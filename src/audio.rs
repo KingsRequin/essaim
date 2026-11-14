@@ -14,6 +14,7 @@ pub struct AudioShared {
     bass: AtomicU32,
     pitch: AtomicU32,
     sensitivity: AtomicU32,
+    min_gap: AtomicU32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -33,6 +34,9 @@ impl AudioShared {
     }
     pub fn set_sensitivity(&self, s: f32) {
         self.sensitivity.store(s.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_min_gap(&self, s: f32) {
+        self.min_gap.store(s.to_bits(), Ordering::Relaxed);
     }
     fn publish(&self, a: &Analyzer) {
         self.kicks.store(a.kicks, Ordering::Relaxed);
@@ -115,6 +119,10 @@ fn stream(shared: &AudioShared, stop: &AtomicBool) -> anyhow::Result<()> {
             break Ok(());
         }
         an.sensitivity = f32::from_bits(shared.sensitivity.load(Ordering::Relaxed));
+        let gap = f32::from_bits(shared.min_gap.load(Ordering::Relaxed));
+        if gap > 0.0 {
+            an.min_gap_s = gap as f64;
+        }
         if event.wait_for_event(10).is_ok() {
             while capture.get_next_packet_size()?.unwrap_or(0) > 0 {
                 let (frames, info) = capture.read_from_device(&mut bytes)?;

@@ -58,6 +58,8 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
   (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
   écrans change (`WM_DISPLAYCHANGE`).
+- **Kick** : un seul par coup, même long et ondulant (type 808) : délai minimal `[audio] delai_kick`
+  (0,25 s) et réarmement après la vraie retombée du kick en cours (mesurée sur son propre maximum).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
 - **Taille du pointeur** de Windows (`CursorBaseSize`) suivie : curseurs refaits à la volée.
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus

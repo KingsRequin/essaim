@@ -118,6 +118,10 @@ pub struct Analyzer {
     low_pk: f64,
     mid_hist: VecDeque<(f64, f64)>,
     armed: bool,
+    /// Excès maximal atteint par le kick en cours.
+    kick_peak: f64,
+    /// Délai minimal entre deux kicks (s).
+    pub min_gap_s: f64,
     last_kick: f64,
     /// Sensibilité du kick, 1 (peu sensible) à 10 (très sensible).
     pub sensitivity: f32,
@@ -156,6 +160,8 @@ impl Analyzer {
             low_pk: 0.0,
             mid_hist: VecDeque::new(),
             armed: true,
+            kick_peak: 0.0,
+            min_gap_s: 0.25,
             last_kick: -9.0,
             sensitivity: 5.0,
             kicks: 0,
@@ -224,16 +230,20 @@ impl Analyzer {
         let onset = exc / self.exc_pk;
         let sens = self.sensitivity.clamp(1.0, 10.0) as f64;
         let thr = 0.6 - (sens - 1.0) * (0.3 / 9.0);
-        if onset < thr * 0.35 {
+        // Réarmement : le kick en cours doit être vraiment retombé, par rapport à SON maximum
+        // (un kick long qui ondule, type 808, remonte plusieurs fois pendant qu'il sonne).
+        self.kick_peak = self.kick_peak.max(exc);
+        if onset < thr * 0.35 && exc < self.kick_peak * 0.35 {
             self.armed = true;
         }
-        if self.armed && onset > thr && t - self.last_kick > 0.12 {
+        if self.armed && onset > thr && t - self.last_kick > self.min_gap_s.max(0.05) {
             let loud = e > self.low_pk * 0.0158 && e > 1e-7;
             let guard = e >= 0.3 * mid_max;
             if loud && guard {
                 self.kicks = self.kicks.wrapping_add(1);
                 self.last_kick = t;
                 self.armed = false;
+                self.kick_peak = exc;
             }
         }
 
@@ -339,6 +349,42 @@ mod tests {
                 v as f32
             })
             .collect()
+    }
+
+    /// Kicks longs et « vibrants » (type 808) : sinus grave qui descend lentement, avec une
+    /// ondulation d'amplitude, un par temps à 120 BPM pendant 6 s, sur fond de charleston.
+    fn render_long_kicks(wobble_hz: f64) -> Vec<f32> {
+        let n = SR as usize * 6;
+        let mut rng = Rng(7);
+        (0..n)
+            .map(|i| {
+                let t = i as f64 / SR as f64;
+                let beat = t % 0.5;
+                let mut v = rng.next() * 0.01;
+                let th = t % 0.25;
+                if th < 0.05 {
+                    v += rng.next() * 0.15 * (-th * 80.0).exp();
+                }
+                let phase = 45.0 * beat + 40.0 * (1.0 - (-beat * 20.0).exp()) / 20.0;
+                let wobble = 0.6 + 0.4 * (std::f64::consts::TAU * wobble_hz * beat).cos();
+                v += (std::f64::consts::TAU * phase).sin() * 0.9 * (-beat * 2.5).exp() * wobble;
+                v as f32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn kick_long_compte_une_seule_fois() {
+        for wobble in [6.0, 9.0, 14.0] {
+            for sens in [1.0, 5.0, 10.0] {
+                let hits = kick_times(&render_long_kicks(wobble), sens);
+                // temps de 1,0 à 5,5 s (10 temps). La première seconde est ignorée : les
+                // moyennes s'y calent sur le morceau, et à sensibilité 10 un kick long peut y
+                // être compté deux fois.
+                let counted = hits.iter().filter(|&&t| t > 0.95).count();
+                assert_eq!(counted, 10, "ondulation {wobble} Hz, sens {sens} : {counted} kicks pour 10 temps ({hits:?})");
+            }
+        }
     }
 
     /// Instants (s) où le compteur de kicks augmente.

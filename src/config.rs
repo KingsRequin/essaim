@@ -94,6 +94,8 @@ pub struct Fissures {
 pub struct Audio {
     pub actif: bool,
     pub sensibilite_kick: f32,
+    /// Délai minimal entre deux kicks (s) : un kick long qui ondule n'est compté qu'une fois.
+    pub delai_kick: f32,
 }
 
 impl Default for Curseur {
@@ -123,7 +125,7 @@ impl Default for Fissures {
 }
 impl Default for Audio {
     fn default() -> Self {
-        Self { actif: true, sensibilite_kick: 5.0 }
+        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.25 }
     }
 }
 
@@ -163,6 +165,7 @@ taille = 1.4
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
+delai_kick = 0.25       # délai minimal entre deux kicks (s) ; plus long si un kick long compte double
 
 [rendu]
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
@@ -203,6 +206,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("fissures", "duree") => (0.2, 30.0),
         ("fissures", "taille") => (0.2, 6.0),
         ("audio", "sensibilite_kick") => (1.0, 10.0),
+        ("audio", "delai_kick") => (0.05, 1.0),
         ("rendu", _) => (0.0, 500.0),
         _ => (0.0, 1000.0),
     }

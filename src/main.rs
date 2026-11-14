@@ -115,6 +115,7 @@ fn run() -> anyhow::Result<()> {
     let mut conf = config::Watched::load();
     let shared = Arc::new(audio::AudioShared::default());
     shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
+    shared.set_min_gap(conf.cfg.audio.delai_kick);
     let mut audio_thread = if conf.cfg.audio.actif { Some(audio::start(shared.clone())?) } else { None };
 
     let _tray = win::Tray::new()?;
@@ -202,6 +203,7 @@ fn run() -> anyhow::Result<()> {
             if conf.reload() {
                 conf_gen += 1;
                 shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
+                shared.set_min_gap(conf.cfg.audio.delai_kick);
                 match (conf.cfg.audio.actif, audio_thread.is_some()) {
                     (true, false) => audio_thread = audio::start(shared.clone()).ok(),
                     (false, true) => audio_thread = None,
