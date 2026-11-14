@@ -14,6 +14,11 @@ cargo build --release
 Les compilations vont sur C: (`.cargo/config.toml`) : lancer cargo depuis le dépôt.
 Exécutable : `C:\Users\KingsRequin\.cache\essaim-target\release\essaim.exe`.
 
+## Installation
+
+Essaim est installé (`scripts\install.ps1`, démarrage avec la session) : après une
+modification vérifiée, réinstaller avec ce script (il arrête l'instance installée).
+
 ## Essai en vrai
 
 - Fermer l'instance avant de recompiler : `essaim.exe --quitter` (sinon l'exe est verrouillé).

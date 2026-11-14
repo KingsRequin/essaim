@@ -11,6 +11,13 @@ et un essaim de satellites en orbite, et des fissures qui s'ouvrent sous chaque 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut) : Spotify,
 navigateur, jeux… sans rien configurer.
 
+## Installation
+
+`scripts\install.ps1` (sans droits administrateur) : compile, copie dans
+`%LOCALAPPDATA%\Programs\Essaim`, lance Essaim à l'ouverture de session (clé Run de HKCU) et
+ajoute au menu Démarrer « Essaim » et « Essaim - restaurer les curseurs ». `-NoBuild` reprend
+la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages conservés).
+
 ## Utilisation
 
 - Icône de notification : *Mettre en pause*, *Ouvrir les réglages*, *Quitter*.
