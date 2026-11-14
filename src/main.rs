@@ -15,8 +15,10 @@ mod config;
 mod cursors;
 mod dsp;
 mod gpu;
+mod ipc;
 mod layer;
 mod pointer;
+mod prisme;
 mod render;
 mod win;
 
@@ -34,6 +36,12 @@ use pointer::Role;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
 
 const MAX_CRACKS: usize = 12;
+/// Sans mouvement de souris ni musique depuis ce délai : cadence de repos.
+const IDLE: Duration = Duration::from_secs(2);
+
+fn start_instant() -> Instant {
+    Instant::now()
+}
 
 struct FileLog(std::sync::Mutex<std::fs::File>);
 impl log::Log for FileLog {
@@ -110,6 +118,16 @@ fn run() -> anyhow::Result<()> {
     let mut audio_thread = if conf.cfg.audio.actif { Some(audio::start(shared.clone())?) } else { None };
 
     let _tray = win::Tray::new()?;
+    // interface locale pour Horizon, et synchro de teinte avec Prisme
+    let ipc_state = Arc::new(ipc::Shared::default());
+    let (ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+    ipc::start(ipc_state.clone(), ipc_tx);
+    let prisme = prisme::start();
+    let mut sync_hue: Option<f32> = None;
+    let mut monitors = win::monitors();
+    let mut cursor_size = win::cursor_base_size();
+    let (mut last_pos, mut last_move, mut last_sound, mut last_kicks) = ((0, 0), start_instant(), start_instant(), 0u32);
+    let mut published: Option<(bool, bool, bool, bool, bool, u32)> = None;
     // un calque immobile par écran visité ; chaque fissure garde son image toute prête
     let mut backend = backend::Backend::new(conf.cfg.rendu.carte_graphique);
     let mut cracks: Vec<Crack> = Vec::new();
@@ -122,6 +140,7 @@ fn run() -> anyhow::Result<()> {
     let mut fs_paused = false;
     // curseurs Windows appliqués : (remplacer, variantes, échelle en %, génération des réglages)
     let mut applied: Option<(bool, bool, u32, u32)> = None;
+    let mut size_applied = cursor_size;
     let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut last_state = "";
@@ -147,6 +166,22 @@ fn run() -> anyhow::Result<()> {
             win::CMD_CONFIG => win::open_file(&config::path()),
             _ => {}
         }
+        while let Ok(c) = ipc_rx.try_recv() {
+            match c {
+                ipc::Cmd::SetPaused(p) if p != user_paused => {
+                    user_paused = p;
+                    win::set_paused_label(p);
+                    log::info!("{} (Horizon)", if p { "pause" } else { "reprise" });
+                }
+                ipc::Cmd::SetPaused(_) => {}
+                ipc::Cmd::OpenConfig => win::open_file(&config::path()),
+            }
+        }
+        if win::take_display_changed() {
+            log::info!("écrans modifiés : calques refaits");
+            monitors = win::monitors();
+            backend.reset_layers();
+        }
         let now = Instant::now();
         let t = (now - start).as_secs_f64();
 
@@ -161,6 +196,8 @@ fn run() -> anyhow::Result<()> {
         }
         if now >= next_conf {
             next_conf = now + Duration::from_secs(1);
+            monitors = win::monitors();
+            cursor_size = win::cursor_base_size();
             if conf.reload() {
                 conf_gen += 1;
                 shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
@@ -172,19 +209,37 @@ fn run() -> anyhow::Result<()> {
             }
         }
         let cfg = &conf.cfg;
+        prisme.set_wanted(cfg.couleur.synchro_prisme);
+        let fields = (user_paused, fs_paused, !user_paused && !fs_paused, backend.is_gpu(), prisme.connected(), conf_gen);
+        if published != Some(fields) {
+            ipc_state.publish(serde_json::json!({
+                "paused": user_paused,
+                "fullscreen": fs_paused,
+                "active": fields.2,
+                "gpu": fields.3,
+                "prisme": fields.4,
+                "config": cfg,
+            }));
+            published = Some(fields);
+        }
 
         let active = !user_paused && !fs_paused;
         // curseurs Windows : refaits si les réglages ou l'échelle de l'écran changent
         let scale_pct = cur.as_ref().map_or(100, |c| (win::scale_at(c.pos.0, c.pos.1) * 100.0).round() as u32);
+        // taille du pointeur de Windows : quand elle change, Windows recharge ses curseurs
+        // (les nôtres sont perdus) ; on les refait à la nouvelle taille
+        let size = if cfg.curseur.taille_windows { cursor_size } else { 32 };
         let want = active.then_some((cfg.curseur.remplacer_curseurs, cfg.curseur.variantes, scale_pct, conf_gen));
-        if want != applied {
+        if want != applied || size != size_applied {
             win::restore_cursors();
+            let s = scale_pct as f32 / 100.0 * size as f32 / 32.0;
             match want {
-                Some((true, true, ..)) => _ = cursors::apply(&Role::ALL, cfg, scale_pct as f32 / 100.0),
-                Some((true, false, ..)) => _ = cursors::apply(&[Role::Normal], cfg, scale_pct as f32 / 100.0),
+                Some((true, true, ..)) => _ = cursors::apply(&Role::ALL, cfg, s),
+                Some((true, false, ..)) => _ = cursors::apply(&[Role::Normal], cfg, s),
                 _ => {}
             }
             applied = want;
+            size_applied = size;
         }
         let state = match &cur {
             _ if !active => "en pause",
@@ -233,8 +288,24 @@ fn run() -> anyhow::Result<()> {
         }
         was_down = down;
 
+        // repos : souris immobile et pas de musique depuis 2 s → cadence réduite
+        let au = shared.view();
+        if cur.pos != last_pos {
+            last_pos = cur.pos;
+            last_move = now;
+        }
+        if au.bass > 0.03 || au.kicks != last_kicks {
+            last_kicks = au.kicks;
+            last_sound = now;
+        }
+        let idle = cfg.rendu.cadence_repos > 0 && now - last_move > IDLE && now - last_sound > IDLE && !down;
+        let cadence = match (idle, cfg.rendu.cadence) {
+            (true, 0) => cfg.rendu.cadence_repos,
+            (true, c) => c.min(cfg.rendu.cadence_repos),
+            (false, c) => c,
+        };
         // cadence choisie : on saute les images en trop (clics et curseur restent lus à chaque tour)
-        if cfg.rendu.cadence > 0 && (now - last).as_secs_f64() < 1.0 / cfg.rendu.cadence as f64 - 0.002 {
+        if cadence > 0 && (now - last).as_secs_f64() < 1.0 / cadence as f64 - 0.002 {
             if unsafe { DwmFlush() }.is_err() {
                 std::thread::sleep(Duration::from_millis(4));
             }
@@ -244,16 +315,25 @@ fn run() -> anyhow::Result<()> {
         last = now;
 
         // simulation
-        swarm.update(t, dt, cursor, shared.view(), cfg, scale);
+        swarm.update(t, dt, cursor, au, cfg, scale);
+        // teinte de l'éclairage (Prisme) : suivie en douceur, en passant par le plus court
+        sync_hue = match (cfg.couleur.synchro_prisme, prisme.current(), sync_hue) {
+            (true, Some(target), Some(h)) => {
+                let d = (target - h + 540.0).rem_euclid(360.0) - 180.0;
+                Some((h + d * (dt * 4.0).min(1.0)).rem_euclid(360.0))
+            }
+            (true, Some(target), None) => Some(target),
+            _ => None,
+        };
+        render::set_sync_hue(sync_hue);
         let life = cfg.fissures.duree.max(0.2) as f64;
         cracks.retain(|c| t - c.born <= life);
-        if cfg.rendu.carte_graphique != backend.is_gpu() && conf_gen != backend_gen {
+        if cfg.rendu.carte_graphique != backend.wants_gpu() && conf_gen != backend_gen {
             backend = backend::Backend::new(cfg.rendu.carte_graphique);
         }
         backend_gen = conf_gen;
 
-        // dessin : l'écran de la souris porte l'essaim ; chaque fissure est dessinée là où elle est
-        let Some(mon) = win::monitor_at(cur.pos.0, cur.pos.1) else { continue };
+        // dessin : sur chaque écran que l'essaim ou une fissure touche
         let (x0, y0, x1, y1) = swarm.bounds(cursor, scale);
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
         let crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
@@ -270,7 +350,7 @@ fn run() -> anyhow::Result<()> {
                 swarm.draw(cv, t, cfg, scale, cursor);
             }
         };
-        stat_send += backend.frame(mon, swarm_rect, &crack_rects, &draw);
+        stat_send += backend.frame(&monitors, swarm_rect, &crack_rects, &draw);
 
         let busy = busy_start.elapsed();
         stat_frames += 1;

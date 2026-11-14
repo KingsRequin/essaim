@@ -38,9 +38,19 @@ impl Rng {
     }
 }
 
-/// Teinte « Prisme » : `k` = 0 en queue de traînée, 1 en tête.
+/// Teinte de base imposée par la synchro avec l'éclairage (bits d'un f32 ; NaN = aucune).
+static SYNC_HUE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x7FC0_0000);
+
+/// Impose (ou retire) la teinte de base, en degrés.
+pub fn set_sync_hue(h: Option<f32>) {
+    SYNC_HUE.store(h.unwrap_or(f32::NAN).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Teinte « Prisme » : `k` = 0 en queue de traînée, 1 en tête. Base : celle de l'éclairage si
+/// la synchro en fournit une, sinon une teinte qui tourne avec le temps.
 pub fn prisme(cfg: &Config, t: f64, k: f32) -> (u8, u8, u8) {
-    let base = (t as f32 * cfg.couleur.vitesse_teinte).rem_euclid(360.0);
+    let synced = f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed));
+    let base = if synced.is_finite() { synced } else { (t as f32 * cfg.couleur.vitesse_teinte).rem_euclid(360.0) };
     let tail = base + cfg.couleur.ecart_teinte;
     let mut dh = base - tail;
     if dh > 180.0 {

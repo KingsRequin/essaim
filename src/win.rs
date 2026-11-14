@@ -10,7 +10,7 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, S
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetMonitorInfoW, MonitorFromPoint,
     MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, AC_SRC_ALPHA, AC_SRC_OVER,
+    EnumDisplayMonitors, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, AC_SRC_ALPHA, AC_SRC_OVER,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -274,16 +274,41 @@ pub fn app_under(x: i32, y: i32) -> String {
     }
 }
 
-/// Écran sous le point : (identifiant, rectangle gauche, haut, droite, bas en pixels physiques).
-pub fn monitor_at(x: i32, y: i32) -> Option<(isize, (i32, i32, i32, i32))> {
+/// Tous les écrans : (identifiant, rectangle gauche, haut, droite, bas en pixels physiques).
+pub fn monitors() -> Vec<(isize, (i32, i32, i32, i32))> {
+    unsafe extern "system" fn each(mon: HMONITOR, _: HDC, r: *mut RECT, data: LPARAM) -> windows::core::BOOL {
+        let list = unsafe { &mut *(data.0 as *mut Vec<(isize, (i32, i32, i32, i32))>) };
+        let r = unsafe { *r };
+        list.push((mon.0 as isize, (r.left, r.top, r.right, r.bottom)));
+        true.into()
+    }
+    let mut list: Vec<(isize, (i32, i32, i32, i32))> = Vec::new();
     unsafe {
-        let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-        if !GetMonitorInfoW(mon, &mut mi).as_bool() {
-            return None;
-        }
-        let r = mi.rcMonitor;
-        Some((mon.0 as isize, (r.left, r.top, r.right, r.bottom)))
+        let _ = EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut list as *mut _ as isize));
+    }
+    list
+}
+
+/// Taille du pointeur choisie dans Windows (32 = taille normale).
+pub fn cursor_base_size() -> u32 {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut v = 32u32;
+    let mut n = std::mem::size_of::<u32>() as u32;
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Control Panel\\Cursors"),
+            w!("CursorBaseSize"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut v as *mut u32 as *mut c_void),
+            Some(&mut n),
+        )
+    };
+    if ok.is_ok() && (16..=512).contains(&v) {
+        v
+    } else {
+        32
     }
 }
 
@@ -340,6 +365,13 @@ thread_local! {
     static PAUSED: Cell<bool> = const { Cell::new(false) };
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ICON: Cell<HICON> = const { Cell::new(HICON(std::ptr::null_mut())) };
+    static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Vrai une fois après un changement de la configuration des écrans (résolution, échelle,
+/// écran branché ou débranché).
+pub fn take_display_changed() -> bool {
+    DISPLAY_CHANGED.with(|d| d.replace(false))
 }
 
 /// Commande choisie dans le menu depuis le dernier appel (0 = aucune).
@@ -390,6 +422,9 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         if msg == WM_COMMAND {
             COMMAND.with(|c| c.set(wp.0 & 0xFFFF));
             return LRESULT(0);
+        }
+        if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED || (msg == WM_SETTINGCHANGE && wp.0 == SPI_SETWORKAREA.0 as usize) {
+            DISPLAY_CHANGED.with(|d| d.set(true));
         }
         if msg == WM_CLOSE || msg == WM_ENDSESSION {
             COMMAND.with(|c| c.set(CMD_QUIT));

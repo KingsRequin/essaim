@@ -1,8 +1,11 @@
 //! Choix du moteur de dessin : carte graphique (DirectComposition + Direct2D, `gpu.rs`) d'abord,
 //! processeur (tiny-skia + fenêtres superposées, `layer.rs`) en secours. Une erreur de la carte
-//! graphique en cours de route (pilote réinitialisé…) fait basculer sur le processeur.
+//! graphique en cours de route (pilote réinitialisé, sortie de veille…) fait basculer sur le
+//! processeur ; la carte graphique est retentée 10 s plus tard, puis toutes les 30 s.
 //!
-//! Dans les deux cas : un calque immobile par écran visité, libéré 10 s après l'avoir quitté.
+//! Dans les deux cas : un calque immobile par écran touché (par l'essaim, qui peut déborder sur
+//! l'écran voisin, ou par une fissure), refait si l'écran change de place ou de taille, libéré
+//! 10 s après être devenu vide.
 
 use crate::canvas::Canvas;
 use crate::gpu::{Gpu, GpuLayer};
@@ -10,57 +13,105 @@ use crate::layer::{intersects, union, IRect, Layer};
 use std::time::{Duration, Instant};
 
 const KEEP_EMPTY: Duration = Duration::from_secs(10);
+const RETRY_FIRST: Duration = Duration::from_secs(10);
+const RETRY_NEXT: Duration = Duration::from_secs(30);
 
-pub enum Backend {
+enum Kind {
     Gpu(Gpu, Vec<GpuLayer>),
     Cpu(Vec<Layer>),
 }
 
-impl Backend {
-    pub fn new(gpu: bool) -> Self {
-        if gpu {
-            match Gpu::new() {
-                Ok(g) => {
-                    log::info!("dessin : carte graphique (DirectComposition + Direct2D)");
-                    return Backend::Gpu(g, Vec::new());
-                }
-                Err(e) => log::warn!("dessin : carte graphique indisponible ({e}), processeur utilisé"),
-            }
+pub struct Backend {
+    kind: Kind,
+    want_gpu: bool,
+    /// Prochain essai de la carte graphique après une erreur.
+    retry_at: Option<Instant>,
+}
+
+fn try_gpu() -> Option<Kind> {
+    match Gpu::new() {
+        Ok(g) => {
+            log::info!("dessin : carte graphique (DirectComposition + Direct2D)");
+            Some(Kind::Gpu(g, Vec::new()))
         }
-        log::info!("dessin : processeur (tiny-skia)");
-        Backend::Cpu(Vec::new())
+        Err(e) => {
+            log::warn!("dessin : carte graphique indisponible ({e}), processeur utilisé");
+            None
+        }
+    }
+}
+
+impl Backend {
+    pub fn new(want_gpu: bool) -> Self {
+        let kind = want_gpu.then(try_gpu).flatten();
+        let retry_at = (want_gpu && kind.is_none()).then(|| Instant::now() + RETRY_NEXT);
+        let kind = kind.unwrap_or_else(|| {
+            log::info!("dessin : processeur (tiny-skia)");
+            Kind::Cpu(Vec::new())
+        });
+        Self { kind, want_gpu, retry_at }
     }
 
     pub fn is_gpu(&self) -> bool {
-        matches!(self, Backend::Gpu(..))
+        matches!(self.kind, Kind::Gpu(..))
     }
 
-    /// Dessine une image. `mon` = écran de la souris (il porte l'essaim, zone `swarm`) ;
-    /// `items` = zones des autres éléments (fissures), dessinés sur l'écran qu'ils touchent.
-    /// `draw(canvas, ici)` dessine tout ; `ici` = calque de l'écran de la souris.
-    /// Renvoie le temps de remise au compositeur.
-    pub fn frame(&mut self, mon: (isize, IRect), swarm: IRect, items: &[IRect], draw: &dyn Fn(&mut dyn Canvas, bool)) -> Duration {
+    pub fn wants_gpu(&self) -> bool {
+        self.want_gpu
+    }
+
+    /// Oublie tous les calques (configuration des écrans changée) : ils sont refaits au besoin.
+    pub fn reset_layers(&mut self) {
+        match &mut self.kind {
+            Kind::Gpu(gpu, layers) => {
+                layers.clear();
+                let _ = gpu.commit();
+            }
+            Kind::Cpu(layers) => layers.clear(),
+        }
+    }
+
+    /// Dessine une image. `monitors` = écrans (identifiant, rectangle) ; `swarm` = zone de
+    /// l'essaim, dessiné sur chaque écran qu'il touche ; `items` = zones des fissures.
+    /// `draw(canvas, essaim_ici)` dessine tout. Renvoie le temps de remise au compositeur.
+    pub fn frame(&mut self, monitors: &[(isize, IRect)], swarm: IRect, items: &[IRect], draw: &dyn Fn(&mut dyn Canvas, bool)) -> Duration {
         let now = Instant::now();
-        let dirty_for = |rect: IRect, here: bool| {
-            let mut d = here.then_some(swarm);
+        if self.retry_at.is_some_and(|r| now >= r) {
+            match try_gpu() {
+                Some(k) => {
+                    self.kind = k;
+                    self.retry_at = None;
+                }
+                None => self.retry_at = Some(now + RETRY_NEXT),
+            }
+        }
+        let touched = |rect: IRect| intersects(rect, swarm) || items.iter().any(|&r| intersects(rect, r));
+        let dirty_for = |rect: IRect| {
+            let mut d = intersects(rect, swarm).then_some(swarm);
             for &r in items.iter().filter(|&&r| intersects(rect, r)) {
                 d = union(d, Some(r));
             }
             d
         };
+        let keep = |mon: isize, rect: IRect, empty_since: Option<Instant>| {
+            monitors.iter().any(|&(m, r)| m == mon && r == rect) && empty_since.is_none_or(|s| now - s < KEEP_EMPTY)
+        };
         let mut sent = Duration::ZERO;
         let mut failed = None;
-        match self {
-            Backend::Gpu(gpu, layers) => {
-                if !layers.iter().any(|l| l.mon == mon.0) {
-                    match gpu.layer(mon.0, mon.1) {
-                        Ok(l) => layers.push(l),
-                        Err(e) => failed = Some(e),
+        match &mut self.kind {
+            Kind::Gpu(gpu, layers) => {
+                layers.retain(|l| keep(l.mon, l.rect, l.empty_since));
+                for &(mon, rect) in monitors.iter().filter(|m| touched(m.1)) {
+                    if !layers.iter().any(|l| l.mon == mon) {
+                        match gpu.layer(mon, rect) {
+                            Ok(l) => layers.push(l),
+                            Err(e) => failed = Some(e),
+                        }
                     }
                 }
                 for lay in layers.iter_mut() {
-                    let here = lay.mon == mon.0;
-                    match lay.frame(gpu, dirty_for(lay.rect, here), |cv| draw(cv, here)) {
+                    let here = intersects(lay.rect, swarm);
+                    match lay.frame(gpu, dirty_for(lay.rect), |cv| draw(cv, here)) {
                         Ok(d) => sent += d,
                         Err(e) => failed = Some(e),
                     }
@@ -70,39 +121,41 @@ impl Backend {
                     failed = Some(e);
                 }
                 sent += t0.elapsed();
-                layers.retain(|l| l.mon == mon.0 || l.empty_since.is_none_or(|s| now - s < KEEP_EMPTY));
             }
-            Backend::Cpu(layers) => {
-                if !layers.iter().any(|l| l.mon == mon.0) {
-                    match Layer::new(mon.0, mon.1) {
-                        Ok(l) => layers.push(l),
-                        Err(e) => log::warn!("calque impossible pour l'écran {:?} : {e:#}", mon.1),
+            Kind::Cpu(layers) => {
+                layers.retain(|l| keep(l.mon, l.rect, l.empty_since));
+                for &(mon, rect) in monitors.iter().filter(|m| touched(m.1)) {
+                    if !layers.iter().any(|l| l.mon == mon) {
+                        match Layer::new(mon, rect) {
+                            Ok(l) => layers.push(l),
+                            Err(e) => log::warn!("calque impossible pour l'écran {rect:?} : {e:#}"),
+                        }
                     }
                 }
                 for lay in layers.iter_mut() {
-                    let here = lay.mon == mon.0;
-                    sent += lay.frame(dirty_for(lay.rect, here), |cv| draw(cv, here));
+                    let here = intersects(lay.rect, swarm);
+                    sent += lay.frame(dirty_for(lay.rect), |cv| draw(cv, here));
                 }
-                layers.retain(|l| l.mon == mon.0 || l.empty_since.is_none_or(|s| now - s < KEEP_EMPTY));
             }
         }
         if let Some(e) = failed {
-            log::warn!("dessin : erreur de la carte graphique ({e}), bascule sur le processeur");
-            *self = Backend::Cpu(Vec::new());
+            log::warn!("dessin : erreur de la carte graphique ({e}), bascule sur le processeur ; nouvel essai dans 10 s");
+            self.kind = Kind::Cpu(Vec::new());
+            self.retry_at = self.want_gpu.then(|| now + RETRY_FIRST);
         }
         sent
     }
 
     /// Efface tout (pause, curseur masqué).
     pub fn clear(&mut self) {
-        match self {
-            Backend::Gpu(gpu, layers) => {
+        match &mut self.kind {
+            Kind::Gpu(gpu, layers) => {
                 for l in layers.iter_mut() {
                     let _ = l.clear(gpu);
                 }
                 let _ = gpu.commit();
             }
-            Backend::Cpu(layers) => layers.iter_mut().for_each(Layer::hide),
+            Kind::Cpu(layers) => layers.iter_mut().for_each(Layer::hide),
         }
     }
 }
@@ -125,7 +178,7 @@ mod tests {
             let mut s = Swarm::new();
             let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0 };
             let mut b = Backend::new(gpu);
-            let mon = (1isize, (0, 0, 1920, 1080));
+            let mons = [(1isize, (0, 0, 1920, 1080))];
             let n = 300;
             let t0 = Instant::now();
             let mut sent = Duration::ZERO;
@@ -138,7 +191,7 @@ mod tests {
                 s.update(t, dt, cursor, au, &cfg, 1.0);
                 let (x0, y0, x1, y1) = s.bounds(cursor, 1.0);
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
-                let d = b.frame(mon, rect, &[], &|cv, _| s.draw(cv, t, &cfg, 1.0, cursor));
+                let d = b.frame(&mons, rect, &[], &|cv, _| s.draw(cv, t, &cfg, 1.0, cursor));
                 if i >= 200 {
                     sent += d;
                 }
