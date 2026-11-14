@@ -6,6 +6,7 @@
 //! tant que la souris ne bouge pas — la barre de texte ou le redimensionnement redevenaient
 //! le point.
 
+use crate::canvas::{Canvas, PixCanvas};
 use crate::win::Surface;
 use std::time::Instant;
 use tiny_skia::{BlendMode, Paint, Pixmap, Rect, Transform};
@@ -47,7 +48,7 @@ impl Layer {
     /// précédente et celle-ci sont effacées, `draw` dessine (origine du calque en argument),
     /// puis seule cette zone est envoyée.
     /// Renvoie le temps passé à envoyer l'image à Windows (pour les statistiques du journal).
-    pub fn frame(&mut self, dirty: Option<IRect>, draw: impl FnOnce(&mut Pixmap, (f32, f32))) -> std::time::Duration {
+    pub fn frame(&mut self, dirty: Option<IRect>, draw: impl FnOnce(&mut dyn Canvas)) -> std::time::Duration {
         let zone = union(self.prev, dirty);
         self.prev = dirty;
         self.empty_since = match (dirty, self.empty_since) {
@@ -65,7 +66,7 @@ impl Layer {
             let clear = Paint { blend_mode: BlendMode::Clear, ..Paint::default() };
             self.pm.fill_rect(r, &clear, Transform::identity(), None);
         }
-        draw(&mut self.pm, (ox as f32, oy as f32));
+        draw(&mut PixCanvas { pm: &mut self.pm, origin: (ox as f32, oy as f32) });
         let sent = Instant::now();
         if let Err(e) = self.surface.update(&self.pm, ox, oy, Some(local)) {
             log::warn!("calque : envoi impossible : {e}");
@@ -96,11 +97,8 @@ mod tests {
             let t0 = Instant::now();
             for i in 0..n {
                 let x = 200 + (i % 50) * 4;
-                total += lay.frame(Some((x, 200, x + 300, 500)), |pm, _| {
-                    let p = Paint { anti_alias: false, ..Paint::default() };
-                    if let Some(r) = Rect::from_xywh(x as f32 + 100.0, 300.0, 50.0, 50.0) {
-                        pm.fill_rect(r, &p, Transform::identity(), None);
-                    }
+                total += lay.frame(Some((x, 200, x + 300, 500)), |cv| {
+                    cv.circle(x as f32 + 120.0, 320.0, 20.0, (255, 255, 255), 1.0);
                 });
             }
             let all = t0.elapsed();

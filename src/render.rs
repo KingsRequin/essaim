@@ -9,7 +9,7 @@ use crate::audio::AudioView;
 use crate::config::Config;
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
-use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use crate::canvas::Canvas;
 
 /// Marge autour de tout ce qui est dessiné, décalage maximal du centre lissé, et étendue
 /// maximale de la fenêtre (une traînée plus longue que ça est coupée).
@@ -66,29 +66,6 @@ fn hsl(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     };
     let to = |v: f32| ((v + m).clamp(0.0, 1.0) * 255.0).round() as u8;
     (to(r), to(g), to(b))
-}
-
-pub(crate) fn paint(rgb: (u8, u8, u8), alpha: f32) -> Paint<'static> {
-    let mut p = Paint::default();
-    p.set_color(Color::from_rgba8(rgb.0, rgb.1, rgb.2, (alpha.clamp(0.0, 1.0) * 255.0) as u8));
-    p.anti_alias = true;
-    p
-}
-
-pub(crate) fn circle(pm: &mut Pixmap, x: f32, y: f32, r: f32, p: &Paint) {
-    if let Some(path) = PathBuilder::from_circle(x, y, r.max(0.1)) {
-        pm.fill_path(&path, p, FillRule::Winding, Transform::identity(), None);
-    }
-}
-
-pub(crate) fn segment(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32, p: &Paint) {
-    let mut pb = PathBuilder::new();
-    pb.move_to(a.0, a.1);
-    pb.line_to(b.0, b.1);
-    if let Some(path) = pb.finish() {
-        let s = Stroke { width, line_cap: LineCap::Round, ..Stroke::default() };
-        pm.stroke_path(&path, p, &s, Transform::identity(), None);
-    }
 }
 
 /// Points de traînée : (instant, x, y) en coordonnées écran.
@@ -229,14 +206,12 @@ impl Swarm {
         }
     }
 
-    /// Dessine dans `pm`, dont le coin haut-gauche est à `origin` (coordonnées écran). Le pointeur
-    /// lui-même est un vrai curseur Windows, affiché par-dessus : seul son éclat au kick est
-    /// dessiné ici, autour de `cursor`.
-    pub fn draw(&self, pm: &mut Pixmap, origin: (f32, f32), t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
+    /// Dessine (coordonnées écran). Le pointeur lui-même est un vrai curseur Windows, affiché
+    /// par-dessus : seul son éclat au kick est dessiné ici, autour de `cursor`.
+    pub fn draw(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
         if self.center.is_none() {
             return;
         }
-        let c = (-origin.0, -origin.1); // décalage écran → image
         let glow = 0.4 + 0.6 * self.env;
         let o = &cfg.orbite;
         let dur = cfg.essaim.duree.max(0.1) as f64;
@@ -254,91 +229,70 @@ impl Swarm {
         for s in &self.sats {
             let k = (1.0 - (t - s.born) / dur) as f32;
             let al = (k * 1.5).min(1.0);
-            draw_trail(pm, &s.trail, c, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
-            if let Some(&(_, dx, dy)) = s.trail.back() {
-                heads.push(Head { x: c.0 + dx, y: c.1 + dy, s: (0.6 + 1.6 * k) * scale, al, front: s.a.sin() > 0.0 });
+            draw_trail(cv, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
+            if let Some(&(_, x, y)) = s.trail.back() {
+                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale, al, front: s.a.sin() > 0.0 });
             }
         }
         // les deux comètes
         if o.cometes {
             for (i, tr) in self.trails.iter().enumerate() {
-                draw_trail(pm, tr, c, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg);
-                if let Some(&(_, dx, dy)) = tr.back() {
+                draw_trail(cv, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg);
+                if let Some(&(_, x, y)) = tr.back() {
                     let a = self.angle + i as f32 * PI;
-                    heads.push(Head { x: c.0 + dx, y: c.1 + dy, s: 2.4 * scale, al: 1.0, front: a.sin() > 0.0 });
+                    heads.push(Head { x, y, s: 2.4 * scale, al: 1.0, front: a.sin() > 0.0 });
                 }
             }
         }
         let head_rgb = prisme(cfg, t, 1.0);
-        let draw_head = |pm: &mut Pixmap, h: &Head| {
-            // lueur : deux disques translucides (un dégradé radial coûte bien plus cher)
-            circle(pm, h.x, h.y, h.s * 2.6, &paint(head_rgb, 0.12 * h.al * glow));
-            circle(pm, h.x, h.y, h.s * 1.6, &paint(head_rgb, 0.3 * h.al * glow));
-            circle(pm, h.x, h.y, h.s, &paint(head_rgb, h.al));
-            circle(pm, h.x, h.y, h.s * 0.45, &paint((255, 255, 255), h.al));
+        let draw_head = |cv: &mut dyn Canvas, h: &Head| {
+            // lueur : deux disques translucides (un dégradé radial coûte bien plus cher sur processeur)
+            cv.circle(h.x, h.y, h.s * 2.6, head_rgb, 0.12 * h.al * glow);
+            cv.circle(h.x, h.y, h.s * 1.6, head_rgb, 0.3 * h.al * glow);
+            cv.circle(h.x, h.y, h.s, head_rgb, h.al);
+            cv.circle(h.x, h.y, h.s * 0.45, (255, 255, 255), h.al);
         };
         for h in heads.iter().filter(|h| !h.front) {
-            draw_head(pm, h);
+            draw_head(cv, h);
         }
         if self.env > 0.02 {
             // éclat du kick : halo blanc et anneau Prisme qui s'élargit sous le point
-            let (px, py) = (cursor.0 - origin.0, cursor.1 - origin.1);
+            let (px, py) = cursor;
             let r = cfg.curseur.taille_point * scale;
-            circle(pm, px, py, r * (2.0 + 2.5 * self.env), &paint((255, 255, 255), 0.35 * self.env));
-            if let Some(path) = PathBuilder::from_circle(px, py, r * (2.5 + 5.0 * (1.0 - self.env))) {
-                let st = Stroke { width: 1.5 * scale, ..Stroke::default() };
-                pm.stroke_path(&path, &paint(head_rgb, 0.8 * self.env), &st, Transform::identity(), None);
-            }
+            cv.circle(px, py, r * (2.0 + 2.5 * self.env), (255, 255, 255), 0.35 * self.env);
+            cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env);
         }
         for h in heads.iter().filter(|h| h.front) {
-            draw_head(pm, h);
+            draw_head(cv, h);
         }
     }
 }
 
 /// Segments de traînée regroupés par morceaux : chaque morceau est un seul tracé (couleur,
-/// épaisseur et opacité de son milieu). Bien moins coûteux qu'un tracé par segment, à l'œil
-/// identique. Le lissage (anticrénelage) coûte ~3,5× plus cher par tracé : il est réservé aux
-/// traînées des comètes ; satellites et halos, fins ou translucides et en mouvement, s'en passent.
+/// épaisseur et opacité de son milieu). Sur processeur, bien moins coûteux qu'un tracé par
+/// segment, à l'œil identique ; le lissage y coûte ~3,5× plus cher par tracé, il est donc
+/// réservé aux comètes.
 const TRAIL_CHUNK: usize = 4;
 
-fn polyline(pts: &[(f32, (f32, f32))]) -> Option<tiny_skia::Path> {
-    let mut pb = PathBuilder::new();
-    pb.move_to(pts[0].1 .0, pts[0].1 .1);
-    for p in &pts[1..] {
-        pb.line_to(p.1 .0, p.1 .1);
-    }
-    pb.finish()
-}
-
 #[allow(clippy::too_many_arguments)]
-fn draw_trail(pm: &mut Pixmap, tr: &Trail, c: (f32, f32), t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
-    let pts: Vec<(f32, (f32, f32))> =
-        tr.iter().map(|&(ti, x, y)| ((1.0 - (t - ti) / life).max(0.0) as f32, (c.0 + x, c.1 + y))).collect();
-    if pts.len() < 2 {
+fn draw_trail(cv: &mut dyn Canvas, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
+    if tr.len() < 2 {
         return;
     }
-    let stroke = |w: f32| Stroke { width: w, line_cap: LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Stroke::default() };
+    let q: Vec<f32> = tr.iter().map(|&(ti, _, _)| (1.0 - (t - ti) / life).max(0.0) as f32).collect();
+    let xy: Vec<(f32, f32)> = tr.iter().map(|&(_, x, y)| (x, y)).collect();
     if halo {
-        if let Some(path) = polyline(&pts) {
-            let mut p = paint(prisme(cfg, t, 0.7), 0.12 * al);
-            p.anti_alias = false;
-            pm.stroke_path(&path, &p, &stroke((0.8 + width * 0.7) * 2.6), Transform::identity(), None);
-        }
+        cv.polyline(&xy, (0.8 + width * 0.7) * 2.6, prisme(cfg, t, 0.7), 0.12 * al, false);
     }
-    // les comètes (avec halo) sont lissées ; les satellites non
+    // les comètes (avec halo) sont lissées ; les satellites non, en deux morceaux (tête vive,
+    // queue pâle) : c'est le poste le plus coûteux sur processeur
     let smooth = halo;
-    // satellites : deux morceaux seulement (tête vive, queue pâle), c'est le poste le plus coûteux
-    let chunk = if smooth { TRAIL_CHUNK } else { (pts.len() - 1).div_ceil(2).max(1) };
+    let chunk = if smooth { TRAIL_CHUNK } else { (xy.len() - 1).div_ceil(2).max(1) };
     let mut i = 0;
-    while i + 1 < pts.len() {
-        let end = (i + chunk).min(pts.len() - 1);
-        let q = (pts[i].0 + pts[end].0) * 0.5;
-        if let Some(path) = polyline(&pts[i..=end]) {
-            let mut p = paint(prisme(cfg, t, q), q * 0.9 * al);
-            p.anti_alias = smooth;
-            pm.stroke_path(&path, &p, &stroke(0.8 + q * width), Transform::identity(), None);
-        }
+    while i + 1 < xy.len() {
+        let end = (i + chunk).min(xy.len() - 1);
+        let k = (q[i] + q[end]) * 0.5;
+        cv.polyline(&xy[i..=end], 0.8 + k * width, prisme(cfg, t, k), k * 0.9 * al, smooth);
         i = end;
     }
 }
@@ -383,25 +337,28 @@ impl Crack {
         Self { x, y, segs, ext, born: t }
     }
 
-    /// Dessine la fissure centrée dans `pm` ; `glow` 0..1 = éclat coloré.
-    pub fn draw(&self, pm: &mut Pixmap, glow: f32, rgb: (u8, u8, u8)) {
-        let c = self.ext;
-        let dark = paint((2, 3, 8), 0.92);
+    /// Rectangle écran (gauche, haut, droite, bas) qui contient la fissure.
+    pub fn rect(&self) -> (i32, i32, i32, i32) {
+        let e = self.ext.ceil() as i32 + 1;
+        (self.x as i32 - e, self.y as i32 - e, self.x as i32 + e, self.y as i32 + e)
+    }
+
+    /// Dessine la fissure (coordonnées écran) ; `glow` 0..1 = éclat coloré, `opacity` = fondu.
+    pub fn draw(&self, cv: &mut dyn Canvas, glow: f32, rgb: (u8, u8, u8), opacity: f32) {
+        let (x, y) = (self.x, self.y);
         for s in &self.segs {
-            segment(pm, (c + s[0], c + s[1]), (c + s[2], c + s[3]), s[4], &dark);
+            cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), s[4], (2, 3, 8), 0.92 * opacity, true);
         }
-        let light = paint((170, 185, 250), 0.25);
         for s in &self.segs {
-            segment(pm, (c + s[0] + 0.8, c + s[1] + 0.8), (c + s[2] + 0.8, c + s[3] + 0.8), (s[4] * 0.35).max(0.5), &light);
+            let w = (s[4] * 0.35).max(0.5);
+            cv.line((x + s[0] + 0.8, y + s[1] + 0.8), (x + s[2] + 0.8, y + s[3] + 0.8), w, (170, 185, 250), 0.25 * opacity, true);
         }
         if glow > 0.02 {
-            let halo = paint(rgb, glow * 0.3);
-            let core = paint(rgb, glow);
             for s in &self.segs {
-                segment(pm, (c + s[0], c + s[1]), (c + s[2], c + s[3]), 3.5, &halo);
+                cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), 3.5, rgb, glow * 0.3 * opacity, true);
             }
             for s in &self.segs {
-                segment(pm, (c + s[0], c + s[1]), (c + s[2], c + s[3]), 1.2, &core);
+                cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), 1.2, rgb, glow * opacity, true);
             }
         }
     }
@@ -410,6 +367,7 @@ impl Crack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tiny_skia::Pixmap;
 
     #[test]
     fn kick_inverse_le_sens_et_ajoute_des_satellites() {
@@ -465,7 +423,7 @@ mod tests {
         let (x0, y0, x1, y1) = s.bounds(cursor, scale);
         let origin = (x0.floor(), y0.floor());
         let mut pm = Pixmap::new((x1 - origin.0).ceil() as u32, (y1 - origin.1).ceil() as u32).unwrap();
-        s.draw(&mut pm, origin, t, cfg, scale, cursor);
+        s.draw(&mut crate::canvas::PixCanvas { pm: &mut pm, origin }, t, cfg, scale, cursor);
         (pm, origin)
     }
 

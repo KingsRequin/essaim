@@ -6,7 +6,8 @@
 //! point chaud du curseur Windows qu'il remplace (centre de la barre de texte, pointe du stylo…).
 
 use crate::config::Config;
-use crate::render::{circle, paint, prisme, segment};
+use crate::canvas::{circle, paint, segment};
+use crate::render::prisme;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use tiny_skia::{FillRule, PathBuilder, Pixmap, Transform};
 

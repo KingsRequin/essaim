@@ -9,9 +9,12 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod audio;
+mod backend;
+mod canvas;
 mod config;
 mod cursors;
 mod dsp;
+mod gpu;
 mod layer;
 mod pointer;
 mod render;
@@ -21,7 +24,6 @@ use render::{Crack, Rng, Swarm};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tiny_skia::Pixmap;
 use windows::core::w;
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -109,13 +111,8 @@ fn run() -> anyhow::Result<()> {
 
     let _tray = win::Tray::new()?;
     // un calque immobile par écran visité ; chaque fissure garde son image toute prête
-    let mut layers: Vec<layer::Layer> = Vec::new();
-    struct Live {
-        crack: Crack,
-        pm: Pixmap,
-        clean: bool,
-    }
-    let mut cracks: Vec<Live> = Vec::new();
+    let mut backend = backend::Backend::new(conf.cfg.rendu.carte_graphique);
+    let mut cracks: Vec<Crack> = Vec::new();
     let mut swarm = Swarm::new();
     let mut rng = Rng::seeded();
 
@@ -129,6 +126,8 @@ fn run() -> anyhow::Result<()> {
     let mut was_down = false;
     let mut last_state = "";
     let mut last_handle = 0isize;
+    let mut cleared = false;
+    let mut backend_gen = 0u32;
     let (mut next_conf, mut next_fs) = (start, start);
     let mut stat_send = Duration::ZERO;
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
@@ -211,11 +210,15 @@ fn run() -> anyhow::Result<()> {
             }
         }
         let Some(cur) = cur.filter(|c| active && c.showing) else {
-            layers.iter_mut().for_each(layer::Layer::hide);
-            cracks.clear();
+            if !cleared {
+                backend.clear();
+                cracks.clear();
+                cleared = true;
+            }
             std::thread::sleep(Duration::from_millis(if active { 16 } else { 100 }));
             continue;
         };
+        cleared = false;
         let busy_start = Instant::now();
         let scale = scale_pct as f32 / 100.0;
         let cursor = (cur.pos.0 as f32, cur.pos.1 as f32);
@@ -226,11 +229,7 @@ fn run() -> anyhow::Result<()> {
             if cracks.len() >= MAX_CRACKS {
                 cracks.remove(0);
             }
-            let crack = Crack::new(cursor.0, cursor.1, t, cfg.fissures.taille * scale, &mut rng);
-            let side = (crack.ext * 2.0).ceil() as u32;
-            if let Some(p) = Pixmap::new(side, side) {
-                cracks.push(Live { crack, pm: p, clean: false });
-            }
+            cracks.push(Crack::new(cursor.0, cursor.1, t, cfg.fissures.taille * scale, &mut rng));
         }
         was_down = down;
 
@@ -247,53 +246,31 @@ fn run() -> anyhow::Result<()> {
         // simulation
         swarm.update(t, dt, cursor, shared.view(), cfg, scale);
         let life = cfg.fissures.duree.max(0.2) as f64;
-        cracks.retain(|l| t - l.crack.born <= life);
-        let rgb = render::prisme(cfg, t, 1.0);
-        for l in &mut cracks {
-            // éclat coloré au début et sur les kicks : image refaite ; sinon réutilisée
-            let glow = ((1.0 - (t - l.crack.born) / 0.45).max(0.0) as f32).max(swarm.env * 0.6);
-            if glow > 0.02 || !l.clean {
-                l.pm.fill(tiny_skia::Color::TRANSPARENT);
-                l.crack.draw(&mut l.pm, glow, rgb);
-                l.clean = glow <= 0.02;
-            }
+        cracks.retain(|c| t - c.born <= life);
+        if cfg.rendu.carte_graphique != backend.is_gpu() && conf_gen != backend_gen {
+            backend = backend::Backend::new(cfg.rendu.carte_graphique);
         }
+        backend_gen = conf_gen;
 
-        // calques : celui de l'écran de la souris porte l'essaim ; chacun porte ses fissures
-        let Some((mon, mon_rect)) = win::monitor_at(cur.pos.0, cur.pos.1) else { continue };
-        if !layers.iter().any(|l| l.mon == mon) {
-            match layer::Layer::new(mon, mon_rect) {
-                Ok(l) => layers.push(l),
-                Err(e) => log::warn!("calque impossible pour l'écran {mon_rect:?} : {e:#}"),
-            }
-        }
+        // dessin : l'écran de la souris porte l'essaim ; chaque fissure est dessinée là où elle est
+        let Some(mon) = win::monitor_at(cur.pos.0, cur.pos.1) else { continue };
         let (x0, y0, x1, y1) = swarm.bounds(cursor, scale);
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
-        let crack_rect = |l: &Live| {
-            let (e, x, y) = (l.crack.ext.ceil() as i32 + 1, l.crack.x as i32, l.crack.y as i32);
-            (x - e, y - e, x + e, y + e)
-        };
-        for lay in &mut layers {
-            let here = lay.mon == mon;
-            let mut dirty = here.then_some(swarm_rect);
-            for l in cracks.iter().filter(|l| layer::intersects(lay.rect, crack_rect(l))) {
-                dirty = layer::union(dirty, Some(crack_rect(l)));
+        let crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
+        let rgb = render::prisme(cfg, t, 1.0);
+        let env = swarm.env;
+        let draw = |cv: &mut dyn canvas::Canvas, here: bool| {
+            for c in &cracks {
+                let age = t - c.born;
+                // éclat coloré au début et sur les kicks, fondu sur la dernière seconde
+                let glow = ((1.0 - age / 0.45).max(0.0) as f32).max(env * 0.6);
+                c.draw(cv, glow, rgb, (life - age).clamp(0.0, 1.0) as f32);
             }
-            stat_send += lay.frame(dirty, |pm, origin| {
-                for l in cracks.iter() {
-                    let age = t - l.crack.born;
-                    let paint = tiny_skia::PixmapPaint { opacity: (life - age).clamp(0.0, 1.0) as f32, ..Default::default() };
-                    let e = l.crack.ext as i32;
-                    let (x, y) = (l.crack.x as i32 - e - origin.0 as i32, l.crack.y as i32 - e - origin.1 as i32);
-                    pm.draw_pixmap(x, y, l.pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
-                }
-                if here {
-                    swarm.draw(pm, origin, t, cfg, scale, cursor);
-                }
-            });
-        }
-        // écrans quittés depuis 10 s et vides : mémoire rendue
-        layers.retain(|l| l.mon == mon || l.empty_since.is_none_or(|s| now - s < Duration::from_secs(10)));
+            if here {
+                swarm.draw(cv, t, cfg, scale, cursor);
+            }
+        };
+        stat_send += backend.frame(mon, swarm_rect, &crack_rects, &draw);
 
         let busy = busy_start.elapsed();
         stat_frames += 1;

@@ -55,6 +55,7 @@ dependencies = [
  "toml",
  "wasapi",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]

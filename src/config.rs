@@ -17,11 +17,19 @@ pub struct Config {
     pub rendu: Rendu,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Rendu {
     /// Images par seconde au plus pour l'essaim (0 = celle de l'écran).
     pub cadence: u32,
+    /// Dessin par la carte graphique (sinon par le processeur).
+    pub carte_graphique: bool,
+}
+
+impl Default for Rendu {
+    fn default() -> Self {
+        Self { cadence: 0, carte_graphique: true }
+    }
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -149,6 +157,7 @@ sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
 
 [rendu]
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
+carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 
 [diagnostic]
 curseur = false         # note chaque changement de curseur dans essaim.log

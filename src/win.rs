@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::sync::Once;
 use tiny_skia::Pixmap;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetMonitorInfoW, MonitorFromPoint,
     MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
@@ -42,34 +42,60 @@ pub struct Surface {
     shown: bool,
 }
 
+/// Fenêtre superposée transparente aux clics, toujours devant, hors barre des tâches, au
+/// rectangle écran `rect`. `composition` : sans surface GDI, pour un contenu DirectComposition
+/// (elle est alors affichée tout de suite et ne bouge plus).
+pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows::core::Result<HWND> {
+    unsafe {
+        let hinst = GetModuleHandleW(None)?;
+        OVERLAY_CLASS.call_once(|| {
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(overlay_proc),
+                hInstance: hinst.into(),
+                lpszClassName: w!("EssaimOverlay"),
+                ..Default::default()
+            };
+            RegisterClassExW(&wc);
+        });
+        let mut ex = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        if composition {
+            ex |= WS_EX_NOREDIRECTIONBITMAP;
+        }
+        let hwnd = CreateWindowExW(
+            ex,
+            w!("EssaimOverlay"),
+            w!("Essaim"),
+            WS_POPUP,
+            rect.0,
+            rect.1,
+            (rect.2 - rect.0).max(1),
+            (rect.3 - rect.1).max(1),
+            None,
+            None,
+            Some(hinst.into()),
+            None,
+        )?;
+        if composition {
+            // une fenêtre « layered » n'est montrée qu'avec des attributs ; l'opacité globale
+            // reste pleine, la transparence vient du contenu DirectComposition
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+        Ok(hwnd)
+    }
+}
+
+pub fn destroy_window(hwnd: HWND) {
+    unsafe {
+        let _ = DestroyWindow(hwnd);
+    }
+}
+
 impl Surface {
     pub fn new() -> windows::core::Result<Self> {
         unsafe {
-            let hinst = GetModuleHandleW(None)?;
-            OVERLAY_CLASS.call_once(|| {
-                let wc = WNDCLASSEXW {
-                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                    lpfnWndProc: Some(overlay_proc),
-                    hInstance: hinst.into(),
-                    lpszClassName: w!("EssaimOverlay"),
-                    ..Default::default()
-                };
-                RegisterClassExW(&wc);
-            });
-            let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                w!("EssaimOverlay"),
-                w!("Essaim"),
-                WS_POPUP,
-                0,
-                0,
-                1,
-                1,
-                None,
-                None,
-                Some(hinst.into()),
-                None,
-            )?;
+            let hwnd = overlay_window((0, 0, 1, 1), false)?;
             let dc = CreateCompatibleDC(None);
             Ok(Self { hwnd, dc, bmp: HBITMAP::default(), old: HGDIOBJ::default(), bits: std::ptr::null_mut(), w: 0, h: 0, shown: false })
         }

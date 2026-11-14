@@ -30,24 +30,30 @@ navigateur, jeux… sans rien configurer.
   bougent (chargement, teinte Prisme) sont des curseurs animés `.ani`. Fichiers dans
   `%APPDATA%\Essaim\curseurs\<échelle>\`. L'appli dessine par-dessus les sphères, l'éclat du
   kick sous le point et les fissures.
-- **Rendu** : un calque transparent par écran (`layer.rs`), de la taille de l'écran et
-  **immobile**, transparent aux clics et toujours devant. Essaim et fissures y sont dessinés ;
-  seule la zone qui change est effacée, redessinée et envoyée (`UpdateLayeredWindowIndirect`
-  avec rectangle modifié). Une fenêtre qui bouge ou apparaît sous la souris fait redemander leur
-  curseur aux applications, et l'Explorateur répond alors « flèche » : la barre de texte et le
-  redimensionnement redevenaient le point. Les traînées sont en coordonnées écran et s'étirent
-  derrière la souris. Dessin par `tiny-skia`, cadence calée sur le compositeur (`DwmFlush`).
+- **Rendu** : un calque **immobile** par écran, de la taille de l'écran, transparent aux clics
+  et toujours devant (une fenêtre qui bouge ou apparaît sous la souris fait redemander leur
+  curseur aux applications, et l'Explorateur répondait « flèche »). Seule la zone qui change
+  est effacée et redessinée. Deux moteurs (`backend.rs`), même interface de dessin
+  (`canvas.rs`) :
+  - **carte graphique** (par défaut, `gpu.rs`) : DirectComposition + surface virtuelle Direct2D,
+    tout dessiné en un **lot de sprites** (une pastille ronde recopiée des milliers de fois ; un
+    trait = une rangée de pastilles). Tracer chaque trait avec `DrawLine` coûtait plus que le
+    moteur processeur (Direct2D découpe chaque trait lissé sur le processeur) ;
+  - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
+    modifiée. Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
+  Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
+  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`.
 - **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
   d'origine revient.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
 
 ## Consommation (mesurée le 2026-11-14)
 
-~7 % d'un cœur (≈ 0,6 % du processeur, 12 cœurs logiques) à 144 images/s, 3,5 Mo de mémoire.
-Une image avec l'essaim plein (16 satellites, écran à 150 %) se dessine en ~1,2 ms : les
-traînées des satellites et les halos ne sont pas lissés (le lissage coûte ~3,5× plus cher par
-tracé), les traînées sont tracées par morceaux. Mesure : `cargo test --release mesure_cout --
---ignored --nocapture`.
+Banc d'essai `cargo test --release mesure_moteurs -- --ignored --nocapture` (essaim plein,
+simulation comprise) : **0,35 ms par image** avec la carte graphique, 1,09 ms avec le
+processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le coût de tiny-skia
+est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
+(pas de gain, bugs connus).
 
 ## Analyse du son (`src/dsp.rs`)
 
