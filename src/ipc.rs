@@ -82,13 +82,15 @@ pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
                 log::warn!("interface locale : trop de clients, connexion refusée");
                 continue;
             }
-            clients.fetch_add(1, Ordering::Relaxed);
-            let (shared, tx, clients) = (shared.clone(), tx.clone(), clients.clone());
+            // la place est rendue quand le client se termine, ou tout de suite si son fil
+            // ne démarre pas (la fermeture est alors détruite avec la garde)
+            let slot = Slot::take(&clients);
+            let (shared, tx) = (shared.clone(), tx.clone());
             let _ = std::thread::Builder::new().name("essaim-ipc-client".into()).spawn(move || {
+                let _slot = slot;
                 if let Err(e) = client(stream, &shared, &tx) {
                     log::debug!("interface locale : client fermé ({e})");
                 }
-                clients.fetch_sub(1, Ordering::Relaxed);
             });
         }
     });
@@ -108,7 +110,26 @@ fn check_origin(req: &HsRequest, resp: HsResponse) -> Result<HsResponse, ErrorRe
     }
 }
 
+/// Place de client occupée, rendue à la destruction.
+struct Slot(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Slot {
+    fn take(count: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Slot(count.clone())
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 fn client(stream: TcpStream, shared: &Shared, tx: &Sender<Cmd>) -> anyhow::Result<()> {
+    // une poignée de main qui traîne ne doit pas garder sa place
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
     let mut ws: WebSocket<TcpStream> = tungstenite::accept_hdr(stream, check_origin)?;
     ws.get_mut().set_read_timeout(Some(Duration::from_millis(250)))?;
     let (mut sent_version, mut last_push) = (u64::MAX, Instant::now());

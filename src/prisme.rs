@@ -14,8 +14,8 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message;
 
 const URL: &str = "ws://127.0.0.1:28650";
-/// Teinte tenue pour valable tant qu'elle date de moins que ça.
-const FRESH: Duration = Duration::from_millis(1500);
+/// Dernière teinte nette tenue pendant ce délai (flashs blancs, creux sombres, LED éteintes).
+const HOLD: Duration = Duration::from_secs(4);
 
 #[derive(Default)]
 pub struct PrismeHue {
@@ -34,15 +34,16 @@ impl PrismeHue {
         self.connected.load(Ordering::Relaxed)
     }
 
-    /// Teinte dominante de l'éclairage (degrés), si Prisme est là et que ses LED sont colorées.
+    /// Teinte dominante de l'éclairage (degrés) : la dernière teinte nette, tenue `HOLD` (un
+    /// flash blanc ou un creux sombre ne fait pas sauter la couleur).
     pub fn current(&self) -> Option<f32> {
-        let fresh = self.stamp.lock().ok()?.is_some_and(|s| s.elapsed() < FRESH);
-        let h = f32::from_bits(self.hue.load(Ordering::Relaxed));
-        (fresh && h.is_finite()).then_some(h)
+        let fresh = self.stamp.lock().ok()?.is_some_and(|s| s.elapsed() < HOLD);
+        (fresh && self.connected()).then(|| f32::from_bits(self.hue.load(Ordering::Relaxed)))
     }
 
     fn store(&self, hue: Option<f32>) {
-        self.hue.store(hue.unwrap_or(f32::NAN).to_bits(), Ordering::Relaxed);
+        let Some(h) = hue else { return };
+        self.hue.store(h.to_bits(), Ordering::Relaxed);
         if let Ok(mut s) = self.stamp.lock() {
             *s = Some(Instant::now());
         }
