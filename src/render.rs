@@ -144,15 +144,11 @@ impl Swarm {
         for &(_, x, y) in pts {
             b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
         }
-        // halo des comètes (le plus large) + marge
+        // halo des comètes (le plus large) + marge. Pas de rognage : tout ce qui est dessiné doit
+        // être dans ce rectangle, sinon ce qui en sort n'est jamais effacé (les points trop
+        // loin du pointeur sont retirés des traînées par `update`).
         let pad = (2.4 * 2.6 + 3.5 * 2.6 + MARGIN) * scale;
-        let half = MAX_EXTENT / 2.0;
-        (
-            (b.0 - pad).max(cursor.0 - half),
-            (b.1 - pad).max(cursor.1 - half),
-            (b.2 + pad).min(cursor.0 + half),
-            (b.3 + pad).min(cursor.1 + half),
-        )
+        (b.0 - pad, b.1 - pad, b.2 + pad, b.3 + pad)
     }
 
     pub fn update(&mut self, t: f64, dt: f32, cursor: (f32, f32), au: AudioView, cfg: &Config, scale: f32) {
@@ -213,6 +209,12 @@ impl Swarm {
             s.a = (s.a + w * s.mul * dt).rem_euclid(TAU);
             let rr = o.rayon * scale * s.r * self.far;
             push_trail(&mut s.trail, t, cx + s.a.cos() * rr, cy + s.a.sin() * rr, SAT_TRAIL);
+        }
+        // saut du pointeur (autre écran…) : la traînée laissée loin derrière est abandonnée
+        let half = MAX_EXTENT / 2.0;
+        let near = |&(_, x, y): &(f64, f32, f32)| (x - cursor.0).abs() <= half && (y - cursor.1).abs() <= half;
+        for tr in self.trails.iter_mut().chain(self.sats.iter_mut().map(|s| &mut s.trail)) {
+            tr.retain(near);
         }
     }
 
@@ -502,6 +504,27 @@ mod tests {
         for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
             for &(_, x, y) in tr {
                 assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors du rectangle");
+            }
+        }
+    }
+
+    #[test]
+    fn saut_d_ecran_la_zone_contient_tout_et_reste_bornee() {
+        // le pointeur saute de 3000 px (autre écran) : la vieille traînée est abandonnée, la
+        // zone contient tout ce qui reste et ne dépasse pas l'étendue maximale
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        let dt = 1.0 / 144.0;
+        for i in 0..100 {
+            s.update(i as f64 * dt as f64, dt, (500.0, 500.0), AudioView::default(), &cfg, 1.0);
+        }
+        let far = (3500.0, -900.0);
+        s.update(100.0 * dt as f64, dt, far, AudioView::default(), &cfg, 1.5);
+        let (x0, y0, x1, y1) = s.bounds(far, 1.5);
+        assert!(x1 - x0 <= MAX_EXTENT + 100.0 && y1 - y0 <= MAX_EXTENT + 100.0, "zone {x0},{y0} → {x1},{y1}");
+        for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
+            for &(_, x, y) in tr {
+                assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors de la zone");
             }
         }
     }
