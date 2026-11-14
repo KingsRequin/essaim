@@ -12,6 +12,7 @@ mod audio;
 mod config;
 mod cursors;
 mod dsp;
+mod layer;
 mod pointer;
 mod render;
 mod win;
@@ -21,7 +22,6 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
-use win::Surface;
 use windows::core::w;
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -108,18 +108,16 @@ fn run() -> anyhow::Result<()> {
     let mut audio_thread = if conf.cfg.audio.actif { Some(audio::start(shared.clone())?) } else { None };
 
     let _tray = win::Tray::new()?;
-    let mut swarm_surface = Surface::new()?;
-    let mut crack_pool: Vec<Surface> = Vec::new();
+    // un calque immobile par écran visité ; chaque fissure garde son image toute prête
+    let mut layers: Vec<layer::Layer> = Vec::new();
     struct Live {
         crack: Crack,
-        surface: Surface,
         pm: Pixmap,
         clean: bool,
     }
     let mut cracks: Vec<Live> = Vec::new();
     let mut swarm = Swarm::new();
     let mut rng = Rng::seeded();
-    let mut pm: Option<Pixmap> = None;
 
     let start = Instant::now();
     let mut last = start;
@@ -131,7 +129,7 @@ fn run() -> anyhow::Result<()> {
     let mut was_down = false;
     let mut last_state = "";
     let mut last_handle = 0isize;
-    let (mut next_conf, mut next_raise, mut next_fs) = (start, start, start);
+    let (mut next_conf, mut next_fs) = (start, start);
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
         (0u32, 0f64, Duration::ZERO, Duration::ZERO, start + Duration::from_secs(60));
 
@@ -214,12 +212,8 @@ fn run() -> anyhow::Result<()> {
             }
         }
         let Some(cur) = cur.filter(|c| active && c.showing) else {
-            swarm_surface.hide();
-            for l in cracks.drain(..) {
-                let mut s = l.surface;
-                s.hide();
-                crack_pool.push(s);
-            }
+            layers.iter_mut().for_each(layer::Layer::hide);
+            cracks.clear();
             std::thread::sleep(Duration::from_millis(if active { 16 } else { 100 }));
             continue;
         };
@@ -227,70 +221,70 @@ fn run() -> anyhow::Result<()> {
         let scale = scale_pct as f32 / 100.0;
         let cursor = (cur.pos.0 as f32, cur.pos.1 as f32);
 
-        // clic gauche : nouvelle fissure
+        // clic gauche : nouvelle fissure (son image est faite une fois, puis recopiée)
         let down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0;
         if down && !was_down && cfg.fissures.actives {
             if cracks.len() >= MAX_CRACKS {
-                let old = cracks.remove(0);
-                crack_pool.push(old.surface);
+                cracks.remove(0);
             }
             let crack = Crack::new(cursor.0, cursor.1, t, cfg.fissures.taille * scale, &mut rng);
             let side = (crack.ext * 2.0).ceil() as u32;
-            if let (Some(p), Some(surface)) = (Pixmap::new(side, side), crack_pool.pop().or_else(|| Surface::new().ok())) {
-                cracks.push(Live { crack, surface, pm: p, clean: false });
+            if let Some(p) = Pixmap::new(side, side) {
+                cracks.push(Live { crack, pm: p, clean: false });
             }
         }
         was_down = down;
 
-        // essaim
+        // simulation
         swarm.update(t, dt, cursor, shared.view(), cfg, scale);
-        // fenêtre ajustée à ce qui est dessiné (s'agrandit quand les traînées s'étirent) ;
-        // taille arrondie à 64 px pour ne pas réallouer l'image à chaque image
-        let (x0, y0, x1, y1) = swarm.bounds(cursor, scale);
-        let origin = (x0.floor() as i32, y0.floor() as i32);
-        let round = |v: f32| ((v.ceil() as u32).div_ceil(64) * 64).max(64);
-        let (w, h) = (round(x1 - origin.0 as f32), round(y1 - origin.1 as f32));
-        let pmr = match &mut pm {
-            Some(p) if p.width() == w && p.height() == h => p,
-            slot => slot.insert(Pixmap::new(w, h).expect("taille d'image valide")),
-        };
-        pmr.fill(tiny_skia::Color::TRANSPARENT);
-        swarm.draw(pmr, (origin.0 as f32, origin.1 as f32), t, cfg, scale, cursor);
-        let _ = swarm_surface.upload(pmr);
-        swarm_surface.present(origin.0, origin.1, 255);
-
-        // fissures : redessinées pendant l'éclat, puis simple fondu
         let life = cfg.fissures.duree.max(0.2) as f64;
+        cracks.retain(|l| t - l.crack.born <= life);
         let rgb = render::prisme(cfg, t, 1.0);
-        let mut i = 0;
-        while i < cracks.len() {
-            let l = &mut cracks[i];
-            let age = t - l.crack.born;
-            if age > life {
-                let mut s = cracks.remove(i).surface;
-                s.hide();
-                crack_pool.push(s);
-                continue;
-            }
-            let glow = ((1.0 - age / 0.45).max(0.0) as f32).max(swarm.env * 0.6);
+        for l in &mut cracks {
+            // éclat coloré au début et sur les kicks : image refaite ; sinon réutilisée
+            let glow = ((1.0 - (t - l.crack.born) / 0.45).max(0.0) as f32).max(swarm.env * 0.6);
             if glow > 0.02 || !l.clean {
                 l.pm.fill(tiny_skia::Color::TRANSPARENT);
                 l.crack.draw(&mut l.pm, glow, rgb);
-                let _ = l.surface.upload(&l.pm);
                 l.clean = glow <= 0.02;
             }
-            let alpha = ((life - age).min(1.0) * 255.0) as u8;
-            let e = l.crack.ext as i32;
-            l.surface.present(l.crack.x as i32 - e, l.crack.y as i32 - e, alpha);
-            i += 1;
         }
-        if now >= next_raise {
-            next_raise = now + Duration::from_secs(2);
-            for l in &cracks {
-                l.surface.raise();
+
+        // calques : celui de l'écran de la souris porte l'essaim ; chacun porte ses fissures
+        let Some((mon, mon_rect)) = win::monitor_at(cur.pos.0, cur.pos.1) else { continue };
+        if !layers.iter().any(|l| l.mon == mon) {
+            match layer::Layer::new(mon, mon_rect) {
+                Ok(l) => layers.push(l),
+                Err(e) => log::warn!("calque impossible pour l'écran {mon_rect:?} : {e:#}"),
             }
-            swarm_surface.raise();
         }
+        let (x0, y0, x1, y1) = swarm.bounds(cursor, scale);
+        let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
+        let crack_rect = |l: &Live| {
+            let (e, x, y) = (l.crack.ext.ceil() as i32 + 1, l.crack.x as i32, l.crack.y as i32);
+            (x - e, y - e, x + e, y + e)
+        };
+        for lay in &mut layers {
+            let here = lay.mon == mon;
+            let mut dirty = here.then_some(swarm_rect);
+            for l in cracks.iter().filter(|l| layer::intersects(lay.rect, crack_rect(l))) {
+                dirty = layer::union(dirty, Some(crack_rect(l)));
+            }
+            lay.frame(dirty, |pm, origin| {
+                for l in cracks.iter() {
+                    let age = t - l.crack.born;
+                    let paint = tiny_skia::PixmapPaint { opacity: (life - age).clamp(0.0, 1.0) as f32, ..Default::default() };
+                    let e = l.crack.ext as i32;
+                    let (x, y) = (l.crack.x as i32 - e - origin.0 as i32, l.crack.y as i32 - e - origin.1 as i32);
+                    pm.draw_pixmap(x, y, l.pm.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+                }
+                if here {
+                    swarm.draw(pm, origin, t, cfg, scale, cursor);
+                }
+            });
+        }
+        // écrans quittés depuis 10 s et vides : mémoire rendue
+        layers.retain(|l| l.mon == mon || l.empty_since.is_none_or(|s| now - s < Duration::from_secs(10)));
 
         let busy = busy_start.elapsed();
         stat_frames += 1;

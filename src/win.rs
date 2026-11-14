@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::sync::Once;
 use tiny_skia::Pixmap;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetMonitorInfoW, MonitorFromPoint,
     MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
@@ -75,9 +75,10 @@ impl Surface {
         }
     }
 
-    fn ensure_size(&mut self, w: i32, h: i32) -> windows::core::Result<()> {
+    /// Adapte la surface à la taille de l'image. Renvoie vrai si elle a été (re)créée.
+    fn ensure_size(&mut self, w: i32, h: i32) -> windows::core::Result<bool> {
         if w == self.w && h == self.h && !self.bits.is_null() {
-            return Ok(());
+            return Ok(false);
         }
         unsafe {
             if !self.bmp.is_invalid() {
@@ -103,51 +104,65 @@ impl Surface {
         }
         self.w = w;
         self.h = h;
-        Ok(())
+        Ok(true)
     }
 
-    /// Copie l'image (RGBA prémultiplié) dans la surface (BGRA prémultiplié).
-    pub fn upload(&mut self, pm: &Pixmap) -> windows::core::Result<()> {
-        self.ensure_size(pm.width() as i32, pm.height() as i32)?;
-        let n = (self.w * self.h * 4) as usize;
-        let dst = unsafe { std::slice::from_raw_parts_mut(self.bits, n) };
-        for (d, s) in dst.chunks_exact_mut(4).zip(pm.data().chunks_exact(4)) {
-            d[0] = s[2];
-            d[1] = s[1];
-            d[2] = s[0];
-            d[3] = s[3];
+    /// Envoie l'image (RGBA prémultiplié) et l'affiche avec son coin haut-gauche en (x, y).
+    /// `region` (gauche, haut, droite, bas, en pixels de l'image) limite l'envoi à la zone qui a
+    /// changé ; `None` envoie tout. La fenêtre ne bouge pas tant que (x, y) et la taille restent
+    /// les mêmes : une fenêtre qui bouge sous la souris fait redemander leur curseur aux
+    /// applications (l'Explorateur répond alors « flèche »).
+    pub fn update(&mut self, pm: &Pixmap, x: i32, y: i32, region: Option<(i32, i32, i32, i32)>) -> windows::core::Result<()> {
+        let resized = self.ensure_size(pm.width() as i32, pm.height() as i32)?;
+        let full = resized || !self.shown || region.is_none();
+        let (l, t, r, b) = if full {
+            (0, 0, self.w, self.h)
+        } else {
+            let (l, t, r, b) = region.unwrap_or_default();
+            (l.max(0), t.max(0), r.min(self.w), b.min(self.h))
+        };
+        if r <= l || b <= t {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    /// Affiche la dernière image envoyée, coin haut-gauche en (x, y), opacité globale `alpha`.
-    pub fn present(&mut self, x: i32, y: i32, alpha: u8) {
-        if self.bits.is_null() {
-            return;
+        let stride = self.w as usize * 4;
+        let dst = unsafe { std::slice::from_raw_parts_mut(self.bits, stride * self.h as usize) };
+        let src = pm.data();
+        for row in t as usize..b as usize {
+            let (a, z) = (row * stride + l as usize * 4, row * stride + r as usize * 4);
+            for (d, s) in dst[a..z].chunks_exact_mut(4).zip(src[a..z].chunks_exact(4)) {
+                d[0] = s[2];
+                d[1] = s[1];
+                d[2] = s[0];
+                d[3] = s[3];
+            }
         }
         let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
             BlendFlags: 0,
-            SourceConstantAlpha: alpha,
+            SourceConstantAlpha: 255,
             AlphaFormat: AC_SRC_ALPHA as u8,
         };
+        let (dst_pt, size, src_pt) = (POINT { x, y }, SIZE { cx: self.w, cy: self.h }, POINT { x: 0, y: 0 });
+        let dirty = RECT { left: l, top: t, right: r, bottom: b };
+        let info = UPDATELAYEREDWINDOWINFO {
+            cbSize: std::mem::size_of::<UPDATELAYEREDWINDOWINFO>() as u32,
+            pptDst: &dst_pt,
+            psize: &size,
+            hdcSrc: self.dc,
+            pptSrc: &src_pt,
+            pblend: &blend,
+            dwFlags: ULW_ALPHA,
+            prcDirty: if full { std::ptr::null() } else { &dirty },
+            ..Default::default()
+        };
         unsafe {
-            let _ = UpdateLayeredWindow(
-                self.hwnd,
-                None,
-                Some(&POINT { x, y }),
-                Some(&SIZE { cx: self.w, cy: self.h }),
-                Some(self.dc),
-                Some(&POINT { x: 0, y: 0 }),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
+            let _ = UpdateLayeredWindowIndirect(self.hwnd, &info);
             if !self.shown {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 self.shown = true;
             }
         }
+        Ok(())
     }
 
     pub fn hide(&mut self) {
@@ -156,23 +171,6 @@ impl Surface {
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
             }
             self.shown = false;
-        }
-    }
-
-    /// Repasse devant les autres fenêtres « toujours devant » ouvertes depuis.
-    pub fn raise(&self) {
-        if self.shown {
-            unsafe {
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    Some(HWND_TOPMOST),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-                );
-            }
         }
     }
 }
@@ -247,6 +245,19 @@ pub fn app_under(x: i32, y: i32) -> String {
         }
         let path = String::from_utf16_lossy(&buf[..n as usize]);
         path.rsplit('\\').next().unwrap_or(&path).to_string()
+    }
+}
+
+/// Écran sous le point : (identifiant, rectangle gauche, haut, droite, bas en pixels physiques).
+pub fn monitor_at(x: i32, y: i32) -> Option<(isize, (i32, i32, i32, i32))> {
+    unsafe {
+        let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(mon, &mut mi).as_bool() {
+            return None;
+        }
+        let r = mi.rcMonitor;
+        Some((mon.0 as isize, (r.left, r.top, r.right, r.bottom)))
     }
 }
 

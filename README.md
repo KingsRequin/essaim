@@ -30,10 +30,13 @@ navigateur, jeux… sans rien configurer.
   bougent (chargement, teinte Prisme) sont des curseurs animés `.ani`. Fichiers dans
   `%APPDATA%\Essaim\curseurs\<échelle>\`. L'appli dessine par-dessus les sphères, l'éclat du
   kick sous le point et les fissures.
-- **Rendu** : une fenêtre superposée (transparente aux clics, toujours devant) suit la souris ;
-  les traînées sont en coordonnées écran et s'étirent derrière la souris quand elle bouge, la
-  fenêtre s'ajustant à leur étendue (2400 px au plus). Chaque fissure a sa propre fenêtre. Dessin par `tiny-skia`, affichage par
-  `UpdateLayeredWindow`, cadence calée sur le compositeur (`DwmFlush`).
+- **Rendu** : un calque transparent par écran (`layer.rs`), de la taille de l'écran et
+  **immobile**, transparent aux clics et toujours devant. Essaim et fissures y sont dessinés ;
+  seule la zone qui change est effacée, redessinée et envoyée (`UpdateLayeredWindowIndirect`
+  avec rectangle modifié). Une fenêtre qui bouge ou apparaît sous la souris fait redemander leur
+  curseur aux applications, et l'Explorateur répond alors « flèche » : la barre de texte et le
+  redimensionnement redevenaient le point. Les traînées sont en coordonnées écran et s'étirent
+  derrière la souris. Dessin par `tiny-skia`, cadence calée sur le compositeur (`DwmFlush`).
 - **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
   d'origine revient.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).

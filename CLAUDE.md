@@ -37,5 +37,8 @@ Exécutable : `C:\Users\KingsRequin\.cache\essaim-target\release\essaim.exe`.
 - Les seuils de `dsp.rs` sont validés par les tests sur signaux synthétiques : tout changement
   de seuil ou de filtre passe par ces tests (caisse claire seule = 0 kick, kicks trouvés avec et
   sans basse, délai médian < 30 ms).
+- Aucune fenêtre ne doit bouger ni apparaître sous la souris : Windows redemande alors leur
+  curseur aux applications (l'Explorateur répond « flèche »). Tout passe par les calques fixes
+  de `layer.rs`.
 - Pas de hook global souris/clavier (Defender a déjà bloqué une appli de l'utilisateur pour un
   comportement suspect) : interrogation `GetAsyncKeyState`.
