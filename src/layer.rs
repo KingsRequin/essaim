@@ -46,7 +46,8 @@ impl Layer {
     /// Image suivante : `dirty` = zone écran de ce qui sera dessiné. La zone de l'image
     /// précédente et celle-ci sont effacées, `draw` dessine (origine du calque en argument),
     /// puis seule cette zone est envoyée.
-    pub fn frame(&mut self, dirty: Option<IRect>, draw: impl FnOnce(&mut Pixmap, (f32, f32))) {
+    /// Renvoie le temps passé à envoyer l'image à Windows (pour les statistiques du journal).
+    pub fn frame(&mut self, dirty: Option<IRect>, draw: impl FnOnce(&mut Pixmap, (f32, f32))) -> std::time::Duration {
         let zone = union(self.prev, dirty);
         self.prev = dirty;
         self.empty_since = match (dirty, self.empty_since) {
@@ -54,20 +55,22 @@ impl Layer {
             (None, None) => Some(Instant::now()),
             (None, since) => since,
         };
-        let Some(z) = zone else { return };
+        let Some(z) = zone else { return std::time::Duration::ZERO };
         let (ox, oy) = (self.rect.0, self.rect.1);
         let local = ((z.0 - ox).max(0), (z.1 - oy).max(0), (z.2 - ox).min(self.pm.width() as i32), (z.3 - oy).min(self.pm.height() as i32));
         if local.2 <= local.0 || local.3 <= local.1 {
-            return;
+            return std::time::Duration::ZERO;
         }
         if let Some(r) = Rect::from_ltrb(local.0 as f32, local.1 as f32, local.2 as f32, local.3 as f32) {
             let clear = Paint { blend_mode: BlendMode::Clear, ..Paint::default() };
             self.pm.fill_rect(r, &clear, Transform::identity(), None);
         }
         draw(&mut self.pm, (ox as f32, oy as f32));
+        let sent = Instant::now();
         if let Err(e) = self.surface.update(&self.pm, ox, oy, Some(local)) {
             log::warn!("calque : envoi impossible : {e}");
         }
+        sent.elapsed()
     }
 
     pub fn hide(&mut self) {
@@ -80,6 +83,35 @@ impl Layer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Coût d'un envoi (zone de 300 px sur un calque plein écran 1080p et 4K).
+    /// `cargo test --release mesure_envoi -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn mesure_envoi() {
+        for (w, h) in [(1920, 1080), (3840, 2160)] {
+            let mut lay = Layer::new(0, (0, 0, w, h)).unwrap();
+            let n = 200;
+            let mut total = std::time::Duration::ZERO;
+            let t0 = Instant::now();
+            for i in 0..n {
+                let x = 200 + (i % 50) * 4;
+                total += lay.frame(Some((x, 200, x + 300, 500)), |pm, _| {
+                    let p = Paint { anti_alias: false, ..Paint::default() };
+                    if let Some(r) = Rect::from_xywh(x as f32 + 100.0, 300.0, 50.0, 50.0) {
+                        pm.fill_rect(r, &p, Transform::identity(), None);
+                    }
+                });
+            }
+            let all = t0.elapsed();
+            eprintln!(
+                "calque {w}×{h} : envoi {:.3} ms, image complète {:.3} ms",
+                total.as_secs_f64() * 1000.0 / n as f64,
+                all.as_secs_f64() * 1000.0 / n as f64
+            );
+            lay.hide();
+        }
+    }
 
     #[test]
     fn rectangles() {

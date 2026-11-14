@@ -130,6 +130,7 @@ fn run() -> anyhow::Result<()> {
     let mut last_state = "";
     let mut last_handle = 0isize;
     let (mut next_conf, mut next_fs) = (start, start);
+    let mut stat_send = Duration::ZERO;
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
         (0u32, 0f64, Duration::ZERO, Duration::ZERO, start + Duration::from_secs(60));
 
@@ -270,7 +271,7 @@ fn run() -> anyhow::Result<()> {
             for l in cracks.iter().filter(|l| layer::intersects(lay.rect, crack_rect(l))) {
                 dirty = layer::union(dirty, Some(crack_rect(l)));
             }
-            lay.frame(dirty, |pm, origin| {
+            stat_send += lay.frame(dirty, |pm, origin| {
                 for l in cracks.iter() {
                     let age = t - l.crack.born;
                     let paint = tiny_skia::PixmapPaint { opacity: (life - age).clamp(0.0, 1.0) as f32, ..Default::default() };
@@ -293,12 +294,14 @@ fn run() -> anyhow::Result<()> {
         stat_max = stat_max.max(busy);
         if now >= next_stat {
             log::info!(
-                "images : {:.0}/s, calcul moyen {:.2} ms, pire {:.2} ms",
+                "images : {:.0}/s, calcul moyen {:.2} ms dont envoi {:.2} ms, pire {:.2} ms",
                 stat_frames as f64 / stat_time.max(1e-3),
                 stat_busy.as_secs_f64() * 1000.0 / stat_frames.max(1) as f64,
+                stat_send.as_secs_f64() * 1000.0 / stat_frames.max(1) as f64,
                 stat_max.as_secs_f64() * 1000.0
             );
-            (stat_frames, stat_time, stat_busy, stat_max, next_stat) = (0, 0.0, Duration::ZERO, Duration::ZERO, now + Duration::from_secs(60));
+            (stat_frames, stat_time, stat_busy, stat_send, stat_max, next_stat) =
+                (0, 0.0, Duration::ZERO, Duration::ZERO, Duration::ZERO, now + Duration::from_secs(60));
         }
         // cadence : une image par rafraîchissement de l'écran
         if unsafe { DwmFlush() }.is_err() {
