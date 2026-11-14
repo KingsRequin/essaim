@@ -68,20 +68,20 @@ fn hsl(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     (to(r), to(g), to(b))
 }
 
-fn paint(rgb: (u8, u8, u8), alpha: f32) -> Paint<'static> {
+pub(crate) fn paint(rgb: (u8, u8, u8), alpha: f32) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color(Color::from_rgba8(rgb.0, rgb.1, rgb.2, (alpha.clamp(0.0, 1.0) * 255.0) as u8));
     p.anti_alias = true;
     p
 }
 
-fn circle(pm: &mut Pixmap, x: f32, y: f32, r: f32, p: &Paint) {
+pub(crate) fn circle(pm: &mut Pixmap, x: f32, y: f32, r: f32, p: &Paint) {
     if let Some(path) = PathBuilder::from_circle(x, y, r.max(0.1)) {
         pm.fill_path(&path, p, FillRule::Winding, Transform::identity(), None);
     }
 }
 
-fn segment(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32, p: &Paint) {
+pub(crate) fn segment(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32, p: &Paint) {
     let mut pb = PathBuilder::new();
     pb.move_to(a.0, a.1);
     pb.line_to(b.0, b.1);
@@ -229,9 +229,10 @@ impl Swarm {
         }
     }
 
-    /// Dessine dans `pm`, dont le coin haut-gauche est à `origin` (coordonnées écran). `dot` =
-    /// position du point à dessiner (aucun quand Windows affiche un autre curseur).
-    pub fn draw(&self, pm: &mut Pixmap, origin: (f32, f32), t: f64, cfg: &Config, scale: f32, dot: Option<(f32, f32)>) {
+    /// Dessine dans `pm`, dont le coin haut-gauche est à `origin` (coordonnées écran). Le pointeur
+    /// lui-même est un vrai curseur Windows, affiché par-dessus : seul son éclat au kick est
+    /// dessiné ici, autour de `cursor`.
+    pub fn draw(&self, pm: &mut Pixmap, origin: (f32, f32), t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
         if self.center.is_none() {
             return;
         }
@@ -279,11 +280,15 @@ impl Swarm {
         for h in heads.iter().filter(|h| !h.front) {
             draw_head(pm, h);
         }
-        if let Some(cursor) = dot {
+        if self.env > 0.02 {
+            // éclat du kick : halo blanc et anneau Prisme qui s'élargit sous le point
             let (px, py) = (cursor.0 - origin.0, cursor.1 - origin.1);
             let r = cfg.curseur.taille_point * scale;
-            circle(pm, px, py, r * 2.2, &paint((255, 255, 255), 0.10 + 0.25 * self.env));
-            circle(pm, px, py, r, &paint((255, 255, 255), 1.0));
+            circle(pm, px, py, r * (2.0 + 2.5 * self.env), &paint((255, 255, 255), 0.35 * self.env));
+            if let Some(path) = PathBuilder::from_circle(px, py, r * (2.5 + 5.0 * (1.0 - self.env))) {
+                let st = Stroke { width: 1.5 * scale, ..Stroke::default() };
+                pm.stroke_path(&path, &paint(head_rgb, 0.8 * self.env), &st, Transform::identity(), None);
+            }
         }
         for h in heads.iter().filter(|h| h.front) {
             draw_head(pm, h);
@@ -459,7 +464,7 @@ mod tests {
         let (x0, y0, x1, y1) = s.bounds(cursor, scale);
         let origin = (x0.floor(), y0.floor());
         let mut pm = Pixmap::new((x1 - origin.0).ceil() as u32, (y1 - origin.1).ceil() as u32).unwrap();
-        s.draw(&mut pm, origin, t, cfg, scale, Some(cursor));
+        s.draw(&mut pm, origin, t, cfg, scale, cursor);
         (pm, origin)
     }
 

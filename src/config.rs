@@ -18,7 +18,8 @@ pub struct Config {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Curseur {
-    pub masquer_fleche: bool,
+    pub remplacer_curseurs: bool,
+    pub variantes: bool,
     pub taille_point: f32,
 }
 
@@ -66,7 +67,7 @@ pub struct Audio {
 
 impl Default for Curseur {
     fn default() -> Self {
-        Self { masquer_fleche: true, taille_point: 3.4 }
+        Self { remplacer_curseurs: true, variantes: true, taille_point: 3.4 }
     }
 }
 impl Default for Orbite {
@@ -99,7 +100,8 @@ const DEFAULT_FILE: &str = r#"# Réglages d'Essaim. Enregistre le fichier : les 
 # Tailles en pixels à 100 % d'échelle (multipliées par l'échelle de l'écran).
 
 [curseur]
-masquer_fleche = true   # remplace la flèche normale de Windows par le point
+remplacer_curseurs = true # la flèche de Windows devient le point (curseur Windows, sans retard)
+variantes = true          # et les autres curseurs aussi (texte, lien, chargement, redimensionnement…)
 taille_point = 3.4
 
 [orbite]

@@ -19,6 +19,9 @@ Exécutable : `C:\Users\KingsRequin\.cache\essaim-target\release\essaim.exe`.
 - Fermer l'instance avant de recompiler : `essaim.exe --quitter` (sinon l'exe est verrouillé).
 - Vérifier le rendu par capture d'écran : `BitBlt` avec `CAPTUREBLT` (0x40CC0020), sinon les
   fenêtres superposées n'apparaissent pas ; processus en `PER_MONITOR_AWARE_V2`.
+- Le curseur n'apparaît pas dans les captures `BitBlt` : pour voir les curseurs fabriqués,
+  dessiner `LoadCursorW(IDC_*)` avec `DrawIconEx` (planche ; la transparence y paraît plus
+  sombre qu'à l'écran).
 - Windows masque le curseur pendant la frappe (`CURSOR_SHOWING` absent) : l'essaim se cache
   aussi. Pour le réafficher depuis un script, un `SendInput` de mouvement relatif (structure
   `INPUT` de 40 octets) ; `SetCursorPos` ne suffit pas.
@@ -27,8 +30,10 @@ Exécutable : `C:\Users\KingsRequin\.cache\essaim-target\release\essaim.exe`.
 
 ## Règles
 
-- La flèche Windows doit toujours revenir : tout chemin de sortie appelle
+- Les curseurs de l'utilisateur doivent toujours revenir : tout chemin de sortie appelle
   `win::restore_cursors()` (fin normale, plantage, plein écran, pause).
+- Le pointeur est un vrai curseur Windows (pas de dessin du pointeur dans l'overlay : il
+  aurait une image de retard). Seul l'éclat du kick est dessiné sous lui.
 - Les seuils de `dsp.rs` sont validés par les tests sur signaux synthétiques : tout changement
   de seuil ou de filtre passe par ces tests (caisse claire seule = 0 kick, kicks trouvés avec et
   sans basse, délai médian < 30 ms).

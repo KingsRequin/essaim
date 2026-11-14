@@ -1,13 +1,18 @@
 //! Essaim : curseur animé réactif à la musique (point, comètes et essaim en orbite, fissures au clic).
 //!
+//! Le point et ses variantes sont de vrais curseurs Windows (`cursors.rs`) : aucun retard. L'appli
+//! dessine par-dessus les sphères, l'éclat du kick et les fissures.
+//!
 //! Options : `--quitter` ferme l'instance en cours ; `--restaurer-curseur` remet les curseurs
-//! Windows d'origine (utile si l'appli a été tuée sans pouvoir le faire elle-même).
+//! Windows d'origine (fermeture, plantage, pause et plein écran le font tout seuls).
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod audio;
 mod config;
+mod cursors;
 mod dsp;
+mod pointer;
 mod render;
 mod win;
 
@@ -23,6 +28,7 @@ use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+use pointer::Role;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
 
 const MAX_CRACKS: usize = 12;
@@ -119,7 +125,9 @@ fn run() -> anyhow::Result<()> {
     let mut last = start;
     let mut user_paused = false;
     let mut fs_paused = false;
-    let mut arrow_hidden = false;
+    // curseurs Windows appliqués : (remplacer, variantes, échelle en %, génération des réglages)
+    let mut applied: Option<(bool, bool, u32, u32)> = None;
+    let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut last_state = "";
     let (mut next_conf, mut next_raise, mut next_fs) = (start, start, start);
@@ -157,6 +165,7 @@ fn run() -> anyhow::Result<()> {
         if now >= next_conf {
             next_conf = now + Duration::from_secs(1);
             if conf.reload() {
+                conf_gen += 1;
                 shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
                 match (conf.cfg.audio.actif, audio_thread.is_some()) {
                     (true, false) => audio_thread = audio::start(shared.clone()).ok(),
@@ -168,21 +177,23 @@ fn run() -> anyhow::Result<()> {
         let cfg = &conf.cfg;
 
         let active = !user_paused && !fs_paused;
-        let want_hidden = active && cfg.curseur.masquer_fleche;
-        if want_hidden != arrow_hidden {
-            if want_hidden {
-                win::hide_arrow();
-            } else {
-                win::restore_cursors();
+        // curseurs Windows : refaits si les réglages ou l'échelle de l'écran changent
+        let scale_pct = cur.as_ref().map_or(100, |c| (win::scale_at(c.pos.0, c.pos.1) * 100.0).round() as u32);
+        let want = active.then_some((cfg.curseur.remplacer_curseurs, cfg.curseur.variantes, scale_pct, conf_gen));
+        if want != applied {
+            win::restore_cursors();
+            match want {
+                Some((true, true, ..)) => _ = cursors::apply(&Role::ALL, cfg, scale_pct as f32 / 100.0),
+                Some((true, false, ..)) => _ = cursors::apply(&[Role::Normal], cfg, scale_pct as f32 / 100.0),
+                _ => {}
             }
-            arrow_hidden = want_hidden;
+            applied = want;
         }
         let state = match &cur {
             _ if !active => "en pause",
             None => "position du curseur illisible",
             Some(c) if !c.showing => "curseur masqué par Windows",
-            Some(c) if c.arrow => "affiché (flèche)",
-            Some(_) => "affiché (autre curseur)",
+            Some(_) => "affiché",
         };
         if state != last_state {
             log::info!("état : {state}");
@@ -199,7 +210,7 @@ fn run() -> anyhow::Result<()> {
             continue;
         };
         let busy_start = Instant::now();
-        let scale = win::scale_at(cur.pos.0, cur.pos.1);
+        let scale = scale_pct as f32 / 100.0;
         let cursor = (cur.pos.0 as f32, cur.pos.1 as f32);
 
         // clic gauche : nouvelle fissure
@@ -230,8 +241,7 @@ fn run() -> anyhow::Result<()> {
             slot => slot.insert(Pixmap::new(w, h).expect("taille d'image valide")),
         };
         pmr.fill(tiny_skia::Color::TRANSPARENT);
-        let dot = (cur.arrow && cfg.curseur.masquer_fleche).then_some(cursor);
-        swarm.draw(pmr, (origin.0 as f32, origin.1 as f32), t, cfg, scale, dot);
+        swarm.draw(pmr, (origin.0 as f32, origin.1 as f32), t, cfg, scale, cursor);
         let _ = swarm_surface.upload(pmr);
         swarm_surface.present(origin.0, origin.1, 255);
 

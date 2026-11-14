@@ -193,24 +193,7 @@ impl Drop for Surface {
 // ---------------------------------------------------------------------------------------------
 // Curseur système
 
-/// Remplace la flèche normale de Windows par une flèche invisible (le point la remplace).
-pub fn hide_arrow() {
-    unsafe {
-        let and = [0xFFu8; 128]; // 32×32, 1 bit par pixel : tout transparent
-        let xor = [0u8; 128];
-        let hinst = GetModuleHandleW(None).ok();
-        match CreateCursor(hinst.map(Into::into), 0, 0, 32, 32, and.as_ptr() as *const c_void, xor.as_ptr() as *const c_void) {
-            Ok(cur) => {
-                if let Err(e) = SetSystemCursor(cur, OCR_NORMAL) {
-                    log::warn!("curseur : remplacement de la flèche impossible : {e}");
-                }
-            }
-            Err(e) => log::warn!("curseur : création du curseur vide impossible : {e}"),
-        }
-    }
-}
-
-/// Recharge les curseurs choisis dans Windows (annule `hide_arrow`).
+/// Recharge les curseurs choisis dans Windows (annule `cursors::apply`).
 pub fn restore_cursors() {
     unsafe {
         let _ = SystemParametersInfoW(SPI_SETCURSORS, 0, None, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
@@ -221,16 +204,13 @@ pub struct CursorState {
     pub pos: (i32, i32),
     /// Le curseur est affiché (les jeux et lecteurs vidéo le cachent).
     pub showing: bool,
-    /// Le curseur courant est la flèche normale (sinon : texte, main, redimensionnement…).
-    pub arrow: bool,
 }
 
 pub fn cursor_state() -> Option<CursorState> {
     unsafe {
         let mut ci = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
         GetCursorInfo(&mut ci).ok()?;
-        let arrow = LoadCursorW(None, IDC_ARROW).map(|h| h == ci.hCursor).unwrap_or(false);
-        Some(CursorState { pos: (ci.ptScreenPos.x, ci.ptScreenPos.y), showing: ci.flags.0 & CURSOR_SHOWING.0 != 0, arrow })
+        Some(CursorState { pos: (ci.ptScreenPos.x, ci.ptScreenPos.y), showing: ci.flags.0 & CURSOR_SHOWING.0 != 0 })
     }
 }
 

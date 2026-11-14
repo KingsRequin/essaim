@@ -17,14 +17,19 @@ navigateur, jeux… sans rien configurer.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
 - `essaim.exe --quitter` ferme l'instance en cours.
-- `essaim.exe --restaurer-curseur` remet les curseurs Windows si l'appli a été tuée de force
-  (fermeture normale, plantage et plein écran les remettent tout seuls).
+- `essaim.exe --restaurer-curseur` remet tes curseurs Windows si l'appli a été tuée de force
+  (fermeture normale, plantage, pause et plein écran les remettent tout seuls). Même tuée,
+  le pointeur reste visible : ce sont de vrais curseurs.
 
 ## Fonctionnement
 
-- **Curseur** : la flèche normale de Windows (`OCR_NORMAL`) est remplacée par une flèche
-  invisible et le point est dessiné à sa place. Les autres curseurs (texte, lien,
-  redimensionnement, attente) restent ceux de Windows ; l'essaim continue autour.
+- **Curseur** : le point et ses 15 variantes (texte, lien, chargement, arrière-plan, précision,
+  aide, interdit, déplacer, 4 redimensionnements, stylo, autre sélection) sont de **vrais
+  curseurs Windows**, fabriqués par l'appli (`cursors.rs`, dessin `pointer.rs`) à la taille de
+  l'écran sous la souris, puis mis en place par `SetSystemCursor` : aucun retard. Ceux qui
+  bougent (chargement, teinte Prisme) sont des curseurs animés `.ani`. Fichiers dans
+  `%APPDATA%\Essaim\curseurs\<échelle>\`. L'appli dessine par-dessus les sphères, l'éclat du
+  kick sous le point et les fissures.
 - **Rendu** : une fenêtre superposée (transparente aux clics, toujours devant) suit la souris ;
   les traînées sont en coordonnées écran et s'étirent derrière la souris quand elle bouge, la
   fenêtre s'ajustant à leur étendue (2400 px au plus). Chaque fissure a sa propre fenêtre. Dessin par `tiny-skia`, affichage par
