@@ -1,0 +1,3 @@
+# Même convention que Prisme et Horizon : les compilations vont sur C:.
+[build]
+target-dir = "C:/Users/KingsRequin/.cache/essaim-target"
