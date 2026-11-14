@@ -6,7 +6,8 @@ et un essaim de satellites en orbite, et des fissures qui s'ouvrent sous chaque 
 - **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
 - **Quantité de basse** : accélère la rotation.
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
-- **Couleurs** : « Prisme » (la teinte tourne en continu).
+- **Couleurs** : celles de l'éclairage RGB quand Prisme tourne (teinte dominante des LED, tenue
+  4 s pendant les flashs blancs ou creux sombres), sinon une teinte qui tourne en continu.
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut) : Spotify,
 navigateur, jeux… sans rien configurer.
@@ -53,6 +54,23 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
 - **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
   d'origine revient.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
+- **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
+  frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
+  (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
+  écrans change (`WM_DISPLAYCHANGE`).
+- **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
+- **Taille du pointeur** de Windows (`CursorBaseSize`) suivie : curseurs refaits à la volée.
+- **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
+  tard, puis toutes les 30 s.
+
+## Interface locale (widget Horizon)
+
+WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 = hooks
+d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
+(`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
+bornées), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
+Pages web refusées (en-tête `Origin`), 8 clients au plus, 3 s pour la poignée de main. Le
+widget Essaim d'Horizon s'en sert (pause au clic, réglages en direct dans son panneau).
 
 ## Consommation (mesurée le 2026-11-14)
 
