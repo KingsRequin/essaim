@@ -149,8 +149,6 @@ fn run() -> anyhow::Result<()> {
             _ => {}
         }
         let now = Instant::now();
-        let dt = (now - last).as_secs_f32().clamp(0.0005, 0.05);
-        last = now;
         let t = (now - start).as_secs_f64();
 
         let cur = win::cursor_state();
@@ -235,6 +233,16 @@ fn run() -> anyhow::Result<()> {
             }
         }
         was_down = down;
+
+        // cadence choisie : on saute les images en trop (clics et curseur restent lus à chaque tour)
+        if cfg.rendu.cadence > 0 && (now - last).as_secs_f64() < 1.0 / cfg.rendu.cadence as f64 - 0.002 {
+            if unsafe { DwmFlush() }.is_err() {
+                std::thread::sleep(Duration::from_millis(4));
+            }
+            continue;
+        }
+        let dt = (now - last).as_secs_f32().clamp(0.0005, 0.05);
+        last = now;
 
         // simulation
         swarm.update(t, dt, cursor, shared.view(), cfg, scale);

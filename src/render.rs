@@ -328,7 +328,8 @@ fn draw_trail(pm: &mut Pixmap, tr: &Trail, c: (f32, f32), t: f64, life: f64, wid
     }
     // les comètes (avec halo) sont lissées ; les satellites non
     let smooth = halo;
-    let chunk = if smooth { TRAIL_CHUNK } else { TRAIL_CHUNK + 2 };
+    // satellites : deux morceaux seulement (tête vive, queue pâle), c'est le poste le plus coûteux
+    let chunk = if smooth { TRAIL_CHUNK } else { (pts.len() - 1).div_ceil(2).max(1) };
     let mut i = 0;
     while i + 1 < pts.len() {
         let end = (i + chunk).min(pts.len() - 1);

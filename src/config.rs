@@ -14,6 +14,14 @@ pub struct Config {
     pub fissures: Fissures,
     pub audio: Audio,
     pub diagnostic: Diagnostic,
+    pub rendu: Rendu,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Rendu {
+    /// Images par seconde au plus pour l'essaim (0 = celle de l'écran).
+    pub cadence: u32,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -138,6 +146,9 @@ taille = 1.4
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
+
+[rendu]
+cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
 
 [diagnostic]
 curseur = false         # note chaque changement de curseur dans essaim.log
