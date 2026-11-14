@@ -25,6 +25,7 @@ use tungstenite::handshake::server::{ErrorResponse, Request as HsRequest, Respon
 use tungstenite::{Message, WebSocket};
 
 pub const PORT: u16 = 28670;
+const MAX_CLIENTS: usize = 8;
 
 /// Commandes qui doivent passer par la boucle principale.
 pub enum Cmd {
@@ -73,13 +74,21 @@ pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
         }
     };
     log::info!("interface locale : ws://127.0.0.1:{PORT}");
+    let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let _ = std::thread::Builder::new().name("essaim-ipc".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
-            let (shared, tx) = (shared.clone(), tx.clone());
+            // quelques clients au plus (Horizon, un outil) : pas de fils sans limite
+            if clients.load(Ordering::Relaxed) >= MAX_CLIENTS {
+                log::warn!("interface locale : trop de clients, connexion refusée");
+                continue;
+            }
+            clients.fetch_add(1, Ordering::Relaxed);
+            let (shared, tx, clients) = (shared.clone(), tx.clone(), clients.clone());
             let _ = std::thread::Builder::new().name("essaim-ipc-client".into()).spawn(move || {
                 if let Err(e) = client(stream, &shared, &tx) {
                     log::debug!("interface locale : client fermé ({e})");
                 }
+                clients.fetch_sub(1, Ordering::Relaxed);
             });
         }
     });

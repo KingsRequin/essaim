@@ -185,8 +185,59 @@ pub fn path() -> PathBuf {
 /// (le fichier est ensuite rechargé comme s'il avait été modifié à la main). Refuse une section
 /// ou une clé inconnue et une valeur du mauvais type.
 pub fn set_value(section: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
-    let p = path();
-    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| DEFAULT_FILE.to_owned());
+    set_value_in(&path(), section, key, value)
+}
+
+/// Bornes des réglages numériques : une valeur absurde (fichier mal tapé, client local) ne doit
+/// pas pouvoir surcharger l'appli (des milliers de satellites, une cadence folle…).
+fn limits(section: &str, key: &str) -> (f64, f64) {
+    match (section, key) {
+        ("curseur", "taille_point") => (1.0, 20.0),
+        ("orbite", "rayon") => (4.0, 200.0),
+        ("orbite", "trainee") => (0.01, 3.0),
+        ("orbite", _) => (0.0, 100.0),
+        ("essaim", "maximum") => (0.0, 64.0),
+        ("essaim", "duree") => (0.1, 30.0),
+        ("essaim", _) => (0.0, 10.0),
+        ("couleur", _) => (0.0, 720.0),
+        ("fissures", "duree") => (0.2, 30.0),
+        ("fissures", "taille") => (0.2, 6.0),
+        ("audio", "sensibilite_kick") => (1.0, 10.0),
+        ("rendu", _) => (0.0, 500.0),
+        _ => (0.0, 1000.0),
+    }
+}
+
+impl Config {
+    /// Ramène chaque réglage numérique dans ses bornes.
+    fn clamped(self) -> Config {
+        let Ok(mut v) = serde_json::to_value(&self) else { return self };
+        if let Some(sections) = v.as_object_mut() {
+            for (section, keys) in sections.iter_mut() {
+                for (key, x) in keys.as_object_mut().into_iter().flatten() {
+                    if let Some(f) = x.as_f64() {
+                        let (lo, hi) = limits(section, key);
+                        let c = f.clamp(lo, hi);
+                        if c != f {
+                            log::warn!("config : [{section}] {key} = {f} hors bornes, {c} utilisé");
+                            *x = if x.is_f64() { c.into() } else { (c as i64).into() };
+                        }
+                    }
+                }
+            }
+        }
+        serde_json::from_value(v).unwrap_or(self)
+    }
+}
+
+fn set_value_in(p: &std::path::Path, section: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+    if let Some(f) = value.as_f64() {
+        let (lo, hi) = limits(section, key);
+        if !(lo..=hi).contains(&f) {
+            return Err(format!("[{section}] {key} : {f} hors bornes ({lo} à {hi})"));
+        }
+    }
+    let text = std::fs::read_to_string(p).unwrap_or_else(|_| DEFAULT_FILE.to_owned());
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("config.toml illisible : {e}"))?;
     let known = serde_json::to_value(Config::default()).map_err(|e| e.to_string())?;
     let Some(old) = known.get(section).and_then(|s| s.get(key)) else {
@@ -210,7 +261,7 @@ pub fn set_value(section: &str, key: &str, value: &serde_json::Value) -> Result<
     doc[section][key] = toml_edit::Item::Value(v);
     let new = doc.to_string();
     toml::from_str::<Config>(&new).map_err(|e| format!("valeur refusée : {e}"))?;
-    std::fs::write(&p, new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))
+    std::fs::write(p, new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))
 }
 
 pub struct Watched {
@@ -243,7 +294,7 @@ impl Watched {
         match std::fs::read_to_string(&p).map_err(anyhow::Error::from).and_then(|s| Ok(toml::from_str::<Config>(&s)?)) {
             Ok(cfg) => {
                 log::info!("config : chargée");
-                self.cfg = cfg;
+                self.cfg = cfg.clamped();
                 true
             }
             Err(e) => {
@@ -261,5 +312,33 @@ mod tests {
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
         assert_eq!(c.essaim.maximum, 16);
         assert!((c.essaim.duree - 2.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ecrire_un_reglage_garde_les_commentaires() {
+        let p = std::env::temp_dir().join(format!("essaim-test-{}.toml", std::process::id()));
+        std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        super::set_value_in(&p, "orbite", "rayon", &serde_json::json!(30)).unwrap();
+        super::set_value_in(&p, "essaim", "maximum", &serde_json::json!(20)).unwrap();
+        super::set_value_in(&p, "couleur", "synchro_prisme", &serde_json::json!(false)).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let c: super::Config = toml::from_str(&text).unwrap();
+        assert!((c.orbite.rayon - 30.0).abs() < 1e-6);
+        assert_eq!(c.essaim.maximum, 20);
+        assert!(!c.couleur.synchro_prisme);
+        assert!(text.contains("# rayon de l'orbite sans basse"), "commentaire perdu :\n{text}");
+        // refus : clé inconnue, mauvais type, hors bornes
+        assert!(super::set_value_in(&p, "orbite", "inconnu", &serde_json::json!(1)).is_err());
+        assert!(super::set_value_in(&p, "orbite", "rayon", &serde_json::json!(true)).is_err());
+        assert!(super::set_value_in(&p, "essaim", "maximum", &serde_json::json!(100000)).is_err());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn valeurs_absurdes_ramenees_dans_les_bornes() {
+        let c: super::Config = toml::from_str("[essaim]\nmaximum = 100000\n[rendu]\ncadence = 99999").unwrap();
+        let c = c.clamped();
+        assert_eq!(c.essaim.maximum, 64);
+        assert_eq!(c.rendu.cadence, 500);
     }
 }

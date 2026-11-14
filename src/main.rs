@@ -124,6 +124,7 @@ fn run() -> anyhow::Result<()> {
     ipc::start(ipc_state.clone(), ipc_tx);
     let prisme = prisme::start();
     let mut sync_hue: Option<f32> = None;
+    let mut synced = false;
     let mut monitors = win::monitors();
     let mut cursor_size = win::cursor_base_size();
     let (mut last_pos, mut last_move, mut last_sound, mut last_kicks) = ((0, 0), start_instant(), start_instant(), 0u32);
@@ -326,6 +327,10 @@ fn run() -> anyhow::Result<()> {
             _ => None,
         };
         render::set_sync_hue(sync_hue);
+        if sync_hue.is_some() != synced {
+            synced = sync_hue.is_some();
+            log::info!("teinte : {}", if synced { "celle de l'éclairage (Prisme)" } else { "cycle propre" });
+        }
         let life = cfg.fissures.duree.max(0.2) as f64;
         cracks.retain(|c| t - c.born <= life);
         if cfg.rendu.carte_graphique != backend.wants_gpu() && conf_gen != backend_gen {
