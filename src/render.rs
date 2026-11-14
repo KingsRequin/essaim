@@ -253,8 +253,9 @@ impl Swarm {
         }
         let head_rgb = prisme(cfg, t, 1.0);
         let draw_head = |pm: &mut Pixmap, h: &Head| {
+            // lueur : deux disques translucides (un dégradé radial coûte bien plus cher)
             circle(pm, h.x, h.y, h.s * 2.6, &paint(head_rgb, 0.12 * h.al * glow));
-            circle(pm, h.x, h.y, h.s * 1.6, &paint(head_rgb, 0.35 * h.al * glow));
+            circle(pm, h.x, h.y, h.s * 1.6, &paint(head_rgb, 0.3 * h.al * glow));
             circle(pm, h.x, h.y, h.s, &paint(head_rgb, h.al));
             circle(pm, h.x, h.y, h.s * 0.45, &paint((255, 255, 255), h.al));
         };
@@ -273,19 +274,49 @@ impl Swarm {
     }
 }
 
+/// Segments de traînée regroupés par morceaux : chaque morceau est un seul tracé (couleur,
+/// épaisseur et opacité de son milieu). Bien moins coûteux qu'un tracé par segment, à l'œil
+/// identique. Le lissage (anticrénelage) coûte ~3,5× plus cher par tracé : il est réservé aux
+/// traînées des comètes ; satellites et halos, fins ou translucides et en mouvement, s'en passent.
+const TRAIL_CHUNK: usize = 4;
+
+fn polyline(pts: &[(f32, (f32, f32))]) -> Option<tiny_skia::Path> {
+    let mut pb = PathBuilder::new();
+    pb.move_to(pts[0].1 .0, pts[0].1 .1);
+    for p in &pts[1..] {
+        pb.line_to(p.1 .0, p.1 .1);
+    }
+    pb.finish()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_trail(pm: &mut Pixmap, tr: &Trail, c: (f32, f32), t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
     let pts: Vec<(f32, (f32, f32))> =
         tr.iter().map(|&(ti, dx, dy)| ((1.0 - (t - ti) / life).max(0.0) as f32, (c.0 + dx, c.1 + dy))).collect();
+    if pts.len() < 2 {
+        return;
+    }
+    let stroke = |w: f32| Stroke { width: w, line_cap: LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Stroke::default() };
     if halo {
-        for w in pts.windows(2) {
-            let q = w[1].0;
-            segment(pm, w[0].1, w[1].1, (0.8 + q * width) * 2.6, &paint(prisme(cfg, t, q), q * 0.18 * al));
+        if let Some(path) = polyline(&pts) {
+            let mut p = paint(prisme(cfg, t, 0.7), 0.12 * al);
+            p.anti_alias = false;
+            pm.stroke_path(&path, &p, &stroke((0.8 + width * 0.7) * 2.6), Transform::identity(), None);
         }
     }
-    for w in pts.windows(2) {
-        let q = w[1].0;
-        segment(pm, w[0].1, w[1].1, 0.8 + q * width, &paint(prisme(cfg, t, q), q * 0.9 * al));
+    // les comètes (avec halo) sont lissées ; les satellites non
+    let smooth = halo;
+    let chunk = if smooth { TRAIL_CHUNK } else { TRAIL_CHUNK + 2 };
+    let mut i = 0;
+    while i + 1 < pts.len() {
+        let end = (i + chunk).min(pts.len() - 1);
+        let q = (pts[i].0 + pts[end].0) * 0.5;
+        if let Some(path) = polyline(&pts[i..=end]) {
+            let mut p = paint(prisme(cfg, t, q), q * 0.9 * al);
+            p.anti_alias = smooth;
+            pm.stroke_path(&path, &p, &stroke(0.8 + q * width), Transform::identity(), None);
+        }
+        i = end;
     }
 }
 
@@ -407,6 +438,33 @@ mod tests {
         s.draw(&mut pm, origin, 71.0 * dt as f64, &cfg, 1.0, None);
         let painted = pm.data().chunks_exact(4).filter(|p| p[3] > 40).count();
         assert!(painted > 150, "{painted} pixels colorés");
+    }
+
+    /// Mesure du coût d'une image avec un essaim plein (`cargo test --release -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn mesure_cout_image() {
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        let dt = 1.0 / 144.0;
+        let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0 };
+        for i in 0..1000 {
+            if i % 30 == 0 {
+                au.kicks += 1;
+            }
+            s.update(i as f64 * dt as f64, dt, (300.0, 300.0), au, &cfg, 1.5);
+        }
+        let size = Swarm::window_size(&cfg, 1.5);
+        let mut pm = Pixmap::new(size, size).unwrap();
+        let origin = (300.0 - size as f32 / 2.0, 300.0 - size as f32 / 2.0);
+        let n = 500;
+        let t0 = std::time::Instant::now();
+        for _ in 0..n {
+            pm.fill(Color::TRANSPARENT);
+            s.draw(&mut pm, origin, 1000.0 * dt as f64, &cfg, 1.5, Some((300.0, 300.0)));
+        }
+        let per = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        eprintln!("{} satellites, image {size}×{size} : {per:.3} ms par image", s.sats.len());
     }
 
     #[test]

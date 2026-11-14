@@ -32,6 +32,14 @@ navigateur, jeux… sans rien configurer.
   d'origine revient.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
 
+## Consommation (mesurée le 2026-11-14)
+
+~7 % d'un cœur (≈ 0,6 % du processeur, 12 cœurs logiques) à 144 images/s, 3,5 Mo de mémoire.
+Une image avec l'essaim plein (16 satellites, écran à 150 %) se dessine en ~1,2 ms : les
+traînées des satellites et les halos ne sont pas lissés (le lissage coûte ~3,5× plus cher par
+tracé), les traînées sont tracées par morceaux. Mesure : `cargo test --release mesure_cout --
+--ignored --nocapture`.
+
 ## Analyse du son (`src/dsp.rs`)
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
