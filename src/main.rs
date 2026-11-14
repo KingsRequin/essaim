@@ -130,6 +130,7 @@ fn run() -> anyhow::Result<()> {
     let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut last_state = "";
+    let mut last_handle = 0isize;
     let (mut next_conf, mut next_raise, mut next_fs) = (start, start, start);
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
         (0u32, 0f64, Duration::ZERO, Duration::ZERO, start + Duration::from_secs(60));
@@ -198,6 +199,19 @@ fn run() -> anyhow::Result<()> {
         if state != last_state {
             log::info!("état : {state}");
             last_state = state;
+        }
+        if cfg.diagnostic.curseur {
+            if let Some(c) = cur.as_ref().filter(|c| c.handle != last_handle) {
+                let down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0;
+                log::info!(
+                    "diagnostic : curseur {} → {} sur {}{}",
+                    win::cursor_name(last_handle),
+                    win::cursor_name(c.handle),
+                    win::app_under(c.pos.0, c.pos.1),
+                    if down { ", bouton enfoncé" } else { "" }
+                );
+                last_handle = c.handle;
+            }
         }
         let Some(cur) = cur.filter(|c| active && c.showing) else {
             swarm_surface.hide();

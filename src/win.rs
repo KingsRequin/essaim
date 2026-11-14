@@ -204,13 +204,49 @@ pub struct CursorState {
     pub pos: (i32, i32),
     /// Le curseur est affiché (les jeux et lecteurs vidéo le cachent).
     pub showing: bool,
+    /// Poignée du curseur affiché.
+    pub handle: isize,
 }
 
 pub fn cursor_state() -> Option<CursorState> {
     unsafe {
         let mut ci = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
         GetCursorInfo(&mut ci).ok()?;
-        Some(CursorState { pos: (ci.ptScreenPos.x, ci.ptScreenPos.y), showing: ci.flags.0 & CURSOR_SHOWING.0 != 0 })
+        Some(CursorState {
+            pos: (ci.ptScreenPos.x, ci.ptScreenPos.y),
+            showing: ci.flags.0 & CURSOR_SHOWING.0 != 0,
+            handle: ci.hCursor.0 as isize,
+        })
+    }
+}
+
+/// Diagnostic : nom du curseur système de poignée `h` (« autre » pour un curseur d'application).
+/// Les poignées des curseurs système ne changent pas quand `SetSystemCursor` les remplace.
+pub fn cursor_name(h: isize) -> String {
+    use crate::pointer::Role;
+    Role::ALL
+        .iter()
+        .find(|r| unsafe { LoadCursorW(None, PCWSTR(r.id() as usize as *const u16)) }.is_ok_and(|x| x.0 as isize == h))
+        .map_or_else(|| format!("autre ({h:#x})"), |r| format!("{r:?}"))
+}
+
+/// Diagnostic : exécutable de la fenêtre sous le point.
+pub fn app_under(x: i32, y: i32) -> String {
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let w = WindowFromPoint(POINT { x, y });
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(w, Some(&mut pid));
+        let Ok(p) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return format!("pid {pid}") };
+        let mut buf = [0u16; 260];
+        let mut n = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(p, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut n).is_ok();
+        let _ = windows::Win32::Foundation::CloseHandle(p);
+        if !ok {
+            return format!("pid {pid}");
+        }
+        let path = String::from_utf16_lossy(&buf[..n as usize]);
+        path.rsplit('\\').next().unwrap_or(&path).to_string()
     }
 }
 

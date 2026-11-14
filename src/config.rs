@@ -13,6 +13,14 @@ pub struct Config {
     pub couleur: Couleur,
     pub fissures: Fissures,
     pub audio: Audio,
+    pub diagnostic: Diagnostic,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Diagnostic {
+    /// Note dans le journal chaque changement de curseur, avec l'appli sous la souris.
+    pub curseur: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -130,6 +138,9 @@ taille = 1.4
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
+
+[diagnostic]
+curseur = false         # note chaque changement de curseur dans essaim.log
 "#;
 
 pub fn dir() -> PathBuf {
