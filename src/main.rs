@@ -219,14 +219,17 @@ fn run() -> anyhow::Result<()> {
 
         // essaim
         swarm.update(t, dt, cursor, shared.view(), cfg, scale);
-        let size = Swarm::window_size(cfg, scale);
+        // fenêtre ajustée à ce qui est dessiné (s'agrandit quand les traînées s'étirent) ;
+        // taille arrondie à 64 px pour ne pas réallouer l'image à chaque image
+        let (x0, y0, x1, y1) = swarm.bounds(cursor, scale);
+        let origin = (x0.floor() as i32, y0.floor() as i32);
+        let round = |v: f32| ((v.ceil() as u32).div_ceil(64) * 64).max(64);
+        let (w, h) = (round(x1 - origin.0 as f32), round(y1 - origin.1 as f32));
         let pmr = match &mut pm {
-            Some(p) if p.width() == size => p,
-            slot => slot.insert(Pixmap::new(size, size).expect("taille d'image valide")),
+            Some(p) if p.width() == w && p.height() == h => p,
+            slot => slot.insert(Pixmap::new(w, h).expect("taille d'image valide")),
         };
         pmr.fill(tiny_skia::Color::TRANSPARENT);
-        let half = (size / 2) as i32;
-        let origin = (cur.pos.0 - half, cur.pos.1 - half);
         let dot = (cur.arrow && cfg.curseur.masquer_fleche).then_some(cursor);
         swarm.draw(pmr, (origin.0 as f32, origin.1 as f32), t, cfg, scale, dot);
         let _ = swarm_surface.upload(pmr);

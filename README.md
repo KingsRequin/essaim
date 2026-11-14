@@ -25,8 +25,9 @@ navigateur, jeux… sans rien configurer.
 - **Curseur** : la flèche normale de Windows (`OCR_NORMAL`) est remplacée par une flèche
   invisible et le point est dessiné à sa place. Les autres curseurs (texte, lien,
   redimensionnement, attente) restent ceux de Windows ; l'essaim continue autour.
-- **Rendu** : une petite fenêtre superposée (transparente aux clics, toujours devant) suit la
-  souris ; chaque fissure a la sienne. Dessin par `tiny-skia`, affichage par
+- **Rendu** : une fenêtre superposée (transparente aux clics, toujours devant) suit la souris ;
+  les traînées sont en coordonnées écran et s'étirent derrière la souris quand elle bouge, la
+  fenêtre s'ajustant à leur étendue (2400 px au plus). Chaque fissure a sa propre fenêtre. Dessin par `tiny-skia`, affichage par
   `UpdateLayeredWindow`, cadence calée sur le compositeur (`DwmFlush`).
 - **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
   d'origine revient.

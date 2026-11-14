@@ -2,8 +2,8 @@
 //!
 //! Règles (« Essaim durable ») : chaque kick inverse le sens de rotation et ajoute des
 //! satellites ; la quantité de basse règle la vitesse ; plus la note de basse est grave, plus
-//! les orbites s'éloignent. Les traînées sont gardées relatives au centre de l'orbite, pour
-//! rester dans la petite fenêtre qui suit la souris.
+//! les orbites s'éloignent. Les traînées sont gardées en coordonnées écran : quand la souris
+//! bouge, elles s'étirent derrière elle (la fenêtre s'agrandit le temps du mouvement).
 
 use crate::audio::AudioView;
 use crate::config::Config;
@@ -11,9 +11,11 @@ use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-/// Marge de la fenêtre autour de l'orbite la plus large, et décalage maximal du centre lissé.
-pub const MARGIN: f32 = 24.0;
+/// Marge autour de tout ce qui est dessiné, décalage maximal du centre lissé, et étendue
+/// maximale de la fenêtre (une traînée plus longue que ça est coupée).
+const MARGIN: f32 = 12.0;
 const CENTER_LAG_MAX: f32 = 30.0;
+const MAX_EXTENT: f32 = 2400.0;
 const SAT_R_MAX: f32 = 1.9;
 const SAT_TRAIL: f64 = 0.25;
 const TRAIL_STEP: f64 = 1.0 / 90.0;
@@ -89,18 +91,18 @@ fn segment(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32, p: &Paint)
     }
 }
 
-/// Points de traînée : (instant, décalage x, décalage y) par rapport au centre de l'orbite.
+/// Points de traînée : (instant, x, y) en coordonnées écran.
 type Trail = VecDeque<(f64, f32, f32)>;
 
 /// Ajoute la position courante. Le dernier point suit la tête à chaque image ; un nouveau point
 /// fixe n'est ajouté que tous les `TRAIL_STEP`, mesuré depuis l'avant-dernier (le dernier, lui,
 /// est sans cesse rafraîchi).
-fn push_trail(tr: &mut Trail, t: f64, dx: f32, dy: f32, life: f64) {
+fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64) {
     let n = tr.len();
     if n >= 2 && t - tr[n - 2].0 < TRAIL_STEP {
-        tr[n - 1] = (t, dx, dy);
+        tr[n - 1] = (t, x, y);
     } else {
-        tr.push_back((t, dx, dy));
+        tr.push_back((t, x, y));
     }
     while tr.front().is_some_and(|p| t - p.0 > life) {
         tr.pop_front();
@@ -147,10 +149,23 @@ impl Swarm {
         }
     }
 
-    /// Taille (carrée) de la fenêtre qui contient l'essaim, en pixels physiques.
-    pub fn window_size(cfg: &Config, scale: f32) -> u32 {
-        let reach = cfg.orbite.rayon * SAT_R_MAX * (1.0 + cfg.orbite.eloignement_grave.max(0.0)) + CENTER_LAG_MAX + MARGIN;
-        (2.0 * reach * scale).ceil() as u32
+    /// Rectangle écran (x0, y0, x1, y1) qui contient tout ce qui sera dessiné : traînées, têtes
+    /// et point. Borné à `MAX_EXTENT` autour du pointeur.
+    pub fn bounds(&self, cursor: (f32, f32), scale: f32) -> (f32, f32, f32, f32) {
+        let mut b = (cursor.0, cursor.1, cursor.0, cursor.1);
+        let pts = self.trails.iter().chain(self.sats.iter().map(|s| &s.trail)).flat_map(|tr| tr.iter());
+        for &(_, x, y) in pts {
+            b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+        }
+        // halo des comètes (le plus large) + marge
+        let pad = (2.4 * 2.6 + 3.5 * 2.6 + MARGIN) * scale;
+        let half = MAX_EXTENT / 2.0;
+        (
+            (b.0 - pad).max(cursor.0 - half),
+            (b.1 - pad).max(cursor.1 - half),
+            (b.2 + pad).min(cursor.0 + half),
+            (b.3 + pad).min(cursor.1 + half),
+        )
     }
 
     pub fn update(&mut self, t: f64, dt: f32, cursor: (f32, f32), au: AudioView, cfg: &Config, scale: f32) {
@@ -203,22 +218,24 @@ impl Swarm {
         let life = o.trainee.max(0.01) as f64;
         for (i, tr) in self.trails.iter_mut().enumerate() {
             let a = self.angle + i as f32 * PI;
-            push_trail(tr, t, a.cos() * r, a.sin() * r, life);
+            push_trail(tr, t, cx + a.cos() * r, cy + a.sin() * r, life);
         }
         let dur = e.duree.max(0.1) as f64;
         self.sats.retain(|s| t - s.born < dur);
         for s in &mut self.sats {
             s.a = (s.a + w * s.mul * dt).rem_euclid(TAU);
             let rr = o.rayon * scale * s.r * self.far;
-            push_trail(&mut s.trail, t, s.a.cos() * rr, s.a.sin() * rr, SAT_TRAIL);
+            push_trail(&mut s.trail, t, cx + s.a.cos() * rr, cy + s.a.sin() * rr, SAT_TRAIL);
         }
     }
 
     /// Dessine dans `pm`, dont le coin haut-gauche est à `origin` (coordonnées écran). `dot` =
     /// position du point à dessiner (aucun quand Windows affiche un autre curseur).
     pub fn draw(&self, pm: &mut Pixmap, origin: (f32, f32), t: f64, cfg: &Config, scale: f32, dot: Option<(f32, f32)>) {
-        let Some((cx, cy)) = self.center else { return };
-        let c = (cx - origin.0, cy - origin.1);
+        if self.center.is_none() {
+            return;
+        }
+        let c = (-origin.0, -origin.1); // décalage écran → image
         let glow = 0.4 + 0.6 * self.env;
         let o = &cfg.orbite;
         let dur = cfg.essaim.duree.max(0.1) as f64;
@@ -292,7 +309,7 @@ fn polyline(pts: &[(f32, (f32, f32))]) -> Option<tiny_skia::Path> {
 #[allow(clippy::too_many_arguments)]
 fn draw_trail(pm: &mut Pixmap, tr: &Trail, c: (f32, f32), t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
     let pts: Vec<(f32, (f32, f32))> =
-        tr.iter().map(|&(ti, dx, dy)| ((1.0 - (t - ti) / life).max(0.0) as f32, (c.0 + dx, c.1 + dy))).collect();
+        tr.iter().map(|&(ti, x, y)| ((1.0 - (t - ti) / life).max(0.0) as f32, (c.0 + x, c.1 + y))).collect();
     if pts.len() < 2 {
         return;
     }
@@ -432,12 +449,44 @@ mod tests {
             s.update(i as f64 * dt as f64, dt, (100.0, 100.0), AudioView::default(), &cfg, 1.0);
         }
         assert!(s.trails[0].len() >= 10, "{} points", s.trails[0].len());
-        let size = Swarm::window_size(&cfg, 1.0);
-        let mut pm = Pixmap::new(size, size).unwrap();
-        let origin = (100.0 - size as f32 / 2.0, 100.0 - size as f32 / 2.0);
-        s.draw(&mut pm, origin, 71.0 * dt as f64, &cfg, 1.0, None);
+        let (pm, _) = render(&s, (100.0, 100.0), 71.0 * dt as f64, &cfg, 1.0);
         let painted = pm.data().chunks_exact(4).filter(|p| p[3] > 40).count();
         assert!(painted > 150, "{painted} pixels colorés");
+    }
+
+    /// Dessine comme la boucle principale : image ajustée au rectangle de `bounds`.
+    fn render(s: &Swarm, cursor: (f32, f32), t: f64, cfg: &Config, scale: f32) -> (Pixmap, (f32, f32)) {
+        let (x0, y0, x1, y1) = s.bounds(cursor, scale);
+        let origin = (x0.floor(), y0.floor());
+        let mut pm = Pixmap::new((x1 - origin.0).ceil() as u32, (y1 - origin.1).ceil() as u32).unwrap();
+        s.draw(&mut pm, origin, t, cfg, scale, Some(cursor));
+        (pm, origin)
+    }
+
+    #[test]
+    fn la_trainee_s_etire_derriere_la_souris() {
+        // la souris traverse 500 px en 0,15 s : les traînées restent en arrière, la fenêtre
+        // s'agrandit pour les contenir, et de la couleur est dessinée loin derrière le pointeur
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        let dt = 1.0 / 144.0;
+        for i in 0..40 {
+            s.update(i as f64 * dt as f64, dt, (100.0, 300.0), AudioView::default(), &cfg, 1.0);
+        }
+        let mut t = 40.0 * dt as f64;
+        for i in 0..22 {
+            let x = 100.0 + 500.0 * (i as f32 / 21.0);
+            s.update(t, dt, (x, 300.0), AudioView::default(), &cfg, 1.0);
+            t += dt as f64;
+        }
+        let cursor = (600.0, 300.0);
+        let (x0, _, x1, _) = s.bounds(cursor, 1.0);
+        assert!(x1 - x0 > 300.0, "fenêtre de {} px", x1 - x0);
+        let (pm, origin) = render(&s, cursor, t, &cfg, 1.0);
+        // colonne de pixels 250 px derrière le pointeur
+        let col = (cursor.0 - 250.0 - origin.0) as u32;
+        let painted = (0..pm.height()).filter(|&y| pm.pixel(col, y).is_some_and(|p| p.alpha() > 30)).count();
+        assert!(painted > 0, "aucune traînée 250 px derrière le pointeur");
     }
 
     /// Mesure du coût d'une image avec un essaim plein (`cargo test --release -- --ignored --nocapture`).
@@ -454,24 +503,32 @@ mod tests {
             }
             s.update(i as f64 * dt as f64, dt, (300.0, 300.0), au, &cfg, 1.5);
         }
-        let size = Swarm::window_size(&cfg, 1.5);
-        let mut pm = Pixmap::new(size, size).unwrap();
-        let origin = (300.0 - size as f32 / 2.0, 300.0 - size as f32 / 2.0);
         let n = 500;
         let t0 = std::time::Instant::now();
+        let mut size = 0;
         for _ in 0..n {
-            pm.fill(Color::TRANSPARENT);
-            s.draw(&mut pm, origin, 1000.0 * dt as f64, &cfg, 1.5, Some((300.0, 300.0)));
+            let (pm, _) = render(&s, (300.0, 300.0), 1000.0 * dt as f64, &cfg, 1.5);
+            size = pm.width();
         }
         let per = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        eprintln!("{} satellites, image {size}×{size} : {per:.3} ms par image", s.sats.len());
+        eprintln!("{} satellites, image {size} px de large : {per:.3} ms par image", s.sats.len());
     }
 
     #[test]
-    fn l_essaim_tient_dans_sa_fenetre() {
+    fn tout_tient_dans_le_rectangle() {
+        // orbite la plus large (basse très grave) : têtes et traînées dans le rectangle
         let cfg = Config::default();
-        let size = Swarm::window_size(&cfg, 1.5) as f32;
-        let reach = cfg.orbite.rayon * 1.5 * SAT_R_MAX * (1.0 + cfg.orbite.eloignement_grave) + CENTER_LAG_MAX * 1.5;
-        assert!(reach < size / 2.0);
+        let mut s = Swarm::new();
+        let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+        for i in 0..200 {
+            let au = AudioView { kicks: (i / 20) as u32, ..au };
+            s.update(i as f64 * 0.007, 0.007, (500.0, 500.0), au, &cfg, 1.5);
+        }
+        let (x0, y0, x1, y1) = s.bounds((500.0, 500.0), 1.5);
+        for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
+            for &(_, x, y) in tr {
+                assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors du rectangle");
+            }
+        }
     }
 }
