@@ -15,6 +15,24 @@ pub struct Config {
     pub audio: Audio,
     pub diagnostic: Diagnostic,
     pub rendu: Rendu,
+    pub bordure: Bordure,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Bordure {
+    /// La bordure de la fenêtre au premier plan prend la couleur d'Essaim (Windows 11).
+    pub active: bool,
+    /// Force de l'illumination sur un kick (0 = aucune, 1 = jusqu'à la couleur pleine).
+    pub intensite: f32,
+    /// Luminosité sans kick (0 = noire, 1 = couleur pleine).
+    pub repos: f32,
+}
+
+impl Default for Bordure {
+    fn default() -> Self {
+        Self { active: true, intensite: 1.0, repos: 0.5 }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -172,6 +190,11 @@ cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran
 carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
 
+[bordure]
+active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim
+intensite = 1.0         # illumination sur chaque kick : 0 = aucune, 1 = jusqu'à la couleur pleine
+repos = 0.5             # luminosité sans kick : 0 = noire, 1 = couleur pleine
+
 [diagnostic]
 curseur = false         # note chaque changement de curseur dans essaim.log
 "#;
@@ -208,6 +231,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("audio", "sensibilite_kick") => (1.0, 10.0),
         ("audio", "delai_kick") => (0.05, 1.0),
         ("rendu", _) => (0.0, 500.0),
+        ("bordure", _) => (0.0, 1.0),
         _ => (0.0, 1000.0),
     }
 }
@@ -316,6 +340,8 @@ mod tests {
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
         assert_eq!(c.essaim.maximum, 16);
         assert!((c.essaim.duree - 2.8).abs() < 1e-6);
+        assert!(c.bordure.active);
+        assert!((c.bordure.repos - super::Bordure::default().repos).abs() < 1e-6);
     }
 
     #[test]
@@ -344,5 +370,8 @@ mod tests {
         let c = c.clamped();
         assert_eq!(c.essaim.maximum, 64);
         assert_eq!(c.rendu.cadence, 500);
+        let c: super::Config = toml::from_str("[bordure]\nintensite = 3\nrepos = -1").unwrap();
+        let c = c.clamped();
+        assert_eq!((c.bordure.intensite, c.bordure.repos), (1.0, 0.0));
     }
 }

@@ -36,7 +36,12 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
 ## Règles
 
 - Les curseurs de l'utilisateur doivent toujours revenir : tout chemin de sortie appelle
-  `win::restore_cursors()` (fin normale, plantage, plein écran, pause).
+  `win::restore_cursors()` (fin normale, plantage, plein écran, pause). De même pour la bordure
+  colorée de la fenêtre au premier plan : `bordure::restore()` (et `Border::reset` en pause et
+  plein écran).
+- Le premier plan ne peut pas être changé par script si un dialogue système (« Sécurité
+  Windows », `Shell_SystemDim`) est ouvert : l'essai réel de la bordure
+  (`bordure_reelle`, `--ignored`) pilote alors `Border` directement sur le Bloc-notes.
 - Le pointeur est un vrai curseur Windows (pas de dessin du pointeur dans l'overlay : il
   aurait une image de retard). Seul l'éclat du kick est dessiné sous lui.
 - Les seuils du kick (`../audio-commun/src/kick.rs`, bibliothèque partagée) sont validés par les tests sur signaux synthétiques : tout changement

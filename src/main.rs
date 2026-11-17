@@ -4,12 +4,14 @@
 //! dessine par-dessus les sphères, l'éclat du kick et les fissures.
 //!
 //! Options : `--quitter` ferme l'instance en cours ; `--restaurer-curseur` remet les curseurs
-//! Windows d'origine (fermeture, plantage, pause et plein écran le font tout seuls).
+//! Windows d'origine et la bordure de fenêtre colorée (fermeture, plantage, pause et plein écran
+//! le font tout seuls).
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod audio;
 mod backend;
+mod bordure;
 mod canvas;
 mod config;
 mod cursors;
@@ -74,6 +76,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--restaurer-curseur") {
         win::restore_cursors();
+        bordure::restore();
         return;
     }
     if args.iter().any(|a| a == "--quitter") {
@@ -94,11 +97,14 @@ fn main() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         std::mem::forget(_mutex); // garde le verrou jusqu'à la fin du processus
     }
-    // Quoi qu'il arrive, la flèche de Windows doit revenir.
+    // Quoi qu'il arrive, la flèche de Windows et la bordure des fenêtres doivent revenir (y
+    // compris celle laissée colorée par une instance tuée).
     win::restore_cursors();
+    bordure::restore();
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         win::restore_cursors();
+        bordure::restore();
         log::error!("plantage : {info}");
         default_hook(info);
     }));
@@ -107,6 +113,7 @@ fn main() {
         log::error!("arrêt sur erreur : {e:#}");
     }
     win::restore_cursors();
+    bordure::restore();
     log::info!("arrêt");
 }
 
@@ -134,6 +141,7 @@ fn run() -> anyhow::Result<()> {
     let mut cracks: Vec<Crack> = Vec::new();
     let mut swarm = Swarm::new();
     let mut rng = Rng::seeded();
+    let mut border = bordure::Border::default();
 
     let start = Instant::now();
     let mut last = start;
@@ -266,7 +274,14 @@ fn run() -> anyhow::Result<()> {
                 last_handle = c.handle;
             }
         }
+        let au = shared.view();
+        if au.bass > 0.03 || au.kicks != last_kicks {
+            last_kicks = au.kicks;
+            last_sound = now;
+        }
         let Some(cur) = cur.filter(|c| active && c.showing) else {
+            // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
+            border.tick(active, &cfg.bordure, render::prisme(cfg, t, 1.0), au.kicks, now);
             if !cleared {
                 backend.clear();
                 cracks.clear();
@@ -291,14 +306,9 @@ fn run() -> anyhow::Result<()> {
         was_down = down;
 
         // repos : souris immobile et pas de musique depuis 2 s → cadence réduite
-        let au = shared.view();
         if cur.pos != last_pos {
             last_pos = cur.pos;
             last_move = now;
-        }
-        if au.bass > 0.03 || au.kicks != last_kicks {
-            last_kicks = au.kicks;
-            last_sound = now;
         }
         let idle = cfg.rendu.cadence_repos > 0 && now - last_move > IDLE && now - last_sound > IDLE && !down;
         let cadence = match (idle, cfg.rendu.cadence) {
@@ -344,6 +354,7 @@ fn run() -> anyhow::Result<()> {
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
         let crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         let rgb = render::prisme(cfg, t, 1.0);
+        border.tick(true, &cfg.bordure, rgb, au.kicks, now);
         let env = swarm.env;
         let draw = |cv: &mut dyn canvas::Canvas, here: bool| {
             for c in &cracks {

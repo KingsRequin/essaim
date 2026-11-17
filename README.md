@@ -8,6 +8,8 @@ et un essaim de satellites en orbite, et des fissures qui s'ouvrent sous chaque 
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
 - **Couleurs** : celles de l'éclairage RGB quand Prisme tourne (teinte dominante des LED, tenue
   4 s pendant les flashs blancs ou creux sombres), sinon une teinte qui tourne en continu.
+- **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
+  s'illumine sur chaque kick (Windows 11).
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut) : Spotify,
 navigateur, jeux… sans rien configurer.
@@ -25,9 +27,10 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
 - `essaim.exe --quitter` ferme l'instance en cours.
-- `essaim.exe --restaurer-curseur` remet tes curseurs Windows si l'appli a été tuée de force
-  (fermeture normale, plantage, pause et plein écran les remettent tout seuls). Même tuée,
-  le pointeur reste visible : ce sont de vrais curseurs.
+- `essaim.exe --restaurer-curseur` remet tes curseurs Windows et la bordure de la fenêtre
+  colorée si l'appli a été tuée de force (fermeture normale, plantage, pause et plein écran les
+  remettent tout seuls ; le lancement suivant rend aussi sa bordure à la fenêtre restée colorée).
+  Même tuée, le pointeur reste visible : ce sont de vrais curseurs.
 
 ## Fonctionnement
 
@@ -51,6 +54,17 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
     modifiée. Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
   Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`.
+- **Bordure** (`bordure.rs`, section `[bordure]`) : `DwmSetWindowAttribute(DWMWA_BORDER_COLOR)`
+  sur la fenêtre au premier plan, lue par `GetForegroundWindow` à chaque image (pas de hook).
+  Couleur = tête de l'essaim (teinte Prisme ou cycle propre) à la luminosité `repos` (0,5) ; sur
+  un kick, montée immédiate vers la couleur pleine (`intensite`, 1) puis retombée en 0,35 s.
+  Une seule fenêtre colorée : l'ancienne retrouve la couleur du système au changement de premier
+  plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
+  notée dans `bordure.hwnd` pour le cas où Essaim est tué). Ignorées : fenêtres sans cadre, outils
+  (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, fenêtres d'Essaim, plein écran. Couleur
+  quantifiée, envoyée seulement si elle change (60 fois par seconde au plus) ; une fenêtre qui
+  refuse (appli administrateur) est notée une fois au journal. Essai réel :
+  `cargo test --release bordure_reelle -- --ignored --nocapture` avec un Bloc-notes ouvert.
 - **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
   d'origine revient.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
@@ -70,7 +84,7 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
 WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 = hooks
 d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
 (`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
-bornées), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
+bornées ; par exemple `bordure`/`intensite`), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
 Pages web refusées (en-tête `Origin`), 8 clients au plus, 3 s pour la poignée de main. Le
 widget Essaim d'Horizon s'en sert (pause au clic, réglages en direct dans son panneau).
 
