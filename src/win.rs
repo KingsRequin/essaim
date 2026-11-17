@@ -338,13 +338,20 @@ pub fn fullscreen_under(x: i32, y: i32) -> bool {
         if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "EssaimOverlay") {
             return false; // bureau (Wallpaper Engine), barre des tâches
         }
-        let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
-        if mon != MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) {
+        if MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) {
             return false;
         }
+        covers_monitor(fg)
+    }
+}
+
+/// La fenêtre couvre tout son écran (plein écran : jeu, vidéo…).
+pub fn covers_monitor(hwnd: HWND) -> bool {
+    unsafe {
+        let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
         let mut r = RECT::default();
-        if !GetMonitorInfoW(mon, &mut mi).as_bool() || GetWindowRect(fg, &mut r).is_err() {
+        if !GetMonitorInfoW(mon, &mut mi).as_bool() || GetWindowRect(hwnd, &mut r).is_err() {
             return false;
         }
         r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom
