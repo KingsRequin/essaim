@@ -76,6 +76,10 @@ pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows:
             Some(hinst.into()),
             None,
         )?;
+        // Sans cette propriété, l'Explorateur prend ce calque (toujours devant, de la taille de
+        // l'écran) pour une appli plein écran : la barre des tâches masquée automatiquement perd
+        // son « toujours devant » et ressort derrière les fenêtres.
+        SetPropW(hwnd, w!("NonRudeHWND"), Some(windows::Win32::Foundation::HANDLE(std::ptr::without_provenance_mut(1))))?;
         if composition {
             // une fenêtre « layered » n'est montrée qu'avec des attributs ; l'opacité globale
             // reste pleine, la transparence vient du contenu DirectComposition
