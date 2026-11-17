@@ -13,7 +13,6 @@ mod backend;
 mod canvas;
 mod config;
 mod cursors;
-mod dsp;
 mod gpu;
 mod ipc;
 mod layer;

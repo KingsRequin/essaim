@@ -13,7 +13,8 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 toml = "0.8"
 toml_edit = "0.22"
 tungstenite = "0.30"
-wasapi = "0.26"
+# Capture du son et détection du kick, partagées avec Prisme et Horizon (dépôt voisin).
+audio-commun = { path = "../audio-commun", default-features = false, features = ["capture"] }
 windows-numerics = "0.3"
 
 [dependencies.windows]

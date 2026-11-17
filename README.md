@@ -82,7 +82,10 @@ processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le c
 est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
 (pas de gain, bugs connus).
 
-## Analyse du son (`src/dsp.rs`)
+## Analyse du son (`../audio-commun/src/kick.rs`)
+
+La capture et l'analyse sont dans la bibliothèque partagée `audio-commun` (aussi utilisée par
+Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'affichage.
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 

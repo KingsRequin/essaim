@@ -39,7 +39,7 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
   `win::restore_cursors()` (fin normale, plantage, plein écran, pause).
 - Le pointeur est un vrai curseur Windows (pas de dessin du pointeur dans l'overlay : il
   aurait une image de retard). Seul l'éclat du kick est dessiné sous lui.
-- Les seuils de `dsp.rs` sont validés par les tests sur signaux synthétiques : tout changement
+- Les seuils du kick (`../audio-commun/src/kick.rs`, bibliothèque partagée) sont validés par les tests sur signaux synthétiques : tout changement
   de seuil ou de filtre passe par ces tests (caisse claire seule = 0 kick, kicks trouvés avec et
   sans basse, délai médian < 30 ms).
 - Aucune fenêtre ne doit bouger ni apparaître sous la souris : Windows redemande alors leur
