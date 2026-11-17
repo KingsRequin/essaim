@@ -143,7 +143,7 @@ impl Default for Fissures {
 }
 impl Default for Audio {
     fn default() -> Self {
-        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.25 }
+        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1 }
     }
 }
 
@@ -183,7 +183,7 @@ taille = 1.4
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
-delai_kick = 0.25       # délai minimal entre deux kicks (s) ; plus long si un kick long compte double
+delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un kick long compte double
 
 [rendu]
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul

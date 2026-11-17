@@ -72,8 +72,9 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
   (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
   écrans change (`WM_DISPLAYCHANGE`).
-- **Kick** : un seul par coup, même long et ondulant (type 808) : délai minimal `[audio] delai_kick`
-  (0,25 s) et réarmement après la vraie retombée du kick en cours (mesurée sur son propre maximum).
+- **Kick** : un seul par coup, même long et ondulant (type 808) : un kick est une attaque, et deux
+  attaques doivent être séparées d'au moins `[audio] delai_kick` (0,1 s ; la double pédale du metal
+  descend vers 0,08 s).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
 - **Taille du pointeur** de Windows (`CursorBaseSize`) suivie : curseurs refaits à la volée.
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
@@ -103,17 +104,20 @@ Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'af
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
-- **Kick** : grave isolé par 3 passe-bas biquad à 90 Hz (pas de FFT : sa fenêtre étale le corps
-  de la caisse claire dans le grave). Attaque = énergie grave au-dessus de sa moyenne lente
-  (~350 ms), seuil réglable (`sensibilite_kick`). Garde anti-caisse claire : l'énergie grave doit
-  valoir au moins 0,3 × le pic récent (120 ms) de l'énergie 120–1000 Hz. Délai mesuré : 10–20 ms.
-- **Niveau de basse** : énergie du même grave en dB, rapportée au pic récent du morceau (plage
-  de 20 dB).
+- **Kick** : 5 bandes (biquads, pas de FFT) suivies tous les 5 ms ; chaque pic de montée
+  d'énergie est jugé par un petit réseau appris sur de vrais morceaux, 10, 20 ou 30 ms après
+  l'attaque selon sa netteté (délai médian mesuré : 25–30 ms). `sensibilite_kick` règle le dernier
+  seuil ; sans kick depuis 4 s (intro, montée, reprise après une pause), le premier doit être franc.
+  Détails et banc d'essai : README d'`audio-commun`, section « Kick » (F1 0,18 → 0,81 sur 107
+  morceaux d'électro, dubstep, hardstyle, rap, pop et rock ; l'ancien détecteur, qui n'écoutait
+  que le sub, avait 50 à 150 ms de retard en électro, où le sub arrive après l'attaque).
+- **Niveau de basse** : énergie du grave (3 passe-bas à 90 Hz) en dB, rapportée au pic récent du
+  morceau (plage de 20 dB).
 - **Hauteur** : autocorrélation du grave sous-échantillonné à ~1 kHz, 25–83 Hz, mise à jour hors
   des kicks.
-- Limite connue : une note de basse qui démarre très sèchement (depuis le silence) peut compter
-  comme un kick. Une attente de confirmation a été essayée et écartée : elle ratait la moitié des
-  vrais kicks (un kick descend en hauteur et son énergie grave monte encore 20–40 ms).
+- Limites connues : une note de basse tenue ou une voix grave qui démarre sèchement peut encore
+  compter comme un kick (la distinguer demanderait d'écouter plus de 30 ms) ; sur la batterie
+  acoustique très propre, l'ancien détecteur faisait un peu mieux (F1 0,93 contre 0,84).
 
 ## Développement
 

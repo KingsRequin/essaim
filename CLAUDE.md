@@ -44,9 +44,10 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
   (`bordure_reelle`, `--ignored`) pilote alors `Border` directement sur le Bloc-notes.
 - Le pointeur est un vrai curseur Windows (pas de dessin du pointeur dans l'overlay : il
   aurait une image de retard). Seul l'éclat du kick est dessiné sous lui.
-- Les seuils du kick (`../audio-commun/src/kick.rs`, bibliothèque partagée) sont validés par les tests sur signaux synthétiques : tout changement
-  de seuil ou de filtre passe par ces tests (caisse claire seule = 0 kick, kicks trouvés avec et
-  sans basse, délai médian < 30 ms).
+- Le kick (`../audio-commun/src/kick.rs`, bibliothèque partagée) est un modèle appris sur de vrais
+  morceaux : tout changement de mesure ou de seuil passe par les tests sur signaux synthétiques
+  (caisse claire seule = 0 kick, kicks trouvés avec et sans basse, délai médian < 30 ms) et par le
+  banc sur vraie musique (`audio-commun`, README, section « Kick »).
 - Aucune fenêtre ne doit bouger ni apparaître sous la souris : Windows redemande alors leur
   curseur aux applications (l'Explorateur répond « flèche »). Tout passe par les calques fixes
   de `layer.rs`.
