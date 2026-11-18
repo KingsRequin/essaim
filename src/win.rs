@@ -418,7 +418,7 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 if let Ok(menu) = CreatePopupMenu() {
                     let paused = PAUSED.with(|p| p.get());
                     let _ = AppendMenuW(menu, MF_STRING, CMD_PAUSE, if paused { w!("Reprendre") } else { w!("Mettre en pause") });
-                    let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG, w!("Ouvrir les réglages"));
+                    let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG, w!("Réglages…"));
                     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                     let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quitter"));
                     let mut pt = POINT::default();
@@ -483,6 +483,11 @@ impl Drop for Tray {
             let _ = DestroyWindow(self.hwnd);
         }
     }
+}
+
+/// Icône de l'appli (pour une fenêtre), dessinée à la volée.
+pub fn app_icon() -> Option<HICON> {
+    make_icon()
 }
 
 /// Icône 32×32 dessinée à la volée : le point et deux comètes.

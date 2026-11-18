@@ -3,7 +3,8 @@
 //! Le point et ses variantes sont de vrais curseurs Windows (`cursors.rs`) : aucun retard. L'appli
 //! dessine par-dessus les sphères, l'éclat du kick et les fissures.
 //!
-//! Options : `--quitter` ferme l'instance en cours ; `--restaurer-curseur` remet les curseurs
+//! Options : `--reglages` ouvre la fenêtre des réglages (de l'instance en cours s'il y en a
+//! une) ; `--quitter` ferme l'instance en cours ; `--restaurer-curseur` remet les curseurs
 //! Windows d'origine et la bordure de fenêtre colorée (fermeture, plantage, pause et plein écran
 //! le font tout seuls).
 
@@ -20,6 +21,8 @@ mod ipc;
 mod layer;
 mod pointer;
 mod prisme;
+mod profils;
+mod reglages;
 mod render;
 mod win;
 
@@ -34,7 +37,7 @@ use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use pointer::Role;
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE, WM_COMMAND};
 
 const MAX_CRACKS: usize = 12;
 /// Sans mouvement de souris ni musique depuis ce délai : cadence de repos.
@@ -79,6 +82,16 @@ fn main() {
         bordure::restore();
         return;
     }
+    let open_settings = args.iter().any(|a| a == "--reglages");
+    if open_settings {
+        // instance en cours : c'est elle qui ouvre sa fenêtre
+        unsafe {
+            if let Ok(h) = FindWindowW(win::TRAY_CLASS, None) {
+                let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(win::CMD_CONFIG), LPARAM(0));
+                return;
+            }
+        }
+    }
     if args.iter().any(|a| a == "--quitter") {
         unsafe {
             if let Ok(h) = FindWindowW(win::TRAY_CLASS, None) {
@@ -109,7 +122,7 @@ fn main() {
         default_hook(info);
     }));
     log::info!("démarrage d'Essaim {}", env!("CARGO_PKG_VERSION"));
-    if let Err(e) = run() {
+    if let Err(e) = run(open_settings) {
         log::error!("arrêt sur erreur : {e:#}");
     }
     win::restore_cursors();
@@ -117,7 +130,7 @@ fn main() {
     log::info!("arrêt");
 }
 
-fn run() -> anyhow::Result<()> {
+fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut conf = config::Watched::load();
     let shared = Arc::new(audio::AudioShared::default());
     shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
@@ -125,6 +138,9 @@ fn run() -> anyhow::Result<()> {
     let mut audio_thread = if conf.cfg.audio.actif { Some(audio::start(shared.clone())?) } else { None };
 
     let _tray = win::Tray::new()?;
+    if open_settings {
+        reglages::open();
+    }
     // interface locale pour Horizon, et synchro de teinte avec Prisme
     let ipc_state = Arc::new(ipc::Shared::default());
     let (ipc_tx, ipc_rx) = std::sync::mpsc::channel();
@@ -147,8 +163,11 @@ fn run() -> anyhow::Result<()> {
     let mut last = start;
     let mut user_paused = false;
     let mut fs_paused = false;
-    // curseurs Windows appliqués : (remplacer, variantes, échelle en %, génération des réglages)
+    // curseurs Windows appliqués : (remplacer, variantes, échelle en %, génération de leurs
+    // réglages) ; ils ne sont refaits que si `[curseur]` ou `[couleur]` change
     let mut applied: Option<(bool, bool, u32, u32)> = None;
+    let cursor_key = |c: &config::Config| serde_json::to_string(&(&c.curseur, &c.couleur)).unwrap_or_default();
+    let (mut cursor_gen, mut cursor_cfg) = (0u32, cursor_key(&conf.cfg));
     let mut size_applied = cursor_size;
     let mut conf_gen = 0u32;
     let mut was_down = false;
@@ -172,7 +191,7 @@ fn run() -> anyhow::Result<()> {
                 win::set_paused_label(user_paused);
                 log::info!("{}", if user_paused { "pause" } else { "reprise" });
             }
-            win::CMD_CONFIG => win::open_file(&config::path()),
+            win::CMD_CONFIG => reglages::open(),
             _ => {}
         }
         while let Ok(c) = ipc_rx.try_recv() {
@@ -203,19 +222,25 @@ fn run() -> anyhow::Result<()> {
                 log::info!("{}", if fs { "plein écran : en veille" } else { "fin du plein écran" });
             }
         }
-        if now >= next_conf {
+        // réglages : relus toutes les secondes, ou tout de suite s'ils viennent de la fenêtre
+        let timed = now >= next_conf;
+        if timed {
             next_conf = now + Duration::from_secs(1);
             monitors = win::monitors();
             cursor_size = win::cursor_base_size();
-            if conf.reload() {
-                conf_gen += 1;
-                shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
-                shared.set_min_gap(conf.cfg.audio.delai_kick);
-                match (conf.cfg.audio.actif, audio_thread.is_some()) {
-                    (true, false) => audio_thread = audio::start(shared.clone()).ok(),
-                    (false, true) => audio_thread = None,
-                    _ => {}
-                }
+        }
+        if (timed || config::take_reload_request()) && conf.reload() {
+            conf_gen += 1;
+            if cursor_key(&conf.cfg) != cursor_cfg {
+                cursor_cfg = cursor_key(&conf.cfg);
+                cursor_gen += 1;
+            }
+            shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
+            shared.set_min_gap(conf.cfg.audio.delai_kick);
+            match (conf.cfg.audio.actif, audio_thread.is_some()) {
+                (true, false) => audio_thread = audio::start(shared.clone()).ok(),
+                (false, true) => audio_thread = None,
+                _ => {}
             }
         }
         let cfg = &conf.cfg;
@@ -239,7 +264,7 @@ fn run() -> anyhow::Result<()> {
         // taille du pointeur de Windows : quand elle change, Windows recharge ses curseurs
         // (les nôtres sont perdus) ; on les refait à la nouvelle taille
         let size = if cfg.curseur.taille_windows { cursor_size } else { 32 };
-        let want = active.then_some((cfg.curseur.remplacer_curseurs, cfg.curseur.variantes, scale_pct, conf_gen));
+        let want = active.then_some((cfg.curseur.remplacer_curseurs, cfg.curseur.variantes, scale_pct, cursor_gen));
         if want != applied || size != size_applied {
             win::restore_cursors();
             let s = scale_pct as f32 / 100.0 * size as f32 / 32.0;

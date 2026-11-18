@@ -93,6 +93,8 @@ pub struct Essaim {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Couleur {
+    /// Teinte de départ (degrés) : la couleur fixe quand `vitesse_teinte` vaut 0.
+    pub teinte: f32,
     pub vitesse_teinte: f32,
     pub ecart_teinte: f32,
     /// Prend la teinte de l'éclairage de Prisme quand il tourne (sinon la teinte tourne seule).
@@ -133,7 +135,7 @@ impl Default for Essaim {
 }
 impl Default for Couleur {
     fn default() -> Self {
-        Self { vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true }
+        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true }
     }
 }
 impl Default for Fissures {
@@ -171,7 +173,8 @@ maximum = 16            # satellites en même temps, au plus
 duree = 2.8             # durée de vie d'un satellite (s)
 
 [couleur]
-vitesse_teinte = 60     # degrés de teinte par seconde (Prisme)
+teinte = 0              # teinte de départ (0 rouge, 120 vert, 240 bleu) ; fixe si vitesse_teinte = 0
+vitesse_teinte = 60     # degrés de teinte par seconde
 ecart_teinte = 140      # écart de teinte entre la tête et la queue des traînées
 synchro_prisme = true   # prend la teinte de l'éclairage de Prisme quand il tourne
 
@@ -225,6 +228,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
+        ("couleur", "teinte") => (0.0, 360.0),
         ("couleur", _) => (0.0, 720.0),
         ("fissures", "duree") => (0.2, 30.0),
         ("fissures", "taille") => (0.2, 6.0),
@@ -237,8 +241,13 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
 }
 
 impl Config {
+    /// Lit un fichier de réglages (manquants : valeurs par défaut), bornes appliquées.
+    pub fn read(p: &std::path::Path) -> anyhow::Result<Config> {
+        Ok(toml::from_str::<Config>(&std::fs::read_to_string(p)?)?.clamped())
+    }
+
     /// Ramène chaque réglage numérique dans ses bornes.
-    fn clamped(self) -> Config {
+    pub fn clamped(self) -> Config {
         let Ok(mut v) = serde_json::to_value(&self) else { return self };
         if let Some(sections) = v.as_object_mut() {
             for (section, keys) in sections.iter_mut() {
@@ -258,38 +267,104 @@ impl Config {
     }
 }
 
-fn set_value_in(p: &std::path::Path, section: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn set_value_in(p: &std::path::Path, section: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+    edit_file(p, |doc, known| set_in_doc(doc, known, section, key, value))
+}
+
+/// Écrit d'un coup les valeurs de `cfg` retenues par `keep(section, clé)` (application d'un
+/// profil), en gardant commentaires et mise en page.
+pub fn apply_keys(cfg: &Config, keep: fn(&str, &str) -> bool) -> Result<(), String> {
+    apply_keys_in(&path(), cfg, keep)
+}
+
+pub(crate) fn apply_keys_in(p: &std::path::Path, cfg: &Config, keep: fn(&str, &str) -> bool) -> Result<(), String> {
+    let values = serde_json::to_value(cfg.clone().clamped()).map_err(|e| e.to_string())?;
+    edit_file(p, |doc, known| {
+        for (section, keys) in values.as_object().into_iter().flatten() {
+            for (key, v) in keys.as_object().into_iter().flatten().filter(|(k, _)| keep(section, k)) {
+                set_in_doc(doc, known, section, key, v)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Lit `config.toml` (ou le fichier par défaut), applique `change`, vérifie que le résultat se
+/// lit, puis l'écrit.
+fn edit_file(
+    p: &std::path::Path,
+    change: impl FnOnce(&mut toml_edit::DocumentMut, &serde_json::Value) -> Result<(), String>,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(p).unwrap_or_else(|_| DEFAULT_FILE.to_owned());
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("config.toml illisible : {e}"))?;
+    let known = serde_json::to_value(Config::default()).map_err(|e| e.to_string())?;
+    change(&mut doc, &known)?;
+    let new = doc.to_string();
+    if new == text {
+        return Ok(());
+    }
+    toml::from_str::<Config>(&new).map_err(|e| format!("valeur refusée : {e}"))?;
+    std::fs::write(p, new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))
+}
+
+fn set_in_doc(
+    doc: &mut toml_edit::DocumentMut,
+    known: &serde_json::Value,
+    section: &str,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
     if let Some(f) = value.as_f64() {
         let (lo, hi) = limits(section, key);
         if !(lo..=hi).contains(&f) {
             return Err(format!("[{section}] {key} : {f} hors bornes ({lo} à {hi})"));
         }
     }
-    let text = std::fs::read_to_string(p).unwrap_or_else(|_| DEFAULT_FILE.to_owned());
-    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("config.toml illisible : {e}"))?;
-    let known = serde_json::to_value(Config::default()).map_err(|e| e.to_string())?;
     let Some(old) = known.get(section).and_then(|s| s.get(key)) else {
         return Err(format!("réglage inconnu : [{section}] {key}"));
     };
-    let v: toml_edit::Value = match (old, value) {
+    let mut v: toml_edit::Value = match (old, value) {
         (serde_json::Value::Bool(_), serde_json::Value::Bool(b)) => (*b).into(),
-        (serde_json::Value::Number(o), serde_json::Value::Number(n)) if o.is_f64() => n.as_f64().unwrap_or(0.0).into(),
+        // 4 décimales : un f32 élargi (3.4000000953…) s'écrit 3.4
+        (serde_json::Value::Number(o), serde_json::Value::Number(n)) if o.is_f64() => {
+            ((n.as_f64().unwrap_or(0.0) * 1e4).round() / 1e4).into()
+        }
         (serde_json::Value::Number(_), serde_json::Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64)).unwrap_or(0).into(),
         _ => return Err(format!("[{section}] {key} : valeur du mauvais type")),
     };
     if doc.get(section).is_none() {
         doc[section] = toml_edit::table();
     }
-    // garde le commentaire de fin de ligne de l'ancienne valeur
-    let decor = doc[section].get(key).and_then(|i| i.as_value()).map(|v| v.decor().clone());
-    let mut v = v;
-    if let Some(d) = decor {
-        *v.decor_mut() = d;
+    // même valeur : rien à changer (le fichier n'est pas réécrit)
+    if let Some(cur) = doc[section].get(key).and_then(|i| i.as_value()) {
+        if same(cur, &v) {
+            return Ok(());
+        }
+        // garde le commentaire de fin de ligne de l'ancienne valeur
+        *v.decor_mut() = cur.decor().clone();
     }
     doc[section][key] = toml_edit::Item::Value(v);
-    let new = doc.to_string();
-    toml::from_str::<Config>(&new).map_err(|e| format!("valeur refusée : {e}"))?;
-    std::fs::write(p, new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))
+    Ok(())
+}
+
+fn same(a: &toml_edit::Value, b: &toml_edit::Value) -> bool {
+    if let (Some(x), Some(y)) = (a.as_bool(), b.as_bool()) {
+        return x == y;
+    }
+    let num = |v: &toml_edit::Value| v.as_float().or(v.as_integer().map(|i| i as f64));
+    matches!((num(a), num(b)), (Some(x), Some(y)) if (x - y).abs() < 1e-9)
+}
+
+/// Demande à la boucle principale de relire `config.toml` sans attendre son tour (réglages
+/// changés depuis la fenêtre : effet immédiat).
+static RELOAD_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn request_reload() {
+    RELOAD_NOW.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn take_reload_request() -> bool {
+    RELOAD_NOW.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
 pub struct Watched {
@@ -319,10 +394,10 @@ impl Watched {
             return false;
         }
         self.modified = modified;
-        match std::fs::read_to_string(&p).map_err(anyhow::Error::from).and_then(|s| Ok(toml::from_str::<Config>(&s)?)) {
+        match Config::read(&p) {
             Ok(cfg) => {
                 log::info!("config : chargée");
-                self.cfg = cfg.clamped();
+                self.cfg = cfg;
                 true
             }
             Err(e) => {
