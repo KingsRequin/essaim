@@ -1,2 +1,4 @@
 /target
 *.log
+/.cargo/config.toml
+CLAUDE.local.md

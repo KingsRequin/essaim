@@ -171,7 +171,7 @@ processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le c
 est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
 (pas de gain, bugs connus).
 
-## Analyse du son (`../audio-commun/src/kick.rs`)
+## Analyse du son (audio-commun, `src/kick.rs`)
 
 La capture et l'analyse sont dans la bibliothèque partagée `audio-commun` (aussi utilisée par
 Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'affichage.
@@ -223,7 +223,18 @@ GitHub en fait une copie et une pull request, à relire avant d'ajouter le prese
 
 ## Développement
 
-Voir `CLAUDE.md`.
+`cargo build --release` suffit : l'analyse du son vient de la bibliothèque
+[audio-commun](https://github.com/KingsRequin/audio-commun) (tag `v0.1.0`), partagée avec Horizon.
+Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
+suivi par git) :
+
+```toml
+[patch."https://github.com/KingsRequin/audio-commun"]
+audio-commun = { path = "../audio-commun" }
+```
+
+Le même fichier peut fixer le dossier de compilation (`[build] target-dir`). Consignes de
+travail : `CLAUDE.md`.
 
 ## Licence
 

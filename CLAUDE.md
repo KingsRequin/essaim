@@ -11,8 +11,10 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-Les compilations vont sur C: (`.cargo/config.toml`) : lancer cargo depuis le dépôt.
-Exécutable : `C:\Users\KingsRequin\.cache\essaim-target\release\essaim.exe`.
+Lancer cargo depuis le dépôt : `.cargo/config.toml` (local, non suivi) y choisit le dossier de
+compilation et remplace `audio-commun` de GitHub par le dossier voisin. Consignes propres au PC
+de l'auteur (chemins, exécutable) : `CLAUDE.local.md`. Exécutable :
+`<dossier de compilation>\release\essaim.exe` (`cargo metadata` donne le dossier).
 
 ## Installation
 

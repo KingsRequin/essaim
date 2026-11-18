@@ -15,7 +15,7 @@ toml = "0.8"
 toml_edit = "0.22"
 tungstenite = "0.30"
 # Capture du son et détection du kick, partagées avec Prisme et Horizon (dépôt voisin).
-audio-commun = { path = "../audio-commun", default-features = false, features = ["capture"] }
+audio-commun = { git = "https://github.com/KingsRequin/audio-commun", tag = "v0.1.0", default-features = false, features = ["capture"] }
 windows-numerics = "0.3"
 wry = { version = "=0.57.1", default-features = false }
 
