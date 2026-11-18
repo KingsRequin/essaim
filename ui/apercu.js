@@ -89,7 +89,7 @@ class Apercu {
       this.canvas.height = w;
     }
     const o = this.reglages.orbite;
-    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0] * 1.2) * (1 + o.eloignement_grave * 0.7) + 6;
+    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0]) * 1.2 * (1 + o.eloignement_grave * 0.7) + 6;
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
   }
 
@@ -147,10 +147,13 @@ class Apercu {
         return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [] };
       });
     }
+    // satellites : sur le trajet des comètes, ou le leur (comme render.rs)
+    const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
     for (const s of this.sats.concat(this.fixes)) {
       s.a = (s.a + w * s.mul * dt) % TAU;
       const rr = o.rayon * S * s.r * this.far;
-      pousser(s.trainee, t, cx + Math.cos(s.a) * rr, cy + Math.sin(s.a) * rr, SAT_TRAINEE);
+      const [x, y] = chemin(forme, s.a);
+      pousser(s.trainee, t, cx + x * rr, cy + y * rr, SAT_TRAINEE);
     }
   }
 
@@ -191,7 +194,7 @@ class Apercu {
       const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
       trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S, al, false);
       const p = s.trainee[s.trainee.length - 1];
-      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S, al, devant: Math.sin(s.a) > 0 });
+      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S, al, devant: p[2] > this.canvas.height / 2 });
     }
     if (c.orbite.cometes) {
       this.trainees.forEach((tr) => {

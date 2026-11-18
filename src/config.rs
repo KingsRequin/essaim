@@ -101,6 +101,35 @@ pub struct Essaim {
     pub duree: f32,
     /// Satellites permanents, présents même sans musique.
     pub fixes: u32,
+    /// Trajet des satellites ; par défaut celui des comètes.
+    pub forme: FormeSatellites,
+}
+
+/// Trajet des satellites : celui des comètes, ou une forme à eux.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FormeSatellites {
+    #[default]
+    Cometes,
+    Cercle,
+    Triangle,
+    Losange,
+    Hexagone,
+    Huit,
+}
+
+impl FormeSatellites {
+    /// La forme suivie, `cometes` étant celle des comètes.
+    pub fn suivie(self, cometes: Forme) -> Forme {
+        match self {
+            Self::Cometes => cometes,
+            Self::Cercle => Forme::Cercle,
+            Self::Triangle => Forme::Triangle,
+            Self::Losange => Forme::Losange,
+            Self::Hexagone => Forme::Hexagone,
+            Self::Huit => Forme::Huit,
+        }
+    }
 }
 
 /// Trajet des comètes autour du pointeur.
@@ -173,7 +202,7 @@ impl Default for Orbite {
 }
 impl Default for Essaim {
     fn default() -> Self {
-        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8, fixes: 0 }
+        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8, fixes: 0, forme: FormeSatellites::Cometes }
     }
 }
 impl Default for Couleur {
@@ -215,6 +244,7 @@ par_kick_max = 3
 maximum = 16            # satellites en même temps, au plus
 duree = 2.8             # durée de vie d'un satellite (s)
 fixes = 0               # satellites permanents, présents même sans musique
+forme = "cometes"       # trajet des satellites : "cometes" (le même), ou cercle, triangle, losange, hexagone, huit
 
 [couleur]
 teinte = 0              # teinte de départ (0 rouge, 120 vert, 240 bleu) ; fixe si vitesse_teinte = 0

@@ -9,7 +9,8 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
   moins en moins vite) suivent un cercle, un triangle, un losange, un hexagone ou un huit
-  (`forme`) ; `[essaim] fixes` ajoute des satellites permanents, même sans musique.
+  (`forme`) ; les satellites suivent le même trajet, ou le leur (`[essaim] forme`) ;
+  `[essaim] fixes` ajoute des satellites permanents, même sans musique.
 - **Couleurs** : une teinte de départ qui tourne en continu ou reste fixe ; ou la couleur
   dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
   exécutable ; les icônes grises gardent la teinte précédente) ; ou, si l'outil Prisme de

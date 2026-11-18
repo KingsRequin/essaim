@@ -261,10 +261,13 @@ impl Swarm {
                 })
                 .collect();
         }
+        // satellites : sur le trajet des comètes, ou le leur, à des distances variées
+        let forme = e.forme.suivie(o.forme);
         for s in self.sats.iter_mut().chain(self.fixes.iter_mut()) {
             s.a = (s.a + w * s.mul * dt).rem_euclid(TAU);
             let rr = o.rayon * scale * s.r * self.far;
-            push_trail(&mut s.trail, t, cx + s.a.cos() * rr, cy + s.a.sin() * rr, SAT_TRAIL);
+            let (x, y) = chemin(forme, s.a);
+            push_trail(&mut s.trail, t, cx + x * rr, cy + y * rr, SAT_TRAIL);
         }
         // saut du pointeur (autre écran…) : la traînée laissée loin derrière est abandonnée
         let half = MAX_EXTENT / 2.0;
@@ -299,7 +302,7 @@ impl Swarm {
             let al = (k * 1.5).min(1.0);
             draw_trail(cv, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
             if let Some(&(_, x, y)) = s.trail.back() {
-                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale, al, front: s.a.sin() > 0.0 });
+                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale, al, front: y > self.center.map_or(0.0, |c| c.1) });
             }
         }
         // les comètes (devant : sous le centre de l'orbite, comme vues de biais)
@@ -566,10 +569,16 @@ mod tests {
 
     #[test]
     fn formes_anneaux_et_permanents_tiennent_dans_le_rectangle() {
-        use crate::config::Forme;
-        for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit] {
+        use crate::config::{Forme, FormeSatellites};
+        for (forme, sat) in [
+            (Forme::Cercle, FormeSatellites::Cometes),
+            (Forme::Triangle, FormeSatellites::Cometes),
+            (Forme::Losange, FormeSatellites::Huit),
+            (Forme::Hexagone, FormeSatellites::Triangle),
+            (Forme::Huit, FormeSatellites::Cometes),
+        ] {
             let mut cfg = Config::default();
-            (cfg.orbite.forme, cfg.orbite.nombre, cfg.orbite.anneaux, cfg.essaim.fixes) = (forme, 8, 4, 32);
+            (cfg.orbite.forme, cfg.orbite.nombre, cfg.orbite.anneaux, cfg.essaim.fixes, cfg.essaim.forme) = (forme, 8, 4, 32, sat);
             let mut s = Swarm::new();
             let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
             for i in 0..200 {
@@ -586,6 +595,25 @@ mod tests {
     }
 
     #[test]
+    fn les_satellites_suivent_la_forme_des_cometes_par_defaut() {
+        use crate::config::{Forme, FormeSatellites};
+        for (sat, attendue) in [(FormeSatellites::Cometes, Forme::Triangle), (FormeSatellites::Huit, Forme::Huit)] {
+            let mut cfg = Config::default();
+            (cfg.orbite.forme, cfg.essaim.fixes, cfg.essaim.forme) = (Forme::Triangle, 6, sat);
+            let mut s = Swarm::new();
+            for i in 0..20 {
+                s.update(i as f64 * 0.01, 0.01, (300.0, 300.0), AudioView::default(), &cfg, 1.0);
+            }
+            for q in &s.fixes {
+                let &(_, x, y) = q.trail.back().unwrap();
+                let rr = cfg.orbite.rayon * q.r * s.far;
+                let (ex, ey) = chemin(attendue, q.a);
+                assert!((x - 300.0 - ex * rr).abs() < 0.01 && (y - 300.0 - ey * rr).abs() < 0.01, "{sat:?} : ({x}, {y})");
+            }
+        }
+    }
+
+        #[test]
     fn les_trajets_sont_continus() {
         use crate::config::Forme;
         for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit] {

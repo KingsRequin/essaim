@@ -92,6 +92,7 @@ function recevoirSon(m) {
 // Presets : fournis, à moi, communauté
 
 const FORMES = [["cercle", "Cercle"], ["triangle", "Triangle"], ["losange", "Losange"], ["hexagone", "Hexagone"], ["huit", "Huit"]];
+const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES];
 
 function fusion(base, partiel) {
   const r = Array.isArray(base) ? [...base] : { ...base };
@@ -181,7 +182,7 @@ function detail(p) {
   if (o.cometes) parts.push(`${formes[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} comète${o.nombre * o.anneaux > 1 ? "s" : ""}`);
   else parts.push("sans comètes");
   const sats = c.essaim.fixes + c.essaim.maximum;
-  if (sats) parts.push(sats + " satellites");
+  if (sats) parts.push(sats + " satellites" + (c.essaim.forme && c.essaim.forme !== "cometes" ? " en " + formes[c.essaim.forme].toLowerCase() : ""));
   if (c.souris && c.souris.jeu) parts.push("curseurs " + c.souris.jeu);
   if (p.origine === "commu" && p.etiquettes.length) parts.push(p.etiquettes.slice(0, 2).join(", "));
   return parts.join(" · ");
@@ -485,12 +486,15 @@ function construireReglages() {
   }, false);
 
   ligneLarge("Effets", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
-  formes = FORMES.map(([id, libelle]) => {
+  const choixForme = (section, cle, liste) => liste.map(([id, libelle]) => {
     const b = el("button", "puce", libelle);
-    b.addEventListener("click", () => { regler("orbite", "forme", id); majReglages(); });
-    return { id, b };
+    b.addEventListener("click", () => { regler(section, cle, id); majReglages(); });
+    const f = { section, cle, id, b };
+    formes.push(f);
+    return b;
   });
-  ligneLarge("Trajet", formes.map((f) => f.b));
+  ligneLarge("Trajet des comètes", choixForme("orbite", "forme", FORMES));
+  ligneLarge("Trajet des satellites", choixForme("essaim", "forme", FORMES_SATELLITES));
   for (const def of NORMAUX) {
     numerique(def);
     if (def.cle === "vitesse_base") {
@@ -565,7 +569,7 @@ function majReglages() {
     const v = val(b.section, b.cle);
     b.bouton.setAttribute("aria-pressed", typeof v === "boolean" ? v : v > 0);
   }
-  for (const f of formes) f.b.setAttribute("aria-pressed", val("orbite", "forme") === f.id);
+  for (const f of formes) f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
   const c = etat.reglages.couleur;
   for (const t of teintes) {
     t.b.setAttribute("aria-pressed", !c.application && !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
