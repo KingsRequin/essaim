@@ -171,7 +171,78 @@ mod tests {
     /// `cargo test --release mesure_moteurs -- --ignored --nocapture`
     #[test]
     #[ignore]
-    fn mesure_moteurs() {
+    fn mesure_impact_reglages() {
+        // coût d'une image (carte graphique, simulation comprise) avec chaque réglage au minimum
+        // puis au maximum, le reste par défaut ; kick toutes les 30 images, basse forte
+        fn cout(cfg: &Config, gpu: bool) -> f64 {
+            let dt = 1.0 / 144.0;
+            let mut s = Swarm::new();
+            let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0 };
+            let mut b = Backend::new(gpu);
+            let mons = [(1isize, (0, 0, 1920, 1080))];
+            let (chauffe, n) = (150, 250);
+            let mut durees = Vec::with_capacity(n);
+            for i in 0..(chauffe + n) {
+                if i % 30 == 0 {
+                    au.kicks += 1;
+                }
+                let t = i as f64 * dt as f64;
+                let cursor = (600.0 + 200.0 * (t as f32).sin(), 500.0);
+                let t0 = Instant::now();
+                s.update(t, dt, cursor, au, cfg, 1.0);
+                let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
+                let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
+                b.frame(&mons, rect, &[], &|cv, _| s.draw(cv, t, cfg, 1.0, cursor));
+                if i >= chauffe {
+                    durees.push(t0.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            mediane(durees)
+        }
+        fn mediane(mut v: Vec<f64>) -> f64 {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v[v.len() / 2]
+        }
+        type Reglage = (&'static str, fn(&mut Config, f32));
+        let reglages: [(Reglage, f32, f32); 16] = [
+            (("orbite.nombre", |c, v| c.orbite.nombre = v as u32), 1.0, 8.0),
+            (("orbite.anneaux", |c, v| c.orbite.anneaux = v as u32), 1.0, 4.0),
+            (("orbite.rayon", |c, v| c.orbite.rayon = v), 4.0, 80.0),
+            (("orbite.vitesse_base", |c, v| c.orbite.vitesse_base = v), 0.0, 15.0),
+            (("orbite.vitesse_basse", |c, v| c.orbite.vitesse_basse = v), 0.0, 40.0),
+            (("orbite.eloignement_grave", |c, v| c.orbite.eloignement_grave = v), 0.0, 4.0),
+            (("orbite.trainee", |c, v| c.orbite.trainee = v), 0.05, 2.0),
+            (("orbite.cometes", |c, v| c.orbite.cometes = v > 0.5), 0.0, 1.0),
+            (("essaim.maximum", |c, v| c.essaim.maximum = v as usize), 0.0, 64.0),
+            (("essaim.fixes", |c, v| c.essaim.fixes = v as u32), 0.0, 32.0),
+            (("essaim.par_kick_max", |c, v| (c.essaim.par_kick_min, c.essaim.par_kick_max) = (v as u32, v as u32)), 0.0, 10.0),
+            (("essaim.duree", |c, v| c.essaim.duree = v), 0.5, 10.0),
+            (("eclat.taille", |c, v| c.eclat.taille = v), 0.0, 12.0),
+            (("orbite.forme", |c, v| c.orbite.forme = if v > 0.5 { crate::config::Forme::Huit } else { crate::config::Forme::Cercle }), 0.0, 1.0),
+            (("couleur.vitesse_teinte", |c, v| c.couleur.vitesse_teinte = v), 0.0, 360.0),
+            (("couleur.ecart_teinte", |c, v| c.couleur.ecart_teinte = v), 0.0, 360.0),
+        ];
+        let base = cout(&Config::default(), true);
+        eprintln!("défaut : {base:.3} ms (carte graphique), {:.3} ms (processeur)", cout(&Config::default(), false));
+        for ((nom, regler), min, max) in reglages {
+            let (mut bas, mut haut) = (Config::default(), Config::default());
+            regler(&mut bas, min);
+            regler(&mut haut, max);
+            // minimum et maximum en alternance, médiane des tours : la dérive (chaleur, autres
+            // programmes) touche les deux pareil
+            let (mut vb, mut vh) = (Vec::new(), Vec::new());
+            for _ in 0..5 {
+                vb.push(cout(&bas, true));
+                vh.push(cout(&haut, true));
+            }
+            let (b, h) = (mediane(vb), mediane(vh));
+            eprintln!("{nom:28} min {b:.3} ms, max {h:.3} ms, écart {:+.3} ms", h - b);
+        }
+    }
+
+    #[test]
+    #[ignore]
+        fn mesure_moteurs() {
         let cfg = Config::default();
         let dt = 1.0 / 144.0;
         for gpu in [true, false] {
