@@ -110,6 +110,8 @@ enum Demande {
     Jeux,
     /// Installe un jeu de curseurs et le garde dans les réglages.
     Souris { jeu: String },
+    /// Les 17 curseurs d'un jeu, un par un.
+    DetailJeu { cle: String },
 }
 
 struct Fenetre {
@@ -243,6 +245,14 @@ impl Fenetre {
                     })
                     .collect();
                 self.envoyer(&json!({ "type": "jeux", "jeux": jeux }));
+            }
+            Demande::DetailJeu { cle } => {
+                let jeux = crate::souris::jeux();
+                if let Some(j) = jeux.iter().find(|j| j.cle == cle) {
+                    let curseurs: Vec<Value> =
+                        crate::souris::curseurs(j).into_iter().map(|(nom, image)| json!({ "nom": nom, "image": image })).collect();
+                    self.envoyer(&json!({ "type": "detail_jeu", "cle": cle, "nom": j.nom, "curseurs": curseurs }));
+                }
             }
             Demande::Souris { jeu } => {
                 match crate::souris::installer(&jeu).and_then(|()| config::set_value("souris", "jeu", &json!(jeu))) {

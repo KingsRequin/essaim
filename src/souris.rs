@@ -167,15 +167,31 @@ fn developper(chemin: &str) -> String {
     out
 }
 
+/// Nom de chaque rôle, comme dans les paramètres de la souris de Windows.
+const NOMS_ROLES: [&str; 17] = [
+    "Sélection normale", "Aide", "Travail en arrière-plan", "Occupé", "Précision", "Texte", "Écriture manuscrite",
+    "Non disponible", "Redimensionnement vertical", "Redimensionnement horizontal", "Redimensionnement diagonal 1",
+    "Redimensionnement diagonal 2", "Déplacement", "Autre sélection", "Lien", "Sélection d'emplacement",
+    "Sélection de personne",
+];
+
 /// Aperçu du jeu : flèche, main, texte et attente côte à côte, en PNG (`data:` URL).
 pub fn apercu(jeu: &Jeu) -> Option<String> {
-    const COTE: i32 = 44;
-    const ROLES_MONTRES: [usize; 4] = [0, 14, 5, 2];
-    let (w, h) = (COTE * 4 + 12 * 3, COTE);
+    image(jeu, &[0, 14, 5, 2], 44)
+}
+
+/// Chaque curseur du jeu, seul : (nom du rôle, image PNG en `data:` URL si le jeu en a un).
+pub fn curseurs(jeu: &Jeu) -> Vec<(&'static str, Option<String>)> {
+    NOMS_ROLES.iter().enumerate().map(|(i, nom)| (*nom, image(jeu, &[i], 64))).collect()
+}
+
+/// Les curseurs `roles` du jeu côte à côte, chacun dans un carré de `cote` px.
+fn image(jeu: &Jeu, roles: &[usize], cote: i32) -> Option<String> {
+    let (w, h) = (cote * roles.len() as i32 + 12 * (roles.len() as i32 - 1), cote);
     // dessin sur fond noir puis sur fond blanc : l'écart donne la transparence (marche aussi
     // pour les vieux curseurs monochromes, qui n'ont pas d'alpha)
-    let noir = dessiner(jeu, &ROLES_MONTRES, COTE, w, h, 0)?;
-    let blanc = dessiner(jeu, &ROLES_MONTRES, COTE, w, h, 255)?;
+    let noir = dessiner(jeu, roles, cote, w, h, 0)?;
+    let blanc = dessiner(jeu, roles, cote, w, h, 255)?;
     let mut pm = tiny_skia::Pixmap::new(w as u32, h as u32)?;
     for ((d, n), b) in pm.data_mut().chunks_exact_mut(4).zip(noir.chunks_exact(4)).zip(blanc.chunks_exact(4)) {
         let a = 255 - (b[1] as i32 - n[1] as i32).clamp(0, 255);

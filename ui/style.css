@@ -234,6 +234,13 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .puissance .niveau { font-size: 13px; font-weight: 900; text-transform: uppercase; }
 .puissance[data-niveau="eleve"] .niveau { color: var(--signal-texte); }
 
+/* Détail du jeu en place : chaque curseur dans une case, avec son rôle. */
+.roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--esp-2); }
+.role { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--esp-2) var(--esp-1); background: var(--survol); }
+.role img { width: 40px; height: 40px; }
+.role .vide-role { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: var(--encre-2); }
+.role span { font-size: 10.5px; font-weight: 600; line-height: 1.2; text-align: center; color: var(--encre-2); }
+
 /* Jeux de curseurs de Windows : aperçu et nom ; le jeu installé a le cadre rouge. */
 .curseurs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--esp-3); padding: var(--esp-3) 0 var(--esp-4); }
 .jeu {
@@ -272,10 +279,12 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .vide { padding-top: var(--esp-6); display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-4); max-width: 560px; }
 .vide .zero { font-size: 64px; font-weight: 900; font-stretch: 125%; line-height: 0.9; color: var(--signal-texte); }
 
-@media (max-width: 1320px) {
-  .t-affiche { font-size: 72px; }
+@media (max-width: 1500px) {
+  .t-affiche { font-size: 64px; }
+  .t-nav { font-size: 19px; }
+  .onglets { gap: var(--esp-4); }
   .entete-droite, .sonde { gap: var(--esp-4); }
-  .sonde .mesure { grid-template-columns: auto 56px; }
+  .sonde .mesure { grid-template-columns: auto 52px; }
 }
 @media (max-width: 1000px) {
   .t-affiche { font-size: 64px; }

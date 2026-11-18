@@ -30,6 +30,7 @@ const etat = {
   depot: "",
   curseurs: "",
   jeux: null,
+  detailDemande: null,
   vue: "presets",
   source: "tout",
   recherche: "",
@@ -594,6 +595,17 @@ function recevoirCharge(m) {
 function dessinerCurseurs() {
   const zone = $("curseurs");
   if (!etat.jeux) return;
+  const actuel = etat.jeux.find((j) => j.cle === etat.curseurs);
+  $("jeu-actuel").textContent = actuel ? actuel.nom : "Curseurs de Windows (non nommés)";
+  $("compte-jeux").textContent = etat.jeux.length + " jeux";
+  // détail du jeu en place : demandé une fois par jeu
+  if (actuel && etat.detailDemande !== actuel.cle) {
+    etat.detailDemande = actuel.cle;
+    envoyer({ cmd: "detail_jeu", cle: actuel.cle });
+  } else if (!actuel) {
+    etat.detailDemande = null;
+    $("roles").replaceChildren(el("p", "note", "Le jeu en place n'a pas de nom (curseurs par défaut ou choisis un par un) : choisis-en un à droite."));
+  }
   if (!etat.jeux.length) {
     zone.replaceChildren(el("span", "t-petit", "Aucun jeu de curseurs trouvé dans Windows."));
     return;
@@ -618,14 +630,29 @@ function dessinerCurseurs() {
 
 function montrerVue(v) {
   etat.vue = v;
-  for (const id of ["presets", "reglages"]) {
+  for (const id of ["presets", "reglages", "curseurs"]) {
     $("vue-" + id).hidden = v !== id;
     $("onglet-" + id).setAttribute("aria-selected", v === id);
   }
-  if (v === "reglages") {
-    requestAnimationFrame(() => grand.dimensionner());
-    if (!etat.jeux) envoyer({ cmd: "jeux" });
-  }
+  if (v === "reglages") requestAnimationFrame(() => grand.dimensionner());
+  if (v === "curseurs" && !etat.jeux) envoyer({ cmd: "jeux" });
+}
+
+function dessinerDetail(m) {
+  if (m.cle !== etat.curseurs) return;
+  $("roles").replaceChildren(...m.curseurs.map((c) => {
+    const d = el("div", "role");
+    if (c.image) {
+      const img = el("img");
+      img.src = c.image;
+      img.alt = "";
+      d.append(img);
+    } else {
+      d.append(el("span", "vide-role", "—"));
+    }
+    d.append(el("span", "", c.nom));
+    return d;
+  }));
 }
 
 let minuterieBandeau = 0;
@@ -682,6 +709,9 @@ window.essaim = {
       case "jeux":
         etat.jeux = m.jeux;
         dessinerCurseurs();
+        break;
+      case "detail_jeu":
+        dessinerDetail(m);
         break;
       case "enregistre":
         fermerPanneau();
@@ -749,6 +779,7 @@ function boucle(maintenant) {
 
 $("onglet-presets").addEventListener("click", () => montrerVue("presets"));
 $("onglet-reglages").addEventListener("click", () => montrerVue("reglages"));
+$("onglet-curseurs").addEventListener("click", () => montrerVue("curseurs"));
 $("recherche").addEventListener("input", (e) => { etat.recherche = e.target.value; dessinerPresets(); });
 $("ouvrir-panneau").addEventListener("click", ouvrirPanneau);
 $("ouvrir-panneau-2").addEventListener("click", ouvrirPanneau);

@@ -20,6 +20,7 @@
       <nav class="onglets" role="tablist" aria-label="Vues">
         <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num">01</span>Presets</button>
         <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num">02</span>Réglages</button>
+        <button class="onglet t-nav" role="tab" id="onglet-curseurs" aria-controls="vue-curseurs" aria-selected="false"><span class="num">03</span>Curseurs</button>
       </nav>
     </div>
   </header>
@@ -76,14 +77,35 @@
     </div>
     <div class="defile">
       <div class="reglages" id="reglages"></div>
-      <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-top: 22px; flex-wrap: wrap">
-        <span class="t-titre">Curseurs de Windows</span>
-        <button class="puce" id="avec-preset" aria-pressed="true">Installer les curseurs du preset choisi</button>
-      </div>
-      <p class="note">Le pointeur reste celui de Windows : choisis un jeu de curseurs installé sur ce PC. Un preset enregistré garde le jeu en place à ce moment-là.</p>
-      <div class="curseurs" id="curseurs"><span class="t-petit">Chargement des curseurs…</span></div>
       <button class="bascule-avance" id="bascule-avance" aria-expanded="false"><span class="signe" id="signe-avance">+</span> Avancé</button>
       <div class="avance" id="avance" hidden></div>
+    </div>
+  </section>
+
+  <section class="vue" id="vue-curseurs" role="tabpanel" aria-labelledby="onglet-curseurs" hidden>
+    <aside class="colonne" style="width: 380px">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <span class="t-label">Jeu en place</span>
+        <span class="t-titre" id="jeu-actuel">—</span>
+      </div>
+      <div class="roles" id="roles"></div>
+      <p class="note">Le pointeur reste un vrai curseur de Windows, sans retard ; Essaim dessine seulement autour.</p>
+    </aside>
+    <div class="principal">
+      <div class="barre-titre">
+        <span class="t-titre">Jeux installés sur ce PC</span>
+        <span class="t-label" id="compte-jeux"></span>
+      </div>
+      <div class="groupe-puces" style="align-items: center; gap: 12px">
+        <button class="puce" id="avec-preset" aria-pressed="true">Installer les curseurs du preset choisi</button>
+        <span class="note">Un preset enregistré garde le jeu en place à ce moment-là ; cette option le remet quand tu choisis le preset.</span>
+      </div>
+      <div class="defile">
+        <div class="curseurs" id="curseurs"><span class="t-petit">Chargement des curseurs…</span></div>
+      </div>
+      <div class="pied">
+        <span class="t-texte">Un clic installe le jeu, comme le panneau de la souris de Windows. Pour en ajouter un : clic droit sur le fichier <b>.inf</b> d'un pack, puis Installer.</span>
+      </div>
     </div>
   </section>
 </div>

@@ -25,9 +25,9 @@ navigateur, jeux… sans rien configurer.
 
 Essaim ne dessine pas le pointeur : il reste un vrai curseur Windows. On installe un pack de
 curseurs comme d'habitude (clic droit → Installer sur le fichier `.inf` du pack), puis on le
-choisit dans *02 Réglages → Curseurs de Windows*, qui liste les jeux installés (ceux de
-l'utilisateur et ceux de Windows) avec un aperçu et les met en place comme le panneau de la
-souris (`src/souris.rs`). Un preset garde le jeu en place quand on l'enregistre ; avec *Installer
+choisit dans l'onglet *03 Curseurs*, qui liste les jeux installés (ceux de l'utilisateur et
+ceux de Windows) avec un aperçu, détaille les 17 curseurs du jeu en place et les met en place
+comme le panneau de la souris (`src/souris.rs`). Un preset garde le jeu en place quand on l'enregistre ; avec *Installer
 les curseurs du preset choisi*, appliquer ce preset remet aussi ce jeu. Le pack utilisé avec
 Essaim sera fourni dans ce dépôt, avec le crédit de son auteur.
 
