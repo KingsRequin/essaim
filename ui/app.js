@@ -44,13 +44,17 @@ const etat = {
   mode: memoire.lire("mode", animationsReduites() ? "survol" : "direct"),
   avance: memoire.lire("avance", false),
   commu: { etat: "rien", liste: [], message: "" },
-  son: { kicks: 0, basse: 0, hauteur: 0 },
+  son: { kicks: 0, basse: 0, hauteur: 0, aigus: 0, brillance: 0 },
   teinte: null,
   dernierSon: -1e9,
   demo: { kicks: 0, prochain: 0 },
   survol: null,
   menu: null, // tuile dont le menu « Gérer » est ouvert
   renomme: null, // tuile en cours de renommage
+  filtreForme: null,
+  comparer: null, // premier preset choisi pour une comparaison
+  applis: [],
+  gif: null, // enregistrement d'un GIF en cours
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -66,15 +70,17 @@ function sonPourApercus(maintenant) {
     etat.demo.kicks++;
     etat.demo.prochain = maintenant + 500;
   }
-  return { kicks: etat.demo.kicks, basse: 0.35, hauteur: 50 };
+  // démo : un charleston entre deux kicks
+  return { kicks: etat.demo.kicks, basse: 0.35, hauteur: 50, aigus: Math.floor((maintenant + 250) / 500), brillance: 0.3 };
 }
 
 // La sonde de l'en-tête : kick, niveau de la basse (faible → forte), note de la basse
 // (grave → aiguë, 25 à 85 Hz sur une échelle logarithmique).
 function recevoirSon(m) {
   const kick = m.kicks !== etat.son.kicks;
+  const aigus = (m.aigus || 0) !== etat.son.aigus;
   if (kick || m.basse > 0.03) etat.dernierSon = performance.now();
-  etat.son = { kicks: m.kicks, basse: m.basse, hauteur: m.hauteur };
+  etat.son = { kicks: m.kicks, basse: m.basse, hauteur: m.hauteur, aigus: m.aigus || 0, brillance: m.brillance || 0 };
   etat.teinte = typeof m.teinte === "number" ? m.teinte : null;
   const actif = musique();
   $("sonde").classList.toggle("silence", !actif);
@@ -90,8 +96,9 @@ function recevoirSon(m) {
     $("detail-niveau").textContent = "silence";
     $("detail-note").textContent = "aperçus en démo";
   }
-  if (kick && actif && !animationsReduites()) {
-    const t = $("temoin");
+  for (const [coup, id] of [[kick, "temoin"], [aigus, "temoin-aigus"]]) {
+    if (!coup || !actif || animationsReduites()) continue;
+    const t = $(id);
     t.classList.remove("coup");
     void t.offsetWidth;
     t.classList.add("coup");
@@ -106,8 +113,10 @@ const FORMES = [
   ["pentagone", "Pentagone"], ["hexagone", "Hexagone"], ["etoile", "Étoile"], ["astroide", "Astroïde"], ["fleur", "Fleur"],
   ["trefle", "Trèfle"], ["coeur", "Cœur"], ["huit", "Huit"], ["lissajous", "Lissajous"],
 ];
-const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES];
-const NOMS_FORMES = Object.fromEntries(FORMES);
+// Dans les réglages, en plus : le trajet dessiné à la main (ouvre la toile).
+const FORMES_REGLAGE = [...FORMES, ["trace", "Dessiné…"]];
+const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
+const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 
 function fusion(base, partiel) {
   const r = Array.isArray(base) ? [...base] : { ...base };
@@ -139,6 +148,7 @@ function filtrer(liste) {
   const libelle = { fourni: "fourni", mien: "mes presets", commu: "communauté" };
   const montres = liste.filter((p) => {
     if (etat.source === "favoris" ? !etat.favoris.has(p.id) : etat.source !== "tout" && p.origine !== etat.source) return false;
+    if (etat.filtreForme && p.reglages.orbite.forme !== etat.filtreForme) return false;
     if (!q) return true;
     return [p.nom, p.auteur, libelle[p.origine], NOMS_FORMES[p.reglages.orbite.forme], ...(p.etiquettes || [])].join(" ").toLowerCase().includes(q);
   });
@@ -223,8 +233,8 @@ function creerTuile(p) {
   const apercu = new window.Apercu(canvas);
   const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, p, pret: false, confirmer: 0 };
   bouton.addEventListener("click", () => { if (etat.renomme !== t.p.id) choisir(t.p); });
-  bouton.addEventListener("mouseenter", () => { etat.survol = p.id; });
-  bouton.addEventListener("mouseleave", () => { if (etat.survol === p.id) etat.survol = null; });
+  bouton.addEventListener("mouseenter", () => { etat.survol = p.id; montrerLoupe(t); });
+  bouton.addEventListener("mouseleave", () => { if (etat.survol === p.id) etat.survol = null; cacherLoupe(); });
   observateur.observe(racine);
   return t;
 }
@@ -294,7 +304,10 @@ function majTuile(t, p, rang) {
     dessinerPresets();
   });
   fav.setAttribute("aria-pressed", etat.favoris.has(p.id));
-  t.actions.append(fav);
+  const comp = puce(etat.comparer === p.id ? "Comparer…" : "Comparer", () => comparer(p));
+  comp.setAttribute("aria-pressed", etat.comparer === p.id);
+  comp.title = "Compare deux presets côte à côte, avec leurs réglages différents";
+  t.actions.append(fav, comp);
   if (p.origine === "commu") {
     const fait = installe(p.nom);
     const b = puce(fait ? "Installé" : "+ Installer", () => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }));
@@ -375,6 +388,7 @@ function dessinerPresets() {
   dessinerSources(liste);
   const titres = { tout: "Tous les presets", fourni: "Fournis avec Essaim", mien: "Mes presets", favoris: "Favoris", commu: "Bibliothèque communautaire" };
   $("titre-grille").textContent = titres[etat.source];
+  dessinerFiltreFormes(liste);
   const montres = filtrer(liste);
   $("compte").textContent = montres.length + (montres.length > 1 ? " résultats" : " résultat");
 
@@ -429,6 +443,21 @@ function dessinerPresets() {
   }
 }
 
+// Filtre par forme : seulement les formes qu'ont les presets de la liste.
+function dessinerFiltreFormes(liste) {
+  const presentes = new Set(liste.map((p) => p.reglages.orbite.forme));
+  if (etat.filtreForme && !presentes.has(etat.filtreForme)) etat.filtreForme = null;
+  const choix = [["", "Toutes"], ...FORMES_REGLAGE.filter(([id]) => presentes.has(id))];
+  $("filtre-formes").replaceChildren(...choix.map(([id, libelle]) => {
+    const b = el("button", "puce petite forme");
+    if (id) b.append(picto(id));
+    b.append(document.createTextNode(id ? NOMS_FORMES[id] : libelle));
+    b.setAttribute("aria-pressed", (etat.filtreForme || "") === id);
+    b.addEventListener("click", () => { etat.filtreForme = id || null; dessinerPresets(); });
+    return b;
+  }));
+}
+
 // Flèches du clavier dans la grille : d'une tuile à sa voisine.
 function deplacerDansLaGrille(e) {
   const boutons = [...$("grille").querySelectorAll(".tuile > button")];
@@ -447,7 +476,7 @@ function deplacerDansLaGrille(e) {
 // Réglages
 
 // Pictogramme d'une forme : son trajet, calculé comme l'essaim (window.chemin), en SVG.
-function picto(forme) {
+function picto(forme, trace) {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "-1.45 -1.45 2.9 2.9");
@@ -455,7 +484,7 @@ function picto(forme) {
   svg.setAttribute("aria-hidden", "true");
   const pts = [];
   for (let i = 0; i <= 120; i++) {
-    const [x, y] = window.chemin(forme, (i / 120) * Math.PI * 2);
+    const [x, y] = window.chemin(forme, (i / 120) * Math.PI * 2, trace || (etat.reglages && etat.reglages.orbite.trace));
     pts.push(x.toFixed(3) + "," + y.toFixed(3));
   }
   const ligne = document.createElementNS(NS, "polyline");
@@ -485,6 +514,7 @@ const IMPACT = {
   "audio.sensibilite_kick": [2, "estime"], "audio.delai_kick": [1, "estime"], "fissures.taille": [1, "estime"], "fissures.duree": [1, "estime"],
   "bordure.intensite": [1, "estime"], "bordure.repos": [1, "estime"],
   "rendu.cadence": [7, "estime"], "rendu.cadence_repos": [2, "estime"], "rendu.carte_graphique": [10],
+  "scintillement.actif": [1, "estime"], "scintillement.quantite": [1, "estime"], "clic.taille": [1, "estime"], "sillage.densite": [1, "estime"],
 };
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
@@ -512,6 +542,9 @@ const SI = {
   son: (r) => r.audio.actif,
   fissures: (r) => r.fissures.actives,
   bordure: (r) => r.bordure.active,
+  scintillement: (r) => r.audio.actif && r.scintillement.actif,
+  clic: (r) => r.clic.onde || r.clic.eclats,
+  sillage: (r) => r.sillage.actif,
 };
 
 // Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
@@ -528,6 +561,7 @@ const NORMAUX = [
   { libelle: "Rotation du trajet", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
   { special: "couleur" },
   { titre: "Réaction au son" },
+  { special: "effets-plus" },
   { libelle: "Satellites", section: "essaim", cle: "maximum", si: SI.son, min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
   { libelle: "Kick", section: "audio", cle: "sensibilite_kick", si: SI.son, min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
   { libelle: "Éclat", section: "eclat", cle: "taille", si: SI.son, min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
@@ -554,6 +588,10 @@ const AVANCES = [
   { libelle: "Durée des fissures", section: "fissures", cle: "duree", si: SI.fissures, min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
   { libelle: "Éclat de la bordure sur le kick", section: "bordure", cle: "intensite", si: SI.bordure, min: 0, max: 1, pas: 0.05, ...pourcent },
   { libelle: "Luminosité de la bordure au repos", section: "bordure", cle: "repos", si: SI.bordure, min: 0, max: 1, pas: 0.05, ...pourcent },
+  { groupe: "Effets en plus" },
+  { libelle: "Étincelles par attaque des aigus", section: "scintillement", cle: "quantite", si: SI.scintillement, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
+  { libelle: "Taille de l'onde et des éclats", section: "clic", cle: "taille", si: SI.clic, min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
+  { libelle: "Densité du sillage", section: "sillage", cle: "densite", si: SI.sillage, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
   { groupe: "Son" },
   { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Cet ordinateur (hors presets)" },
@@ -564,6 +602,7 @@ const AVANCES = [
     note: "Mesuré sur Essaim : 0,24 ms de calcul par image avec la carte graphique, 1,18 ms avec le processeur (cinq fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
   },
   { demarrage: true },
+  { accueil: true },
 ];
 
 const glissieres = []; // { def, input, saisie }
@@ -652,8 +691,12 @@ function construireReglages() {
     const b = el("button", "puce forme");
     if (id !== "cometes") b.append(picto(id));
     b.append(document.createTextNode(libelle));
-    b.title = libelle;
-    b.addEventListener("click", () => { regler(section, cle, id); majReglages(); });
+    b.title = id === "trace" ? "Dessine toi-même le trajet" : libelle;
+    b.addEventListener("click", () => {
+      if (id === "trace") { ouvrirDessin(section, cle); return; }
+      regler(section, cle, id);
+      majReglages();
+    });
     formes.push({ section, cle, id, b });
     return b;
   });
@@ -673,9 +716,16 @@ function construireReglages() {
     } else if (def.special === "effets") {
       ligneLarge("Effets", "orbite.cometes", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
     } else if (def.special === "trajet-cometes") {
-      ligneLarge("Trajet des comètes", "orbite.forme", choixForme("orbite", "forme", FORMES));
+      ligneLarge("Trajet des comètes", "orbite.forme", choixForme("orbite", "forme", FORMES_REGLAGE));
     } else if (def.special === "trajet-satellites") {
       ligneLarge("Trajet des satellites", "essaim.forme", choixForme("essaim", "forme", FORMES_SATELLITES));
+    } else if (def.special === "effets-plus") {
+      ligneLarge("Effets en plus", "scintillement.actif", [
+        bascule("Étincelles sur les aigus", "scintillement", "actif"),
+        bascule("Onde au clic", "clic", "onde"),
+        bascule("Éclats au clic", "clic", "eclats"),
+        bascule("Sillage de la souris", "sillage", "actif"),
+      ]);
     } else if (def.special === "couleur") {
       teintes = TEINTES.map((h) => {
         const b = el("button", "teinte");
@@ -696,6 +746,7 @@ function construireReglages() {
         bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
         bascule("Couleur de l'application", "couleur", "application"),
         bascule("Couleur du site (navigateur)", "couleur", "site"),
+        bascule("Suit la musique", "couleur", "musique"),
       ]);
     } else {
       numerique(def);
@@ -709,7 +760,7 @@ function construireReglages() {
       g.style.gridColumn = "1 / -1";
       g.style.padding = "18px 0 6px";
       avance.append(g);
-    } else if (def.bascule || def.demarrage) {
+    } else if (def.bascule || def.demarrage || def.accueil) {
       const l = el("div");
       l.style.cssText = "grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--filet)";
       if (def.bascule) {
@@ -718,10 +769,15 @@ function construireReglages() {
         tete.append(bascule(def.bascule, def.section, def.cle), jaugeImpact(def.section + "." + def.cle));
         l.append(tete);
         if (def.note) l.append(el("p", "note", def.note));
-      } else {
+      } else if (def.demarrage) {
         const b = el("button", "puce", "Démarrer Essaim avec Windows");
         b.id = "demarrage";
         b.addEventListener("click", () => envoyer({ cmd: "demarrage", actif: !etat.demarrage }));
+        l.append(b);
+      } else {
+        const b = el("button", "puce", "Revoir l'accueil");
+        b.style.alignSelf = "flex-start";
+        b.addEventListener("click", () => ouvrirAccueil());
         l.append(b);
       }
       avance.append(l);
@@ -772,7 +828,14 @@ function majReglages() {
     const v = val(b.section, b.cle);
     b.bouton.setAttribute("aria-pressed", typeof v === "boolean" ? v : v > 0);
   }
-  for (const f of formes) f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
+  for (const f of formes) {
+    f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
+    // le pictogramme du trajet dessiné suit le dessin
+    if (f.id === "trace" && f.trace !== etat.reglages.orbite.trace) {
+      f.trace = etat.reglages.orbite.trace;
+      f.b.querySelector("svg").replaceWith(picto("trace", f.trace));
+    }
+  }
   const c = etat.reglages.couleur;
   for (const t of teintes) {
     t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
@@ -922,9 +985,452 @@ function dessinerDetail(m) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Automatique : règles par application et par heure, raccourcis
+
+function remplirChoixPresets(id) {
+  const s = $(id), avant = s.value;
+  s.replaceChildren(...etat.presets.map((p) => { const o = el("option", "", p.nom); o.value = p.nom; return o; }));
+  if (etat.presets.some((p) => p.nom === avant)) s.value = avant;
+}
+
+function ligneRegle(gauche, droite, retirer) {
+  const d = el("div", "regle");
+  const introuvable = !etat.presets.some((p) => p.nom === droite);
+  d.append(el("span", "t-petit", gauche), el("span", "fleche", "→"), el("span", "t-petit", droite + (introuvable ? " (preset introuvable)" : "")));
+  const b = el("button", "puce petite", "Retirer");
+  b.addEventListener("click", retirer);
+  d.append(b);
+  return d;
+}
+
+function dessinerAuto() {
+  if (!etat.reglages) return;
+  const a = etat.reglages.automatique;
+  $("auto-actif").setAttribute("aria-pressed", a.actif);
+  $("raccourcis-actif").setAttribute("aria-pressed", etat.reglages.raccourcis.actif);
+  remplirChoixPresets("appli-preset");
+  remplirChoixPresets("horaire-preset");
+  const vide = (texte) => el("div", "regle", "").appendChild(el("span", "vide-regle t-petit", texte)).parentNode;
+  $("regles-applis").replaceChildren(...(a.applis.length ? a.applis.map((r, i) => ligneRegle(r.appli, r.preset, () => {
+    regler("automatique", "applis", a.applis.filter((_, j) => j !== i));
+    dessinerAuto();
+  })) : [vide("Aucune règle : ajoute une application ci-dessous.")]));
+  $("regles-horaires").replaceChildren(...(a.horaires.length ? a.horaires.map((r, i) => ligneRegle(`${r.debut} à ${r.fin}`, r.preset, () => {
+    regler("automatique", "horaires", a.horaires.filter((_, j) => j !== i));
+    dessinerAuto();
+  })) : [vide("Aucune plage horaire.")]));
+  $("applis-ouvertes").replaceChildren(...etat.applis.map((n) => { const o = el("option"); o.value = n; return o; }));
+}
+
+$("auto-actif").addEventListener("click", () => { regler("automatique", "actif", !etat.reglages.automatique.actif); dessinerAuto(); });
+$("raccourcis-actif").addEventListener("click", () => { regler("raccourcis", "actif", !etat.reglages.raccourcis.actif); dessinerAuto(); });
+$("ajout-appli").addEventListener("submit", (e) => {
+  e.preventDefault();
+  let appli = $("appli-nom").value.trim().toLowerCase();
+  const preset = $("appli-preset").value;
+  if (!appli || !preset) { bandeau("Indique une application et un preset."); return; }
+  if (!appli.endsWith(".exe")) appli += ".exe";
+  const liste = etat.reglages.automatique.applis.filter((r) => r.appli !== appli).concat([{ appli, preset }]);
+  regler("automatique", "applis", liste);
+  $("appli-nom").value = "";
+  dessinerAuto();
+});
+$("ajout-horaire").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const debut = $("horaire-debut").value, fin = $("horaire-fin").value, preset = $("horaire-preset").value;
+  if (!/^\d\d:\d\d$/.test(debut) || !/^\d\d:\d\d$/.test(fin) || debut === fin || !preset) {
+    bandeau("Choisis deux heures différentes et un preset.");
+    return;
+  }
+  regler("automatique", "horaires", etat.reglages.automatique.horaires.concat([{ debut, fin, preset }]));
+  dessinerAuto();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Loupe : un preset survolé, en grand, après un court arrêt de la souris.
+
+const loupe = { apercu: new window.Apercu($("toile-loupe")), p: null, minuterie: 0 };
+function montrerLoupe(t) {
+  clearTimeout(loupe.minuterie);
+  loupe.minuterie = setTimeout(() => {
+    if (etat.vue !== "presets" || etat.renomme) return;
+    const r = t.racine.getBoundingClientRect(), d = $("loupe"), largeur = 300;
+    const gauche = r.right + 12 + largeur < innerWidth ? r.right + 12 : r.left - 12 - largeur;
+    if (gauche < 0) return; // pas la place : la vignette suffit
+    d.style.left = gauche + "px";
+    d.style.top = borne(r.top - 40, 12, innerHeight - 360) + "px";
+    $("nom-loupe").textContent = t.p.nom;
+    loupe.p = t.p;
+    loupe.apercu = new window.Apercu($("toile-loupe"));
+    loupe.apercu.regler(t.p.reglages);
+    d.hidden = false;
+    loupe.apercu.dimensionner();
+    for (let i = 0; i < 40; i++) loupe.apercu.avancer(1 / 30, sonPourApercus(performance.now()));
+  }, 650);
+}
+function cacherLoupe() {
+  clearTimeout(loupe.minuterie);
+  loupe.p = null;
+  $("loupe").hidden = true;
+}
+$("defile-grille").addEventListener("scroll", cacherLoupe, { passive: true });
+
+// ---------------------------------------------------------------------------------------------
+// Comparaison de deux presets
+
+const comparaison = { apercus: [] };
+const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris"];
+
+function libelleReglage(section, cle) {
+  const def = NORMAUX.concat(AVANCES).find((d) => d.section === section && d.cle === cle);
+  if (def) return [def.libelle || def.bascule, def.aff];
+  const bascule = EFFETS.find(([, s, c]) => s === section && c === cle);
+  if (bascule) return [bascule[0]];
+  const noms = {
+    "orbite.forme": "Trajet des comètes", "essaim.forme": "Trajet des satellites", "couleur.application": "Couleur de l'application",
+    "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique", "scintillement.actif": "Étincelles sur les aigus",
+    "clic.onde": "Onde au clic", "clic.eclats": "Éclats au clic", "sillage.actif": "Sillage de la souris", "souris.jeu": "Curseurs",
+    "couleur.synchro_prisme": "Synchro Prisme",
+  };
+  return [noms[section + "." + cle] || section + "." + cle];
+}
+
+function valeurLisible(v, aff) {
+  if (typeof v === "boolean") return v ? "oui" : "non";
+  if (aff && typeof v === "number") return aff(v);
+  if (typeof v === "string") return NOMS_FORMES[v] || v || "—";
+  return String(v);
+}
+
+function ecartsEntre(a, b) {
+  const lignes = [];
+  for (const s of SECTIONS_PRESET) {
+    const x = a[s] || {}, y = b[s] || {};
+    for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
+      if (k === "avec_preset" || k === "trace" || JSON.stringify(x[k]) === JSON.stringify(y[k])) continue;
+      const [libelle, aff] = libelleReglage(s, k);
+      lignes.push([libelle, valeurLisible(x[k], aff), valeurLisible(y[k], aff)]);
+    }
+  }
+  return lignes;
+}
+
+function comparer(p) {
+  if (!etat.comparer || etat.comparer === p.id) {
+    etat.comparer = etat.comparer === p.id ? null : p.id;
+    if (etat.comparer) bandeau(`« ${p.nom} » retenu : choisis le preset à lui comparer (Comparer).`);
+    dessinerPresets();
+    return;
+  }
+  const a = tousLesPresets().find((x) => x.id === etat.comparer);
+  etat.comparer = null;
+  dessinerPresets();
+  if (a) ouvrirComparaison(a, p);
+}
+
+function ouvrirComparaison(a, b) {
+  cacherLoupe();
+  const zone = $("comparaison");
+  comparaison.apercus = [];
+  const cotes = [a, b].map((p) => {
+    const d = el("div", "cote");
+    const canvas = el("canvas", "scene");
+    const ap = new window.Apercu(canvas);
+    ap.regler(p.reglages);
+    comparaison.apercus.push(ap);
+    const choisirCe = el("button", "puce", "Appliquer");
+    choisirCe.style.alignSelf = "flex-start";
+    choisirCe.addEventListener("click", () => { choisir(p); fermerComparaison(); });
+    d.append(canvas, el("span", "t-nom", p.nom), choisirCe);
+    return d;
+  });
+  const ecarts = ecartsEntre(a.reglages, b.reglages);
+  const table = el("div", "regles");
+  table.style.gridColumn = "1 / -1";
+  if (!ecarts.length) table.append(el("div", "regle", "").appendChild(el("span", "vide-regle t-petit", "Mêmes réglages.")).parentNode);
+  for (const [libelle, x, y] of ecarts) {
+    const l = el("div", "regle");
+    l.append(el("span", "t-petit", libelle), el("span", "t-petit", x), el("span", "fleche", "≠"), el("span", "t-petit", y));
+    l.style.gridTemplateColumns = "minmax(0, 1.3fr) minmax(0, 1fr) 24px minmax(0, 1fr)";
+    table.append(l);
+  }
+  const titre = el("span", "t-label", ecarts.length ? `${ecarts.length} réglage${ecarts.length > 1 ? "s" : ""} différent${ecarts.length > 1 ? "s" : ""}` : "");
+  titre.style.gridColumn = "1 / -1";
+  zone.replaceChildren(...cotes, titre, table);
+  $("voile-comparaison").hidden = false;
+  requestAnimationFrame(() => comparaison.apercus.forEach((ap) => ap.dimensionner()));
+}
+
+function fermerComparaison() {
+  $("voile-comparaison").hidden = true;
+  comparaison.apercus = [];
+}
+$("fermer-comparaison").addEventListener("click", fermerComparaison);
+$("voile-comparaison").addEventListener("click", (e) => { if (e.target === $("voile-comparaison")) fermerComparaison(); });
+
+// ---------------------------------------------------------------------------------------------
+// Trajet dessiné à la main : une boucle tracée d'un geste sur la toile.
+
+const dessin = { points: [], trace: false, cible: null };
+const RAYON_GUIDE = 140;
+
+function couleurJeton(nom) {
+  return getComputedStyle(document.documentElement).getPropertyValue(nom).trim() || "#ff3b1f";
+}
+
+function redessinerToile() {
+  const c = $("toile-dessin"), g = c.getContext("2d"), m = c.width / 2;
+  g.clearRect(0, 0, c.width, c.height);
+  g.strokeStyle = "rgba(255,255,255,0.18)";
+  g.setLineDash([4, 6]);
+  g.lineWidth = 1;
+  g.beginPath();
+  g.arc(m, m, RAYON_GUIDE, 0, Math.PI * 2);
+  g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = "#fff";
+  g.beginPath();
+  g.arc(m, m, 3, 0, Math.PI * 2);
+  g.fill();
+  if (dessin.points.length < 2) return;
+  g.strokeStyle = couleurJeton("--signal");
+  g.lineWidth = 3;
+  g.lineJoin = g.lineCap = "round";
+  g.beginPath();
+  dessin.points.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  if (!dessin.trace) g.closePath();
+  g.stroke();
+}
+
+function ouvrirDessin(section, cle) {
+  dessin.cible = { section, cle };
+  // le tracé en place, s'il y en a un
+  const t = etat.reglages.orbite.trace || [];
+  const m = $("toile-dessin").width / 2;
+  dessin.points = t.map(([x, y]) => [m + x * RAYON_GUIDE, m + y * RAYON_GUIDE]);
+  dessin.trace = false;
+  $("voile-dessin").hidden = false;
+  redessinerToile();
+}
+
+function fermerDessin() {
+  $("voile-dessin").hidden = true;
+}
+
+const toile = $("toile-dessin");
+const pointToile = (e) => {
+  const r = toile.getBoundingClientRect();
+  return [((e.clientX - r.left) / r.width) * toile.width, ((e.clientY - r.top) / r.height) * toile.height];
+};
+toile.addEventListener("pointerdown", (e) => {
+  toile.setPointerCapture(e.pointerId);
+  dessin.points = [pointToile(e)];
+  dessin.trace = true;
+  redessinerToile();
+});
+toile.addEventListener("pointermove", (e) => {
+  if (!dessin.trace) return;
+  const p = pointToile(e), q = dessin.points[dessin.points.length - 1];
+  if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= 3) { dessin.points.push(p); redessinerToile(); }
+});
+toile.addEventListener("pointerup", () => { dessin.trace = false; redessinerToile(); });
+$("effacer-dessin").addEventListener("click", () => { dessin.points = []; redessinerToile(); });
+$("fermer-dessin").addEventListener("click", fermerDessin);
+$("valider-dessin").addEventListener("click", () => {
+  if (dessin.points.length < 12) { bandeau("Trace une boucle plus grande autour du point."); return; }
+  const m = toile.width / 2, pas = Math.ceil(dessin.points.length / 200);
+  const trace = dessin.points.filter((_, i) => i % pas === 0).map(([x, y]) => [+((x - m) / RAYON_GUIDE).toFixed(3), +((y - m) / RAYON_GUIDE).toFixed(3)]);
+  regler("orbite", "trace", trace);
+  regler(dessin.cible.section, dessin.cible.cle, "trace");
+  majReglages();
+  fermerDessin();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Export GIF : trois secondes du grand aperçu, 20 images/s, palette fixe de 256 couleurs.
+
+const GIF_COTE = 320, GIF_IMAGES = 60, GIF_DELAI = 5; // centièmes de seconde par image
+
+function indexCouleur(r, g, b) {
+  return Math.round(r / 51) * 42 + Math.round(g / 42.5) * 6 + Math.round(b / 51);
+}
+
+function paletteGif() {
+  const p = new Uint8Array(768);
+  for (let i = 0; i < 252; i++) {
+    p[i * 3] = Math.floor(i / 42) * 51;
+    p[i * 3 + 1] = Math.round((Math.floor(i / 6) % 7) * 42.5);
+    p[i * 3 + 2] = (i % 6) * 51;
+  }
+  return p;
+}
+
+// Compression LZW du GIF (codes de 9 à 12 bits), en sous-blocs de 255 octets au plus.
+function lzw(indices, sortie) {
+  const min = 8, clear = 1 << min, eoi = clear + 1;
+  let taille = min + 1, suivant = eoi + 1, dict = new Map();
+  const octets = [];
+  let acc = 0, nbits = 0;
+  const ecrire = (code) => {
+    acc |= code << nbits;
+    nbits += taille;
+    while (nbits >= 8) { octets.push(acc & 255); acc >>>= 8; nbits -= 8; }
+  };
+  ecrire(clear);
+  let prefixe = indices[0];
+  for (let i = 1; i < indices.length; i++) {
+    const k = indices[i], cle = prefixe * 256 + k, c = dict.get(cle);
+    if (c !== undefined) { prefixe = c; continue; }
+    ecrire(prefixe);
+    if (suivant === 4096) {
+      ecrire(clear);
+      dict = new Map();
+      taille = min + 1;
+      suivant = eoi + 1;
+    } else {
+      if (suivant >= 1 << taille) taille++;
+      dict.set(cle, suivant++);
+    }
+    prefixe = k;
+  }
+  ecrire(prefixe);
+  ecrire(eoi);
+  if (nbits > 0) octets.push(acc & 255);
+  sortie.push(min);
+  for (let i = 0; i < octets.length; i += 255) {
+    const bloc = octets.slice(i, i + 255);
+    sortie.push(bloc.length, ...bloc);
+  }
+  sortie.push(0);
+}
+
+function encoderGif(images, cote) {
+  const o = [];
+  const mot = (n) => o.push(n & 255, (n >> 8) & 255);
+  for (const c of "GIF89a") o.push(c.charCodeAt(0));
+  mot(cote); mot(cote);
+  o.push(0xf7, 0, 0);
+  o.push(...paletteGif());
+  o.push(0x21, 0xff, 11, ..."NETSCAPE2.0".split("").map((c) => c.charCodeAt(0)), 3, 1, 0, 0, 0);
+  for (const indices of images) {
+    o.push(0x21, 0xf9, 4, 0); mot(GIF_DELAI); o.push(0, 0);
+    o.push(0x2c); mot(0); mot(0); mot(cote); mot(cote); o.push(0);
+    lzw(indices, o);
+  }
+  o.push(0x3b);
+  return new Uint8Array(o);
+}
+
+function versBase64(octets) {
+  let s = "";
+  for (let i = 0; i < octets.length; i += 0x8000) s += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function lancerGif() {
+  if (etat.gif) return;
+  const c = document.createElement("canvas");
+  c.width = c.height = GIF_COTE;
+  etat.gif = { c, g: c.getContext("2d", { willReadFrequently: true }), images: [], prochain: 0, fond: getComputedStyle($("grand-apercu")).backgroundColor };
+  $("exporter-gif").textContent = "Enregistrement…";
+  $("exporter-gif").disabled = true;
+}
+
+// Appelée après chaque image du grand aperçu pendant l'enregistrement.
+function imageGif(maintenant) {
+  const e = etat.gif;
+  if (!e || maintenant < e.prochain) return;
+  e.prochain = maintenant + GIF_DELAI * 10;
+  const src = $("grand-apercu");
+  e.g.fillStyle = e.fond;
+  e.g.fillRect(0, 0, GIF_COTE, GIF_COTE);
+  e.g.drawImage(src, 0, 0, src.width, src.height, 0, 0, GIF_COTE, GIF_COTE);
+  const px = e.g.getImageData(0, 0, GIF_COTE, GIF_COTE).data, idx = new Uint8Array(GIF_COTE * GIF_COTE);
+  for (let i = 0; i < idx.length; i++) idx[i] = indexCouleur(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
+  e.images.push(idx);
+  if (e.images.length < GIF_IMAGES) return;
+  etat.gif = null;
+  $("exporter-gif").textContent = "Encodage…";
+  setTimeout(() => {
+    const nom = $("nom-actif").textContent.replace(/^Preset « (.*) »$/, "$1").replace(/[«»]/g, "").replace(/\s+/g, " ").trim() || "Essaim";
+    envoyer({ cmd: "enregistrer_gif", nom, donnees: versBase64(encoderGif(e.images, GIF_COTE)) });
+    $("exporter-gif").textContent = "Exporter en GIF";
+    $("exporter-gif").disabled = false;
+  }, 30);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Accueil : trois étapes au premier lancement, à revoir depuis les réglages avancés.
+
+const ETAPES_ACCUEIL = [
+  {
+    titre: "Bienvenue",
+    corps: () => [
+      el("p", "t-texte", "Essaim dessine autour de ton pointeur des comètes qui suivent la musique : chaque kick les fait changer de sens et lâche des satellites, les aigus font jaillir des étincelles."),
+      el("p", "note", "Ton pointeur reste celui de Windows : Essaim dessine seulement autour, dans une surcouche qui laisse passer les clics."),
+    ],
+  },
+  {
+    titre: "Choisis un style",
+    corps: () => {
+      const g = el("div", "choix-accueil");
+      for (const p of etat.presets.filter((x) => x.fourni)) {
+        const b = el("button", "puce forme");
+        b.append(picto(p.reglages.orbite.forme, p.reglages.orbite.trace), document.createTextNode(p.nom));
+        b.setAttribute("aria-pressed", etat.actif === p.nom);
+        b.addEventListener("click", () => {
+          envoyer({ cmd: "appliquer", nom: p.nom });
+          for (const x of g.children) x.setAttribute("aria-pressed", x === b);
+        });
+        g.append(b);
+      }
+      return [el("p", "note", "Un clic l'applique tout de suite : regarde autour de ta souris. Tu pourras tout régler ensuite."), g];
+    },
+  },
+  {
+    titre: "À savoir",
+    corps: () => {
+      const l = el("div", "raccourcis");
+      for (const [k, t] of [["Ctrl + Alt + →", "preset suivant, partout dans Windows"], ["Ctrl + Alt + ←", "preset précédent"], ["Ctrl + Alt + P", "pause"], ["04 Auto", "un preset par application ou par heure"], ["Icône", "presets et pause dans la zone de notification"]]) {
+        l.append(el("span", "touche", k), el("span", "", t));
+      }
+      return [l, el("p", "note", "Les cases à côté de chaque réglage notent sur 10 son impact sur la puissance utilisée.")];
+    },
+  },
+];
+let etapeAccueil = 0;
+
+function ouvrirAccueil() {
+  etapeAccueil = 0;
+  majAccueil();
+  $("voile-accueil").hidden = false;
+  $("suivant-accueil").focus();
+}
+
+function majAccueil() {
+  const e = ETAPES_ACCUEIL[etapeAccueil];
+  $("etape-accueil").textContent = `${etapeAccueil + 1} / ${ETAPES_ACCUEIL.length}`;
+  $("titre-accueil").textContent = e.titre;
+  $("corps-accueil").replaceChildren(...e.corps());
+  $("corps-accueil").style.cssText = "display: flex; flex-direction: column; gap: 16px";
+  $("suivant-accueil").textContent = etapeAccueil === ETAPES_ACCUEIL.length - 1 ? "Commencer" : "Suivant →";
+}
+
+function fermerAccueil() {
+  $("voile-accueil").hidden = true;
+  memoire.ecrire("accueil", true);
+}
+$("suivant-accueil").addEventListener("click", () => {
+  if (etapeAccueil === ETAPES_ACCUEIL.length - 1) { fermerAccueil(); return; }
+  etapeAccueil++;
+  majAccueil();
+});
+$("passer-accueil").addEventListener("click", fermerAccueil);
+
+// ---------------------------------------------------------------------------------------------
 // Vues, panneau, bandeau
 
-const VUES = ["presets", "reglages", "curseurs"];
+const VUES = ["presets", "reglages", "curseurs", "auto"];
 function montrerVue(v) {
   etat.vue = v;
   for (const id of VUES) {
@@ -933,6 +1439,8 @@ function montrerVue(v) {
   }
   if (v === "reglages") requestAnimationFrame(() => grand.dimensionner());
   if (v === "curseurs" && !etat.jeux) envoyer({ cmd: "jeux" });
+  if (v === "auto") { envoyer({ cmd: "applis" }); dessinerAuto(); }
+  cacherLoupe();
 }
 
 let minuterieBandeau = 0;
@@ -983,13 +1491,19 @@ window.essaim = {
         if (premier) {
           construireReglages();
           chargerCommu(false);
+          if (!memoire.lire("accueil", false)) ouvrirAccueil();
         }
         grand.regler(etat.reglages);
         majReglages();
         dessinerPresets();
         dessinerCurseurs();
+        if (etat.vue === "auto") dessinerAuto();
         break;
       }
+      case "applis":
+        etat.applis = m.applis || [];
+        dessinerAuto();
+        break;
       case "son":
         recevoirSon(m);
         break;
@@ -1045,6 +1559,19 @@ function boucle(maintenant) {
     grand.dimensionner();
     grand.avancer(dt, son);
     grand.dessiner();
+    imageGif(maintenant);
+  }
+  if (loupe.p && etat.vue === "presets") {
+    loupe.apercu.teinteImposee = teinteImposee(loupe.p.reglages);
+    loupe.apercu.curseur = flecheJeu((loupe.p.reglages.souris && loupe.p.reglages.souris.jeu) || etat.curseurs);
+    loupe.apercu.dimensionner();
+    loupe.apercu.avancer(dt, son);
+    loupe.apercu.dessiner();
+  }
+  for (const ap of comparaison.apercus) {
+    ap.dimensionner();
+    ap.avancer(dt, son);
+    ap.dessiner();
   }
   cumul += dt;
   if (etat.vue === "presets" && cumul >= 1 / 30) {
@@ -1090,14 +1617,20 @@ $("panneau").addEventListener("submit", (e) => {
 $("ouvrir-config").addEventListener("click", () => envoyer({ cmd: "ouvrir_config" }));
 $("importer").addEventListener("click", () => envoyer({ cmd: "importer" }));
 $("surprise").addEventListener("click", surprise);
+$("exporter-gif").addEventListener("click", lancerGif);
+$("grand-apercu").addEventListener("pointerdown", () => grand.clic());
 $("pause").addEventListener("click", () => envoyer({ cmd: "pause" }));
 $("bandeau-fermer").addEventListener("click", () => { $("bandeau").hidden = true; });
 
-// Clavier : / chercher, Ctrl+1/2/3 onglets, Ctrl+S enregistrer, Ctrl+Z annuler le dernier preset,
-// Ctrl+P pause, flèches dans la grille, Échap ferme le panneau.
+// Clavier : / chercher, Ctrl+1 à 4 onglets, Ctrl+S enregistrer, Ctrl+Z annuler le dernier preset,
+// Ctrl+P pause, flèches dans la grille, Échap ferme la boîte ouverte.
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("voile").hidden) { fermerPanneau(); return; }
-  if (e.ctrlKey && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); montrerVue(VUES[+e.key - 1]); return; }
+  if (e.key === "Escape") {
+    const ouverte = [["voile", fermerPanneau], ["voile-dessin", fermerDessin], ["voile-comparaison", fermerComparaison], ["voile-accueil", fermerAccueil]].find(([id]) => !$(id).hidden);
+    if (ouverte) { ouverte[1](); return; }
+    if (etat.comparer) { etat.comparer = null; dessinerPresets(); return; }
+  }
+  if (e.ctrlKey && ["1", "2", "3", "4"].includes(e.key)) { e.preventDefault(); montrerVue(VUES[+e.key - 1]); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); ouvrirPanneau(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "p") { e.preventDefault(); envoyer({ cmd: "pause" }); return; }
   if (enSaisie()) return;

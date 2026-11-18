@@ -30,6 +30,10 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
 - Windows masque le curseur pendant la frappe (`CURSOR_SHOWING` absent) : l'essaim se cache
   aussi. Pour le réafficher depuis un script, un `SendInput` de mouvement relatif (structure
   `INPUT` de 40 octets) ; `SetCursorPos` ne suffit pas.
+- Un clic simulé doit durer ~60 ms (bouton enfoncé, pause, relâché) : sinon `GetAsyncKeyState`
+  le manque et ni l'onde ni les fissures n'apparaissent. Si les clics dans la page n'agissent
+  plus, vérifier par `WindowFromPoint` qu'aucune fenêtre d'une autre appli (bulle de SharkApp,
+  invisible dans `PrintWindow`) ne couvre le point.
 - Le journal (`%APPDATA%\Essaim\essaim.log`) note chaque changement d'état et, toutes les
   minutes, la cadence et le temps de calcul par image.
 

@@ -7,10 +7,13 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
 - **Quantité de basse** : accélère la rotation.
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
+- **Aigus** (charleston, cymbales) : chaque attaque fait jaillir des étincelles des têtes
+  (`[scintillement]`, passe-haut à 5 kHz, enveloppes rapide et lente).
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
   moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
   losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
-  qui peut tourner sur lui-même (`rotation`, tours/min) ; les
+  ou un trajet dessiné à la main (`forme = "trace"`, points dans `trace`, parcourus à vitesse
+  constante), qui peut tourner sur lui-même (`rotation`, tours/min) ; les
   satellites suivent le même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des
   satellites permanents, même sans musique. Entre deux images, les traînées suivent le vrai
   trajet (points intermédiaires) : elles restent lisses à grande vitesse.
@@ -20,7 +23,10 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
   mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
   précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
-  RGB.
+  RGB. Avec `[couleur] musique`, la teinte glisse en plus avec la basse et la brillance du son.
+- **Clics** : une onde de choc (`[clic] onde`) et, au choix, des éclats (`eclats`), en plus des
+  fissures.
+- **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`).
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11).
 
@@ -48,17 +54,33 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
 
 ## Utilisation
 
-- Icône de notification : *Mettre en pause*, *Réglages…*, *Quitter*.
+- Icône de notification : *Mettre en pause*, *Réglages…*, *Presets* (celui en place coché),
+  *Quitter*.
+- **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
+  (une bulle de l'icône le nomme), Ctrl+Alt+P pause. Ils passent par `RegisterHotKey` : Windows
+  prévient Essaim de ces seules touches, sans hook sur le clavier.
+- **Preset automatique** (`[automatique]`) : un preset par application au premier plan (nom de
+  l'exécutable, prioritaire) ou par plage horaire (qui peut passer minuit). Quand plus aucune
+  règle ne s'applique, les réglages d'avant reviennent. Les fenêtres d'Essaim ne comptent pas.
 - **Fenêtre des réglages** (`essaim.exe --reglages`, *Réglages…*, ou « Essaim - réglages » dans
   le menu Démarrer). Elle est claire ou sombre selon le thème des applications de Windows.
   - *01 Presets* : la grille des presets, chacun animé comme l'essaim autour du pointeur et au
     rythme du vrai son (en silence, sur un kick de démonstration). Recherche, filtre par source
     (fournis, mes presets, communauté), aperçus *Direct*, *Survol* ou *Figé*. Un clic applique ;
     le cadre rouge marque le preset actif. *Enregistrer le preset* garde les réglages actuels
-    (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque.
+    (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque. Filtre par
+    forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
+    montre côte à côte avec la liste de leurs réglages différents.
   - *02 Réglages* : les réglages courants appliqués en direct, *+ Avancé* pour tous les autres.
+    Un réglage dont l'effet est coupé (fissures, bordure, son, comètes…) est masqué. *Dessiné…*
+    ouvre une toile où tracer le trajet d'un geste. Un clic sur l'aperçu y montre l'effet du
+    clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
+    `Images\Essaim` et le montre dans l'Explorateur.
+  - *04 Auto* : les règles du preset automatique et les raccourcis.
+  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Avancé*).
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
-    niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë).
+    niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
+    *Aigus* s'allume sur les attaques des aigus.
   - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
     (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
   - Une valeur de réglage se tape au clavier (clic dessus, Entrée) ; double-clic sur une
@@ -73,7 +95,7 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
     dont les réglages en cours s'écartent de peu est marqué *modifié* (cadre pointillé).
   - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Avancé*.
-  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1/2/3 onglets,
+  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 4 onglets,
     Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause.
   - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*, *Delta*, *Ruche*,
     *Huit*, *Pollen*, *Losange*, *Spirale*, chacun refaisable à la main dans les réglages. Les

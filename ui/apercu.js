@@ -15,9 +15,9 @@ function hsl(h, s, l) {
 }
 
 // Teinte : k = 0 en queue de traînée, 1 en tête (comme render::prisme). `imposee` : teinte de
-// l'application au premier plan, quand le preset la suit.
-function prisme(c, t, k, imposee) {
-  const base = imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360;
+// l'application au premier plan, quand le preset la suit ; `decalage` : glissement musical.
+function prisme(c, t, k, imposee, decalage = 0) {
+  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0);
   const queue = base + c.ecart_teinte;
   let dh = base - queue;
   if (dh > 180) dh -= 360;
@@ -25,8 +25,44 @@ function prisme(c, t, k, imposee) {
   return hsl((((queue + dh * k) % 360) + 360) % 360, 1, 0.66);
 }
 
-// Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin).
-function chemin(forme, a) {
+// Trajet dessiné : rééchantillonné à 256 pas égaux, centré, rayon le plus grand 1,2 (comme
+// render::reechantillonner) ; gardé par tableau de points.
+const traces = new WeakMap();
+function reechantillonner(points) {
+  if (!Array.isArray(points) || points.length < 3) return null;
+  if (traces.has(points)) return traces.get(points);
+  const p = points.filter((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]));
+  const n = p.length;
+  const long = (i) => Math.hypot(p[(i + 1) % n][0] - p[i][0], p[(i + 1) % n][1] - p[i][1]);
+  let total = 0;
+  for (let i = 0; i < n; i++) total += long(i);
+  if (n < 3 || total <= 1e-6) { traces.set(points, null); return null; }
+  const out = [];
+  let i = 0, fait = 0;
+  for (let k = 0; k < 256; k++) {
+    const cible = (total * k) / 256;
+    while (i < n - 1 && fait + long(i) < cible) { fait += long(i); i++; }
+    const f = long(i) > 0 ? Math.min(1, Math.max(0, (cible - fait) / long(i))) : 0;
+    const a = p[i], b = p[(i + 1) % n];
+    out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+  }
+  const cx = out.reduce((s, q) => s + q[0], 0) / 256, cy = out.reduce((s, q) => s + q[1], 0) / 256;
+  const r = Math.max(1e-6, ...out.map((q) => Math.hypot(q[0] - cx, q[1] - cy)));
+  const res = out.map((q) => [((q[0] - cx) / r) * 1.2, ((q[1] - cy) / r) * 1.2]);
+  traces.set(points, res);
+  return res;
+}
+
+// Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin). `trace` : points du
+// trajet dessiné, pour la forme « trace ».
+function chemin(forme, a, trace) {
+  if (forme === "trace") {
+    const t = reechantillonner(trace);
+    if (!t) return [Math.cos(a), Math.sin(a)];
+    const u = (((a / TAU) * 256) % 256 + 256) % 256, i = Math.floor(u), f = u - i;
+    const p = t[i % 256], q = t[(i + 1) % 256];
+    return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+  }
   const poly = (k, r, r2, depart = -Math.PI / 2) => {
     const u = (((a / TAU) * k) % k + k) % k, j = Math.floor(u), f = u - j;
     const v = (j) => { const th = depart + (j * TAU) / k, rr = j % 2 === 0 ? r : r2; return [Math.cos(th) * rr, Math.sin(th) * rr]; };
@@ -84,6 +120,9 @@ class Apercu {
     this.fixes = [];
     this.teinteImposee = null;
     this.curseur = null;
+    this.particules = [];
+    this.aigusVus = null;
+    this.decalage = 0;
     this.kicksVus = null;
     this.t = 0;
   }
@@ -151,7 +190,7 @@ class Apercu {
       const [rk, wk] = anneau(k);
       this.angles[k] = (this.angles[k] + w * wk * dt) % TAU;
       for (let i = 0; i < nombre; i++) {
-        const [x, y] = tourne(chemin(o.forme, this.angles[k] + (i * TAU) / nombre));
+        const [x, y] = tourne(chemin(o.forme, this.angles[k] + (i * TAU) / nombre, o.trace));
         pousser(this.trainees[k * nombre + i], t, cx + x * r * rk, cy + y * r * rk, Math.max(0.01, o.trainee));
       }
     }
@@ -168,8 +207,41 @@ class Apercu {
     for (const s of this.sats.concat(this.fixes)) {
       s.a = (s.a + w * s.mul * dt) % TAU;
       const rr = o.rayon * S * s.r * this.far;
-      const [x, y] = tourne(chemin(forme, s.a));
+      const [x, y] = tourne(chemin(forme, s.a, o.trace));
       pousser(s.trainee, t, cx + x * rr, cy + y * rr, SAT_TRAINEE);
+    }
+    // glissement de teinte avec la musique (comme render::decalage_vise), lissé
+    const vise = 160 * (0.6 * Math.min(1, son.basse) + 0.4 * Math.min(1, son.brillance || 0));
+    this.decalage += (vise - this.decalage) * Math.min(dt * 6, 1);
+    // aigus : étincelles près des têtes
+    if (this.aigusVus === null) this.aigusVus = son.aigus || 0;
+    const aigus = Math.min(4, ((son.aigus || 0) - this.aigusVus) >>> 0);
+    this.aigusVus = son.aigus || 0;
+    const sc = c.scintillement;
+    if (sc && sc.actif && aigus > 0) {
+      const tetes = this.trainees.concat(this.sats.map((x) => x.trainee), this.fixes.map((x) => x.trainee)).map((tr) => tr[tr.length - 1]).filter(Boolean);
+      for (let n = 0; n < aigus * Math.round(Math.min(10, Math.max(1, sc.quantite))); n++) {
+        const h = tetes.length ? tetes[Math.floor(Math.random() * tetes.length)] : [0, cx + r, cy];
+        const a = Math.random() * TAU, v = (30 + Math.random() * 60) * S;
+        this.particules.push({ x: h[1], y: h[2], vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: 0.3 + Math.random() * 0.25, taille: (1.1 + Math.random()) * S, genre: "etincelle" });
+      }
+    }
+    const frein = Math.exp(-dt * 3);
+    for (const q of this.particules) { q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= frein; q.vy *= frein; }
+    this.particules = this.particules.filter((q) => t - q.ne < q.vie).slice(-400);
+  }
+
+  // Effets d'un clic au centre (onde de choc, éclats), comme Swarm::clic.
+  clic() {
+    if (!this.reglages || !this.reglages.clic) return;
+    const k = this.reglages.clic, S = this.echelle || 1, t = this.t;
+    const cx = this.canvas.width / 2, cy = this.canvas.height / 2, taille = Math.min(3, Math.max(0.3, k.taille));
+    if (k.onde) this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: 0.55, taille: 46 * taille * S, genre: "onde" });
+    if (k.eclats) {
+      for (let i = 0; i < 16; i++) {
+        const a = Math.random() * TAU, v = (160 + Math.random() * 220) * taille * S;
+        this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: 0.45 + Math.random() * 0.35, taille: (1.2 + Math.random() * 1.2) * S, genre: "etincelle" });
+      }
     }
   }
 
@@ -182,7 +254,7 @@ class Apercu {
     const trainee = (tr, vie, largeur, al, halo) => {
       if (tr.length < 2) return;
       if (halo) {
-        g.strokeStyle = rgba(prisme(c.couleur, t, 0.7, this.teinteImposee), 0.12 * al);
+        g.strokeStyle = rgba(prisme(c.couleur, t, 0.7, this.teinteImposee, this.decalage), 0.12 * al);
         g.lineWidth = (0.8 + largeur * 0.7) * 2.6;
         g.beginPath();
         tr.forEach(([, x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
@@ -190,7 +262,7 @@ class Apercu {
       }
       for (let i = 0; i + 1 < tr.length; i++) {
         const k = Math.max(0, 1 - (t - tr[i + 1][0]) / vie);
-        g.strokeStyle = rgba(prisme(c.couleur, t, k, this.teinteImposee), k * 0.9 * al);
+        g.strokeStyle = rgba(prisme(c.couleur, t, k, this.teinteImposee, this.decalage), k * 0.9 * al);
         g.lineWidth = 0.8 + k * largeur;
         g.beginPath();
         g.moveTo(tr[i][1], tr[i][2]);
@@ -204,7 +276,7 @@ class Apercu {
       g.arc(x, y, Math.max(0.1, r), 0, TAU);
       g.fill();
     };
-    const lueur = 0.4 + 0.6 * this.env, tete = prisme(c.couleur, t, 1, this.teinteImposee), duree = Math.max(0.1, c.essaim.duree);
+    const lueur = 0.4 + 0.6 * this.env, tete = prisme(c.couleur, t, 1, this.teinteImposee, this.decalage), duree = Math.max(0.1, c.essaim.duree);
     const tetes = [];
     for (const s of this.sats.concat(this.fixes)) {
       const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
@@ -237,6 +309,19 @@ class Apercu {
       g.stroke();
     }
     tetes.filter((h) => h.devant).forEach(dessinerTete);
+    for (const q of this.particules) {
+      const k = Math.min(1, Math.max(0, (t - q.ne) / q.vie));
+      if (q.genre === "onde") {
+        g.strokeStyle = rgba(tete, 0.85 * (1 - k));
+        g.lineWidth = (2.5 * (1 - k) + 0.6) * S;
+        g.beginPath();
+        g.arc(q.x, q.y, Math.max(1, q.taille * (1 - (1 - k) ** 3)), 0, TAU);
+        g.stroke();
+      } else {
+        disque(q.x, q.y, q.taille * 2.2, tete, 0.25 * (1 - k));
+        disque(q.x, q.y, q.taille * (1 - 0.5 * k), [255, 255, 255], 1 - k);
+      }
+    }
     // le pointeur, au centre : le curseur Windows du preset (point chaud au centre), sinon un point
     const cur = this.curseur;
     if (cur) {

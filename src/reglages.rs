@@ -495,6 +495,18 @@ fn depuis_base64(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Dossier Images de l'utilisateur, là où Windows le place (il peut être déplacé ou redirigé).
+fn dossier_images() -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_Pictures, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_Pictures, KF_FLAG_DEFAULT, None).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s.map(std::path::PathBuf::from)
+    }
+}
+
 /// Enregistre un GIF dans « Images\Essaim » ; renvoie son chemin.
 fn enregistrer_gif(nom: &str, donnees: &str) -> Result<std::path::PathBuf, String> {
     let octets = depuis_base64(donnees).ok_or("image illisible")?;
@@ -502,7 +514,7 @@ fn enregistrer_gif(nom: &str, donnees: &str) -> Result<std::path::PathBuf, Strin
         return Err("ce n'est pas un GIF".into());
     }
     let propre: String = nom.chars().filter(|c| !r#"\/:*?"<>|"#.contains(*c) && !c.is_control()).take(40).collect();
-    let dossier = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).ok_or("dossier de l'utilisateur introuvable")?.join("Pictures").join("Essaim");
+    let dossier = dossier_images().ok_or("dossier Images introuvable")?.join("Essaim");
     std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
     let f = dossier.join(format!("{}.gif", if propre.trim().is_empty() { "Essaim" } else { propre.trim() }));
     std::fs::write(&f, octets).map_err(|e| e.to_string())?;

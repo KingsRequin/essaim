@@ -15,6 +15,7 @@
       <button class="puce petite" id="pause" aria-pressed="false" title="Met l'essaim en pause (Ctrl+P)">Pause</button>
       <div class="sonde silence" id="sonde" title="Ce que l'essaim entend du son de Windows">
         <span class="kick t-label"><span class="temoin" id="temoin"></span>Kick</span>
+        <span class="kick t-label"><span class="temoin" id="temoin-aigus"></span>Aigus</span>
         <span class="mesure"><span class="t-label">Basse</span><span class="jauge"><span id="jauge-niveau"></span></span><span class="detail" id="detail-niveau">—</span></span>
         <span class="mesure"><span class="t-label">Note</span><span class="jauge note"><span id="jauge-note"></span></span><span class="detail" id="detail-note">—</span></span>
       </div>
@@ -22,6 +23,7 @@
         <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num">01</span>Presets</button>
         <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num">02</span>Réglages</button>
         <button class="onglet t-nav" role="tab" id="onglet-curseurs" aria-controls="vue-curseurs" aria-selected="false"><span class="num">03</span>Curseurs</button>
+        <button class="onglet t-nav" role="tab" id="onglet-auto" aria-controls="vue-auto" aria-selected="false"><span class="num">04</span>Auto</button>
       </nav>
     </div>
   </header>
@@ -39,6 +41,10 @@
         <div class="t-label">Aperçus animés</div>
         <div class="groupe-puces" id="modes" style="margin-top: 8px"></div>
         <p class="t-petit" id="mode-aide" style="margin: 8px 0 0"></p>
+      </div>
+      <div>
+        <div class="t-label">Forme</div>
+        <div class="groupe-puces" id="filtre-formes" style="margin-top: 8px"></div>
       </div>
       <div>
         <div class="t-label">Ordre</div>
@@ -67,8 +73,8 @@
   </section>
 
   <section class="vue" id="vue-reglages" role="tabpanel" aria-labelledby="onglet-reglages" hidden>
-    <div class="colonne" style="width: 380px; overflow: visible">
-      <canvas class="scene" id="grand-apercu" style="aspect-ratio: 1"></canvas>
+    <div class="colonne" style="width: 380px">
+      <canvas class="scene" id="grand-apercu" style="aspect-ratio: 1; flex-shrink: 0"></canvas>
       <div style="display: flex; flex-direction: column; gap: 6px">
         <span class="t-titre" id="nom-actif"></span>
         <span class="t-petit">Aperçu en direct, calculé comme l'essaim autour de ton pointeur.</span>
@@ -83,6 +89,7 @@
       <div class="groupe-puces" style="align-items: center; gap: 12px">
         <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
         <button class="puce" id="surprise" title="Des réglages tirés au hasard (Ctrl+Z pour revenir)">Surprends-moi</button>
+        <button class="puce" id="exporter-gif" title="Trois secondes de l'aperçu, en GIF, dans Images\Essaim">Exporter en GIF</button>
         <button class="puce" id="ouvrir-config">Ouvrir config.toml</button>
       </div>
     </div>
@@ -90,6 +97,40 @@
       <div class="reglages" id="reglages"></div>
       <button class="bascule-avance" id="bascule-avance" aria-expanded="false"><span class="signe" id="signe-avance">+</span> Avancé</button>
       <div class="avance" id="avance" hidden></div>
+    </div>
+  </section>
+
+  <section class="vue" id="vue-auto" role="tabpanel" aria-labelledby="onglet-auto" hidden>
+    <aside class="colonne" style="width: 330px">
+      <span class="t-titre">Preset automatique</span>
+      <p class="note">Essaim change tout seul de preset selon l'application au premier plan, ou selon l'heure. Quand plus aucune règle ne s'applique, tes réglages d'avant reviennent.</p>
+      <button class="puce" id="auto-actif" aria-pressed="false" style="align-self: flex-start">Choisir le preset automatiquement</button>
+      <span class="t-titre" style="margin-top: 8px">Raccourcis clavier</span>
+      <button class="puce" id="raccourcis-actif" aria-pressed="true" style="align-self: flex-start">Raccourcis globaux</button>
+      <div class="raccourcis">
+        <span class="touche">Ctrl + Alt + →</span><span>preset suivant</span>
+        <span class="touche">Ctrl + Alt + ←</span><span>preset précédent</span>
+        <span class="touche">Ctrl + Alt + P</span><span>pause</span>
+      </div>
+      <p class="note">Ils marchent partout dans Windows, sans surveiller le clavier (pas de hook) : Windows prévient seulement Essaim quand ces touches sont pressées.</p>
+    </aside>
+    <div class="defile">
+      <div class="barre-titre"><span class="t-titre">Selon l'application</span><span class="t-label">prioritaire</span></div>
+      <div class="regles" id="regles-applis"></div>
+      <form class="ajout-regle" id="ajout-appli">
+        <label><span class="t-label">Application</span><input class="champ petit" id="appli-nom" list="applis-ouvertes" placeholder="jeu.exe" autocomplete="off" spellcheck="false"></label>
+        <datalist id="applis-ouvertes"></datalist>
+        <label><span class="t-label">Preset</span><select class="choix" id="appli-preset"></select></label>
+        <button class="puce" type="submit">Ajouter</button>
+      </form>
+      <div class="barre-titre" style="margin-top: 28px"><span class="t-titre">Selon l'heure</span></div>
+      <div class="regles" id="regles-horaires"></div>
+      <form class="ajout-regle" id="ajout-horaire">
+        <label><span class="t-label">De</span><input class="champ petit" id="horaire-debut" type="time" value="22:00"></label>
+        <label><span class="t-label">À</span><input class="champ petit" id="horaire-fin" type="time" value="07:00"></label>
+        <label><span class="t-label">Preset</span><select class="choix" id="horaire-preset"></select></label>
+        <button class="puce" type="submit">Ajouter</button>
+      </form>
     </div>
   </section>
 
@@ -119,6 +160,43 @@
       </div>
     </div>
   </section>
+</div>
+
+<div class="voile centre" id="voile-dessin" hidden>
+  <div class="boite" role="dialog" aria-modal="true" aria-labelledby="titre-dessin">
+    <span class="t-titre" id="titre-dessin">Dessiner un trajet</span>
+    <p class="note">Trace une boucle d'un seul geste autour du pointeur (le point au centre). Les comètes la parcourront à vitesse constante.</p>
+    <canvas class="scene" id="toile-dessin" width="420" height="420"></canvas>
+    <div class="groupe-puces" style="gap: 12px">
+      <button class="signal" id="valider-dessin">Utiliser ce trajet →</button>
+      <button class="puce" id="effacer-dessin">Effacer</button>
+      <button class="puce" id="fermer-dessin">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<div class="voile centre" id="voile-comparaison" hidden>
+  <div class="boite large" role="dialog" aria-modal="true" aria-labelledby="titre-comparaison">
+    <div class="barre-titre"><span class="t-titre" id="titre-comparaison">Comparer</span><button class="puce" id="fermer-comparaison">Fermer</button></div>
+    <div class="comparaison" id="comparaison"></div>
+  </div>
+</div>
+
+<div class="loupe" id="loupe" hidden>
+  <canvas class="scene" id="toile-loupe"></canvas>
+  <span class="t-nom" id="nom-loupe"></span>
+</div>
+
+<div class="voile centre" id="voile-accueil" hidden>
+  <div class="boite large accueil" role="dialog" aria-modal="true" aria-labelledby="titre-accueil">
+    <span class="t-label" id="etape-accueil">1 / 3</span>
+    <span class="t-affiche petite" id="titre-accueil">Bienvenue</span>
+    <div id="corps-accueil"></div>
+    <div class="groupe-puces" style="gap: 12px; margin-top: auto">
+      <button class="signal" id="suivant-accueil">Suivant →</button>
+      <button class="puce" id="passer-accueil">Passer</button>
+    </div>
+  </div>
 </div>
 
 <div class="voile" id="voile" hidden>
