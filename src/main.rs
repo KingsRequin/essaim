@@ -10,10 +10,12 @@
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod appli;
 mod audio;
 mod backend;
 mod bordure;
 mod canvas;
+mod charge;
 mod config;
 mod gpu;
 mod ipc;
@@ -22,6 +24,7 @@ mod prisme;
 mod profils;
 mod reglages;
 mod render;
+mod souris;
 mod win;
 
 use render::{Crack, Rng, Swarm};
@@ -139,6 +142,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let (ipc_tx, ipc_rx) = std::sync::mpsc::channel();
     ipc::start(ipc_state.clone(), ipc_tx);
     let prisme = prisme::start();
+    let mut appli = appli::TeinteAppli::default();
     let mut sync_hue: Option<f32> = None;
     let mut synced = false;
     let mut monitors = win::monitors();
@@ -162,6 +166,8 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut backend_gen = 0u32;
     let (mut next_conf, mut next_fs) = (start, start);
     let mut stat_send = Duration::ZERO;
+    // charge publiée chaque seconde pour la fenêtre des réglages
+    let (mut charge_busy, mut charge_frames, mut charge_depuis) = (Duration::ZERO, 0u32, start);
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
         (0u32, 0f64, Duration::ZERO, Duration::ZERO, start + Duration::from_secs(60));
 
@@ -197,6 +203,11 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         }
         let now = Instant::now();
         let t = (now - start).as_secs_f64();
+        if now - charge_depuis >= Duration::from_secs(1) {
+            let ms = charge_busy.as_secs_f32() * 1000.0 / charge_frames.max(1) as f32;
+            charge::publier(ms, charge_frames as f32 / (now - charge_depuis).as_secs_f32());
+            (charge_busy, charge_frames, charge_depuis) = (Duration::ZERO, 0, now);
+        }
 
         let cur = win::cursor_state();
         if now >= next_fs {
@@ -303,19 +314,28 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
 
         // simulation
         swarm.update(t, dt, cursor, au, cfg, scale);
-        // teinte de l'éclairage (Prisme) : suivie en douceur, en passant par le plus court
-        sync_hue = match (cfg.couleur.synchro_prisme, prisme.current(), sync_hue) {
-            (true, Some(target), Some(h)) => {
+        // teinte imposée : celle de l'application au premier plan, sinon celle de l'éclairage
+        // (Prisme) ; suivie en douceur, en passant par le plus court
+        let cible = if cfg.couleur.application {
+            appli.courante()
+        } else if cfg.couleur.synchro_prisme {
+            prisme.current()
+        } else {
+            None
+        };
+        sync_hue = match (cible, sync_hue) {
+            (Some(target), Some(h)) => {
                 let d = (target - h + 540.0).rem_euclid(360.0) - 180.0;
                 Some((h + d * (dt * 4.0).min(1.0)).rem_euclid(360.0))
             }
-            (true, Some(target), None) => Some(target),
+            (Some(target), None) => Some(target),
             _ => None,
         };
         render::set_sync_hue(sync_hue);
         if sync_hue.is_some() != synced {
             synced = sync_hue.is_some();
-            log::info!("teinte : {}", if synced { "celle de l'éclairage (Prisme)" } else { "cycle propre" });
+            let source = if cfg.couleur.application { "celle de l'application au premier plan" } else { "celle de l'éclairage (Prisme)" };
+            log::info!("teinte : {}", if synced { source } else { "cycle propre" });
         }
         let life = cfg.fissures.duree.max(0.2) as f64;
         cracks.retain(|c| t - c.born <= life);
@@ -345,6 +365,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         stat_send += backend.frame(&monitors, swarm_rect, &crack_rects, &draw);
 
         let busy = busy_start.elapsed();
+        (charge_busy, charge_frames) = (charge_busy + busy, charge_frames + 1);
         stat_frames += 1;
         stat_time += dt as f64;
         stat_busy += busy;
