@@ -189,7 +189,7 @@ mod tests {
                 let t = i as f64 * dt as f64;
                 let cursor = (600.0 + 200.0 * (t as f32).sin(), 500.0);
                 s.update(t, dt, cursor, au, &cfg, 1.0);
-                let (x0, y0, x1, y1) = s.bounds(cursor, 1.0);
+                let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
                 let d = b.frame(&mons, rect, &[], &|cv, _| s.draw(cv, t, &cfg, 1.0, cursor));
                 if i >= 200 {

@@ -2,21 +2,17 @@
 //!
 //! Quatre préréglages intégrés (non modifiables) et les profils de l'utilisateur, un fichier
 //! `%APPDATA%\Essaim\profils\<nom>.toml` chacun. Appliquer un profil réécrit ses réglages dans
-//! `config.toml` (commentaires gardés). Les choix propres à la machine n'en font pas partie :
-//! `[rendu]`, `[diagnostic]` et le remplacement des curseurs de Windows (`[curseur]` sauf la
-//! taille du point).
+//! `config.toml` (commentaires gardés). `[rendu]`, propre à la machine, n'en fait pas partie.
 
 use crate::config::{self, Config};
 use std::path::PathBuf;
 
 /// Sections enregistrées dans un profil.
-const SECTIONS: [&str; 7] = ["curseur", "orbite", "essaim", "couleur", "fissures", "audio", "bordure"];
-/// Réglages de ces sections qui restent hors des profils.
-const MACHINE: [(&str, &str); 3] = [("curseur", "remplacer_curseurs"), ("curseur", "variantes"), ("curseur", "taille_windows")];
+const SECTIONS: [&str; 7] = ["eclat", "orbite", "essaim", "couleur", "fissures", "audio", "bordure"];
 
-/// Le réglage `[section] key` fait-il partie des profils ?
-pub fn in_profile(section: &str, key: &str) -> bool {
-    SECTIONS.contains(&section) && !MACHINE.contains(&(section, key))
+/// Le réglage `[section] _` fait-il partie des profils ?
+pub fn in_profile(section: &str, _key: &str) -> bool {
+    SECTIONS.contains(&section)
 }
 
 pub struct Profile {
@@ -178,15 +174,13 @@ mod tests {
         cfg.orbite.rayon = 31.5;
         cfg.couleur.teinte = 200.0;
         cfg.essaim.maximum = 12;
-        // hors profil : non enregistrés
-        cfg.rendu.cadence = 60;
-        cfg.curseur.remplacer_curseurs = false;
+        cfg.rendu.cadence = 60; // hors profil : non enregistré
         save_in(&d, "Essai", &cfg).unwrap();
         let text = std::fs::read_to_string(d.join("Essai.toml")).unwrap();
         let back = Config::read(&d.join("Essai.toml")).unwrap();
         assert!(same(&cfg, &back));
         assert_eq!(back.rendu.cadence, 0);
-        assert!(!text.contains("remplacer_curseurs") && !text.contains("[rendu]"), "{text}");
+        assert!(!text.contains("[rendu]"), "{text}");
         assert!(!same(&Config::default(), &back));
         assert!(save_in(&d, "défaut", &cfg).is_err(), "préréglage écrasé");
         let _ = std::fs::remove_dir_all(&d);

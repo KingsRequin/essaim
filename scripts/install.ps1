@@ -1,8 +1,8 @@
-# Installe (ou met à jour) Essaim pour l'utilisateur courant, sans droits administrateur :
+﻿# Installe (ou met à jour) Essaim pour l'utilisateur courant, sans droits administrateur :
 #   - compile en release ;
 #   - copie l'exécutable dans %LOCALAPPDATA%\Programs\Essaim ;
 #   - lance Essaim à l'ouverture de session (clé Run de HKCU) ;
-#   - ajoute au menu Démarrer « Essaim » et « Essaim - restaurer les curseurs ».
+#   - ajoute au menu Démarrer « Essaim » et « Essaim - réglages ».
 # Désinstaller : scripts\uninstall.ps1
 param([switch]$NoBuild)
 
@@ -21,7 +21,7 @@ try {
 } finally { Pop-Location }
 $built = Join-Path $target 'release\essaim.exe'
 
-# Arrêt propre de toute instance (elle remet les curseurs de l'utilisateur), puis copie.
+# Arrêt propre de toute instance (elle rend sa couleur à la bordure colorée), puis copie.
 $installed = Join-Path $dest 'essaim.exe'
 & $built --quitter
 Wait-Process essaim -Timeout 10 -ErrorAction SilentlyContinue
@@ -38,14 +38,17 @@ $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut((Join-Path $programs 'Essaim.lnk'))
 $lnk.TargetPath = $installed
 $lnk.WorkingDirectory = $dest
-$lnk.Description = 'Curseur animé réactif à la musique'
+$lnk.Description = 'Essaim réactif à la musique autour du pointeur'
 $lnk.Save()
-$lnk = $shell.CreateShortcut((Join-Path $programs 'Essaim - restaurer les curseurs.lnk'))
+$lnk = $shell.CreateShortcut((Join-Path $programs 'Essaim - réglages.lnk'))
 $lnk.TargetPath = $installed
-$lnk.Arguments = '--restaurer-curseur'
+$lnk.Arguments = '--reglages'
 $lnk.WorkingDirectory = $dest
-$lnk.Description = "Remet les curseurs Windows d'origine (si Essaim a été arrêté de force)"
+$lnk.Description = "Ouvre la fenêtre des réglages et des profils d'Essaim"
 $lnk.Save()
+# Restes des versions qui fabriquaient leurs curseurs (le pointeur est désormais celui de Windows).
+Remove-Item (Join-Path $programs 'Essaim - restaurer les curseurs.lnk') -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:APPDATA 'Essaim\curseurs') -Recurse -Force -ErrorAction SilentlyContinue
 
 Start-Process $installed
 Write-Host "Essaim installé dans $dest et démarré."

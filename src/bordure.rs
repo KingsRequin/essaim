@@ -5,7 +5,7 @@
 //! seule fenêtre colorée à la fois ; l'ancienne retrouve la couleur du système dès qu'elle perd
 //! le premier plan. `DwmSetWindowAttribute` n'est appelé que si la couleur (quantifiée) change,
 //! 60 fois par seconde au plus. La fenêtre colorée est notée dans `bordure.hwnd` : si Essaim est
-//! tué, le lancement suivant (ou `--restaurer-curseur`) lui rend sa couleur.
+//! tué, le lancement suivant (ou `--restaurer-bordure`) lui rend sa couleur.
 
 use crate::config::Bordure;
 use std::collections::HashSet;

@@ -7,13 +7,12 @@ use std::time::SystemTime;
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Config {
-    pub curseur: Curseur,
+    pub eclat: Eclat,
     pub orbite: Orbite,
     pub essaim: Essaim,
     pub couleur: Couleur,
     pub fissures: Fissures,
     pub audio: Audio,
-    pub diagnostic: Diagnostic,
     pub rendu: Rendu,
     pub bordure: Bordure,
 }
@@ -52,22 +51,12 @@ impl Default for Rendu {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
-#[serde(default)]
-pub struct Diagnostic {
-    /// Note dans le journal chaque changement de curseur, avec l'appli sous la souris.
-    pub curseur: bool,
-}
-
+/// Éclat du kick, dessiné sous le pointeur (le pointeur lui-même est celui de Windows).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
-pub struct Curseur {
-    pub remplacer_curseurs: bool,
-    pub variantes: bool,
-    pub taille_point: f32,
-    /// Suit le réglage « taille du pointeur » de Windows (multiplie la taille du point et des
-    /// variantes).
-    pub taille_windows: bool,
+pub struct Eclat {
+    /// Taille de l'éclat (0 = aucun).
+    pub taille: f32,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -118,9 +107,9 @@ pub struct Audio {
     pub delai_kick: f32,
 }
 
-impl Default for Curseur {
+impl Default for Eclat {
     fn default() -> Self {
-        Self { remplacer_curseurs: true, variantes: true, taille_point: 3.4, taille_windows: true }
+        Self { taille: 3.4 }
     }
 }
 impl Default for Orbite {
@@ -152,11 +141,8 @@ impl Default for Audio {
 const DEFAULT_FILE: &str = r#"# Réglages d'Essaim. Enregistre le fichier : les changements s'appliquent tout de suite.
 # Tailles en pixels à 100 % d'échelle (multipliées par l'échelle de l'écran).
 
-[curseur]
-remplacer_curseurs = true # la flèche de Windows devient le point (curseur Windows, sans retard)
-variantes = true          # et les autres curseurs aussi (texte, lien, chargement, redimensionnement…)
-taille_point = 3.4
-taille_windows = true     # suit le réglage « taille du pointeur » de Windows
+[eclat]
+taille = 3.4            # éclat du kick sous le pointeur ; 0 = aucun
 
 [orbite]
 rayon = 22              # rayon de l'orbite sans basse
@@ -197,9 +183,6 @@ cadence_repos = 30      # images par seconde quand la souris est immobile et san
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim
 intensite = 1.0         # illumination sur chaque kick : 0 = aucune, 1 = jusqu'à la couleur pleine
 repos = 0.5             # luminosité sans kick : 0 = noire, 1 = couleur pleine
-
-[diagnostic]
-curseur = false         # note chaque changement de curseur dans essaim.log
 "#;
 
 pub fn dir() -> PathBuf {
@@ -221,7 +204,7 @@ pub fn set_value(section: &str, key: &str, value: &serde_json::Value) -> Result<
 /// pas pouvoir surcharger l'appli (des milliers de satellites, une cadence folle…).
 fn limits(section: &str, key: &str) -> (f64, f64) {
     match (section, key) {
-        ("curseur", "taille_point") => (1.0, 20.0),
+        ("eclat", "taille") => (0.0, 20.0),
         ("orbite", "rayon") => (4.0, 200.0),
         ("orbite", "trainee") => (0.01, 3.0),
         ("orbite", _) => (0.0, 100.0),

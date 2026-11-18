@@ -1,46 +1,56 @@
 # Essaim
 
-Curseur animé réactif à la musique pour Windows : un point à la place de la flèche, deux comètes
-et un essaim de satellites en orbite, et des fissures qui s'ouvrent sous chaque clic.
+Surcouche réactive à la musique autour du pointeur de Windows : deux comètes et un essaim de
+satellites en orbite, un éclat sous le pointeur à chaque kick, et des fissures qui s'ouvrent sous
+chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 
 - **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
 - **Quantité de basse** : accélère la rotation.
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
 - **Couleurs** : celles de l'éclairage RGB quand Prisme tourne (teinte dominante des LED, tenue
-  4 s pendant les flashs blancs ou creux sombres), sinon une teinte qui tourne en continu.
+  4 s pendant les flashs blancs ou creux sombres), sinon une teinte de départ qui tourne en
+  continu, ou reste fixe.
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11).
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut) : Spotify,
 navigateur, jeux… sans rien configurer.
 
+## Curseurs
+
+Essaim ne touche pas au pointeur : on installe un pack de curseurs par Windows (Paramètres →
+Bluetooth et appareils → Souris → Autres paramètres de souris → Pointeurs, ou clic droit →
+Installer sur le fichier `.inf` du pack). Le pack utilisé avec Essaim sera fourni dans ce dépôt,
+avec le crédit de son auteur.
+
 ## Installation
 
 `scripts\install.ps1` (sans droits administrateur) : compile, copie dans
 `%LOCALAPPDATA%\Programs\Essaim`, lance Essaim à l'ouverture de session (clé Run de HKCU) et
-ajoute au menu Démarrer « Essaim » et « Essaim - restaurer les curseurs ». `-NoBuild` reprend
+ajoute au menu Démarrer « Essaim » et « Essaim - réglages ». `-NoBuild` reprend
 la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages conservés).
 
 ## Utilisation
 
-- Icône de notification : *Mettre en pause*, *Ouvrir les réglages*, *Quitter*.
-- Réglages : `%APPDATA%\Essaim\config.toml`, appliqués dès l'enregistrement du fichier.
+- Icône de notification : *Mettre en pause*, *Réglages…*, *Quitter*.
+- **Fenêtre des réglages** (`essaim.exe --reglages`, ou *Réglages…*) : glissières et cases
+  appliquées en direct (écrites dans `config.toml`, commentaires gardés). En haut, les
+  **profils** : choisir un profil l'applique ; taper un nom puis *Enregistrer* garde les
+  réglages actuels sous ce nom (`%APPDATA%\Essaim\profils\<nom>.toml`), *Supprimer* l'efface.
+  Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*. Les profils ne touchent
+  pas à `[rendu]` (propre à la machine).
+- Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
 - `essaim.exe --quitter` ferme l'instance en cours.
-- `essaim.exe --restaurer-curseur` remet tes curseurs Windows et la bordure de la fenêtre
-  colorée si l'appli a été tuée de force (fermeture normale, plantage, pause et plein écran les
-  remettent tout seuls ; le lancement suivant rend aussi sa bordure à la fenêtre restée colorée).
-  Même tuée, le pointeur reste visible : ce sont de vrais curseurs.
+- `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été
+  tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
+  lancement suivant aussi).
 
 ## Fonctionnement
 
-- **Curseur** : le point et ses 15 variantes (texte, lien, chargement, arrière-plan, précision,
-  aide, interdit, déplacer, 4 redimensionnements, stylo, autre sélection) sont de **vrais
-  curseurs Windows**, fabriqués par l'appli (`cursors.rs`, dessin `pointer.rs`) à la taille de
-  l'écran sous la souris, puis mis en place par `SetSystemCursor` : aucun retard. Ceux qui
-  bougent (chargement, teinte Prisme) sont des curseurs animés `.ani`. Fichiers dans
-  `%APPDATA%\Essaim\curseurs\<échelle>\`. L'appli dessine par-dessus les sphères, l'éclat du
-  kick sous le point et les fissures.
+- **Pointeur** : celui de Windows, jamais dessiné par l'appli (il aurait une image de retard).
+  L'appli dessine autour : sphères, éclat du kick sous le pointeur (`[eclat] taille`, 0 = aucun)
+  et fissures.
 - **Rendu** : un calque **immobile** par écran, de la taille de l'écran, transparent aux clics
   et toujours devant (une fenêtre qui bouge ou apparaît sous la souris fait redemander leur
   curseur aux applications, et l'Explorateur répondait « flèche »). Seule la zone qui change
@@ -76,7 +86,6 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
   attaques doivent être séparées d'au moins `[audio] delai_kick` (0,1 s ; la double pédale du metal
   descend vers 0,08 s).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
-- **Taille du pointeur** de Windows (`CursorBaseSize`) suivie : curseurs refaits à la volée.
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
   tard, puis toutes les 30 s.
 

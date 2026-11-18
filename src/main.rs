@@ -1,12 +1,12 @@
-//! Essaim : curseur animé réactif à la musique (point, comètes et essaim en orbite, fissures au clic).
+//! Essaim : surcouche réactive à la musique autour du pointeur (comètes et essaim en orbite,
+//! éclat du kick, fissures au clic).
 //!
-//! Le point et ses variantes sont de vrais curseurs Windows (`cursors.rs`) : aucun retard. L'appli
-//! dessine par-dessus les sphères, l'éclat du kick et les fissures.
+//! Le pointeur reste celui de Windows (pack de curseurs installé par les réglages de la souris) :
+//! l'appli ne dessine que ce qui l'entoure.
 //!
 //! Options : `--reglages` ouvre la fenêtre des réglages (de l'instance en cours s'il y en a
-//! une) ; `--quitter` ferme l'instance en cours ; `--restaurer-curseur` remet les curseurs
-//! Windows d'origine et la bordure de fenêtre colorée (fermeture, plantage, pause et plein écran
-//! le font tout seuls).
+//! une) ; `--quitter` ferme l'instance en cours ; `--restaurer-bordure` rend sa couleur à la
+//! fenêtre restée colorée (fermeture, plantage, pause et plein écran le font tout seuls).
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
@@ -15,11 +15,9 @@ mod backend;
 mod bordure;
 mod canvas;
 mod config;
-mod cursors;
 mod gpu;
 mod ipc;
 mod layer;
-mod pointer;
 mod prisme;
 mod profils;
 mod reglages;
@@ -36,7 +34,6 @@ use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-use pointer::Role;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE, WM_COMMAND};
 
 const MAX_CRACKS: usize = 12;
@@ -77,8 +74,7 @@ fn init_log() {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--restaurer-curseur") {
-        win::restore_cursors();
+    if args.iter().any(|a| a == "--restaurer-bordure") {
         bordure::restore();
         return;
     }
@@ -110,13 +106,11 @@ fn main() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         std::mem::forget(_mutex); // garde le verrou jusqu'à la fin du processus
     }
-    // Quoi qu'il arrive, la flèche de Windows et la bordure des fenêtres doivent revenir (y
-    // compris celle laissée colorée par une instance tuée).
-    win::restore_cursors();
+    // Quoi qu'il arrive, la bordure des fenêtres doit revenir (y compris celle laissée colorée
+    // par une instance tuée).
     bordure::restore();
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        win::restore_cursors();
         bordure::restore();
         log::error!("plantage : {info}");
         default_hook(info);
@@ -125,7 +119,6 @@ fn main() {
     if let Err(e) = run(open_settings) {
         log::error!("arrêt sur erreur : {e:#}");
     }
-    win::restore_cursors();
     bordure::restore();
     log::info!("arrêt");
 }
@@ -149,7 +142,6 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut sync_hue: Option<f32> = None;
     let mut synced = false;
     let mut monitors = win::monitors();
-    let mut cursor_size = win::cursor_base_size();
     let (mut last_pos, mut last_move, mut last_sound, mut last_kicks) = ((0, 0), start_instant(), start_instant(), 0u32);
     let mut published: Option<(bool, bool, bool, bool, bool, u32)> = None;
     // un calque immobile par écran visité ; chaque fissure garde son image toute prête
@@ -163,16 +155,9 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut last = start;
     let mut user_paused = false;
     let mut fs_paused = false;
-    // curseurs Windows appliqués : (remplacer, variantes, échelle en %, génération de leurs
-    // réglages) ; ils ne sont refaits que si `[curseur]` ou `[couleur]` change
-    let mut applied: Option<(bool, bool, u32, u32)> = None;
-    let cursor_key = |c: &config::Config| serde_json::to_string(&(&c.curseur, &c.couleur)).unwrap_or_default();
-    let (mut cursor_gen, mut cursor_cfg) = (0u32, cursor_key(&conf.cfg));
-    let mut size_applied = cursor_size;
     let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut last_state = "";
-    let mut last_handle = 0isize;
     let mut cleared = false;
     let mut backend_gen = 0u32;
     let (mut next_conf, mut next_fs) = (start, start);
@@ -227,14 +212,9 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         if timed {
             next_conf = now + Duration::from_secs(1);
             monitors = win::monitors();
-            cursor_size = win::cursor_base_size();
         }
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
-            if cursor_key(&conf.cfg) != cursor_cfg {
-                cursor_cfg = cursor_key(&conf.cfg);
-                cursor_gen += 1;
-            }
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
             match (conf.cfg.audio.actif, audio_thread.is_some()) {
@@ -259,23 +239,6 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         }
 
         let active = !user_paused && !fs_paused;
-        // curseurs Windows : refaits si les réglages ou l'échelle de l'écran changent
-        let scale_pct = cur.as_ref().map_or(100, |c| (win::scale_at(c.pos.0, c.pos.1) * 100.0).round() as u32);
-        // taille du pointeur de Windows : quand elle change, Windows recharge ses curseurs
-        // (les nôtres sont perdus) ; on les refait à la nouvelle taille
-        let size = if cfg.curseur.taille_windows { cursor_size } else { 32 };
-        let want = active.then_some((cfg.curseur.remplacer_curseurs, cfg.curseur.variantes, scale_pct, cursor_gen));
-        if want != applied || size != size_applied {
-            win::restore_cursors();
-            let s = scale_pct as f32 / 100.0 * size as f32 / 32.0;
-            match want {
-                Some((true, true, ..)) => _ = cursors::apply(&Role::ALL, cfg, s),
-                Some((true, false, ..)) => _ = cursors::apply(&[Role::Normal], cfg, s),
-                _ => {}
-            }
-            applied = want;
-            size_applied = size;
-        }
         let state = match &cur {
             _ if !active => "en pause",
             None => "position du curseur illisible",
@@ -285,19 +248,6 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         if state != last_state {
             log::info!("état : {state}");
             last_state = state;
-        }
-        if cfg.diagnostic.curseur {
-            if let Some(c) = cur.as_ref().filter(|c| c.handle != last_handle) {
-                let down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0;
-                log::info!(
-                    "diagnostic : curseur {} → {} sur {}{}",
-                    win::cursor_name(last_handle),
-                    win::cursor_name(c.handle),
-                    win::app_under(c.pos.0, c.pos.1),
-                    if down { ", bouton enfoncé" } else { "" }
-                );
-                last_handle = c.handle;
-            }
         }
         let au = shared.view();
         if au.bass > 0.03 || au.kicks != last_kicks {
@@ -317,7 +267,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         };
         cleared = false;
         let busy_start = Instant::now();
-        let scale = scale_pct as f32 / 100.0;
+        let scale = win::scale_at(cur.pos.0, cur.pos.1);
         let cursor = (cur.pos.0 as f32, cur.pos.1 as f32);
 
         // clic gauche : nouvelle fissure (son image est faite une fois, puis recopiée)
@@ -375,7 +325,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         backend_gen = conf_gen;
 
         // dessin : sur chaque écran que l'essaim ou une fissure touche
-        let (x0, y0, x1, y1) = swarm.bounds(cursor, scale);
+        let (x0, y0, x1, y1) = swarm.bounds(cursor, scale, cfg.eclat.taille);
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
         let crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         let rgb = render::prisme(cfg, t, 1.0);

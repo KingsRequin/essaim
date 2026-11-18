@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
-    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN, TBS_HORZ, TBS_NOTICKS, TB_THUMBTRACK,
+    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN, TBS_HORZ, TBS_NOTICKS,
     TRACKBAR_CLASSW,
 };
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow, SystemParametersInfoForDpi};
@@ -55,21 +55,25 @@ struct Item {
     key: &'static str,
     label: &'static str,
     kind: Kind,
-    /// Écrit pendant le glissement (sinon au lâcher : ces réglages refont les curseurs Windows).
-    live: bool,
 }
 
 const fn b(section: &'static str, key: &'static str, label: &'static str) -> Item {
-    Item { section, key, label, kind: Kind::Bool, live: true }
+    Item { section, key, label, kind: Kind::Bool }
 }
 const fn n(section: &'static str, key: &'static str, label: &'static str, min: f64, max: f64, step: f64) -> Item {
-    Item { section, key, label, kind: Kind::Num { min, max, step, zero: None }, live: true }
+    Item { section, key, label, kind: Kind::Num { min, max, step, zero: None } }
 }
 
 /// Réglages montrés, par colonne puis par groupe.
 const COLUMNS: [&[(&str, &[Item])]; 3] = [
     &[
-        ("Pointeur", &[Item { live: false, ..n("curseur", "taille_point", "Taille du point", 1.0, 12.0, 0.1) }]),
+        (
+            "Éclat du kick",
+            &[Item {
+                kind: Kind::Num { min: 0.0, max: 12.0, step: 0.1, zero: Some("aucun") },
+                ..n("eclat", "taille", "Taille sous le pointeur", 0.0, 0.0, 0.0)
+            }],
+        ),
         (
             "Orbite et comètes",
             &[
@@ -104,13 +108,12 @@ const COLUMNS: [&[(&str, &[Item])]; 3] = [
             "Couleur",
             &[
                 b("couleur", "synchro_prisme", "Teinte de l'éclairage RGB (Prisme)"),
-                Item { live: false, ..n("couleur", "teinte", "Teinte de départ (°)", 0.0, 360.0, 1.0) },
+                n("couleur", "teinte", "Teinte de départ (°)", 0.0, 360.0, 1.0),
                 Item {
-                    live: false,
                     kind: Kind::Num { min: 0.0, max: 360.0, step: 1.0, zero: Some("fixe") },
                     ..n("couleur", "vitesse_teinte", "Défilement (°/s)", 0.0, 0.0, 0.0)
                 },
-                Item { live: false, ..n("couleur", "ecart_teinte", "Écart tête-queue (°)", 0.0, 360.0, 1.0) },
+                n("couleur", "ecart_teinte", "Écart tête-queue (°)", 0.0, 360.0, 1.0),
             ],
         ),
         (
@@ -132,11 +135,8 @@ const COLUMNS: [&[(&str, &[Item])]; 3] = [
             ],
         ),
         (
-            "Windows (hors profils)",
+            "Rendu (hors profils)",
             &[
-                b("curseur", "remplacer_curseurs", "Remplacer la flèche par le point"),
-                b("curseur", "variantes", "Remplacer aussi les autres curseurs"),
-                b("curseur", "taille_windows", "Suivre la taille du pointeur de Windows"),
                 b("rendu", "carte_graphique", "Dessin par la carte graphique"),
                 Item {
                     kind: Kind::Num { min: 0.0, max: 240.0, step: 1.0, zero: Some("écran") },
@@ -541,7 +541,7 @@ impl Ui {
     }
 
     /// Le réglage `i` a changé dans la fenêtre : affiché tout de suite, écrit au prochain tour.
-    fn changed(&mut self, i: usize, write: bool) {
+    fn changed(&mut self, i: usize) {
         let Some(it) = items().nth(i) else { return };
         let ctrl = &self.ctrls[i];
         let v = match it.kind {
@@ -559,12 +559,10 @@ impl Ui {
             s.insert(it.key.into(), v.clone());
         }
         self.message = None;
-        if write {
-            self.pending.retain(|(j, _)| *j != i);
-            self.pending.push((i, v));
-            unsafe {
-                SetTimer(Some(self.hwnd), TIMER_FLUSH, 60, None);
-            }
+        self.pending.retain(|(j, _)| *j != i);
+        self.pending.push((i, v));
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_FLUSH, 60, None);
         }
         self.show_status();
     }
@@ -644,12 +642,10 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 return LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize);
             }
             WM_HSCROLL => {
-                let code = (wp.0 & 0xFFFF) as i32;
                 let src = HWND(lp.0 as *mut _);
                 with_ui(|ui| {
                     if let Some(i) = ui.ctrls.iter().position(|c| c.input == src) {
-                        let live = items().nth(i).is_some_and(|it| it.live);
-                        ui.changed(i, live || code != TB_THUMBTRACK as i32);
+                        ui.changed(i);
                     }
                 });
                 return LRESULT(0);
@@ -666,7 +662,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                     x if x == IDCANCEL.0 as usize => {
                         let _ = DestroyWindow(hwnd);
                     }
-                    x if x >= ID_ITEM && code == BN_CLICKED as usize => ui.changed(x - ID_ITEM, true),
+                    x if x >= ID_ITEM && code == BN_CLICKED as usize => ui.changed(x - ID_ITEM),
                     _ => {}
                 });
                 if done.is_some() {
@@ -720,8 +716,7 @@ mod tests {
         for it in items() {
             let v = known.get(it.section).and_then(|s| s.get(it.key));
             // le groupe « hors profils » contient exactement ce que les profils ignorent
-            let machine = COLUMNS[2][1].1.iter().any(|o| (o.section, o.key) == (it.section, it.key));
-            assert_eq!(profils::in_profile(it.section, it.key), !machine, "[{}] {}", it.section, it.key);
+            assert_eq!(profils::in_profile(it.section, it.key), it.section != "rendu", "[{}] {}", it.section, it.key);
             assert!(v.is_some(), "[{}] {} inconnu", it.section, it.key);
             assert!(seen.insert((it.section, it.key)), "[{}] {} en double", it.section, it.key);
             match it.kind {

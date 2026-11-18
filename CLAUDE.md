@@ -1,7 +1,7 @@
 # Essaim — consignes du projet
 
-Curseur animé réactif à la musique (Rust, Win32 pur, `tiny-skia`, WASAPI loopback). Lire
-`README.md` avant de modifier.
+Surcouche réactive à la musique autour du pointeur (Rust, Win32 pur, `tiny-skia`, WASAPI
+loopback). Lire `README.md` avant de modifier.
 
 ## Vérification (avant de dire « terminé »)
 
@@ -24,9 +24,9 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
 - Fermer l'instance avant de recompiler : `essaim.exe --quitter` (sinon l'exe est verrouillé).
 - Vérifier le rendu par capture d'écran : `BitBlt` avec `CAPTUREBLT` (0x40CC0020), sinon les
   fenêtres superposées n'apparaissent pas ; processus en `PER_MONITOR_AWARE_V2`.
-- Le curseur n'apparaît pas dans les captures `BitBlt` : pour voir les curseurs fabriqués,
-  dessiner `LoadCursorW(IDC_*)` avec `DrawIconEx` (planche ; la transparence y paraît plus
-  sombre qu'à l'écran).
+- Fenêtre des réglages : `essaim.exe --reglages`, capture par `PrintWindow` (classe
+  `EssaimReglages`). Pour la piloter depuis un autre processus, `SendMessage(WM_SETTEXT)` et non
+  `SetWindowText` (sans effet hors processus).
 - Windows masque le curseur pendant la frappe (`CURSOR_SHOWING` absent) : l'essaim se cache
   aussi. Pour le réafficher depuis un script, un `SendInput` de mouvement relatif (structure
   `INPUT` de 40 octets) ; `SetCursorPos` ne suffit pas.
@@ -35,15 +35,18 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
 
 ## Règles
 
-- Les curseurs de l'utilisateur doivent toujours revenir : tout chemin de sortie appelle
-  `win::restore_cursors()` (fin normale, plantage, plein écran, pause). De même pour la bordure
-  colorée de la fenêtre au premier plan : `bordure::restore()` (et `Border::reset` en pause et
-  plein écran).
+- La bordure colorée de la fenêtre au premier plan doit toujours revenir : tout chemin de sortie
+  appelle `bordure::restore()` (fin normale, plantage), et `Border::reset` en pause et plein
+  écran.
 - Le premier plan ne peut pas être changé par script si un dialogue système (« Sécurité
   Windows », `Shell_SystemDim`) est ouvert : l'essai réel de la bordure
   (`bordure_reelle`, `--ignored`) pilote alors `Border` directement sur le Bloc-notes.
-- Le pointeur est un vrai curseur Windows (pas de dessin du pointeur dans l'overlay : il
-  aurait une image de retard). Seul l'éclat du kick est dessiné sous lui.
+- Essaim ne touche pas aux curseurs : le pointeur est celui de Windows (pack installé par les
+  réglages de la souris). L'overlay ne dessine jamais le pointeur (il aurait une image de
+  retard), seulement ce qui l'entoure (orbes, éclat du kick, fissures).
+- Réglages : la fenêtre (`reglages.rs`) n'écrit que dans `config.toml` (via `config::set_value`)
+  puis `config::request_reload` ; un nouveau réglage s'ajoute à `Config`, au fichier par défaut,
+  à `limits` et à la table `COLUMNS` (le test vérifie bornes et appartenance aux profils).
 - Le kick (`../audio-commun/src/kick.rs`, bibliothèque partagée) est un modèle appris sur de vrais
   morceaux : tout changement de mesure ou de seuil passe par les tests sur signaux synthétiques
   (caisse claire seule = 0 kick, kicks trouvés avec et sans basse, délai médian < 30 ms) et par le

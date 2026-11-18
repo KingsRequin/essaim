@@ -137,9 +137,11 @@ impl Swarm {
     }
 
     /// Rectangle écran (x0, y0, x1, y1) qui contient tout ce qui sera dessiné : traînées, têtes
-    /// et point. Borné à `MAX_EXTENT` autour du pointeur.
-    pub fn bounds(&self, cursor: (f32, f32), scale: f32) -> (f32, f32, f32, f32) {
-        let mut b = (cursor.0, cursor.1, cursor.0, cursor.1);
+    /// et éclat du kick (de taille `eclat`). Borné à `MAX_EXTENT` autour du pointeur.
+    pub fn bounds(&self, cursor: (f32, f32), scale: f32, eclat: f32) -> (f32, f32, f32, f32) {
+        // anneau de l'éclat : jusqu'à 7,5 fois sa taille, plus son épaisseur
+        let ring = ((eclat * 7.5 + 1.5) * scale - (2.4 * 2.6 + 3.5 * 2.6 + MARGIN) * scale).max(0.0);
+        let mut b = (cursor.0 - ring, cursor.1 - ring, cursor.0 + ring, cursor.1 + ring);
         let pts = self.trails.iter().chain(self.sats.iter().map(|s| &s.trail)).flat_map(|tr| tr.iter());
         for &(_, x, y) in pts {
             b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
@@ -218,7 +220,7 @@ impl Swarm {
         }
     }
 
-    /// Dessine (coordonnées écran). Le pointeur lui-même est un vrai curseur Windows, affiché
+    /// Dessine (coordonnées écran). Le pointeur lui-même est celui de Windows, affiché
     /// par-dessus : seul son éclat au kick est dessiné ici, autour de `cursor`.
     pub fn draw(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
         if self.center.is_none() {
@@ -267,10 +269,10 @@ impl Swarm {
         for h in heads.iter().filter(|h| !h.front) {
             draw_head(cv, h);
         }
-        if self.env > 0.02 {
-            // éclat du kick : halo blanc et anneau Prisme qui s'élargit sous le point
+        if self.env > 0.02 && cfg.eclat.taille > 0.0 {
+            // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
             let (px, py) = cursor;
-            let r = cfg.curseur.taille_point * scale;
+            let r = cfg.eclat.taille * scale;
             cv.circle(px, py, r * (2.0 + 2.5 * self.env), (255, 255, 255), 0.35 * self.env);
             cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env);
         }
@@ -432,7 +434,7 @@ mod tests {
 
     /// Dessine comme la boucle principale : image ajustée au rectangle de `bounds`.
     fn render(s: &Swarm, cursor: (f32, f32), t: f64, cfg: &Config, scale: f32) -> (Pixmap, (f32, f32)) {
-        let (x0, y0, x1, y1) = s.bounds(cursor, scale);
+        let (x0, y0, x1, y1) = s.bounds(cursor, scale, cfg.eclat.taille);
         let origin = (x0.floor(), y0.floor());
         let mut pm = Pixmap::new((x1 - origin.0).ceil() as u32, (y1 - origin.1).ceil() as u32).unwrap();
         s.draw(&mut crate::canvas::PixCanvas { pm: &mut pm, origin }, t, cfg, scale, cursor);
@@ -456,7 +458,7 @@ mod tests {
             t += dt as f64;
         }
         let cursor = (600.0, 300.0);
-        let (x0, _, x1, _) = s.bounds(cursor, 1.0);
+        let (x0, _, x1, _) = s.bounds(cursor, 1.0, cfg.eclat.taille);
         assert!(x1 - x0 > 300.0, "fenêtre de {} px", x1 - x0);
         let (pm, origin) = render(&s, cursor, t, &cfg, 1.0);
         // colonne de pixels 250 px derrière le pointeur
@@ -500,7 +502,7 @@ mod tests {
             let au = AudioView { kicks: (i / 20) as u32, ..au };
             s.update(i as f64 * 0.007, 0.007, (500.0, 500.0), au, &cfg, 1.5);
         }
-        let (x0, y0, x1, y1) = s.bounds((500.0, 500.0), 1.5);
+        let (x0, y0, x1, y1) = s.bounds((500.0, 500.0), 1.5, cfg.eclat.taille);
         for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
             for &(_, x, y) in tr {
                 assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors du rectangle");
@@ -520,7 +522,7 @@ mod tests {
         }
         let far = (3500.0, -900.0);
         s.update(100.0 * dt as f64, dt, far, AudioView::default(), &cfg, 1.5);
-        let (x0, y0, x1, y1) = s.bounds(far, 1.5);
+        let (x0, y0, x1, y1) = s.bounds(far, 1.5, cfg.eclat.taille);
         assert!(x1 - x0 <= MAX_EXTENT + 100.0 && y1 - y0 <= MAX_EXTENT + 100.0, "zone {x0},{y0} → {x1},{y1}");
         for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
             for &(_, x, y) in tr {
