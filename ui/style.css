@@ -185,7 +185,7 @@ button, input { font-family: inherit; color: inherit; }
 .tuile > button:hover .scene { outline-width: 2px; }
 .tuile.active .scene { outline-width: 5px; }
 .tuile.active .t-numero { color: var(--signal-texte); }
-.tuile .actions { display: flex; gap: 6px; min-height: 22px; }
+.tuile .actions { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
 
 /* Scène : fond des aperçus, toujours sombre (l'essaim est lumineux). */
 .scene { background: var(--scene); box-shadow: inset 0 0 0 1px var(--scene-bord); display: block; width: 100%; }
@@ -237,7 +237,6 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 /* Détail du jeu en place : chaque curseur dans une case, avec son rôle. */
 .roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--esp-2); }
 .role { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--esp-2) var(--esp-1); background: var(--survol); }
-.role img { width: 40px; height: 40px; }
 .role .vide-role { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; color: var(--encre-2); }
 .role span { font-size: 10.5px; font-weight: 600; line-height: 1.2; text-align: center; color: var(--encre-2); }
 
@@ -249,7 +248,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 }
 .jeu:hover { box-shadow: inset 0 0 0 var(--trait-controle) var(--encre); }
 .jeu[aria-pressed="true"] { box-shadow: inset 0 0 0 3px var(--signal); }
-.jeu img { height: 30px; image-rendering: auto; }
+.jeu .apercu-jeu { display: flex; gap: 12px; min-height: 30px; align-items: center; }
+.anim { display: inline-block; background-repeat: no-repeat; flex-shrink: 0; }
 .jeu .t-petit { color: var(--encre); font-weight: 700; }
 
 /* Panneau d'enregistrement : rouge, à droite, par-dessus la fenêtre. */
@@ -268,12 +268,33 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .panneau .puce { border-color: var(--sur-signal); color: var(--sur-signal); }
 .panneau .signal { background: var(--encre); color: var(--fond); }
 
-/* Bandeau : message bref en bas de la fenêtre. */
+/* Bandeau : message bref en bas de la fenêtre, avec parfois une action (Annuler). */
 .bandeau {
-  position: fixed; left: var(--esp-6); bottom: var(--esp-4); max-width: 640px; z-index: 20;
-  background: var(--encre); color: var(--fond); border: 0; padding: 14px 18px;
-  font-size: 13px; font-weight: 700; text-align: left; cursor: pointer;
+  position: fixed; left: var(--esp-6); bottom: var(--esp-4); max-width: 680px; z-index: 20;
+  display: flex; align-items: center; gap: var(--esp-3);
+  background: var(--encre); color: var(--fond); padding: 10px 10px 10px 18px;
+  font-size: 13px; font-weight: 700;
 }
+.bandeau .puce { border-color: var(--fond); color: var(--fond); }
+.bandeau .puce:hover { background: var(--fond); color: var(--encre); }
+.bandeau-fermer { background: none; border: 0; color: var(--fond); font-size: 18px; font-weight: 700; cursor: pointer; padding: 0 6px; }
+
+/* Impact sur la puissance : dix cases, remplies selon le score mesuré (rouge à partir de 7). */
+.impact { display: inline-flex; gap: 2px; margin-top: 5px; }
+.impact i { width: 4px; height: 7px; background: var(--survol); box-shadow: inset 0 0 0 1px var(--filet); }
+.impact i.plein { background: var(--encre-2); box-shadow: none; }
+.impact.fort i.plein { background: var(--signal); }
+.libelle-reglage { display: flex; flex-direction: column; justify-content: center; align-items: flex-start !important; }
+
+/* Tuile proche des réglages en cours (« modifié ») : cadre rouge en pointillé. */
+.tuile.proche .scene { outline: 2px dashed var(--signal); outline-offset: -4px; }
+.tuile .menu-tuile { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; }
+.tuile .renommer {
+  width: 100%; background: transparent; border: 0; outline: 0; border-bottom: var(--trait-controle) solid var(--signal);
+  font-size: 16px; font-weight: 900; font-stretch: 110%; text-transform: uppercase; padding: 0 0 2px;
+  -webkit-user-select: text; user-select: text;
+}
+.tuile > button:focus-visible .scene { outline-width: 3px; }
 
 /* État vide ou erreur dans la grille. */
 .vide { padding-top: var(--esp-6); display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-4); max-width: 560px; }
@@ -285,6 +306,13 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   .onglets { gap: var(--esp-4); }
   .entete-droite, .sonde { gap: var(--esp-4); }
   .sonde .mesure { grid-template-columns: auto 52px; }
+}
+@media (max-width: 1300px) {
+  .t-affiche { font-size: 54px; }
+  .t-nav { font-size: 17px; }
+  .onglets { gap: var(--esp-3); }
+  .entete-droite, .sonde { gap: var(--esp-3); }
+  .sonde .mesure { grid-template-columns: auto 44px; }
 }
 @media (max-width: 1000px) {
   .t-affiche { font-size: 64px; }

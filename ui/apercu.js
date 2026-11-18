@@ -27,17 +27,19 @@ function prisme(c, t, k, imposee) {
 
 // Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin).
 function chemin(forme, a) {
-  const poly = (k, r) => {
+  const poly = (k, r, r2) => {
     const u = (((a / TAU) * k) % k + k) % k, j = Math.floor(u), f = u - j;
-    const v = (j) => { const th = -Math.PI / 2 + (j * TAU) / k; return [Math.cos(th) * r, Math.sin(th) * r]; };
+    const v = (j) => { const th = -Math.PI / 2 + (j * TAU) / k, rr = j % 2 === 0 ? r : r2; return [Math.cos(th) * rr, Math.sin(th) * rr]; };
     const p = v(j), q = v(j + 1);
     return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
   };
   switch (forme) {
-    case "triangle": return poly(3, 1.2);
-    case "losange": return poly(4, 1.15);
-    case "hexagone": return poly(6, 1.05);
+    case "triangle": return poly(3, 1.2, 1.2);
+    case "losange": return poly(4, 1.15, 1.15);
+    case "hexagone": return poly(6, 1.05, 1.05);
     case "huit": return [1.2 * Math.cos(a), 0.6 * Math.sin(2 * a)];
+    case "etoile": return poly(10, 1.25, 0.55);
+    case "fleur": { const r = 0.95 + 0.3 * Math.cos(5 * a); return [Math.cos(a) * r, Math.sin(a) * r]; }
     default: return [Math.cos(a), Math.sin(a)];
   }
 }
@@ -71,6 +73,7 @@ class Apercu {
     this.sats = [];
     this.fixes = [];
     this.teinteImposee = null;
+    this.curseur = null;
     this.kicksVus = null;
     this.t = 0;
   }
@@ -89,7 +92,7 @@ class Apercu {
       this.canvas.height = w;
     }
     const o = this.reglages.orbite;
-    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0]) * 1.2 * (1 + o.eloignement_grave * 0.7) + 6;
+    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0]) * 1.3 * (1 + o.eloignement_grave * 0.7) + 6;
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
   }
 
@@ -127,6 +130,9 @@ class Apercu {
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2, S = this.echelle || 1;
     const r = o.rayon * S * this.far;
     const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
+    // rotation du trajet lui-même (comme render.rs)
+    this.rot = ((this.rot || 0) + ((o.rotation || 0) * TAU) / 60 * dt) % TAU;
+    const tourne = ([x, y]) => [x * Math.cos(this.rot) - y * Math.sin(this.rot), x * Math.sin(this.rot) + y * Math.cos(this.rot)];
     while (this.angles.length < nAnneaux) this.angles.push(0);
     this.angles.length = nAnneaux;
     while (this.trainees.length < nAnneaux * nombre) this.trainees.push([]);
@@ -135,7 +141,7 @@ class Apercu {
       const [rk, wk] = anneau(k);
       this.angles[k] = (this.angles[k] + w * wk * dt) % TAU;
       for (let i = 0; i < nombre; i++) {
-        const [x, y] = chemin(o.forme, this.angles[k] + (i * TAU) / nombre);
+        const [x, y] = tourne(chemin(o.forme, this.angles[k] + (i * TAU) / nombre));
         pousser(this.trainees[k * nombre + i], t, cx + x * r * rk, cy + y * r * rk, Math.max(0.01, o.trainee));
       }
     }
@@ -152,7 +158,7 @@ class Apercu {
     for (const s of this.sats.concat(this.fixes)) {
       s.a = (s.a + w * s.mul * dt) % TAU;
       const rr = o.rayon * S * s.r * this.far;
-      const [x, y] = chemin(forme, s.a);
+      const [x, y] = tourne(chemin(forme, s.a));
       pousser(s.trainee, t, cx + x * rr, cy + y * rr, SAT_TRAINEE);
     }
   }
@@ -220,10 +226,24 @@ class Apercu {
       g.arc(cx, cy, eclat * (2.5 + 5 * (1 - this.env)), 0, TAU);
       g.stroke();
     }
-    // le pointeur, au centre
-    disque(cx, cy, 2.2 * S, [255, 255, 255], 0.95);
     tetes.filter((h) => h.devant).forEach(dessinerTete);
+    // le pointeur, au centre : le curseur Windows du preset (point chaud au centre), sinon un point
+    const cur = this.curseur;
+    if (cur) {
+      const taille = 32 * S, k = cur.images > 1 ? imageA(cur, performance.now()) : 0;
+      g.drawImage(cur.img, k * cur.cote, 0, cur.cote, cur.cote, cx - (cur.chaud[0] / cur.cote) * taille, cy - (cur.chaud[1] / cur.cote) * taille, taille, taille);
+    } else {
+      disque(cx, cy, 2.2 * S, [255, 255, 255], 0.95);
+    }
   }
 }
 
+// Image (indice) d'un curseur animé à l'instant `ms`, d'après la durée de chaque image.
+function imageA(image, ms) {
+  let t = ms % (image.durees.reduce((a, b) => a + b, 0) || 1), k = 0;
+  while (k < image.durees.length - 1 && t >= image.durees[k]) { t -= image.durees[k]; k++; }
+  return k;
+}
+
 window.Apercu = Apercu;
+window.imageA = imageA;

@@ -8,13 +8,18 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Quantité de basse** : accélère la rotation.
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
-  moins en moins vite) suivent un cercle, un triangle, un losange, un hexagone ou un huit
-  (`forme`) ; les satellites suivent le même trajet, ou le leur (`[essaim] forme`) ;
-  `[essaim] fixes` ajoute des satellites permanents, même sans musique.
+  moins en moins vite) suivent un cercle, un triangle, un losange, un hexagone, un huit, une
+  étoile ou une fleur (`forme`), qui peut tourner sur lui-même (`rotation`, tours/min) ; les
+  satellites suivent le même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des
+  satellites permanents, même sans musique. Entre deux images, les traînées suivent le vrai
+  trajet (points intermédiaires) : elles restent lisses à grande vitesse.
 - **Couleurs** : une teinte de départ qui tourne en continu ou reste fixe ; ou la couleur
   dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
-  exécutable ; les icônes grises gardent la teinte précédente) ; ou, si l'outil Prisme de
-  l'auteur tourne (non fourni ici), celle de l'éclairage RGB.
+  exécutable ; les icônes grises gardent la teinte précédente) ; dans un navigateur, celle du
+  site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
+  mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
+  précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
+  RGB.
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11).
 
@@ -27,8 +32,10 @@ Essaim ne dessine pas le pointeur : il reste un vrai curseur Windows. On install
 curseurs comme d'habitude (clic droit → Installer sur le fichier `.inf` du pack), puis on le
 choisit dans l'onglet *03 Curseurs*, qui liste les jeux installés (ceux de l'utilisateur et
 ceux de Windows) avec un aperçu, détaille les 17 curseurs du jeu en place et les met en place
-comme le panneau de la souris (`src/souris.rs`). Un preset garde le jeu en place quand on l'enregistre ; avec *Installer
-les curseurs du preset choisi*, appliquer ce preset remet aussi ce jeu. Le pack utilisé avec
+comme le panneau de la souris (`src/souris.rs`). Les curseurs animés (`.ani`) sont animés dans
+la fenêtre, à leur cadence. Un preset garde le jeu en place quand on l'enregistre, et son
+curseur est dessiné au centre de son aperçu ; avec *Installer les curseurs du preset choisi*,
+appliquer ce preset remet aussi ce jeu. Le pack utilisé avec
 Essaim sera fourni dans ce dépôt, avec le crédit de son auteur.
 
 ## Installation
@@ -53,7 +60,20 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë).
   - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
     (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
-  - Une valeur de réglage se tape au clavier : clic dessus, Entrée.
+  - Une valeur de réglage se tape au clavier (clic dessus, Entrée) ; double-clic sur une
+    glissière : valeur par défaut.
+  - À côté de chaque réglage, dix cases notent son impact sur la puissance (1 à 10), mesuré par
+    le banc `mesure_impact_reglages` (coût d'une image au minimum puis au maximum du réglage) ;
+    quelques réglages hors du banc ont un score estimé, signalé comme tel. Ce qui pèse : la
+    carte graphique (10), la cadence (7), le rayon (4) ; le reste compte peu.
+  - Presets : favoris, tri (nom, récents), menu *Gérer* (dupliquer ; pour les tiens : renommer,
+    exporter vers l'Explorateur, supprimer), import d'un fichier `.toml` (bouton ou glisser sur
+    la fenêtre). Un preset appliqué s'annule par *Annuler* dans le message ou Ctrl+Z. Le preset
+    dont les réglages en cours s'écartent de peu est marqué *modifié* (cadre pointillé).
+  - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
+  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Avancé*.
+  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1/2/3 onglets,
+    Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause.
   - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*, *Delta*, *Ruche*,
     *Huit*, *Pollen*, *Losange*, *Spirale*, chacun refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]` (propre à la machine) ni à l'option des curseurs.

@@ -112,6 +112,22 @@ enum Demande {
     Souris { jeu: String },
     /// Les 17 curseurs d'un jeu, un par un.
     DetailJeu { cle: String },
+    /// Les quatre curseurs montrés sur la carte d'un jeu (et au centre des aperçus).
+    ApercuJeu { cle: String },
+    Renommer { ancien: String, nouveau: String },
+    Dupliquer { nom: String },
+    /// Montre le fichier du preset dans l'Explorateur (pour le partager).
+    Exporter { nom: String },
+    /// Choisit un fichier de preset à importer.
+    Importer,
+    /// Fichiers glissés sur la fenêtre.
+    ImporterFichiers { chemins: Vec<String> },
+    /// Revient aux réglages d'avant le dernier preset appliqué.
+    Annuler,
+    /// Applique des réglages venus de la page (« Surprends-moi »).
+    AppliquerReglages { nom: String, reglages: Value },
+    Pause,
+    Demarrage { actif: bool },
 }
 
 struct Fenetre {
@@ -122,8 +138,10 @@ struct Fenetre {
     son_envoye: (u32, u32),
     /// Dates de `config.toml` et du dossier des presets au dernier état envoyé.
     dates: (Option<SystemTime>, Option<SystemTime>),
-    /// Aperçus des jeux de curseurs déjà dessinés (clé → `data:` URL).
-    apercus: std::collections::HashMap<String, Option<String>>,
+    /// Aperçus des jeux de curseurs déjà dessinés (clé → images).
+    apercus: std::collections::HashMap<String, Value>,
+    /// Réglages d'avant le dernier preset appliqué (pour « Annuler »).
+    avant: Option<Config>,
 }
 
 thread_local! {
@@ -150,7 +168,17 @@ impl Fenetre {
         let cfg = Config::read(&config::path()).unwrap_or_default();
         let liste = profils::list();
         let actif = liste.iter().find(|p| profils::same(&p.cfg, &cfg)).map(|p| p.name.clone());
-        let presets: Vec<Value> = liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg })).collect();
+        // sans preset identique : le plus proche, s'il ne diffère que de quelques réglages
+        let proche = if actif.is_some() {
+            None
+        } else {
+            liste.iter().map(|p| (profils::ecarts(&p.cfg, &cfg), p)).filter(|(n, _)| *n <= 6).min_by_key(|(n, _)| *n)
+        };
+        let date = |p: &profils::Profile| {
+            p.date.and_then(|d| d.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs())
+        };
+        let presets: Vec<Value> =
+            liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg, "date": date(p) })).collect();
         self.envoyer(&json!({
             "type": "etat",
             "reglages": cfg,
@@ -158,6 +186,9 @@ impl Fenetre {
             "actif": actif,
             "depot": cfg.bibliotheque.depot,
             "curseurs": crate::souris::actuel(),
+            "proche": proche.map(|(n, p)| json!({ "nom": p.name, "ecarts": n })),
+            "defauts": Config::default(),
+            "demarrage": demarrage_actif(),
         }));
     }
 
@@ -182,10 +213,13 @@ impl Fenetre {
             },
             Demande::Appliquer { nom } => {
                 let liste = profils::list();
+                let avant = Config::read(&config::path()).ok();
                 match liste.iter().find(|p| p.name == nom).map(|p| (p, profils::apply(p))) {
                     Some((p, Ok(()))) => {
                         config::request_reload();
                         self.curseurs_du_preset(&p.cfg);
+                        self.avant = avant;
+                        self.envoyer(&json!({ "type": "applique", "nom": nom }));
                     }
                     Some((_, Err(e))) => self.erreur(&format!("Preset « {nom} » non appliqué : {e}.")),
                     None => self.erreur(&format!("Preset « {nom} » introuvable.")),
@@ -221,6 +255,7 @@ impl Fenetre {
                 match cfg.and_then(|cfg| profils::save(&nom, &cfg).map(|n| (n, cfg))) {
                     Ok((nom, cfg)) => {
                         if appliquer {
+                            self.avant = Config::read(&config::path()).ok();
                             let p = profils::list().into_iter().find(|p| p.name == nom);
                             match p.as_ref().map(profils::apply) {
                                 Some(Ok(())) => self.curseurs_du_preset(&cfg),
@@ -237,14 +272,17 @@ impl Fenetre {
             }
             Demande::OuvrirConfig => crate::win::open_file(&config::path()),
             Demande::Jeux => {
-                let jeux: Vec<Value> = crate::souris::jeux()
-                    .iter()
-                    .map(|j| {
-                        let apercu = self.apercus.entry(j.cle.clone()).or_insert_with(|| crate::souris::apercu(j)).clone();
-                        json!({ "cle": j.cle, "nom": j.nom, "systeme": j.systeme, "apercu": apercu })
-                    })
-                    .collect();
+                let jeux: Vec<Value> =
+                    crate::souris::jeux().iter().map(|j| json!({ "cle": j.cle, "nom": j.nom, "systeme": j.systeme })).collect();
                 self.envoyer(&json!({ "type": "jeux", "jeux": jeux }));
+            }
+            Demande::ApercuJeu { cle } => {
+                if !self.apercus.contains_key(&cle) {
+                    let jeux = crate::souris::jeux();
+                    let Some(j) = jeux.iter().find(|j| j.cle == cle) else { return };
+                    self.apercus.insert(cle.clone(), json!(crate::souris::apercu(j)));
+                }
+                self.envoyer(&json!({ "type": "apercu_jeu", "cle": cle, "curseurs": self.apercus[&cle] }));
             }
             Demande::DetailJeu { cle } => {
                 let jeux = crate::souris::jeux();
@@ -264,10 +302,101 @@ impl Fenetre {
                 }
                 self.etat();
             }
+            Demande::Renommer { ancien, nouveau } => match profils::rename(&ancien, &nouveau) {
+                Ok(nom) => {
+                    self.etat();
+                    self.message(&format!("Preset renommé en « {nom} »."));
+                }
+                Err(e) => self.erreur(&format!("{}.", majuscule(&e))),
+            },
+            Demande::Dupliquer { nom } => match profils::dupliquer(&nom) {
+                Ok(copie) => {
+                    self.etat();
+                    self.message(&format!("Copie « {copie} » ajoutée à Mes presets."));
+                }
+                Err(e) => self.erreur(&format!("{}.", majuscule(&e))),
+            },
+            Demande::Exporter { nom } => {
+                let f = profils::fichier(&nom);
+                if f.exists() {
+                    montrer_dans_l_explorateur(&f);
+                } else {
+                    self.erreur(&format!("« {nom} » est un preset fourni : duplique-le pour avoir son fichier."));
+                }
+            }
+            Demande::Importer => {
+                if let Some(f) = choisir_fichier(self.hwnd) {
+                    self.importer(&[f]);
+                }
+            }
+            Demande::ImporterFichiers { chemins } => {
+                let chemins: Vec<std::path::PathBuf> = chemins.into_iter().map(Into::into).collect();
+                self.importer(&chemins);
+            }
+            Demande::Annuler => match self.avant.take() {
+                Some(avant) => {
+                    let jeu = avant.souris.jeu.clone();
+                    match config::apply_keys(&avant, profils::in_profile) {
+                        Ok(()) => {
+                            config::request_reload();
+                            if !jeu.is_empty() && jeu != crate::souris::actuel() {
+                                let _ = crate::souris::installer(&jeu);
+                            }
+                            self.message("Réglages d'avant remis.");
+                        }
+                        Err(e) => self.erreur(&format!("Retour impossible : {e}.")),
+                    }
+                    self.etat();
+                }
+                None => self.erreur("Rien à annuler."),
+            },
+            Demande::AppliquerReglages { nom, reglages } => match serde_json::from_value::<Config>(reglages) {
+                Ok(cfg) => {
+                    self.avant = Config::read(&config::path()).ok();
+                    match config::apply_keys(&cfg, |s, k| profils::in_profile(s, k) && (s, k) != ("souris", "jeu")) {
+                        Ok(()) => {
+                            config::request_reload();
+                            self.envoyer(&json!({ "type": "applique", "nom": nom }));
+                        }
+                        Err(e) => self.erreur(&format!("Réglages refusés : {e}.")),
+                    }
+                    self.etat();
+                }
+                Err(e) => self.erreur(&format!("Réglages illisibles : {e}.")),
+            },
+            Demande::Pause => unsafe {
+                if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
+                    let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_PAUSE), LPARAM(0));
+                }
+            },
+            Demande::Demarrage { actif } => {
+                match regler_demarrage(actif) {
+                    Ok(()) => self.message(if actif { "Essaim démarrera avec Windows." } else { "Essaim ne démarrera plus avec Windows." }),
+                    Err(e) => self.erreur(&format!("Démarrage avec Windows non modifié : {e}.")),
+                }
+                self.etat();
+            }
             Demande::OuvrirDepot => {
                 let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
                 crate::win::open_url(&format!("https://github.com/{depot}"));
             }
+        }
+    }
+
+    fn importer(&mut self, chemins: &[std::path::PathBuf]) {
+        let (mut faits, mut erreurs) = (Vec::new(), Vec::new());
+        for c in chemins {
+            match profils::importer(c) {
+                Ok(nom) => faits.push(nom),
+                Err(e) => erreurs.push(e),
+            }
+        }
+        self.etat();
+        if !faits.is_empty() {
+            self.message(&format!("Importé dans Mes presets : {}.", faits.join(", ")));
+        }
+        if !erreurs.is_empty() {
+            self.erreur(&format!("{}.", majuscule(&erreurs.join(" ; "))));
         }
     }
 
@@ -312,12 +441,65 @@ impl Fenetre {
             }
         } else {
             let (ms, ips) = crate::charge::lire();
-            self.envoyer(&json!({ "type": "charge", "ms": ms, "ips": ips }));
+            self.envoyer(&json!({ "type": "charge", "ms": ms, "ips": ips, "pause": crate::charge::pause() }));
             if dates() != self.dates {
                 self.etat();
             }
         }
     }
+}
+
+const CLE_RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+
+/// Essaim démarre-t-il avec la session (valeur `Essaim` de la clé Run de l'utilisateur) ?
+fn demarrage_actif() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, None, None) }.is_ok()
+}
+
+/// Démarrage avec la session : l'exécutable en cours, ou plus rien.
+fn regler_demarrage(actif: bool) -> Result<(), String> {
+    use windows::Win32::System::Registry::{RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    unsafe {
+        if actif {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let valeur = format!("\"{}\"", exe.display());
+            let octets: Vec<u8> = valeur.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
+            RegSetKeyValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), REG_SZ.0, Some(octets.as_ptr() as *const _), octets.len() as u32)
+                .ok()
+                .map_err(|e| e.to_string())
+        } else {
+            let r = RegDeleteKeyValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"));
+            if r.is_ok() || r == windows::Win32::Foundation::ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(r.to_hresult().message()) }
+        }
+    }
+}
+
+fn montrer_dans_l_explorateur(f: &std::path::Path) {
+    let args: Vec<u16> = format!("/select,\"{}\"", f.display()).encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(None, w!("open"), w!("explorer.exe"), PCWSTR(args.as_ptr()), None, SW_SHOWNORMAL);
+    }
+}
+
+/// Boîte « Ouvrir » de Windows pour un fichier de preset.
+fn choisir_fichier(parent: HWND) -> Option<std::path::PathBuf> {
+    use windows::Win32::UI::Controls::Dialogs::{GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW};
+    let filtre: Vec<u16> = "Presets Essaim (*.toml)\0*.toml\0\0".encode_utf16().collect();
+    let mut buf = vec![0u16; 1024];
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: parent,
+        lpstrFilter: PCWSTR(filtre.as_ptr()),
+        lpstrFile: windows::core::PWSTR(buf.as_mut_ptr()),
+        nMaxFile: buf.len() as u32,
+        lpstrTitle: w!("Importer un preset"),
+        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+    unsafe { GetOpenFileNameW(&mut ofn) }.as_bool().then(|| {
+        std::path::PathBuf::from(String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)]))
+    })
 }
 
 fn majuscule(s: &str) -> String {
@@ -401,6 +583,15 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         .with_url(format!("{ORIGINE}index.html"))
         .with_background_color((r, g, b, 255))
         .with_ipc_handler(move |req| recus.borrow_mut().push(req.into_body()))
+        .with_drag_drop_handler(|ev| {
+            // fichiers de preset glissés sur la fenêtre : importés (et rien d'autre ne s'ouvre)
+            if let wry::DragDropEvent::Drop { paths, .. } = ev {
+                let chemins: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+                let m = json!({ "cmd": "importer_fichiers", "chemins": chemins }).to_string();
+                RECUS.with(|r| r.borrow_mut().push(m));
+            }
+            true
+        })
         .with_navigation_handler(|url| url.starts_with(ORIGINE))
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
         .with_hotkeys_zoom(false)
@@ -409,7 +600,7 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         .with_devtools(cfg!(debug_assertions))
         .build(&Parent(hwnd))?;
     let _ = vue.focus();
-    FENETRE.with(|f| *f.borrow_mut() = Some(Fenetre { hwnd, vue, son, son_envoye: (u32::MAX, 0), dates: (None, None), apercus: Default::default() }));
+    FENETRE.with(|f| *f.borrow_mut() = Some(Fenetre { hwnd, vue, son, son_envoye: (u32::MAX, 0), dates: (None, None), apercus: Default::default(), avant: None }));
     unsafe {
         SetTimer(Some(hwnd), TIMER_SON, 33, None);
         SetTimer(Some(hwnd), TIMER_FICHIERS, 700, None);

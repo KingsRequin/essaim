@@ -12,6 +12,7 @@
   <header class="entete">
     <h1 class="t-affiche">ESSAIM</h1>
     <div class="entete-droite">
+      <button class="puce petite" id="pause" aria-pressed="false" title="Met l'essaim en pause (Ctrl+P)">Pause</button>
       <div class="sonde silence" id="sonde" title="Ce que l'essaim entend du son de Windows">
         <span class="kick t-label"><span class="temoin" id="temoin"></span>Kick</span>
         <span class="mesure"><span class="t-label">Basse</span><span class="jauge"><span id="jauge-niveau"></span></span><span class="detail" id="detail-niveau">—</span></span>
@@ -38,6 +39,14 @@
         <div class="t-label">Aperçus animés</div>
         <div class="groupe-puces" id="modes" style="margin-top: 8px"></div>
         <p class="t-petit" id="mode-aide" style="margin: 8px 0 0"></p>
+      </div>
+      <div>
+        <div class="t-label">Ordre</div>
+        <div class="groupe-puces" id="ordres" style="margin-top: 8px"></div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <button class="puce" id="importer" style="align-self: flex-start">Importer un preset…</button>
+        <p class="t-petit" style="margin: 0">ou glisse un fichier .toml sur la fenêtre. Clavier : / pour chercher, flèches pour parcourir, Entrée pour appliquer, Ctrl+Z pour annuler.</p>
       </div>
     </aside>
     <div class="principal">
@@ -72,6 +81,7 @@
       <div style="flex-grow: 1"></div>
       <div class="groupe-puces" style="align-items: center; gap: 12px">
         <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
+        <button class="puce" id="surprise" title="Des réglages tirés au hasard (Ctrl+Z pour revenir)">Surprends-moi</button>
         <button class="puce" id="ouvrir-config">Ouvrir config.toml</button>
       </div>
     </div>
@@ -126,6 +136,10 @@
   </form>
 </div>
 
-<button class="bandeau" id="bandeau" hidden></button>
+<div class="bandeau" id="bandeau" role="status" hidden>
+  <span id="bandeau-texte"></span>
+  <button class="puce petite" id="bandeau-action" hidden></button>
+  <button class="bandeau-fermer" id="bandeau-fermer" aria-label="Fermer le message">×</button>
+</div>
 </body>
 </html>
