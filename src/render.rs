@@ -19,6 +19,16 @@ const MAX_EXTENT: f32 = 2400.0;
 const SAT_R_MAX: f32 = 1.9;
 const SAT_TRAIL: f64 = 0.25;
 const TRAIL_STEP: f64 = 1.0 / 90.0;
+/// Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points) :
+/// les comètes, larges et longues, sont lissées de près ; les satellites, fins et courts, moins.
+const FINESSE_COMETES: (f32, f32) = (0.045, 4.0);
+const FINESSE_SATELLITES: (f32, f32) = (0.1, 8.0);
+
+/// Pas intermédiaires pour un déplacement d'angle `da` sur un rayon de `r` px, pour que la
+/// traînée reste une courbe (et non une ligne brisée) quand l'essaim tourne vite.
+fn sous_pas(da: f32, r: f32, (angle, ecart): (f32, f32)) -> usize {
+    (da.abs() / angle).max(da.abs() * r / ecart).ceil().clamp(1.0, 24.0) as usize
+}
 
 /// Petit générateur pseudo-aléatoire (xorshift), suffisant pour des effets visuels.
 pub struct Rng(u64);
@@ -87,11 +97,13 @@ fn hsl(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 type Trail = VecDeque<(f64, f32, f32)>;
 
 /// Ajoute la position courante. Le dernier point suit la tête à chaque image ; un nouveau point
-/// fixe n'est ajouté que tous les `TRAIL_STEP`, mesuré depuis l'avant-dernier (le dernier, lui,
-/// est sans cesse rafraîchi).
-fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64) {
+/// fixe n'est ajouté que tous les `TRAIL_STEP` ou tous les `gap` pixels, mesurés depuis
+/// l'avant-dernier (le dernier, lui, est sans cesse rafraîchi) : peu de points au ralenti, assez
+/// pour une courbe lisse à grande vitesse.
+fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
     let n = tr.len();
-    if n >= 2 && t - tr[n - 2].0 < TRAIL_STEP {
+    let proche = |p: &(f64, f32, f32)| t - p.0 < TRAIL_STEP && (p.1 - x).powi(2) + (p.2 - y).powi(2) < gap * gap;
+    if n >= 2 && proche(&tr[n - 2]) {
         tr[n - 1] = (t, x, y);
     } else {
         tr.push_back((t, x, y));
@@ -194,6 +206,7 @@ impl Swarm {
     pub fn update(&mut self, t: f64, dt: f32, cursor: (f32, f32), au: AudioView, cfg: &Config, scale: f32) {
         // centre de l'orbite : suit le pointeur avec un léger retard, borné
         let (mut cx, mut cy) = self.center.unwrap_or(cursor);
+        let (c0, far0) = ((cx, cy), self.far);
         let k = 1.0 - (-dt * 14.0).exp();
         cx += (cursor.0 - cx) * k;
         cy += (cursor.1 - cy) * k;
@@ -240,14 +253,27 @@ impl Swarm {
         let (anneaux, nombre) = (o.anneaux.max(1) as usize, o.nombre.max(1) as usize);
         self.angles.resize(anneaux, 0.0);
         self.trails.resize_with(anneaux * nombre, Trail::new);
-        let r = o.rayon * scale * self.far;
         let life = o.trainee.max(0.01) as f64;
+        // position sur le trajet à la fraction `f` de l'image (centre et rayon interpolés) : les
+        // points intermédiaires suivent la vraie forme, coins compris
+        let (rayon, rayon0) = (o.rayon * scale * self.far, o.rayon * scale * far0);
+        let point = |forme, a: f32, rel: f32, f: f32| {
+            let (x, y) = chemin(forme, a);
+            let rr = (rayon0 + (rayon - rayon0) * f) * rel;
+            (c0.0 + (cx - c0.0) * f + x * rr, c0.1 + (cy - c0.1) * f + y * rr)
+        };
         for (k, angle) in self.angles.iter_mut().enumerate() {
             let (rk, wk) = anneau(k);
-            *angle = (*angle + w * wk * dt).rem_euclid(TAU);
+            let (a0, da) = (*angle, w * wk * dt);
+            *angle = (a0 + da).rem_euclid(TAU);
+            let n = sous_pas(da, rayon * rk * 1.2, FINESSE_COMETES);
             for i in 0..nombre {
-                let (x, y) = chemin(o.forme, *angle + i as f32 * TAU / nombre as f32);
-                push_trail(&mut self.trails[k * nombre + i], t, cx + x * r * rk, cy + y * r * rk, life);
+                let decale = i as f32 * TAU / nombre as f32;
+                for j in 1..=n {
+                    let f = j as f32 / n as f32;
+                    let (x, y) = point(o.forme, a0 + da * f + decale, rk, f);
+                    push_trail(&mut self.trails[k * nombre + i], t - dt as f64 * (1.0 - f) as f64, x, y, life, FINESSE_COMETES.1);
+                }
             }
         }
         let dur = e.duree.max(0.1) as f64;
@@ -264,10 +290,14 @@ impl Swarm {
         // satellites : sur le trajet des comètes, ou le leur, à des distances variées
         let forme = e.forme.suivie(o.forme);
         for s in self.sats.iter_mut().chain(self.fixes.iter_mut()) {
-            s.a = (s.a + w * s.mul * dt).rem_euclid(TAU);
-            let rr = o.rayon * scale * s.r * self.far;
-            let (x, y) = chemin(forme, s.a);
-            push_trail(&mut s.trail, t, cx + x * rr, cy + y * rr, SAT_TRAIL);
+            let (a0, da) = (s.a, w * s.mul * dt);
+            s.a = (a0 + da).rem_euclid(TAU);
+            let n = sous_pas(da, rayon * s.r * 1.2, FINESSE_SATELLITES);
+            for j in 1..=n {
+                let f = j as f32 / n as f32;
+                let (x, y) = point(forme, a0 + da * f, s.r, f);
+                push_trail(&mut s.trail, t - dt as f64 * (1.0 - f) as f64, x, y, SAT_TRAIL, FINESSE_SATELLITES.1);
+            }
         }
         // saut du pointeur (autre écran…) : la traînée laissée loin derrière est abandonnée
         let half = MAX_EXTENT / 2.0;
@@ -610,6 +640,26 @@ mod tests {
                 let (ex, ey) = chemin(attendue, q.a);
                 assert!((x - 300.0 - ex * rr).abs() < 0.01 && (y - 300.0 - ey * rr).abs() < 0.01, "{sat:?} : ({x}, {y})");
             }
+        }
+    }
+
+        #[test]
+    fn la_trainee_reste_lisse_a_grande_vitesse() {
+        // basse au maximum, 60 images/s : l'essaim fait ~3 tours par seconde ; entre deux points
+        // de traînée, l'angle vu du centre doit rester petit (pas de ligne brisée)
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+        for i in 0..120 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, (400.0, 400.0), au, &cfg, 1.0);
+        }
+        assert!(s.spd > 12.0, "vitesse {}", s.spd);
+        let tr = &s.trails[0];
+        assert!(tr.len() > 30, "{} points", tr.len());
+        let angle = |p: &(f64, f32, f32)| (p.2 - 400.0).atan2(p.1 - 400.0);
+        for w in tr.iter().collect::<Vec<_>>().windows(2) {
+            let d = (angle(w[1]) - angle(w[0]) + 3.0 * PI).rem_euclid(TAU) - PI;
+            assert!(d.abs() < 0.08, "écart de {d} rad entre deux points");
         }
     }
 
