@@ -286,6 +286,24 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .impact.fort i.plein { background: var(--signal); }
 .libelle-reglage { display: flex; flex-direction: column; justify-content: center; align-items: flex-start !important; }
 
+/* Boutons de forme : pictogramme du trajet ; la forme choisie a le cadre rouge (sans voyant). */
+.puce.forme::before { display: none; }
+.puce .picto { width: 18px; height: 18px; flex-shrink: 0; overflow: visible; }
+.puce .picto polyline { fill: none; stroke: currentColor; stroke-width: 0.16; stroke-linejoin: round; }
+.puce.forme[aria-pressed="true"] .picto polyline { stroke: var(--signal); }
+
+/* Parties de la grille des réglages. */
+.reglages > .titre-groupe {
+  grid-column: 1 / -1; min-height: 0; border-bottom: 0; padding: 22px 0 6px;
+  font-size: 13px; font-weight: 900; font-stretch: 115%; letter-spacing: 0.08em; text-transform: uppercase; color: var(--signal-texte);
+}
+.reglages > .titre-groupe:first-child { padding-top: 10px; }
+
+/* Actions d'une tuile : au survol, au clavier, menu ouvert ; un favori ou « Installé » reste visible. */
+.tuile .actions > * { opacity: 0; transition: opacity 0.12s; }
+.tuile:hover .actions > *, .tuile:focus-within .actions > *, .tuile.menu-ouvert .actions > *, .tuile .actions > [aria-pressed="true"] { opacity: 1; }
+@media (hover: none) { .tuile .actions > * { opacity: 1; } }
+
 /* Tuile proche des réglages en cours (« modifié ») : cadre rouge en pointillé. */
 .tuile.proche .scene { outline: 2px dashed var(--signal); outline-offset: -4px; }
 .tuile .menu-tuile { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; }

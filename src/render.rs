@@ -123,19 +123,20 @@ struct Sat {
 
 /// Point du trajet des comètes à l'angle `a`, pour un rayon de 1 (y vers le bas).
 pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
-    // polygone de k sommets, pointe en haut, rayons alternés `r` et `r2` (égaux : régulier),
-    // parcouru à vitesse constante
-    let poly = |k: f32, r: f32, r2: f32| {
+    // polygone de k sommets, premier sommet à l'angle `depart`, rayons alternés `r` et `r2`
+    // (égaux : régulier), parcouru à vitesse constante
+    let poly_depuis = |k: f32, r: f32, r2: f32, depart: f32| {
         let u = (a / TAU * k).rem_euclid(k);
         let (j, f) = (u.floor(), u.fract());
         let v = |j: f32| {
-            let th = -PI / 2.0 + j * TAU / k;
+            let th = depart + j * TAU / k;
             let rr = if j as i32 % 2 == 0 { r } else { r2 };
             (th.cos() * rr, th.sin() * rr)
         };
         let (p, q) = (v(j), v(j + 1.0));
         (p.0 + (q.0 - p.0) * f, p.1 + (q.1 - p.1) * f)
     };
+    let poly = |k: f32, r: f32, r2: f32| poly_depuis(k, r, r2, -PI / 2.0);
     match forme {
         Forme::Cercle => (a.cos(), a.sin()),
         Forme::Triangle => poly(3.0, 1.2, 1.2),
@@ -147,6 +148,23 @@ pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
             let r = 0.95 + 0.3 * (5.0 * a).cos();
             (a.cos() * r, a.sin() * r)
         }
+        // carré posé à plat (le losange est sur la pointe)
+        Forme::Carre => poly_depuis(4.0, 1.25, 1.25, -3.0 * PI / 4.0),
+        Forme::Pentagone => poly(5.0, 1.1, 1.1),
+        Forme::Ellipse => (1.3 * a.cos(), 0.7 * a.sin()),
+        // cœur classique (16 sin³, 13 cos − 5 cos 2 − 2 cos 3 − cos 4), pointe en bas
+        Forme::Coeur => {
+            let (s, c) = a.sin_cos();
+            let y = 13.0 * c - 5.0 * (2.0 * a).cos() - 2.0 * (3.0 * a).cos() - (4.0 * a).cos();
+            (16.0 * s * s * s / 15.0, -(y + 2.5) / 15.0)
+        }
+        Forme::Trefle => {
+            let r = 0.75 + 0.45 * (3.0 * a).cos();
+            (a.cos() * r, a.sin() * r)
+        }
+        Forme::Lissajous => (0.9 * (3.0 * a).cos(), 0.85 * (2.0 * a).sin()),
+        // astroïde : étoile à quatre branches courbes
+        Forme::Astroide => (1.3 * a.cos().powi(3), 1.3 * a.sin().powi(3)),
     }
 }
 
@@ -622,6 +640,8 @@ mod tests {
             (Forme::Huit, FormeSatellites::Cometes),
             (Forme::Etoile, FormeSatellites::Fleur),
             (Forme::Fleur, FormeSatellites::Cometes),
+            (Forme::Coeur, FormeSatellites::Lissajous),
+            (Forme::Astroide, FormeSatellites::Carre),
         ] {
             let mut cfg = Config::default();
             (cfg.orbite.forme, cfg.orbite.nombre, cfg.orbite.anneaux, cfg.essaim.fixes, cfg.essaim.forme) = (forme, 8, 4, 32, sat);
@@ -683,8 +703,16 @@ mod tests {
         #[test]
     fn les_trajets_sont_continus() {
         use crate::config::Forme;
-        for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit, Forme::Etoile, Forme::Fleur] {
+        for forme in [
+            Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit, Forme::Etoile, Forme::Fleur,
+            Forme::Carre, Forme::Pentagone, Forme::Ellipse, Forme::Coeur, Forme::Trefle, Forme::Lissajous, Forme::Astroide,
+        ] {
             let mut p = chemin(forme, 0.0);
+            // chaque trajet tient dans le rayon prévu par les bornes du dessin (1,3)
+            for i in 0..720 {
+                let (x, y) = chemin(forme, i as f32 * TAU / 720.0);
+                assert!((x * x + y * y).sqrt() <= 1.31, "{forme:?} : ({x}, {y}) trop loin");
+            }
             for i in 1..=720 {
                 let q = chemin(forme, i as f32 * TAU / 720.0);
                 let d = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt();

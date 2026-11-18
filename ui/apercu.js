@@ -27,9 +27,9 @@ function prisme(c, t, k, imposee) {
 
 // Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin).
 function chemin(forme, a) {
-  const poly = (k, r, r2) => {
+  const poly = (k, r, r2, depart = -Math.PI / 2) => {
     const u = (((a / TAU) * k) % k + k) % k, j = Math.floor(u), f = u - j;
-    const v = (j) => { const th = -Math.PI / 2 + (j * TAU) / k, rr = j % 2 === 0 ? r : r2; return [Math.cos(th) * rr, Math.sin(th) * rr]; };
+    const v = (j) => { const th = depart + (j * TAU) / k, rr = j % 2 === 0 ? r : r2; return [Math.cos(th) * rr, Math.sin(th) * rr]; };
     const p = v(j), q = v(j + 1);
     return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
   };
@@ -40,6 +40,16 @@ function chemin(forme, a) {
     case "huit": return [1.2 * Math.cos(a), 0.6 * Math.sin(2 * a)];
     case "etoile": return poly(10, 1.25, 0.55);
     case "fleur": { const r = 0.95 + 0.3 * Math.cos(5 * a); return [Math.cos(a) * r, Math.sin(a) * r]; }
+    case "carre": return poly(4, 1.25, 1.25, (-3 * Math.PI) / 4);
+    case "pentagone": return poly(5, 1.1, 1.1);
+    case "ellipse": return [1.3 * Math.cos(a), 0.7 * Math.sin(a)];
+    case "coeur": {
+      const s = Math.sin(a), y = 13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a);
+      return [(16 * s * s * s) / 15, -(y + 2.5) / 15];
+    }
+    case "trefle": { const r = 0.75 + 0.45 * Math.cos(3 * a); return [Math.cos(a) * r, Math.sin(a) * r]; }
+    case "lissajous": return [0.9 * Math.cos(3 * a), 0.85 * Math.sin(2 * a)];
+    case "astroide": return [1.3 * Math.cos(a) ** 3, 1.3 * Math.sin(a) ** 3];
     default: return [Math.cos(a), Math.sin(a)];
   }
 }
@@ -246,4 +256,5 @@ function imageA(image, ms) {
 }
 
 window.Apercu = Apercu;
+window.chemin = chemin;
 window.imageA = imageA;

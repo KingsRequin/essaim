@@ -101,7 +101,11 @@ function recevoirSon(m) {
 // ---------------------------------------------------------------------------------------------
 // Presets : fournis, à moi, communauté
 
-const FORMES = [["cercle", "Cercle"], ["triangle", "Triangle"], ["losange", "Losange"], ["hexagone", "Hexagone"], ["huit", "Huit"], ["etoile", "Étoile"], ["fleur", "Fleur"]];
+const FORMES = [
+  ["cercle", "Cercle"], ["ellipse", "Ellipse"], ["triangle", "Triangle"], ["carre", "Carré"], ["losange", "Losange"],
+  ["pentagone", "Pentagone"], ["hexagone", "Hexagone"], ["etoile", "Étoile"], ["astroide", "Astroïde"], ["fleur", "Fleur"],
+  ["trefle", "Trèfle"], ["coeur", "Cœur"], ["huit", "Huit"], ["lissajous", "Lissajous"],
+];
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES];
 const NOMS_FORMES = Object.fromEntries(FORMES);
 
@@ -276,6 +280,7 @@ function majTuile(t, p, rang) {
   const actif = p.origine === "commu" ? installe(p.nom) && etat.actif === p.nom : etat.actif === p.nom;
   t.racine.classList.toggle("active", actif);
   t.racine.classList.toggle("proche", !!proche);
+  t.racine.classList.toggle("menu-ouvert", etat.menu === p.id);
   t.bouton.setAttribute("aria-pressed", actif);
   t.bouton.setAttribute("aria-label", `${p.nom}, ${t.origine.textContent}${actif ? ", actif" : ""}`);
   if (proche) t.bouton.title = `Les réglages en cours sont ceux de « ${p.nom} » avec ${etat.proche.ecarts} réglage${etat.proche.ecarts > 1 ? "s" : ""} changé${etat.proche.ecarts > 1 ? "s" : ""}.`;
@@ -441,6 +446,24 @@ function deplacerDansLaGrille(e) {
 // ---------------------------------------------------------------------------------------------
 // Réglages
 
+// Pictogramme d'une forme : son trajet, calculé comme l'essaim (window.chemin), en SVG.
+function picto(forme) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "-1.45 -1.45 2.9 2.9");
+  svg.setAttribute("class", "picto");
+  svg.setAttribute("aria-hidden", "true");
+  const pts = [];
+  for (let i = 0; i <= 120; i++) {
+    const [x, y] = window.chemin(forme, (i / 120) * Math.PI * 2);
+    pts.push(x.toFixed(3) + "," + y.toFixed(3));
+  }
+  const ligne = document.createElementNS(NS, "polyline");
+  ligne.setAttribute("points", pts.join(" "));
+  svg.append(ligne);
+  return svg;
+}
+
 const val = (section, cle) => etat.reglages[section][cle];
 const envois = new Map();
 function regler(section, cle, valeur) {
@@ -483,11 +506,20 @@ function jaugeImpact(cle) {
 // dans l'unité affichée ; par défaut le nombre lui-même).
 const tpm = { aff: (v) => String(Math.round((v * 60) / (2 * Math.PI))), vers: (x) => (x * 2 * Math.PI) / 60 };
 const pourcent = { aff: (v) => Math.round(v * 100) + " %", vers: (x) => x / 100 };
+// Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
+// rangée construite à part (effets, trajets, couleur).
 const NORMAUX = [
-  { libelle: "Rotation du trajet", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+  { titre: "Forme" },
+  { special: "effets" },
+  { special: "trajet-cometes" },
+  { special: "trajet-satellites" },
   { libelle: "Comètes", section: "orbite", cle: "nombre", min: 1, max: 8, pas: 1, aff: (v) => String(v) },
   { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
+  { titre: "Mouvement et couleur" },
   { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
+  { libelle: "Rotation du trajet", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+  { special: "couleur" },
+  { titre: "Réaction au son" },
   { libelle: "Satellites", section: "essaim", cle: "maximum", min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
   { libelle: "Kick", section: "audio", cle: "sensibilite_kick", min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
   { libelle: "Éclat", section: "eclat", cle: "taille", min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
@@ -606,7 +638,10 @@ function construireReglages() {
     return b;
   };
   const choixForme = (section, cle, liste) => liste.map(([id, libelle]) => {
-    const b = el("button", "puce", libelle);
+    const b = el("button", "puce forme");
+    if (id !== "cometes") b.append(picto(id));
+    b.append(document.createTextNode(libelle));
+    b.title = libelle;
     b.addEventListener("click", () => { regler(section, cle, id); majReglages(); });
     formes.push({ section, cle, id, b });
     return b;
@@ -619,12 +654,16 @@ function construireReglages() {
     grille.append(libelleAvecImpact(def.libelle, def.section + "." + def.cle, input.id), zone, sortie);
   }, false);
 
-  ligneLarge("Effets", "orbite.cometes", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
-  ligneLarge("Trajet des comètes", "orbite.forme", choixForme("orbite", "forme", FORMES));
-  ligneLarge("Trajet des satellites", "essaim.forme", choixForme("essaim", "forme", FORMES_SATELLITES));
   for (const def of NORMAUX) {
-    numerique(def);
-    if (def.cle === "vitesse_base") {
+    if (def.titre) {
+      grille.append(el("div", "titre-groupe", def.titre));
+    } else if (def.special === "effets") {
+      ligneLarge("Effets", "orbite.cometes", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
+    } else if (def.special === "trajet-cometes") {
+      ligneLarge("Trajet des comètes", "orbite.forme", choixForme("orbite", "forme", FORMES));
+    } else if (def.special === "trajet-satellites") {
+      ligneLarge("Trajet des satellites", "essaim.forme", choixForme("essaim", "forme", FORMES_SATELLITES));
+    } else if (def.special === "couleur") {
       teintes = TEINTES.map((h) => {
         const b = el("button", "teinte");
         b.style.background = hslCss(h);
@@ -645,6 +684,8 @@ function construireReglages() {
         bascule("Couleur de l'application", "couleur", "application"),
         bascule("Couleur du site (navigateur)", "couleur", "site"),
       ]);
+    } else {
+      numerique(def);
     }
   }
 

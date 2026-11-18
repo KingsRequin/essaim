@@ -8,8 +8,9 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Quantité de basse** : accélère la rotation.
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
-  moins en moins vite) suivent un cercle, un triangle, un losange, un hexagone, un huit, une
-  étoile ou une fleur (`forme`), qui peut tourner sur lui-même (`rotation`, tours/min) ; les
+  moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
+  losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
+  qui peut tourner sur lui-même (`rotation`, tours/min) ; les
   satellites suivent le même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des
   satellites permanents, même sans musique. Entre deux images, les traînées suivent le vrai
   trajet (points intermédiaires) : elles restent lisses à grande vitesse.

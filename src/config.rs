@@ -120,6 +120,13 @@ pub enum FormeSatellites {
     Huit,
     Etoile,
     Fleur,
+    Carre,
+    Pentagone,
+    Ellipse,
+    Coeur,
+    Trefle,
+    Lissajous,
+    Astroide,
 }
 
 impl FormeSatellites {
@@ -134,6 +141,13 @@ impl FormeSatellites {
             Self::Huit => Forme::Huit,
             Self::Etoile => Forme::Etoile,
             Self::Fleur => Forme::Fleur,
+            Self::Carre => Forme::Carre,
+            Self::Pentagone => Forme::Pentagone,
+            Self::Ellipse => Forme::Ellipse,
+            Self::Coeur => Forme::Coeur,
+            Self::Trefle => Forme::Trefle,
+            Self::Lissajous => Forme::Lissajous,
+            Self::Astroide => Forme::Astroide,
         }
     }
 }
@@ -150,6 +164,13 @@ pub enum Forme {
     Huit,
     Etoile,
     Fleur,
+    Carre,
+    Pentagone,
+    Ellipse,
+    Coeur,
+    Trefle,
+    Lissajous,
+    Astroide,
 }
 
 /// Jeu de curseurs de Windows.
@@ -240,7 +261,8 @@ taille = 3.4            # éclat du kick sous le pointeur ; 0 = aucun
 [orbite]
 rayon = 22              # rayon de l'orbite sans basse
 cometes = true          # comètes en orbite
-forme = "cercle"        # trajet : cercle, triangle, losange, hexagone, huit, etoile ou fleur
+forme = "cercle"        # trajet : cercle, triangle, losange, hexagone, huit, etoile, fleur, carre,
+                        # pentagone, ellipse, coeur, trefle, lissajous ou astroide
 nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
