@@ -136,7 +136,8 @@ class Apercu {
     const r = this.canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(r.width * dpr));
-    if (this.canvas.width !== w) {
+    // la hauteur aussi : un canevas neuf fait 300 × 150, et une largeur de 300 ne changerait rien
+    if (this.canvas.width !== w || this.canvas.height !== w) {
       this.canvas.width = w;
       this.canvas.height = w;
     }
