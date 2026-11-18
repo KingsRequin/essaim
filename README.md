@@ -224,3 +224,8 @@ GitHub en fait une copie et une pull request, à relire avant d'ajouter le prese
 ## Développement
 
 Voir `CLAUDE.md`.
+
+## Licence
+
+[MIT](LICENSE). Police Archivo et curseurs Dotter fournis sous leur propre licence : voir
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
