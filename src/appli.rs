@@ -75,7 +75,7 @@ impl TeinteAppli {
                 self.mesure = Some(now + Duration::from_secs(3));
                 let page = teinte_page(fg);
                 if let Some(h) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
-                    log::info!("teinte du site « {} » : {h:.0}°", self.titre.chars().take(60).collect::<String>());
+                    log::info!("teinte du site : {h:.0}°");
                 }
                 if let Some(h) = page.or(if appli { self.icone } else { None }) {
                     self.teinte = Some(h);
