@@ -15,6 +15,7 @@ pub struct Config {
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
+    pub souris: Souris,
     pub bibliotheque: Bibliotheque,
 }
 
@@ -79,6 +80,12 @@ pub struct Eclat {
 pub struct Orbite {
     pub rayon: f32,
     pub cometes: bool,
+    /// Trajet des comètes.
+    pub forme: Forme,
+    /// Comètes par anneau, réparties sur le trajet.
+    pub nombre: u32,
+    /// Anneaux de comètes emboîtés (les extérieurs, plus larges, tournent moins vite).
+    pub anneaux: u32,
     pub vitesse_base: f32,
     pub vitesse_basse: f32,
     pub eloignement_grave: f32,
@@ -92,6 +99,36 @@ pub struct Essaim {
     pub par_kick_max: u32,
     pub maximum: usize,
     pub duree: f32,
+    /// Satellites permanents, présents même sans musique.
+    pub fixes: u32,
+}
+
+/// Trajet des comètes autour du pointeur.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Forme {
+    #[default]
+    Cercle,
+    Triangle,
+    Losange,
+    Hexagone,
+    Huit,
+}
+
+/// Jeu de curseurs de Windows.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Souris {
+    /// Jeu de curseurs des réglages (nom d'un jeu de Windows ; vide = ne pas y toucher).
+    pub jeu: String,
+    /// Choisir un preset installe aussi son jeu de curseurs.
+    pub avec_preset: bool,
+}
+
+impl Default for Souris {
+    fn default() -> Self {
+        Self { jeu: String::new(), avec_preset: true }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -103,6 +140,8 @@ pub struct Couleur {
     pub ecart_teinte: f32,
     /// Prend la teinte de l'éclairage de Prisme quand il tourne (sinon la teinte tourne seule).
     pub synchro_prisme: bool,
+    /// Prend la teinte dominante de l'icône de l'application au premier plan (prioritaire).
+    pub application: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -129,17 +168,17 @@ impl Default for Eclat {
 }
 impl Default for Orbite {
     fn default() -> Self {
-        Self { rayon: 22.0, cometes: true, vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
+        Self { rayon: 22.0, cometes: true, forme: Forme::Cercle, nombre: 2, anneaux: 1, vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
     }
 }
 impl Default for Essaim {
     fn default() -> Self {
-        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8 }
+        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8, fixes: 0 }
     }
 }
 impl Default for Couleur {
     fn default() -> Self {
-        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true }
+        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false }
     }
 }
 impl Default for Fissures {
@@ -161,7 +200,10 @@ taille = 3.4            # éclat du kick sous le pointeur ; 0 = aucun
 
 [orbite]
 rayon = 22              # rayon de l'orbite sans basse
-cometes = true          # les deux comètes face à face
+cometes = true          # comètes en orbite
+forme = "cercle"        # trajet : cercle, triangle, losange, hexagone ou huit
+nombre = 2              # comètes par anneau
+anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
 vitesse_basse = 11      # vitesse ajoutée quand la basse est au maximum
 eloignement_grave = 1.3 # écartement ajouté pour une note très grave (1.3 = +130 %)
@@ -172,12 +214,14 @@ par_kick_min = 2        # satellites ajoutés à chaque kick
 par_kick_max = 3
 maximum = 16            # satellites en même temps, au plus
 duree = 2.8             # durée de vie d'un satellite (s)
+fixes = 0               # satellites permanents, présents même sans musique
 
 [couleur]
 teinte = 0              # teinte de départ (0 rouge, 120 vert, 240 bleu) ; fixe si vitesse_teinte = 0
 vitesse_teinte = 60     # degrés de teinte par seconde
 ecart_teinte = 140      # écart de teinte entre la tête et la queue des traînées
 synchro_prisme = true   # prend la teinte de l'éclairage de Prisme quand il tourne
+application = false     # prend la teinte de l'icône de l'application au premier plan
 
 [fissures]
 actives = true
@@ -193,6 +237,10 @@ delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un 
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
 carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
+
+[souris]
+jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
+avec_preset = true      # choisir un preset installe aussi son jeu de curseurs
 
 [bibliotheque]
 depot = "KingsRequin/essaim-presets" # dépôt GitHub des presets partagés (index.json à la racine)
@@ -225,7 +273,10 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("eclat", "taille") => (0.0, 20.0),
         ("orbite", "rayon") => (4.0, 200.0),
         ("orbite", "trainee") => (0.01, 3.0),
+        ("orbite", "nombre") => (1.0, 8.0),
+        ("orbite", "anneaux") => (1.0, 4.0),
         ("orbite", _) => (0.0, 100.0),
+        ("essaim", "fixes") => (0.0, 32.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -326,6 +377,7 @@ fn set_in_doc(
     };
     let mut v: toml_edit::Value = match (old, value) {
         (serde_json::Value::Bool(_), serde_json::Value::Bool(b)) => (*b).into(),
+        (serde_json::Value::String(_), serde_json::Value::String(v)) => v.as_str().into(),
         // 4 décimales : un f32 élargi (3.4000000953…) s'écrit 3.4
         (serde_json::Value::Number(o), serde_json::Value::Number(n)) if o.is_f64() => {
             ((n.as_f64().unwrap_or(0.0) * 1e4).round() / 1e4).into()
@@ -350,6 +402,9 @@ fn set_in_doc(
 
 fn same(a: &toml_edit::Value, b: &toml_edit::Value) -> bool {
     if let (Some(x), Some(y)) = (a.as_bool(), b.as_bool()) {
+        return x == y;
+    }
+    if let (Some(x), Some(y)) = (a.as_str(), b.as_str()) {
         return x == y;
     }
     let num = |v: &toml_edit::Value| v.as_float().or(v.as_integer().map(|i| i as f64));
@@ -437,6 +492,11 @@ mod tests {
         assert!(super::set_value_in(&p, "orbite", "inconnu", &serde_json::json!(1)).is_err());
         assert!(super::set_value_in(&p, "orbite", "rayon", &serde_json::json!(true)).is_err());
         assert!(super::set_value_in(&p, "essaim", "maximum", &serde_json::json!(100000)).is_err());
+        // texte : une forme connue passe, une inconnue est refusée
+        super::set_value_in(&p, "orbite", "forme", &serde_json::json!("huit")).unwrap();
+        assert!(super::set_value_in(&p, "orbite", "forme", &serde_json::json!("rond")).is_err());
+        let c: super::Config = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(c.orbite.forme, super::Forme::Huit);
         let _ = std::fs::remove_file(&p);
     }
 

@@ -6,7 +6,7 @@
 //! bouge, elles s'étirent derrière elle (la fenêtre s'agrandit le temps du mouvement).
 
 use crate::audio::AudioView;
-use crate::config::Config;
+use crate::config::{Config, Forme};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 use crate::canvas::Canvas;
@@ -40,6 +40,11 @@ impl Rng {
 
 /// Teinte de base imposée par la synchro avec l'éclairage (bits d'un f32 ; NaN = aucune).
 static SYNC_HUE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x7FC0_0000);
+
+/// Teinte de base imposée en ce moment (application, Prisme), en degrés.
+pub fn sync_hue() -> Option<f32> {
+    Some(f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed))).filter(|h| h.is_finite())
+}
 
 /// Impose (ou retire) la teinte de base, en degrés.
 pub fn set_sync_hue(h: Option<f32>) {
@@ -104,14 +109,46 @@ struct Sat {
     trail: Trail,
 }
 
+/// Point du trajet des comètes à l'angle `a`, pour un rayon de 1 (y vers le bas).
+pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
+    let poly = |k: f32, r: f32| {
+        // polygone régulier, pointe en haut, parcouru à vitesse constante
+        let u = (a / TAU * k).rem_euclid(k);
+        let (j, f) = (u.floor(), u.fract());
+        let v = |j: f32| {
+            let th = -PI / 2.0 + j * TAU / k;
+            (th.cos() * r, th.sin() * r)
+        };
+        let (p, q) = (v(j), v(j + 1.0));
+        (p.0 + (q.0 - p.0) * f, p.1 + (q.1 - p.1) * f)
+    };
+    match forme {
+        Forme::Cercle => (a.cos(), a.sin()),
+        Forme::Triangle => poly(3.0, 1.2),
+        Forme::Losange => poly(4.0, 1.15),
+        Forme::Hexagone => poly(6.0, 1.05),
+        Forme::Huit => (1.2 * a.cos(), 0.6 * (2.0 * a).sin()),
+    }
+}
+
+/// Rayon (relatif) et vitesse (relative) de l'anneau `k` : les anneaux extérieurs, plus
+/// larges, tournent moins vite.
+fn anneau(k: usize) -> (f32, f32) {
+    (1.0 + 0.55 * k as f32, 1.0 / (1.0 + 0.45 * k as f32))
+}
+
 pub struct Swarm {
     rng: Rng,
     dir: f32,
     spd: f32,
     far: f32,
-    angle: f32,
-    trails: [Trail; 2],
+    /// Angle de chaque anneau.
+    angles: Vec<f32>,
+    /// Traînées des comètes, anneau par anneau.
+    trails: Vec<Trail>,
     sats: Vec<Sat>,
+    /// Satellites permanents (`[essaim] fixes`).
+    fixes: Vec<Sat>,
     kicks_seen: Option<u32>,
     center: Option<(f32, f32)>,
     pitch: f32,
@@ -126,9 +163,10 @@ impl Swarm {
             dir: 1.0,
             spd: 3.5,
             far: 1.0,
-            angle: 0.0,
-            trails: [Trail::new(), Trail::new()],
+            angles: Vec::new(),
+            trails: Vec::new(),
             sats: Vec::new(),
+            fixes: Vec::new(),
             kicks_seen: None,
             center: None,
             pitch: 50.0,
@@ -142,7 +180,7 @@ impl Swarm {
         // anneau de l'éclat : jusqu'à 7,5 fois sa taille, plus son épaisseur
         let ring = ((eclat * 7.5 + 1.5) * scale - (2.4 * 2.6 + 3.5 * 2.6 + MARGIN) * scale).max(0.0);
         let mut b = (cursor.0 - ring, cursor.1 - ring, cursor.0 + ring, cursor.1 + ring);
-        let pts = self.trails.iter().chain(self.sats.iter().map(|s| &s.trail)).flat_map(|tr| tr.iter());
+        let pts = self.trails.iter().chain(self.sats.iter().chain(&self.fixes).map(|s| &s.trail)).flat_map(|tr| tr.iter());
         for &(_, x, y) in pts {
             b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
         }
@@ -198,16 +236,32 @@ impl Swarm {
         self.far += ((1.0 + o.eloignement_grave * depth * presence) - self.far) * (dt * 16.0).min(1.0);
 
         let w = self.dir * self.spd;
-        self.angle = (self.angle + w * dt).rem_euclid(TAU);
+        // comètes : `nombre` par anneau, réparties sur le trajet
+        let (anneaux, nombre) = (o.anneaux.max(1) as usize, o.nombre.max(1) as usize);
+        self.angles.resize(anneaux, 0.0);
+        self.trails.resize_with(anneaux * nombre, Trail::new);
         let r = o.rayon * scale * self.far;
         let life = o.trainee.max(0.01) as f64;
-        for (i, tr) in self.trails.iter_mut().enumerate() {
-            let a = self.angle + i as f32 * PI;
-            push_trail(tr, t, cx + a.cos() * r, cy + a.sin() * r, life);
+        for (k, angle) in self.angles.iter_mut().enumerate() {
+            let (rk, wk) = anneau(k);
+            *angle = (*angle + w * wk * dt).rem_euclid(TAU);
+            for i in 0..nombre {
+                let (x, y) = chemin(o.forme, *angle + i as f32 * TAU / nombre as f32);
+                push_trail(&mut self.trails[k * nombre + i], t, cx + x * r * rk, cy + y * r * rk, life);
+            }
         }
         let dur = e.duree.max(0.1) as f64;
         self.sats.retain(|s| t - s.born < dur);
-        for s in &mut self.sats {
+        // satellites permanents : répartis une fois pour toutes (nombre d'or), toujours les mêmes
+        if self.fixes.len() != e.fixes as usize {
+            self.fixes = (0..e.fixes)
+                .map(|j| {
+                    let u = (j as f32 * 0.618_034).fract();
+                    Sat { a: j as f32 * 2.399_963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1.0 - u), born: f64::INFINITY, trail: Trail::new() }
+                })
+                .collect();
+        }
+        for s in self.sats.iter_mut().chain(self.fixes.iter_mut()) {
             s.a = (s.a + w * s.mul * dt).rem_euclid(TAU);
             let rr = o.rayon * scale * s.r * self.far;
             push_trail(&mut s.trail, t, cx + s.a.cos() * rr, cy + s.a.sin() * rr, SAT_TRAIL);
@@ -215,7 +269,7 @@ impl Swarm {
         // saut du pointeur (autre écran…) : la traînée laissée loin derrière est abandonnée
         let half = MAX_EXTENT / 2.0;
         let near = |&(_, x, y): &(f64, f32, f32)| (x - cursor.0).abs() <= half && (y - cursor.1).abs() <= half;
-        for tr in self.trails.iter_mut().chain(self.sats.iter_mut().map(|s| &mut s.trail)) {
+        for tr in self.trails.iter_mut().chain(self.sats.iter_mut().chain(self.fixes.iter_mut()).map(|s| &mut s.trail)) {
             tr.retain(near);
         }
     }
@@ -239,22 +293,22 @@ impl Swarm {
         }
         let mut heads: Vec<Head> = Vec::with_capacity(2 + self.sats.len());
 
-        // satellites (traînées sans halo, pour rester léger)
-        for s in &self.sats {
-            let k = (1.0 - (t - s.born) / dur) as f32;
+        // satellites (traînées sans halo, pour rester léger) ; les permanents restent à 0,8
+        for s in self.sats.iter().chain(&self.fixes) {
+            let k = if s.born.is_finite() { (1.0 - (t - s.born) / dur) as f32 } else { 0.8 };
             let al = (k * 1.5).min(1.0);
             draw_trail(cv, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
             if let Some(&(_, x, y)) = s.trail.back() {
                 heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale, al, front: s.a.sin() > 0.0 });
             }
         }
-        // les deux comètes
+        // les comètes (devant : sous le centre de l'orbite, comme vues de biais)
         if o.cometes {
-            for (i, tr) in self.trails.iter().enumerate() {
+            let cy = self.center.map_or(0.0, |c| c.1);
+            for tr in &self.trails {
                 draw_trail(cv, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg);
                 if let Some(&(_, x, y)) = tr.back() {
-                    let a = self.angle + i as f32 * PI;
-                    heads.push(Head { x, y, s: 2.4 * scale, al: 1.0, front: a.sin() > 0.0 });
+                    heads.push(Head { x, y, s: 2.4 * scale, al: 1.0, front: y > cy });
                 }
             }
         }
@@ -503,9 +557,44 @@ mod tests {
             s.update(i as f64 * 0.007, 0.007, (500.0, 500.0), au, &cfg, 1.5);
         }
         let (x0, y0, x1, y1) = s.bounds((500.0, 500.0), 1.5, cfg.eclat.taille);
-        for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
+        for tr in s.trails.iter().chain(s.sats.iter().chain(&s.fixes).map(|q| &q.trail)) {
             for &(_, x, y) in tr {
                 assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors du rectangle");
+            }
+        }
+    }
+
+    #[test]
+    fn formes_anneaux_et_permanents_tiennent_dans_le_rectangle() {
+        use crate::config::Forme;
+        for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit] {
+            let mut cfg = Config::default();
+            (cfg.orbite.forme, cfg.orbite.nombre, cfg.orbite.anneaux, cfg.essaim.fixes) = (forme, 8, 4, 32);
+            let mut s = Swarm::new();
+            let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+            for i in 0..200 {
+                s.update(i as f64 * 0.007, 0.007, (500.0, 500.0), au, &cfg, 1.5);
+            }
+            assert_eq!((s.trails.len(), s.fixes.len()), (32, 32), "{forme:?}");
+            let (x0, y0, x1, y1) = s.bounds((500.0, 500.0), 1.5, cfg.eclat.taille);
+            for tr in s.trails.iter().chain(s.fixes.iter().map(|q| &q.trail)) {
+                for &(_, x, y) in tr {
+                    assert!(x > x0 && x < x1 && y > y0 && y < y1, "{forme:?} : ({x}, {y}) hors du rectangle");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn les_trajets_sont_continus() {
+        use crate::config::Forme;
+        for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit] {
+            let mut p = chemin(forme, 0.0);
+            for i in 1..=720 {
+                let q = chemin(forme, i as f32 * TAU / 720.0);
+                let d = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt();
+                assert!(d < 0.05, "{forme:?} : saut de {d} à l'angle {i}/720");
+                p = q;
             }
         }
     }
@@ -524,7 +613,7 @@ mod tests {
         s.update(100.0 * dt as f64, dt, far, AudioView::default(), &cfg, 1.5);
         let (x0, y0, x1, y1) = s.bounds(far, 1.5, cfg.eclat.taille);
         assert!(x1 - x0 <= MAX_EXTENT + 100.0 && y1 - y0 <= MAX_EXTENT + 100.0, "zone {x0},{y0} → {x1},{y1}");
-        for tr in s.trails.iter().chain(s.sats.iter().map(|q| &q.trail)) {
+        for tr in s.trails.iter().chain(s.sats.iter().chain(&s.fixes).map(|q| &q.trail)) {
             for &(_, x, y) in tr {
                 assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors de la zone");
             }

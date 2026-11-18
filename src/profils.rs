@@ -1,18 +1,19 @@
 //! Profils : jeux de réglages d'apparence et de réaction au son, à appliquer d'un clic.
 //!
-//! Quatre préréglages intégrés (non modifiables) et les profils de l'utilisateur, un fichier
-//! `%APPDATA%\Essaim\profils\<nom>.toml` chacun. Appliquer un profil réécrit ses réglages dans
-//! `config.toml` (commentaires gardés). `[rendu]`, propre à la machine, n'en fait pas partie.
+//! Préréglages intégrés (non modifiables, chacun refaisable à la main dans les réglages) et
+//! profils de l'utilisateur, un fichier `%APPDATA%\Essaim\profils\<nom>.toml` chacun.
+//! Appliquer un profil réécrit ses réglages dans `config.toml` (commentaires gardés). Les choix
+//! propres à la machine n'en font pas partie : `[rendu]` et `[souris] avec_preset`.
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, Forme};
 use std::path::PathBuf;
 
 /// Sections enregistrées dans un profil.
-const SECTIONS: [&str; 7] = ["eclat", "orbite", "essaim", "couleur", "fissures", "audio", "bordure"];
+const SECTIONS: [&str; 8] = ["eclat", "orbite", "essaim", "couleur", "fissures", "audio", "bordure", "souris"];
 
-/// Le réglage `[section] _` fait-il partie des profils ?
-pub fn in_profile(section: &str, _key: &str) -> bool {
-    SECTIONS.contains(&section)
+/// Le réglage `[section] key` fait-il partie des profils ?
+pub fn in_profile(section: &str, key: &str) -> bool {
+    SECTIONS.contains(&section) && (section, key) != ("souris", "avec_preset")
 }
 
 pub struct Profile {
@@ -48,12 +49,44 @@ fn builtins() -> Vec<Profile> {
             (c.couleur.vitesse_teinte, c.couleur.ecart_teinte) = (120.0, 200.0);
             (c.fissures.taille, c.fissures.duree) = (2.2, 4.0);
             c.audio.sensibilite_kick = 6.0;
+            c.orbite.nombre = 3;
         }),
         make("Point seul", |c| {
             c.orbite.cometes = false;
             c.essaim.maximum = 0;
             c.fissures.actives = false;
             c.bordure.active = false;
+        }),
+        // formes : une teinte fixe chacune (la synchro Prisme la remplacerait)
+        make("Delta", |c| {
+            (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Triangle, 3, 2.4);
+            c.essaim.maximum = 0;
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (175.0, 0.0, 40.0, false);
+        }),
+        make("Ruche", |c| {
+            (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Hexagone, 6, 1.25);
+            c.essaim.maximum = 0;
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (38.0, 0.0, 30.0, false);
+        }),
+        make("Huit", |c| {
+            (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Huit, 2, 1.65);
+            c.essaim.maximum = 0;
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.synchro_prisme) = (265.0, 60.0, false);
+        }),
+        make("Pollen", |c| {
+            (c.orbite.cometes, c.orbite.vitesse_base) = (false, 1.4);
+            (c.essaim.maximum, c.essaim.fixes) = (0, 14);
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (52.0, 0.0, 20.0, false);
+        }),
+        make("Losange", |c| {
+            (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Losange, 4, 2.1);
+            c.essaim.maximum = 0;
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (25.0, 0.0, 40.0, false);
+        }),
+        make("Spirale", |c| {
+            (c.orbite.anneaux, c.orbite.nombre, c.orbite.vitesse_base) = (3, 1, 2.6);
+            c.essaim.maximum = 0;
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.synchro_prisme) = (215.0, 60.0, false);
         }),
     ]
 }
@@ -134,9 +167,13 @@ pub fn delete(name: &str) -> Result<(), String> {
     std::fs::remove_file(&p).map_err(|_| format!("aucun profil « {name} »"))
 }
 
-/// Écrit le profil dans `config.toml`.
+/// Écrit le profil dans `config.toml`. Un profil sans jeu de curseurs garde celui des réglages.
 pub fn apply(p: &Profile) -> Result<(), String> {
-    config::apply_keys(&p.cfg, in_profile)
+    let mut cfg = p.cfg.clone();
+    if cfg.souris.jeu.is_empty() {
+        cfg.souris.jeu = Config::read(&config::path()).map(|c| c.souris.jeu).unwrap_or_default();
+    }
+    config::apply_keys(&cfg, in_profile)
 }
 
 /// Les réglages de profil de `a` et `b` sont-ils identiques (aux arrondis près) ?
@@ -145,6 +182,8 @@ pub fn same(a: &Config, b: &Config) -> bool {
     a.as_object().into_iter().flatten().all(|(s, keys)| {
         keys.as_object().into_iter().flatten().filter(|(k, _)| in_profile(s, k)).all(|(k, v)| {
             match (v, b.get(s).and_then(|y| y.get(k))) {
+                // jeu de curseurs non précisé d'un côté : il ne départage pas
+                (serde_json::Value::String(x), Some(serde_json::Value::String(y))) if x.is_empty() || y.is_empty() => true,
                 (serde_json::Value::Number(m), Some(serde_json::Value::Number(n))) => {
                     let (m, n) = (m.as_f64().unwrap_or(0.0), n.as_f64().unwrap_or(0.0));
                     (m - n).abs() <= 1e-3 * m.abs().max(n.abs()).max(1.0)
