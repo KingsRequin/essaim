@@ -83,8 +83,11 @@ fn reechantillonner(points: &[[f32; 2]]) -> Vec<(f32, f32)> {
     if points.len() < 3 {
         return Vec::new();
     }
-    let p: Vec<(f32, f32)> = points.iter().map(|q| (q[0], q[1])).collect();
+    let p: Vec<(f32, f32)> = points.iter().filter(|q| q[0].is_finite() && q[1].is_finite()).take(2000).map(|q| (q[0], q[1])).collect();
     let n = p.len();
+    if n < 3 {
+        return Vec::new();
+    }
     let long = |i: usize| {
         let (a, b) = (p[i], p[(i + 1) % n]);
         ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
@@ -389,7 +392,8 @@ impl Swarm {
         if cfg.scintillement.actif {
             let tetes: Vec<(f32, f32)> =
                 self.trails.iter().chain(self.sats.iter().chain(&self.fixes).map(|s| &s.trail)).filter_map(|tr| tr.back().map(|p| (p.1, p.2))).collect();
-            for _ in 0..nouveaux * cfg.scintillement.quantite.round().max(1.0) as u32 {
+            let quantite = cfg.scintillement.quantite.clamp(1.0, 10.0).round() as u32;
+            for _ in 0..(nouveaux * quantite).min(MAX_PARTICULES as u32) {
                 let (x, y) = if tetes.is_empty() {
                     let a = self.rng.range(0.0, TAU);
                     (cx + a.cos() * cfg.orbite.rayon * scale, cy + a.sin() * cfg.orbite.rayon * scale)
@@ -407,7 +411,7 @@ impl Swarm {
             let (dx, dy) = (cursor.0 - avant.0, cursor.1 - avant.1);
             let dist = (dx * dx + dy * dy).sqrt();
             if dist / dt.max(1e-3) > 700.0 * scale && dist < 600.0 * scale {
-                let n = ((cfg.sillage.densite * dist / (60.0 * scale)).round() as usize).min(14);
+                let n = ((cfg.sillage.densite.clamp(1.0, 10.0) * dist / (60.0 * scale)).round() as usize).min(14);
                 for i in 0..n {
                     let f = (i as f32 + self.rng.f()) / n.max(1) as f32;
                     let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(5.0, 30.0) * scale);
@@ -510,13 +514,14 @@ impl Swarm {
     /// Effets d'un clic en (x, y) : onde de choc et éclats (`[clic]`).
     pub fn clic(&mut self, x: f32, y: f32, t: f64, cfg: &Config, scale: f32) {
         let c = &cfg.clic;
+        let t_clic = c.taille.clamp(0.3, 3.0);
         if c.onde {
-            let taille = 46.0 * c.taille * scale;
+            let taille = 46.0 * t_clic * scale;
             self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie: 0.55, taille, genre: Genre::Onde });
         }
         if c.eclats {
             for _ in 0..16 {
-                let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(160.0, 380.0) * c.taille * scale);
+                let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(160.0, 380.0) * t_clic * scale);
                 let vie = self.rng.range(0.45, 0.8);
                 let taille = self.rng.range(1.2, 2.4) * scale;
                 self.particules.push(Particule { x, y, vx: a.cos() * v, vy: a.sin() * v, ne: t, vie, taille, genre: Genre::Etincelle });

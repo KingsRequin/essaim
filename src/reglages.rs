@@ -128,6 +128,10 @@ enum Demande {
     AppliquerReglages { nom: String, reglages: Value },
     Pause,
     Demarrage { actif: bool },
+    /// Exécutables des fenêtres ouvertes, pour les règles automatiques.
+    Applis,
+    /// Enregistre une image GIF (base64) dans les images de l'utilisateur.
+    EnregistrerGif { nom: String, donnees: String },
 }
 
 struct Fenetre {
@@ -335,15 +339,8 @@ impl Fenetre {
             }
             Demande::Annuler => match self.avant.take() {
                 Some(avant) => {
-                    let jeu = avant.souris.jeu.clone();
-                    match config::apply_keys(&avant, profils::in_profile) {
-                        Ok(()) => {
-                            config::request_reload();
-                            if !jeu.is_empty() && jeu != crate::souris::actuel() {
-                                let _ = crate::souris::installer(&jeu);
-                            }
-                            self.message("Réglages d'avant remis.");
-                        }
+                    match profils::remettre(&avant) {
+                        Ok(()) => self.message("Réglages d'avant remis."),
                         Err(e) => self.erreur(&format!("Retour impossible : {e}.")),
                     }
                     self.etat();
@@ -376,6 +373,14 @@ impl Fenetre {
                 }
                 self.etat();
             }
+            Demande::Applis => self.envoyer(&json!({ "type": "applis", "applis": crate::appli::applis_ouvertes() })),
+            Demande::EnregistrerGif { nom, donnees } => match enregistrer_gif(&nom, &donnees) {
+                Ok(f) => {
+                    montrer_dans_l_explorateur(&f);
+                    self.message(&format!("Aperçu enregistré : {}.", f.display()));
+                }
+                Err(e) => self.erreur(&format!("GIF non enregistré : {e}.")),
+            },
             Demande::OuvrirDepot => {
                 let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
                 crate::win::open_url(&format!("https://github.com/{depot}"));
@@ -403,12 +408,7 @@ impl Fenetre {
     /// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée
     /// et qu'il en précise un autre que celui en place.
     fn curseurs_du_preset(&self, preset: &Config) {
-        let avec = Config::read(&config::path()).map(|c| c.souris.avec_preset).unwrap_or(true);
-        let jeu = &preset.souris.jeu;
-        if !avec || jeu.is_empty() || *jeu == crate::souris::actuel() {
-            return;
-        }
-        if let Err(e) = crate::souris::installer(jeu) {
+        if let Err(e) = profils::curseurs_du_preset(preset) {
             self.erreur(&format!("Preset appliqué, mais curseurs non installés : {e}."));
         }
     }
@@ -473,6 +473,40 @@ fn regler_demarrage(actif: bool) -> Result<(), String> {
             if r.is_ok() || r == windows::Win32::Foundation::ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(r.to_hresult().message()) }
         }
     }
+}
+
+/// Décode du base64 standard (sans espaces).
+fn depuis_base64(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let octets = s.trim_end_matches('=').as_bytes();
+    let mut out = Vec::with_capacity(octets.len() * 3 / 4);
+    for bloc in octets.chunks(4) {
+        let v: Vec<u8> = bloc.iter().map(|&c| val(c)).collect::<Option<_>>()?;
+        let n = v.iter().enumerate().fold(0u32, |n, (i, &x)| n | (x as u32) << (18 - 6 * i));
+        out.extend_from_slice(&n.to_be_bytes()[1..v.len()]);
+    }
+    Some(out)
+}
+
+/// Enregistre un GIF dans « Images\Essaim » ; renvoie son chemin.
+fn enregistrer_gif(nom: &str, donnees: &str) -> Result<std::path::PathBuf, String> {
+    let octets = depuis_base64(donnees).ok_or("image illisible")?;
+    if !octets.starts_with(b"GIF89a") || octets.len() > 40 << 20 {
+        return Err("ce n'est pas un GIF".into());
+    }
+    let propre: String = nom.chars().filter(|c| !r#"\/:*?"<>|"#.contains(*c) && !c.is_control()).take(40).collect();
+    let dossier = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).ok_or("dossier de l'utilisateur introuvable")?.join("Pictures").join("Essaim");
+    std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
+    let f = dossier.join(format!("{}.gif", if propre.trim().is_empty() { "Essaim" } else { propre.trim() }));
+    std::fs::write(&f, octets).map_err(|e| e.to_string())?;
+    Ok(f)
 }
 
 fn montrer_dans_l_explorateur(f: &std::path::Path) {
@@ -736,6 +770,14 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_decode() {
+        assert_eq!(depuis_base64("TWFu").unwrap(), b"Man");
+        assert_eq!(depuis_base64("TWE=").unwrap(), b"Ma");
+        assert_eq!(depuis_base64("TQ==").unwrap(), b"M");
+        assert!(depuis_base64("T@==").is_none());
+    }
 
     #[test]
     fn encodage_d_url() {

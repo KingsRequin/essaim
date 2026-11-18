@@ -488,14 +488,27 @@ impl Config {
     }
 
     /// Ramène chaque réglage numérique dans ses bornes.
-    pub fn clamped(self) -> Config {
+    pub fn clamped(mut self) -> Config {
+        // tracé : 2 000 points au plus, sans valeur non finie ni démesurée (avant le passage en
+        // JSON, où un point non fini empêcherait toute la relecture)
+        self.orbite.trace.retain(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e6));
+        self.orbite.trace.truncate(2000);
         let Ok(mut v) = serde_json::to_value(&self) else { return self };
+        let defaut = serde_json::to_value(Config::default()).unwrap_or_default();
         if let Some(sections) = v.as_object_mut() {
             for (section, keys) in sections.iter_mut() {
                 for (key, x) in keys.as_object_mut().into_iter().flatten() {
+                    // nan et inf deviennent `null` en JSON : la borne basse
+                    if x.is_null() && defaut.get(section.as_str()).and_then(|s| s.get(key.as_str())).is_some_and(|d| d.is_number()) {
+                        let (lo, _) = limits(section, key);
+                        log::warn!("config : [{section}] {key} n'est pas un nombre fini, {lo} utilisé");
+                        *x = lo.into();
+                        continue;
+                    }
                     if let Some(f) = x.as_f64() {
                         let (lo, hi) = limits(section, key);
-                        let c = f.clamp(lo, hi);
+                        // nan ou inf (écrits à la main) : la borne basse
+                        let c = if f.is_finite() { f.clamp(lo, hi) } else { lo };
                         if c != f {
                             log::warn!("config : [{section}] {key} = {f} hors bornes, {c} utilisé");
                             *x = if x.is_f64() { c.into() } else { (c as i64).into() };
@@ -504,7 +517,12 @@ impl Config {
                 }
             }
         }
-        serde_json::from_value(v).unwrap_or(self)
+        // relecture impossible (ne devrait pas arriver) : les réglages par défaut, pas des
+        // valeurs non bornées
+        serde_json::from_value(v).unwrap_or_else(|e| {
+            log::warn!("config : bornes impossibles à appliquer ({e}), réglages par défaut");
+            Config::default()
+        })
     }
 }
 
@@ -732,5 +750,10 @@ mod tests {
         let c: super::Config = toml::from_str("[bordure]\nintensite = 3\nrepos = -1").unwrap();
         let c = c.clamped();
         assert_eq!((c.bordure.intensite, c.bordure.repos), (1.0, 0.0));
+        // nan, inf et points non finis du tracé : bornés ou écartés
+        let texte = "[scintillement]\nquantite = nan\n[clic]\ntaille = inf\n[orbite]\ntrace = [[1.0, nan], [2.0, 3.0]]";
+        let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
+        assert_eq!((c.scintillement.quantite, c.clic.taille), (1.0, 0.3));
+        assert_eq!(c.orbite.trace, vec![[2.0, 3.0]]);
     }
 }

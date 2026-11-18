@@ -244,6 +244,48 @@ pub fn apply(p: &Profile) -> Result<(), String> {
     config::apply_keys(&cfg, in_profile)
 }
 
+/// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée et
+/// qu'il en précise un autre que celui en place.
+pub fn curseurs_du_preset(preset: &Config) -> Result<(), String> {
+    let avec = Config::read(&config::path()).map(|c| c.souris.avec_preset).unwrap_or(true);
+    let jeu = &preset.souris.jeu;
+    if !avec || jeu.is_empty() || *jeu == crate::souris::actuel() {
+        return Ok(());
+    }
+    crate::souris::installer(jeu)
+}
+
+/// Applique le preset `nom` (et ses curseurs), puis fait relire la config.
+pub fn appliquer(nom: &str) -> Result<(), String> {
+    let liste = list();
+    let p = liste.iter().find(|p| p.name == nom).ok_or_else(|| format!("aucun preset « {nom} »"))?;
+    apply(p)?;
+    config::request_reload();
+    curseurs_du_preset(&p.cfg)
+}
+
+/// Remet des réglages gardés (« Annuler », fin d'une règle automatique), curseurs compris.
+pub fn remettre(avant: &Config) -> Result<(), String> {
+    config::apply_keys(avant, in_profile)?;
+    config::request_reload();
+    let jeu = &avant.souris.jeu;
+    if !jeu.is_empty() && *jeu != crate::souris::actuel() {
+        crate::souris::installer(jeu)?;
+    }
+    Ok(())
+}
+
+/// Preset voisin de celui en place dans la liste (`pas` = 1 : suivant, -1 : précédent).
+pub fn voisin(cfg: &Config, pas: i32) -> Option<String> {
+    let liste = list();
+    if liste.is_empty() {
+        return None;
+    }
+    let n = liste.len() as i32;
+    let i = liste.iter().position(|p| same(&p.cfg, cfg)).map_or(if pas > 0 { -1 } else { 0 }, |i| i as i32);
+    Some(liste[(i + pas).rem_euclid(n) as usize].name.clone())
+}
+
 /// Les réglages de profil de `a` et `b` sont-ils identiques (aux arrondis près) ?
 pub fn same(a: &Config, b: &Config) -> bool {
     let (Ok(a), Ok(b)) = (serde_json::to_value(a), serde_json::to_value(b)) else { return false };

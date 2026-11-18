@@ -154,6 +154,36 @@ fn teinte_page(hwnd: HWND) -> Option<f32> {
     }
 }
 
+/// Nom (en minuscules) de l'exécutable de la fenêtre au premier plan ; aucun pour Essaim.
+pub fn nom_premier_plan() -> Option<String> {
+    let exe = executable(unsafe { GetForegroundWindow() })?;
+    Some(exe.rsplit('\\').next().unwrap_or(&exe).to_lowercase())
+}
+
+/// Exécutables des fenêtres visibles (pour proposer des règles automatiques).
+pub fn applis_ouvertes() -> Vec<String> {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
+    unsafe extern "system" fn chaque(h: HWND, l: LPARAM) -> windows::core::BOOL {
+        let liste = unsafe { &mut *(l.0 as *mut Vec<String>) };
+        if unsafe { IsWindowVisible(h) }.as_bool() && !titre(h).is_empty() {
+            if let Some(exe) = executable(h) {
+                let nom = exe.rsplit('\\').next().unwrap_or(&exe).to_lowercase();
+                if !liste.contains(&nom) {
+                    liste.push(nom);
+                }
+            }
+        }
+        true.into()
+    }
+    let mut liste: Vec<String> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(chaque), LPARAM(&mut liste as *mut _ as isize));
+    }
+    liste.sort();
+    liste
+}
+
 /// Chemin de l'exécutable de la fenêtre (aucun pour les fenêtres d'Essaim).
 fn executable(hwnd: HWND) -> Option<String> {
     unsafe {

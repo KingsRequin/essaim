@@ -12,6 +12,7 @@
 
 mod appli;
 mod audio;
+mod auto;
 mod backend;
 mod bordure;
 mod canvas;
@@ -135,6 +136,9 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut audio_thread = if conf.cfg.audio.actif { Some(audio::start(shared.clone())?) } else { None };
 
     let _tray = win::Tray::new()?;
+    win::raccourcis(conf.cfg.raccourcis.actif);
+    let mut raccourcis = conf.cfg.raccourcis.actif;
+    let mut automatique = auto::Auto::default();
     if open_settings {
         reglages::open(shared.clone());
     }
@@ -185,6 +189,22 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
                 log::info!("{}", if user_paused { "pause" } else { "reprise" });
             }
             win::CMD_CONFIG => reglages::open(shared.clone()),
+            c @ (win::CMD_SUIVANT | win::CMD_PRECEDENT) => {
+                let pas = if c == win::CMD_SUIVANT { 1 } else { -1 };
+                if let Some(nom) = profils::voisin(&conf.cfg, pas) {
+                    match profils::appliquer(&nom) {
+                        Ok(()) => win::bulle(&format!("Preset « {nom} »")),
+                        Err(e) => log::warn!("raccourci : preset « {nom} » non appliqué ({e})"),
+                    }
+                }
+            }
+            c if c >= win::CMD_PRESET => {
+                if let Some(p) = profils::list().get(c - win::CMD_PRESET) {
+                    if let Err(e) = profils::appliquer(&p.name) {
+                        log::warn!("menu : preset « {} » non appliqué ({e})", p.name);
+                    }
+                }
+            }
             _ => {}
         }
         while let Ok(c) = ipc_rx.try_recv() {
@@ -230,6 +250,10 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
             render::set_trace(&conf.cfg.orbite.trace);
+            if conf.cfg.raccourcis.actif != raccourcis {
+                raccourcis = conf.cfg.raccourcis.actif;
+                win::raccourcis(raccourcis);
+            }
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
             match (conf.cfg.audio.actif, audio_thread.is_some()) {
@@ -238,6 +262,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
                 _ => {}
             }
         }
+        automatique.tick(&conf.cfg, now);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
         let fields = (user_paused, fs_paused, !user_paused && !fs_paused, backend.is_gpu(), prisme.connected(), conf_gen);

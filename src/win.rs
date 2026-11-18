@@ -305,6 +305,10 @@ pub fn covers_monitor(hwnd: HWND) -> bool {
 pub const CMD_PAUSE: usize = 1;
 pub const CMD_CONFIG: usize = 2;
 pub const CMD_QUIT: usize = 3;
+pub const CMD_SUIVANT: usize = 4;
+pub const CMD_PRECEDENT: usize = 5;
+/// Presets du menu : `CMD_PRESET + rang` dans `profils::list()`.
+pub const CMD_PRESET: usize = 100;
 const WM_TRAY: u32 = WM_APP + 1;
 pub const TRAY_CLASS: PCWSTR = w!("EssaimTray");
 
@@ -314,6 +318,40 @@ thread_local! {
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ICON: Cell<HICON> = const { Cell::new(HICON(std::ptr::null_mut())) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
+    static TRAY_HWND: Cell<isize> = const { Cell::new(0) };
+}
+
+/// Raccourcis globaux (RegisterHotKey, sans hook) : Ctrl+Alt+→ / ← preset suivant / précédent,
+/// Ctrl+Alt+P pause. Les enregistre ou les retire.
+pub fn raccourcis(actif: bool) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_LEFT, VK_RIGHT};
+    let hwnd = HWND(TRAY_HWND.with(|h| h.get()) as *mut _);
+    let touches = [(1, VK_RIGHT.0 as u32), (2, VK_LEFT.0 as u32), (3, b'P' as u32)];
+    unsafe {
+        for (id, vk) in touches {
+            let _ = UnregisterHotKey(Some(hwnd), id);
+            if actif && RegisterHotKey(Some(hwnd), id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk).is_err() {
+                log::warn!("raccourci {id} déjà pris par une autre application");
+            }
+        }
+    }
+}
+
+/// Petite notification de l'icône (changement de preset au clavier).
+pub fn bulle(texte: &str) {
+    let hwnd = HWND(TRAY_HWND.with(|h| h.get()) as *mut _);
+    let mut n = nid(hwnd);
+    n.uFlags = windows::Win32::UI::Shell::NIF_INFO | windows::Win32::UI::Shell::NIF_REALTIME;
+    for (d, s) in n.szInfo.iter_mut().zip(texte.encode_utf16().take(250)) {
+        *d = s;
+    }
+    for (d, s) in n.szInfoTitle.iter_mut().zip("Essaim".encode_utf16()) {
+        *d = s;
+    }
+    n.dwInfoFlags = windows::Win32::UI::Shell::NIIF_NOSOUND;
+    unsafe {
+        let _ = Shell_NotifyIconW(windows::Win32::UI::Shell::NIM_MODIFY, &n);
+    }
 }
 
 /// Vrai une fois après un changement de la configuration des écrans (résolution, échelle,
@@ -356,6 +394,16 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                     let paused = PAUSED.with(|p| p.get());
                     let _ = AppendMenuW(menu, MF_STRING, CMD_PAUSE, if paused { w!("Reprendre") } else { w!("Mettre en pause") });
                     let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG, w!("Réglages…"));
+                    // presets : celui en place coché
+                    if let Ok(sous) = CreatePopupMenu() {
+                        let cfg = crate::config::Config::read(&crate::config::path()).unwrap_or_default();
+                        for (i, p) in crate::profils::list().iter().enumerate().take(80) {
+                            let nom: Vec<u16> = p.name.encode_utf16().chain(Some(0)).collect();
+                            let coche = if crate::profils::same(&p.cfg, &cfg) { MF_CHECKED } else { MF_UNCHECKED };
+                            let _ = AppendMenuW(sous, MF_STRING | coche, CMD_PRESET + i, PCWSTR(nom.as_ptr()));
+                        }
+                        let _ = AppendMenuW(menu, MF_POPUP, sous.0 as usize, w!("Presets"));
+                    }
                     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                     let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quitter"));
                     let mut pt = POINT::default();
@@ -369,6 +417,15 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         if msg == WM_COMMAND {
             COMMAND.with(|c| c.set(wp.0 & 0xFFFF));
+            return LRESULT(0);
+        }
+        if msg == WM_HOTKEY {
+            let cmd = match wp.0 {
+                1 => CMD_SUIVANT,
+                2 => CMD_PRECEDENT,
+                _ => CMD_PAUSE,
+            };
+            COMMAND.with(|c| c.set(cmd));
             return LRESULT(0);
         }
         if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED || (msg == WM_SETTINGCHANGE && wp.0 == SPI_SETWORKAREA.0 as usize) {
@@ -404,6 +461,7 @@ impl Tray {
             RegisterClassExW(&wc);
             let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), TRAY_CLASS, w!("Essaim"), WS_POPUP, 0, 0, 0, 0, None, None, Some(hinst.into()), None)?;
             TASKBAR_CREATED.with(|t| t.set(RegisterWindowMessageW(w!("TaskbarCreated"))));
+            TRAY_HWND.with(|h| h.set(hwnd.0 as isize));
             ICON.with(|i| i.set(make_icon().unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default())));
             if !Shell_NotifyIconW(NIM_ADD, &nid(hwnd)).as_bool() {
                 log::warn!("icône de notification : ajout impossible");
