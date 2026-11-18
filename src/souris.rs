@@ -17,7 +17,7 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::UI::Shell::SHLoadIndirectString;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyCursor, DrawIconEx, LoadImageW, SystemParametersInfoW, DI_NORMAL, HCURSOR, HICON, IMAGE_CURSOR, LR_LOADFROMFILE,
+    DestroyCursor, DrawIconEx, GetIconInfo, LoadImageW, ICONINFO, SystemParametersInfoW, DI_NORMAL, HCURSOR, HICON, IMAGE_CURSOR, LR_LOADFROMFILE,
     SPIF_SENDCHANGE, SPI_SETCURSORS,
 };
 
@@ -175,73 +175,147 @@ const NOMS_ROLES: [&str; 17] = [
     "Sélection de personne",
 ];
 
-/// Aperçu du jeu : flèche, main, texte et attente côte à côte, en PNG (`data:` URL).
-pub fn apercu(jeu: &Jeu) -> Option<String> {
-    image(jeu, &[0, 14, 5, 2], 44)
+/// Un curseur dessiné : ses images côte à côte dans une bande PNG (une seule s'il est fixe),
+/// la durée de chaque image (ms) et son point chaud (px dans le carré de `cote`).
+#[derive(serde::Serialize)]
+pub struct Image {
+    pub png: String,
+    pub cote: u32,
+    pub images: u32,
+    pub durees: Vec<u32>,
+    pub chaud: (u32, u32),
 }
 
-/// Chaque curseur du jeu, seul : (nom du rôle, image PNG en `data:` URL si le jeu en a un).
-pub fn curseurs(jeu: &Jeu) -> Vec<(&'static str, Option<String>)> {
-    NOMS_ROLES.iter().enumerate().map(|(i, nom)| (*nom, image(jeu, &[i], 64))).collect()
+/// Rôles montrés sur la carte d'un jeu : flèche, lien, texte, travail en arrière-plan.
+const ROLES_APERCU: [usize; 4] = [0, 14, 5, 2];
+
+/// Aperçu d'un jeu : ses quatre curseurs les plus vus.
+pub fn apercu(jeu: &Jeu) -> Vec<Option<Image>> {
+    ROLES_APERCU.iter().map(|&r| image(jeu, r, 44)).collect()
 }
 
-/// Les curseurs `roles` du jeu côte à côte, chacun dans un carré de `cote` px.
-fn image(jeu: &Jeu, roles: &[usize], cote: i32) -> Option<String> {
-    let (w, h) = (cote * roles.len() as i32 + 12 * (roles.len() as i32 - 1), cote);
-    // dessin sur fond noir puis sur fond blanc : l'écart donne la transparence (marche aussi
-    // pour les vieux curseurs monochromes, qui n'ont pas d'alpha)
-    let noir = dessiner(jeu, roles, cote, w, h, 0)?;
-    let blanc = dessiner(jeu, roles, cote, w, h, 255)?;
-    let mut pm = tiny_skia::Pixmap::new(w as u32, h as u32)?;
-    for ((d, n), b) in pm.data_mut().chunks_exact_mut(4).zip(noir.chunks_exact(4)).zip(blanc.chunks_exact(4)) {
-        let a = 255 - (b[1] as i32 - n[1] as i32).clamp(0, 255);
-        // BGRA sur noir = couleur × alpha (déjà prémultipliée)
-        d.copy_from_slice(&[n[2].min(a as u8), n[1].min(a as u8), n[0].min(a as u8), a as u8]);
+/// Chaque curseur du jeu : (nom du rôle, image si le jeu en a un).
+pub fn curseurs(jeu: &Jeu) -> Vec<(&'static str, Option<Image>)> {
+    NOMS_ROLES.iter().enumerate().map(|(i, nom)| (*nom, image(jeu, i, 64))).collect()
+}
+
+/// Animation d'un curseur `.ani` : pour chaque pas, l'image à montrer et sa durée (ms). Lue
+/// dans les morceaux `anih` (nombre d'images et de pas, cadence), `rate` et `seq ` du fichier.
+fn animation(octets: &[u8]) -> Option<Vec<(u32, u32)>> {
+    if octets.len() < 12 || &octets[0..4] != b"RIFF" || &octets[8..12] != b"ACON" {
+        return None;
     }
-    let png = pm.encode_png().ok()?;
-    Some(format!("data:image/png;base64,{}", base64(&png)))
-}
-
-fn dessiner(jeu: &Jeu, roles: &[usize], cote: i32, w: i32, h: i32, fond: u8) -> Option<Vec<u8>> {
-    unsafe {
-        let dc = CreateCompatibleDC(None);
-        let bi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut bits: *mut c_void = std::ptr::null_mut();
-        let Ok(bmp) = CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0) else {
-            let _ = DeleteDC(dc);
-            return None;
-        };
-        let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
-        pixels.fill(fond);
-        let ancien = SelectObject(dc, bmp.into());
-        let mut dessines = 0;
-        for (i, &role) in roles.iter().enumerate() {
-            let Some(f) = jeu.fichiers.get(role).filter(|f| !f.is_empty()) else { continue };
-            let chemin = HSTRING::from(developper(f));
-            if let Ok(HANDLE(c)) = LoadImageW(None, &chemin, IMAGE_CURSOR, cote, cote, LR_LOADFROMFILE) {
-                if DrawIconEx(dc, i as i32 * (cote + 12), 0, HICON(c), cote, cote, 0, None, DI_NORMAL).is_ok() {
-                    dessines += 1;
-                }
-                let _ = DestroyCursor(HCURSOR(c));
+    let mot = |o: &[u8], i: usize| o.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let (mut images, mut pas, mut cadence) = (0u32, 0u32, 0u32);
+    let (mut rate, mut seq): (Option<Vec<u32>>, Option<Vec<u32>>) = (None, None);
+    let mut i = 12;
+    while i + 8 <= octets.len() {
+        let id = &octets[i..i + 4];
+        let taille = mot(octets, i + 4)? as usize;
+        let data = octets.get(i + 8..(i + 8 + taille).min(octets.len()))?;
+        let liste = |d: &[u8]| (0..d.len() / 4).filter_map(|k| mot(d, k * 4)).collect::<Vec<u32>>();
+        match id {
+            b"anih" => {
+                images = mot(data, 4)?;
+                pas = mot(data, 8)?;
+                cadence = mot(data, 28)?;
             }
+            b"rate" => rate = Some(liste(data)),
+            b"seq " => seq = Some(liste(data)),
+            _ => {}
         }
-        let copie = pixels.to_vec();
-        SelectObject(dc, ancien);
-        let _ = DeleteObject(bmp.into());
-        let _ = DeleteDC(dc);
-        (dessines > 0).then_some(copie)
+        i += 8 + taille + (taille & 1);
     }
+    if images == 0 {
+        return None;
+    }
+    let pas = pas.clamp(1, 120);
+    Some(
+        (0..pas)
+            .map(|k| {
+                let image = seq.as_ref().and_then(|s| s.get(k as usize).copied()).unwrap_or(k % images).min(images - 1);
+                let jiffies = rate.as_ref().and_then(|r| r.get(k as usize).copied()).unwrap_or(cadence).max(1);
+                (image, jiffies * 1000 / 60)
+            })
+            .collect(),
+    )
+}
+
+/// Le curseur `role` du jeu, dessiné dans un carré de `cote` px (toutes ses images s'il est animé).
+fn image(jeu: &Jeu, role: usize, cote: i32) -> Option<Image> {
+    let f = jeu.fichiers.get(role).filter(|f| !f.is_empty())?;
+    let chemin = developper(f);
+    let pas = std::fs::read(&chemin).ok().and_then(|o| animation(&o)).unwrap_or_else(|| vec![(0, 0)]);
+    unsafe {
+        let HANDLE(c) = LoadImageW(None, &HSTRING::from(chemin.as_str()), IMAGE_CURSOR, cote, cote, LR_LOADFROMFILE).ok()?;
+        let curseur = HICON(c);
+        let mut info = ICONINFO::default();
+        let chaud = if GetIconInfo(curseur, &mut info).is_ok() {
+            let _ = DeleteObject(info.hbmColor.into());
+            let _ = DeleteObject(info.hbmMask.into());
+            (info.xHotspot.min(cote as u32 - 1), info.yHotspot.min(cote as u32 - 1))
+        } else {
+            (0, 0)
+        };
+        let n = pas.len() as i32;
+        // dessin sur fond noir puis sur fond blanc : l'écart donne la transparence (marche aussi
+        // pour les vieux curseurs monochromes, qui n'ont pas d'alpha)
+        let noir = dessiner(curseur, &pas, cote, 0);
+        let blanc = dessiner(curseur, &pas, cote, 255);
+        let _ = DestroyCursor(HCURSOR(c));
+        let (noir, blanc) = (noir?, blanc?);
+        let mut pm = tiny_skia::Pixmap::new((cote * n) as u32, cote as u32)?;
+        for ((d, n), b) in pm.data_mut().chunks_exact_mut(4).zip(noir.chunks_exact(4)).zip(blanc.chunks_exact(4)) {
+            let a = 255 - (b[1] as i32 - n[1] as i32).clamp(0, 255);
+            // BGRA sur noir = couleur × alpha (déjà prémultipliée)
+            d.copy_from_slice(&[n[2].min(a as u8), n[1].min(a as u8), n[0].min(a as u8), a as u8]);
+        }
+        let png = pm.encode_png().ok()?;
+        Some(Image {
+            png: format!("data:image/png;base64,{}", base64(&png)),
+            cote: cote as u32,
+            images: n as u32,
+            durees: pas.iter().map(|p| p.1).collect(),
+            chaud,
+        })
+    }
+}
+
+/// Les images `pas` du curseur côte à côte sur un fond uni ; pixels BGRA.
+unsafe fn dessiner(curseur: HICON, pas: &[(u32, u32)], cote: i32, fond: u8) -> Option<Vec<u8>> {
+    let (w, h) = (cote * pas.len() as i32, cote);
+    let dc = CreateCompatibleDC(None);
+    let bi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut c_void = std::ptr::null_mut();
+    let Ok(bmp) = CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0) else {
+        let _ = DeleteDC(dc);
+        return None;
+    };
+    let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
+    pixels.fill(fond);
+    let ancien = SelectObject(dc, bmp.into());
+    let mut dessines = 0;
+    for (i, &(image, _)) in pas.iter().enumerate() {
+        if DrawIconEx(dc, i as i32 * cote, 0, curseur, cote, cote, image, None, DI_NORMAL).is_ok() {
+            dessines += 1;
+        }
+    }
+    let copie = pixels.to_vec();
+    SelectObject(dc, ancien);
+    let _ = DeleteObject(bmp.into());
+    let _ = DeleteDC(dc);
+    (dessines > 0).then_some(copie)
 }
 
 fn base64(octets: &[u8]) -> String {
@@ -270,13 +344,33 @@ mod tests {
         assert_eq!(developper("100%"), "100%");
     }
 
+    /// Les pas d'un curseur animé du jeu en place donnent des images différentes (`--ignored`).
+    #[test]
+    #[ignore]
+    fn les_images_d_un_curseur_anime_different() {
+        let jeux = jeux();
+        let jeu = jeux.iter().find(|j| j.cle == actuel()).expect("jeu en place");
+        for role in [2usize, 3] {
+            let f = developper(&jeu.fichiers[role]);
+            let Some(pas) = std::fs::read(&f).ok().and_then(|o| animation(&o)) else { continue };
+            let c = unsafe { LoadImageW(None, &HSTRING::from(f.as_str()), IMAGE_CURSOR, 32, 32, LR_LOADFROMFILE) }.unwrap();
+            let px = unsafe { dessiner(HICON(c.0), &pas, 32, 0) }.unwrap();
+            let image = |k: usize| (0..32).flat_map(|y| px[(y * 32 * pas.len() + k * 32) * 4..(y * 32 * pas.len() + k * 32 + 32) * 4].to_vec()).collect::<Vec<u8>>();
+            let differentes = (1..pas.len()).filter(|&k| image(k) != image(0)).count();
+            eprintln!("{} : {} pas, {differentes} différents du premier", NOMS_ROLES[role], pas.len());
+            assert!(differentes > 0);
+        }
+    }
+
     /// Lit les jeux du vrai registre et dessine leurs aperçus (`--ignored --nocapture`).
     #[test]
     #[ignore]
     fn jeux_de_cette_machine() {
         for j in jeux() {
             let a = apercu(&j);
-            eprintln!("{} ({}) : {} fichiers, aperçu {} octets", j.nom, j.cle, j.fichiers.len(), a.map_or(0, |a| a.len()));
+            let images: Vec<u32> = a.iter().map(|i| i.as_ref().map_or(0, |i| i.images)).collect();
+            let octets: usize = a.iter().flatten().map(|i| i.png.len()).sum();
+            eprintln!("{} : images par curseur {images:?}, {octets} octets", j.nom);
         }
         eprintln!("actuel : « {} »", actuel());
     }

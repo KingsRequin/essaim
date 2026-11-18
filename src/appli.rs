@@ -1,46 +1,156 @@
 //! Teinte de l'application au premier plan : la couleur dominante de l'icône de son exécutable
-//! (`[couleur] application`). Calculée une fois par exécutable, relue seulement quand la fenêtre
-//! au premier plan change (`GetForegroundWindow` à chaque image, sans hook).
+//! (`[couleur] application`), calculée une fois par exécutable ; et, dans un navigateur, celle du
+//! site affiché (`[couleur] site`) : la couleur dominante du haut de la page, sous la barre
+//! d'adresse, mesurée quand le titre de la fenêtre change et toutes les 3 s. La fenêtre au premier
+//! plan est lue à chaque image (`GetForegroundWindow`, sans hook).
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::time::{Duration, Instant};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{
-    DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, SelectObject,
+    BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
 };
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Shell::ExtractIconExW;
-use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowThreadProcessId, HICON, ICONINFO};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, HICON,
+    ICONINFO,
+};
+
+/// Navigateurs reconnus (nom de l'exécutable) pour la couleur du site.
+const NAVIGATEURS: [&str; 13] = [
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe", "arc.exe", "zen.exe", "librewolf.exe",
+    "floorp.exe", "waterfox.exe", "thorium.exe", "chromium.exe",
+];
 
 #[derive(Default)]
 pub struct TeinteAppli {
     fenetre: isize,
+    /// Teinte de l'icône de l'application au premier plan (aucune : grise).
+    icone: Option<f32>,
+    navigateur: bool,
+    /// Titre de la fenêtre du navigateur à la dernière lecture, et prochaine mesure de la page.
+    titre: String,
+    mesure: Option<Instant>,
     teinte: Option<f32>,
     cache: HashMap<String, Option<f32>>,
 }
 
 impl TeinteAppli {
-    /// Teinte (degrés) de l'application au premier plan. Essaim lui-même, une application sans
-    /// icône ou à l'icône grise gardent la teinte précédente.
-    pub fn courante(&mut self) -> Option<f32> {
+    /// Teinte (degrés) à suivre : celle du site dans un navigateur (`site`), sinon celle de
+    /// l'icône de l'application (`appli`). Essaim lui-même, une icône grise ou une page sans
+    /// couleur nette gardent la teinte précédente ; ailleurs, sans option qui s'applique, aucune.
+    pub fn courante(&mut self, appli: bool, site: bool, now: Instant) -> Option<f32> {
         let fg = unsafe { GetForegroundWindow() };
-        if fg.0 as isize == self.fenetre {
+        if fg.0 as isize != self.fenetre {
+            self.fenetre = fg.0 as isize;
+            let Some(exe) = executable(fg) else {
+                self.navigateur = false;
+                return self.teinte;
+            };
+            let nom = exe.rsplit('\\').next().unwrap_or(&exe).to_lowercase();
+            self.navigateur = NAVIGATEURS.contains(&nom.as_str());
+            self.icone = *self.cache.entry(exe.clone()).or_insert_with(|| {
+                let t = icone(&exe).and_then(|px| teinte_dominante(&px));
+                log::info!("teinte de {nom} : {}", t.map_or("grise, ignorée".into(), |h| format!("{h:.0}°")));
+                t
+            });
+            (self.titre, self.mesure) = (String::new(), Some(now + Duration::from_millis(300)));
+        }
+        if site && self.navigateur {
+            // nouvelle page (titre changé) : mesure un peu après, le temps qu'elle s'affiche
+            let titre = titre(fg);
+            if titre != self.titre {
+                self.titre = titre;
+                self.mesure = Some(now + Duration::from_millis(700));
+            }
+            if self.mesure.is_some_and(|m| now >= m) {
+                self.mesure = Some(now + Duration::from_secs(3));
+                let page = teinte_page(fg);
+                if let Some(h) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
+                    log::info!("teinte du site « {} » : {h:.0}°", self.titre.chars().take(60).collect::<String>());
+                }
+                if let Some(h) = page.or(if appli { self.icone } else { None }) {
+                    self.teinte = Some(h);
+                }
+            }
             return self.teinte;
         }
-        self.fenetre = fg.0 as isize;
-        let Some(exe) = executable(fg) else { return self.teinte };
-        let teinte = *self.cache.entry(exe.clone()).or_insert_with(|| {
-            let t = icone(&exe).and_then(|px| teinte_dominante(&px));
-            log::info!("teinte de {} : {}", exe.rsplit('\\').next().unwrap_or(&exe), t.map_or("grise, ignorée".into(), |h| format!("{h:.0}°")));
-            t
-        });
-        if teinte.is_some() {
-            self.teinte = teinte;
+        if appli {
+            if self.icone.is_some() {
+                self.teinte = self.icone;
+            }
+            return self.teinte;
         }
-        self.teinte
+        None
+    }
+}
+
+fn titre(hwnd: HWND) -> String {
+    let mut buf = [0u16; 512];
+    let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+/// Teinte dominante du haut de la page affichée par un navigateur : une bande sous les onglets
+/// et la barre d'adresse, lue à l'écran (sans les calques d'Essaim, qui ne sont pas copiés).
+fn teinte_page(hwnd: HWND) -> Option<f32> {
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            return None;
+        }
+        let mut r = RECT::default();
+        GetWindowRect(hwnd, &mut r).ok()?;
+        let e = GetDpiForWindow(hwnd).max(96) as i32;
+        let px = |v: i32| v * e / 96;
+        let (x, y) = (r.left + (r.right - r.left) / 20, r.top + px(130));
+        let (w, h) = ((r.right - r.left) * 9 / 10, px(220).min(r.bottom - y));
+        if w < 50 || h < 30 {
+            return None;
+        }
+        let ecran = GetDC(None);
+        let dc = CreateCompatibleDC(Some(ecran));
+        let bi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let resultat = match CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(bmp) => {
+                let ancien = SelectObject(dc, bmp.into());
+                let copie = BitBlt(dc, 0, 0, w, h, Some(ecran), x, y, SRCCOPY).is_ok();
+                // un pixel sur trois dans chaque sens suffit ; alpha à 255 (la copie n'en a pas)
+                let tout = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);
+                let echantillon: Vec<u8> = tout
+                    .chunks_exact(4)
+                    .enumerate()
+                    .filter(|(i, _)| (i % w as usize).is_multiple_of(3) && (i / w as usize).is_multiple_of(3))
+                    .flat_map(|(_, p)| [p[0], p[1], p[2], 255])
+                    .collect();
+                SelectObject(dc, ancien);
+                let _ = DeleteObject(bmp.into());
+                if copie { teinte_dominante(&echantillon) } else { None }
+            }
+            Err(_) => None,
+        };
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, ecran);
+        resultat
     }
 }
 

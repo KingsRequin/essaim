@@ -86,6 +86,8 @@ pub struct Orbite {
     pub nombre: u32,
     /// Anneaux de comètes emboîtés (les extérieurs, plus larges, tournent moins vite).
     pub anneaux: u32,
+    /// Rotation du trajet lui-même (tours par minute ; négatif : dans l'autre sens).
+    pub rotation: f32,
     pub vitesse_base: f32,
     pub vitesse_basse: f32,
     pub eloignement_grave: f32,
@@ -116,6 +118,8 @@ pub enum FormeSatellites {
     Losange,
     Hexagone,
     Huit,
+    Etoile,
+    Fleur,
 }
 
 impl FormeSatellites {
@@ -128,6 +132,8 @@ impl FormeSatellites {
             Self::Losange => Forme::Losange,
             Self::Hexagone => Forme::Hexagone,
             Self::Huit => Forme::Huit,
+            Self::Etoile => Forme::Etoile,
+            Self::Fleur => Forme::Fleur,
         }
     }
 }
@@ -142,6 +148,8 @@ pub enum Forme {
     Losange,
     Hexagone,
     Huit,
+    Etoile,
+    Fleur,
 }
 
 /// Jeu de curseurs de Windows.
@@ -171,6 +179,8 @@ pub struct Couleur {
     pub synchro_prisme: bool,
     /// Prend la teinte dominante de l'icône de l'application au premier plan (prioritaire).
     pub application: bool,
+    /// Dans un navigateur, prend la couleur dominante du haut de la page affichée.
+    pub site: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -197,7 +207,7 @@ impl Default for Eclat {
 }
 impl Default for Orbite {
     fn default() -> Self {
-        Self { rayon: 22.0, cometes: true, forme: Forme::Cercle, nombre: 2, anneaux: 1, vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
+        Self { rayon: 22.0, cometes: true, forme: Forme::Cercle, nombre: 2, anneaux: 1, rotation: 0.0, vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
     }
 }
 impl Default for Essaim {
@@ -207,7 +217,7 @@ impl Default for Essaim {
 }
 impl Default for Couleur {
     fn default() -> Self {
-        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false }
+        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false, site: false }
     }
 }
 impl Default for Fissures {
@@ -230,9 +240,10 @@ taille = 3.4            # éclat du kick sous le pointeur ; 0 = aucun
 [orbite]
 rayon = 22              # rayon de l'orbite sans basse
 cometes = true          # comètes en orbite
-forme = "cercle"        # trajet : cercle, triangle, losange, hexagone ou huit
+forme = "cercle"        # trajet : cercle, triangle, losange, hexagone, huit, etoile ou fleur
 nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
+rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
 vitesse_basse = 11      # vitesse ajoutée quand la basse est au maximum
 eloignement_grave = 1.3 # écartement ajouté pour une note très grave (1.3 = +130 %)
@@ -244,7 +255,7 @@ par_kick_max = 3
 maximum = 16            # satellites en même temps, au plus
 duree = 2.8             # durée de vie d'un satellite (s)
 fixes = 0               # satellites permanents, présents même sans musique
-forme = "cometes"       # trajet des satellites : "cometes" (le même), ou cercle, triangle, losange, hexagone, huit
+forme = "cometes"       # trajet des satellites : "cometes" (le même), ou une forme du trajet des comètes
 
 [couleur]
 teinte = 0              # teinte de départ (0 rouge, 120 vert, 240 bleu) ; fixe si vitesse_teinte = 0
@@ -252,6 +263,7 @@ vitesse_teinte = 60     # degrés de teinte par seconde
 ecart_teinte = 140      # écart de teinte entre la tête et la queue des traînées
 synchro_prisme = true   # prend la teinte de l'éclairage de Prisme quand il tourne
 application = false     # prend la teinte de l'icône de l'application au premier plan
+site = false            # dans un navigateur, prend la couleur du haut de la page affichée
 
 [fissures]
 actives = true
@@ -305,6 +317,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("orbite", "trainee") => (0.01, 3.0),
         ("orbite", "nombre") => (1.0, 8.0),
         ("orbite", "anneaux") => (1.0, 4.0),
+        ("orbite", "rotation") => (-60.0, 60.0),
         ("orbite", _) => (0.0, 100.0),
         ("essaim", "fixes") => (0.0, 32.0),
         ("essaim", "maximum") => (0.0, 64.0),

@@ -123,23 +123,30 @@ struct Sat {
 
 /// Point du trajet des comètes à l'angle `a`, pour un rayon de 1 (y vers le bas).
 pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
-    let poly = |k: f32, r: f32| {
-        // polygone régulier, pointe en haut, parcouru à vitesse constante
+    // polygone de k sommets, pointe en haut, rayons alternés `r` et `r2` (égaux : régulier),
+    // parcouru à vitesse constante
+    let poly = |k: f32, r: f32, r2: f32| {
         let u = (a / TAU * k).rem_euclid(k);
         let (j, f) = (u.floor(), u.fract());
         let v = |j: f32| {
             let th = -PI / 2.0 + j * TAU / k;
-            (th.cos() * r, th.sin() * r)
+            let rr = if j as i32 % 2 == 0 { r } else { r2 };
+            (th.cos() * rr, th.sin() * rr)
         };
         let (p, q) = (v(j), v(j + 1.0));
         (p.0 + (q.0 - p.0) * f, p.1 + (q.1 - p.1) * f)
     };
     match forme {
         Forme::Cercle => (a.cos(), a.sin()),
-        Forme::Triangle => poly(3.0, 1.2),
-        Forme::Losange => poly(4.0, 1.15),
-        Forme::Hexagone => poly(6.0, 1.05),
+        Forme::Triangle => poly(3.0, 1.2, 1.2),
+        Forme::Losange => poly(4.0, 1.15, 1.15),
+        Forme::Hexagone => poly(6.0, 1.05, 1.05),
         Forme::Huit => (1.2 * a.cos(), 0.6 * (2.0 * a).sin()),
+        Forme::Etoile => poly(10.0, 1.25, 0.55),
+        Forme::Fleur => {
+            let r = 0.95 + 0.3 * (5.0 * a).cos();
+            (a.cos() * r, a.sin() * r)
+        }
     }
 }
 
@@ -156,6 +163,8 @@ pub struct Swarm {
     far: f32,
     /// Angle de chaque anneau.
     angles: Vec<f32>,
+    /// Rotation du trajet lui-même.
+    rot: f32,
     /// Traînées des comètes, anneau par anneau.
     trails: Vec<Trail>,
     sats: Vec<Sat>,
@@ -176,6 +185,7 @@ impl Swarm {
             spd: 3.5,
             far: 1.0,
             angles: Vec::new(),
+            rot: 0.0,
             trails: Vec::new(),
             sats: Vec::new(),
             fixes: Vec::new(),
@@ -257,8 +267,12 @@ impl Swarm {
         // position sur le trajet à la fraction `f` de l'image (centre et rayon interpolés) : les
         // points intermédiaires suivent la vraie forme, coins compris
         let (rayon, rayon0) = (o.rayon * scale * self.far, o.rayon * scale * far0);
+        let (rot0, drot) = (self.rot, o.rotation * TAU / 60.0 * dt);
+        self.rot = (rot0 + drot).rem_euclid(TAU);
         let point = |forme, a: f32, rel: f32, f: f32| {
             let (x, y) = chemin(forme, a);
+            let (sin, cos) = (rot0 + drot * f).sin_cos();
+            let (x, y) = (x * cos - y * sin, x * sin + y * cos);
             let rr = (rayon0 + (rayon - rayon0) * f) * rel;
             (c0.0 + (cx - c0.0) * f + x * rr, c0.1 + (cy - c0.1) * f + y * rr)
         };
@@ -606,9 +620,12 @@ mod tests {
             (Forme::Losange, FormeSatellites::Huit),
             (Forme::Hexagone, FormeSatellites::Triangle),
             (Forme::Huit, FormeSatellites::Cometes),
+            (Forme::Etoile, FormeSatellites::Fleur),
+            (Forme::Fleur, FormeSatellites::Cometes),
         ] {
             let mut cfg = Config::default();
             (cfg.orbite.forme, cfg.orbite.nombre, cfg.orbite.anneaux, cfg.essaim.fixes, cfg.essaim.forme) = (forme, 8, 4, 32, sat);
+            cfg.orbite.rotation = 45.0;
             let mut s = Swarm::new();
             let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
             for i in 0..200 {
@@ -666,7 +683,7 @@ mod tests {
         #[test]
     fn les_trajets_sont_continus() {
         use crate::config::Forme;
-        for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit] {
+        for forme in [Forme::Cercle, Forme::Triangle, Forme::Losange, Forme::Hexagone, Forme::Huit, Forme::Etoile, Forme::Fleur] {
             let mut p = chemin(forme, 0.0);
             for i in 1..=720 {
                 let q = chemin(forme, i as f32 * TAU / 720.0);

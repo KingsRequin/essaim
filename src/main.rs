@@ -179,6 +179,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
             win::CMD_QUIT => break,
             win::CMD_PAUSE => {
                 user_paused = !user_paused;
+                charge::publier_pause(user_paused);
                 win::set_paused_label(user_paused);
                 log::info!("{}", if user_paused { "pause" } else { "reprise" });
             }
@@ -189,6 +190,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
             match c {
                 ipc::Cmd::SetPaused(p) if p != user_paused => {
                     user_paused = p;
+                    charge::publier_pause(p);
                     win::set_paused_label(p);
                     log::info!("{} (Horizon)", if p { "pause" } else { "reprise" });
                 }
@@ -316,8 +318,8 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         swarm.update(t, dt, cursor, au, cfg, scale);
         // teinte imposée : celle de l'application au premier plan, sinon celle de l'éclairage
         // (Prisme) ; suivie en douceur, en passant par le plus court
-        let cible = if cfg.couleur.application {
-            appli.courante()
+        let cible = if cfg.couleur.application || cfg.couleur.site {
+            appli.courante(cfg.couleur.application, cfg.couleur.site, now)
         } else if cfg.couleur.synchro_prisme {
             prisme.current()
         } else {
@@ -334,7 +336,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         render::set_sync_hue(sync_hue);
         if sync_hue.is_some() != synced {
             synced = sync_hue.is_some();
-            let source = if cfg.couleur.application { "celle de l'application au premier plan" } else { "celle de l'éclairage (Prisme)" };
+            let source = if cfg.couleur.application || cfg.couleur.site { "celle de l'application ou du site au premier plan" } else { "celle de l'éclairage (Prisme)" };
             log::info!("teinte : {}", if synced { source } else { "cycle propre" });
         }
         let life = cfg.fissures.duree.max(0.2) as f64;

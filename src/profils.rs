@@ -20,6 +20,8 @@ pub struct Profile {
     pub name: String,
     pub builtin: bool,
     pub cfg: Config,
+    /// Dernière modification du fichier (profils de l'utilisateur).
+    pub date: Option<std::time::SystemTime>,
 }
 
 pub fn dir() -> PathBuf {
@@ -30,7 +32,7 @@ fn builtins() -> Vec<Profile> {
     let make = |name: &str, change: fn(&mut Config)| {
         let mut cfg = Config::default();
         change(&mut cfg);
-        Profile { name: name.to_owned(), builtin: true, cfg }
+        Profile { name: name.to_owned(), builtin: true, cfg, date: None }
     };
     vec![
         make("Défaut", |_| {}),
@@ -104,7 +106,7 @@ pub fn list() -> Vec<Profile> {
             }
             let name = p.file_stem()?.to_string_lossy().into_owned();
             match Config::read(&p) {
-                Ok(cfg) => Some(Profile { name, builtin: false, cfg }),
+                Ok(cfg) => Some(Profile { name, builtin: false, cfg, date: e.metadata().and_then(|m| m.modified()).ok() }),
                 Err(e) => {
                     log::warn!("profil {} illisible : {e}", p.display());
                     None
@@ -158,6 +160,71 @@ fn save_in(dir: &std::path::Path, name: &str, cfg: &Config) -> Result<String, St
     Ok(name.to_owned())
 }
 
+/// Fichier d'un profil de l'utilisateur.
+pub fn fichier(name: &str) -> PathBuf {
+    dir().join(format!("{}.toml", name.trim()))
+}
+
+/// Renomme un profil de l'utilisateur ; renvoie le nouveau nom.
+pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
+    let ancien = check_name(ancien)?;
+    let nouveau = check_name(nouveau)?;
+    if is_builtin(nouveau) {
+        return Err(format!("« {nouveau} » est un préréglage : choisis un autre nom"));
+    }
+    let cible = fichier(nouveau);
+    // même nom à la casse près : Windows accepte le renommage
+    if cible.exists() && !ancien.eq_ignore_ascii_case(nouveau) {
+        return Err(format!("un preset s'appelle déjà « {nouveau} »"));
+    }
+    std::fs::rename(fichier(ancien), &cible).map_err(|_| format!("aucun profil « {ancien} »"))?;
+    Ok(nouveau.to_owned())
+}
+
+/// Copie un preset (fourni ou non) sous « nom (copie) » ; renvoie le nom de la copie.
+pub fn dupliquer(name: &str) -> Result<String, String> {
+    let liste = list();
+    let p = liste.iter().find(|p| p.name == name).ok_or_else(|| format!("aucun preset « {name} »"))?;
+    let base: String = name.chars().take(30).collect();
+    let pris = |n: &str| liste.iter().any(|q| q.name.eq_ignore_ascii_case(n));
+    let nom = (1..100)
+        .map(|i| if i == 1 { format!("{base} (copie)") } else { format!("{base} (copie {i})") })
+        .find(|n| !pris(n))
+        .ok_or("trop de copies")?;
+    save(&nom, &p.cfg)
+}
+
+/// Importe un fichier de preset (.toml) sous le nom du fichier ; renvoie ce nom.
+pub fn importer(chemin: &std::path::Path) -> Result<String, String> {
+    let nom = chemin.file_stem().map(|s| s.to_string_lossy().into_owned()).ok_or("fichier sans nom")?;
+    if chemin.extension().is_none_or(|e| !e.eq_ignore_ascii_case("toml")) {
+        return Err(format!("« {nom} » n'est pas un preset (.toml attendu)"));
+    }
+    let cfg = Config::read(chemin).map_err(|e| format!("« {nom} » illisible : {e}"))?;
+    save(&nom, &cfg)
+}
+
+/// Nombre de réglages de profil qui diffèrent entre `a` et `b`.
+pub fn ecarts(a: &Config, b: &Config) -> usize {
+    let (Ok(a), Ok(b)) = (serde_json::to_value(a), serde_json::to_value(b)) else { return usize::MAX };
+    let mut n = 0;
+    for (s, keys) in a.as_object().into_iter().flatten() {
+        for (k, v) in keys.as_object().into_iter().flatten().filter(|(k, _)| in_profile(s, k)) {
+            let w = b.get(s).and_then(|y| y.get(k));
+            let pareil = match (v, w) {
+                (serde_json::Value::Number(m), Some(serde_json::Value::Number(n))) => {
+                    let (m, n) = (m.as_f64().unwrap_or(0.0), n.as_f64().unwrap_or(0.0));
+                    (m - n).abs() <= 1e-3 * m.abs().max(n.abs()).max(1.0)
+                }
+                (serde_json::Value::String(x), Some(serde_json::Value::String(y))) if x.is_empty() || y.is_empty() => true,
+                (v, w) => Some(v) == w,
+            };
+            n += usize::from(!pareil);
+        }
+    }
+    n
+}
+
 pub fn delete(name: &str) -> Result<(), String> {
     let name = check_name(name)?;
     if is_builtin(name) {
@@ -197,6 +264,17 @@ pub fn same(a: &Config, b: &Config) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ecarts_entre_reglages() {
+        let a = Config::default();
+        let mut b = Config::default();
+        assert_eq!(ecarts(&a, &b), 0);
+        b.orbite.rayon = 40.0;
+        b.essaim.maximum = 3;
+        b.rendu.cadence = 60; // hors profil
+        assert_eq!(ecarts(&a, &b), 2);
+    }
 
     #[test]
     fn noms_refuses() {
