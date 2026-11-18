@@ -12,7 +12,11 @@
   <header class="entete">
     <h1 class="t-affiche">ESSAIM</h1>
     <div class="entete-droite">
-      <div class="ecoute t-label" id="ecoute"><span class="temoin" id="temoin"></span><span id="ecoute-texte">Silence</span></div>
+      <div class="sonde silence" id="sonde" title="Ce que l'essaim entend du son de Windows">
+        <span class="kick t-label"><span class="temoin" id="temoin"></span>Kick</span>
+        <span class="mesure"><span class="t-label">Basse</span><span class="jauge"><span id="jauge-niveau"></span></span><span class="detail" id="detail-niveau">—</span></span>
+        <span class="mesure"><span class="t-label">Note</span><span class="jauge note"><span id="jauge-note"></span></span><span class="detail" id="detail-note">—</span></span>
+      </div>
       <nav class="onglets" role="tablist" aria-label="Vues">
         <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num">01</span>Presets</button>
         <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num">02</span>Réglages</button>
@@ -59,6 +63,11 @@
         <span class="t-titre" id="nom-actif"></span>
         <span class="t-petit">Aperçu en direct, calculé comme l'essaim autour de ton pointeur.</span>
       </div>
+      <div class="puissance" id="puissance" data-niveau="faible">
+        <div class="ligne-haut"><span class="t-label">Puissance utilisée</span><span class="niveau" id="puissance-niveau">—</span></div>
+        <div class="barre"><span id="puissance-barre"></span></div>
+        <p class="note" id="puissance-detail">Mesure en cours…</p>
+      </div>
       <div style="flex-grow: 1"></div>
       <div class="groupe-puces" style="align-items: center; gap: 12px">
         <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
@@ -67,6 +76,12 @@
     </div>
     <div class="defile">
       <div class="reglages" id="reglages"></div>
+      <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-top: 22px; flex-wrap: wrap">
+        <span class="t-titre">Curseurs de Windows</span>
+        <button class="puce" id="avec-preset" aria-pressed="true">Installer les curseurs du preset choisi</button>
+      </div>
+      <p class="note">Le pointeur reste celui de Windows : choisis un jeu de curseurs installé sur ce PC. Un preset enregistré garde le jeu en place à ce moment-là.</p>
+      <div class="curseurs" id="curseurs"><span class="t-petit">Chargement des curseurs…</span></div>
       <button class="bascule-avance" id="bascule-avance" aria-expanded="false"><span class="signe" id="signe-avance">+</span> Avancé</button>
       <div class="avance" id="avance" hidden></div>
     </div>

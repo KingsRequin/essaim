@@ -106,6 +106,10 @@ enum Demande {
     Installer { nom: String, reglages: Value, appliquer: bool },
     OuvrirConfig,
     OuvrirDepot,
+    /// Jeux de curseurs de Windows, avec leur aperçu.
+    Jeux,
+    /// Installe un jeu de curseurs et le garde dans les réglages.
+    Souris { jeu: String },
 }
 
 struct Fenetre {
@@ -116,6 +120,8 @@ struct Fenetre {
     son_envoye: (u32, u32),
     /// Dates de `config.toml` et du dossier des presets au dernier état envoyé.
     dates: (Option<SystemTime>, Option<SystemTime>),
+    /// Aperçus des jeux de curseurs déjà dessinés (clé → `data:` URL).
+    apercus: std::collections::HashMap<String, Option<String>>,
 }
 
 thread_local! {
@@ -149,6 +155,7 @@ impl Fenetre {
             "presets": presets,
             "actif": actif,
             "depot": cfg.bibliotheque.depot,
+            "curseurs": crate::souris::actuel(),
         }));
     }
 
@@ -172,15 +179,21 @@ impl Fenetre {
                 Err(e) => self.erreur(&format!("Réglage refusé : {e}.")),
             },
             Demande::Appliquer { nom } => {
-                match profils::list().iter().find(|p| p.name == nom).map(profils::apply) {
-                    Some(Ok(())) => config::request_reload(),
-                    Some(Err(e)) => self.erreur(&format!("Preset « {nom} » non appliqué : {e}.")),
+                let liste = profils::list();
+                match liste.iter().find(|p| p.name == nom).map(|p| (p, profils::apply(p))) {
+                    Some((p, Ok(()))) => {
+                        config::request_reload();
+                        self.curseurs_du_preset(&p.cfg);
+                    }
+                    Some((_, Err(e))) => self.erreur(&format!("Preset « {nom} » non appliqué : {e}.")),
                     None => self.erreur(&format!("Preset « {nom} » introuvable.")),
                 }
                 self.etat();
             }
             Demande::Enregistrer { nom, publier } => {
-                let cfg = Config::read(&config::path()).unwrap_or_default();
+                let mut cfg = Config::read(&config::path()).unwrap_or_default();
+                // le preset garde le jeu de curseurs installé en ce moment
+                cfg.souris.jeu = crate::souris::actuel();
                 match profils::save(&nom, &cfg) {
                     Ok(nom) => {
                         self.etat();
@@ -206,8 +219,11 @@ impl Fenetre {
                 match cfg.and_then(|cfg| profils::save(&nom, &cfg).map(|n| (n, cfg))) {
                     Ok((nom, cfg)) => {
                         if appliquer {
-                            if let Err(e) = config::apply_keys(&cfg, profils::in_profile) {
-                                self.erreur(&format!("Preset « {nom} » installé mais non appliqué : {e}."));
+                            let p = profils::list().into_iter().find(|p| p.name == nom);
+                            match p.as_ref().map(profils::apply) {
+                                Some(Ok(())) => self.curseurs_du_preset(&cfg),
+                                Some(Err(e)) => self.erreur(&format!("Preset « {nom} » installé mais non appliqué : {e}.")),
+                                None => {}
                             }
                             config::request_reload();
                         }
@@ -218,10 +234,43 @@ impl Fenetre {
                 }
             }
             Demande::OuvrirConfig => crate::win::open_file(&config::path()),
+            Demande::Jeux => {
+                let jeux: Vec<Value> = crate::souris::jeux()
+                    .iter()
+                    .map(|j| {
+                        let apercu = self.apercus.entry(j.cle.clone()).or_insert_with(|| crate::souris::apercu(j)).clone();
+                        json!({ "cle": j.cle, "nom": j.nom, "systeme": j.systeme, "apercu": apercu })
+                    })
+                    .collect();
+                self.envoyer(&json!({ "type": "jeux", "jeux": jeux }));
+            }
+            Demande::Souris { jeu } => {
+                match crate::souris::installer(&jeu).and_then(|()| config::set_value("souris", "jeu", &json!(jeu))) {
+                    Ok(()) => {
+                        config::request_reload();
+                        self.message(&format!("Curseurs « {jeu} » installés."));
+                    }
+                    Err(e) => self.erreur(&format!("Curseurs non installés : {e}.")),
+                }
+                self.etat();
+            }
             Demande::OuvrirDepot => {
                 let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
                 crate::win::open_url(&format!("https://github.com/{depot}"));
             }
+        }
+    }
+
+    /// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée
+    /// et qu'il en précise un autre que celui en place.
+    fn curseurs_du_preset(&self, preset: &Config) {
+        let avec = Config::read(&config::path()).map(|c| c.souris.avec_preset).unwrap_or(true);
+        let jeu = &preset.souris.jeu;
+        if !avec || jeu.is_empty() || *jeu == crate::souris::actuel() {
+            return;
+        }
+        if let Err(e) = crate::souris::installer(jeu) {
+            self.erreur(&format!("Preset appliqué, mais curseurs non installés : {e}."));
         }
     }
 
@@ -249,10 +298,14 @@ impl Fenetre {
             let cle = (au.kicks, au.bass.to_bits());
             if cle != self.son_envoye {
                 self.son_envoye = cle;
-                self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch }));
+                self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "teinte": crate::render::sync_hue() }));
             }
-        } else if dates() != self.dates {
-            self.etat();
+        } else {
+            let (ms, ips) = crate::charge::lire();
+            self.envoyer(&json!({ "type": "charge", "ms": ms, "ips": ips }));
+            if dates() != self.dates {
+                self.etat();
+            }
         }
     }
 }
@@ -346,7 +399,7 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         .with_devtools(cfg!(debug_assertions))
         .build(&Parent(hwnd))?;
     let _ = vue.focus();
-    FENETRE.with(|f| *f.borrow_mut() = Some(Fenetre { hwnd, vue, son, son_envoye: (u32::MAX, 0), dates: (None, None) }));
+    FENETRE.with(|f| *f.borrow_mut() = Some(Fenetre { hwnd, vue, son, son_envoye: (u32::MAX, 0), dates: (None, None), apercus: Default::default() }));
     unsafe {
         SetTimer(Some(hwnd), TIMER_SON, 33, None);
         SetTimer(Some(hwnd), TIMER_FICHIERS, 700, None);

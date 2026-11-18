@@ -7,9 +7,13 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
 - **Quantité de basse** : accélère la rotation.
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
-- **Couleurs** : celles de l'éclairage RGB quand Prisme tourne (teinte dominante des LED, tenue
-  4 s pendant les flashs blancs ou creux sombres), sinon une teinte de départ qui tourne en
-  continu, ou reste fixe.
+- **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
+  moins en moins vite) suivent un cercle, un triangle, un losange, un hexagone ou un huit
+  (`forme`) ; `[essaim] fixes` ajoute des satellites permanents, même sans musique.
+- **Couleurs** : une teinte de départ qui tourne en continu ou reste fixe ; ou la couleur
+  dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
+  exécutable ; les icônes grises gardent la teinte précédente) ; ou, si l'outil Prisme de
+  l'auteur tourne (non fourni ici), celle de l'éclairage RGB.
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11).
 
@@ -18,10 +22,13 @@ navigateur, jeux… sans rien configurer.
 
 ## Curseurs
 
-Essaim ne touche pas au pointeur : on installe un pack de curseurs par Windows (Paramètres →
-Bluetooth et appareils → Souris → Autres paramètres de souris → Pointeurs, ou clic droit →
-Installer sur le fichier `.inf` du pack). Le pack utilisé avec Essaim sera fourni dans ce dépôt,
-avec le crédit de son auteur.
+Essaim ne dessine pas le pointeur : il reste un vrai curseur Windows. On installe un pack de
+curseurs comme d'habitude (clic droit → Installer sur le fichier `.inf` du pack), puis on le
+choisit dans *02 Réglages → Curseurs de Windows*, qui liste les jeux installés (ceux de
+l'utilisateur et ceux de Windows) avec un aperçu et les met en place comme le panneau de la
+souris (`src/souris.rs`). Un preset garde le jeu en place quand on l'enregistre ; avec *Installer
+les curseurs du preset choisi*, appliquer ce preset remet aussi ce jeu. Le pack utilisé avec
+Essaim sera fourni dans ce dépôt, avec le crédit de son auteur.
 
 ## Installation
 
@@ -41,8 +48,14 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
     le cadre rouge marque le preset actif. *Enregistrer le preset* garde les réglages actuels
     (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque.
   - *02 Réglages* : les réglages courants appliqués en direct, *+ Avancé* pour tous les autres.
-  - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*. Les presets ne touchent
-    pas à `[rendu]` (propre à la machine).
+  - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
+    niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë).
+  - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
+    (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
+  - Une valeur de réglage se tape au clavier : clic dessus, Entrée.
+  - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*, *Delta*, *Ruche*,
+    *Huit*, *Pollen*, *Losange*, *Spirale*, chacun refaisable à la main dans les réglages. Les
+    presets ne touchent pas à `[rendu]` (propre à la machine) ni à l'option des curseurs.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
 - `essaim.exe --quitter` ferme l'instance en cours.

@@ -20,19 +20,24 @@ const memoire = {
 };
 const virgule = (x, d) => x.toFixed(d).replace(".", ",");
 const deux = (n) => String(n).padStart(2, "0");
+const borne = (x, a, b) => Math.max(a, Math.min(b, x));
+const animationsReduites = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const etat = {
   reglages: null,
   presets: [],
   actif: null,
   depot: "",
+  curseurs: "",
+  jeux: null,
   vue: "presets",
   source: "tout",
   recherche: "",
-  mode: memoire.lire("mode", matchMedia("(prefers-reduced-motion: reduce)").matches ? "survol" : "direct"),
+  mode: memoire.lire("mode", animationsReduites() ? "survol" : "direct"),
   avance: memoire.lire("avance", false),
   commu: { etat: "rien", liste: [], message: "" },
   son: { kicks: 0, basse: 0, hauteur: 0 },
+  teinte: null,
   dernierSon: -1e9,
   demo: { kicks: 0, prochain: 0 },
   survol: null,
@@ -54,14 +59,28 @@ function sonPourApercus(maintenant) {
   return { kicks: etat.demo.kicks, basse: 0.35, hauteur: 50 };
 }
 
+// La sonde de l'en-tête : kick, niveau de la basse (faible → forte), note de la basse
+// (grave → aiguë, 25 à 85 Hz sur une échelle logarithmique).
 function recevoirSon(m) {
   const kick = m.kicks !== etat.son.kicks;
   if (kick || m.basse > 0.03) etat.dernierSon = performance.now();
   etat.son = { kicks: m.kicks, basse: m.basse, hauteur: m.hauteur };
+  etat.teinte = typeof m.teinte === "number" ? m.teinte : null;
   const actif = musique();
-  $("ecoute").classList.toggle("actif", actif);
-  $("ecoute-texte").textContent = actif ? "Musique détectée" : "Silence · aperçus en démo";
-  if (kick && actif && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  $("sonde").classList.toggle("silence", !actif);
+  if (actif) {
+    $("jauge-niveau").style.width = Math.round(borne(m.basse, 0, 1) * 100) + "%";
+    $("detail-niveau").textContent = m.basse < 0.25 ? "faible" : m.basse < 0.6 ? "moyenne" : "forte";
+    if (m.hauteur > 0) {
+      const p = borne((Math.log(m.hauteur) - Math.log(25)) / (Math.log(85) - Math.log(25)), 0, 1);
+      $("jauge-note").style.left = `calc(${(p * 100).toFixed(1)}% - 2px)`;
+      $("detail-note").textContent = `${Math.round(m.hauteur)} Hz · ${m.hauteur < 45 ? "grave" : m.hauteur < 65 ? "médium" : "aiguë"}`;
+    }
+  } else {
+    $("detail-niveau").textContent = "silence";
+    $("detail-note").textContent = "aperçus en démo";
+  }
+  if (kick && actif && !animationsReduites()) {
     const t = $("temoin");
     t.classList.remove("coup");
     void t.offsetWidth;
@@ -71,6 +90,8 @@ function recevoirSon(m) {
 
 // ---------------------------------------------------------------------------------------------
 // Presets : fournis, à moi, communauté
+
+const FORMES = [["cercle", "Cercle"], ["triangle", "Triangle"], ["losange", "Losange"], ["hexagone", "Hexagone"], ["huit", "Huit"]];
 
 function fusion(base, partiel) {
   const r = Array.isArray(base) ? [...base] : { ...base };
@@ -103,7 +124,7 @@ function filtrer(liste) {
   return liste.filter((p) => {
     if (etat.source !== "tout" && p.origine !== etat.source) return false;
     if (!q) return true;
-    return [p.nom, p.auteur, libelle[p.origine], ...(p.etiquettes || [])].join(" ").toLowerCase().includes(q);
+    return [p.nom, p.auteur, libelle[p.origine], p.reglages.orbite.forme, ...(p.etiquettes || [])].join(" ").toLowerCase().includes(q);
   });
 }
 
@@ -154,8 +175,14 @@ const observateur = new IntersectionObserver((entrees) => {
 }, { root: $("defile-grille"), rootMargin: "80px" });
 
 function detail(p) {
-  const c = p.reglages;
-  const parts = [c.orbite.cometes ? "2 comètes" : "sans comètes", c.essaim.maximum + " satellites"];
+  const c = p.reglages, o = c.orbite;
+  const formes = Object.fromEntries(FORMES);
+  const parts = [];
+  if (o.cometes) parts.push(`${formes[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} comète${o.nombre * o.anneaux > 1 ? "s" : ""}`);
+  else parts.push("sans comètes");
+  const sats = c.essaim.fixes + c.essaim.maximum;
+  if (sats) parts.push(sats + " satellites");
+  if (c.souris && c.souris.jeu) parts.push("curseurs " + c.souris.jeu);
   if (p.origine === "commu" && p.etiquettes.length) parts.push(p.etiquettes.slice(0, 2).join(", "));
   return parts.join(" · ");
 }
@@ -193,6 +220,7 @@ function choisir(p) {
 }
 
 function majTuile(t, p, rang) {
+  if (t.p !== p) t.pret = false;
   t.p = p;
   t.apercu.regler(p.reglages);
   t.numero.textContent = deux(rang);
@@ -219,8 +247,8 @@ function majTuile(t, p, rang) {
     t.actions.append(b);
   } else if (p.origine === "commu") {
     const fait = installe(p.nom);
-    const b = el("button", "puce petite", fait ? "Installé ✓" : "+ Installer");
-    b.setAttribute("aria-pressed", fait);
+    const b = el("button", "puce petite", fait ? "Installé" : "+ Installer");
+    if (fait) b.setAttribute("aria-pressed", "true");
     b.disabled = fait;
     b.addEventListener("click", () => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }));
     t.actions.append(b);
@@ -229,12 +257,12 @@ function majTuile(t, p, rang) {
 
 function dessinerSources(liste) {
   const sources = [["tout", "Tout"], ["fourni", "Fournis"], ["mien", "Mes presets"], ["commu", "Communauté (GitHub)"]];
-  const conteneur = $("sources");
-  conteneur.replaceChildren(...sources.map(([id, libelle]) => {
+  $("sources").replaceChildren(...sources.map(([id, libelle]) => {
     const b = el("button", "ligne");
     b.setAttribute("aria-pressed", etat.source === id);
     const n = id === "tout" ? liste.length : liste.filter((p) => p.origine === id).length;
-    b.append(el("span", "", libelle), el("span", "compte", id === "commu" && etat.commu.etat !== "ok" ? (etat.commu.etat === "erreur" ? "—" : "··") : deux(n)));
+    const compte = id === "commu" && etat.commu.etat !== "ok" ? (etat.commu.etat === "erreur" ? "—" : "··") : deux(n);
+    b.append(el("span", "", libelle), el("span", "compte", compte));
     b.addEventListener("click", () => {
       etat.source = id;
       if (id === "commu" || id === "tout") chargerCommu(false);
@@ -284,11 +312,9 @@ function dessinerPresets() {
     note.append(lien);
   }
 
-  const vus = new Set();
   const enfants = montres.map((p) => {
     let t = tuiles.get(p.id);
     if (!t) { t = creerTuile(p); tuiles.set(p.id, t); }
-    vus.add(p.id);
     majTuile(t, p, liste.indexOf(p) + 1);
     return t.racine;
   });
@@ -336,9 +362,14 @@ function regler(section, cle, valeur) {
   envois.set(k, setTimeout(() => { envois.delete(k); envoyer({ cmd: "regler", section, cle, valeur }); }, 60));
 }
 
+// Chaque réglage : bornes de la glissière, affichage (aff) et lecture d'une valeur tapée (vers,
+// dans l'unité affichée ; par défaut le nombre lui-même).
+const tpm = { aff: (v) => String(Math.round((v * 60) / (2 * Math.PI))), vers: (x) => (x * 2 * Math.PI) / 60 };
+const pourcent = { aff: (v) => Math.round(v * 100) + " %", vers: (x) => x / 100 };
 const NORMAUX = [
+  { libelle: "Comètes", section: "orbite", cle: "nombre", min: 1, max: 8, pas: 1, aff: (v) => String(v) },
   { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
-  { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, aff: (v) => String(Math.round((v * 60) / (2 * Math.PI))) },
+  { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
   { libelle: "Satellites", section: "essaim", cle: "maximum", min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
   { libelle: "Kick", section: "audio", cle: "sensibilite_kick", min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
   { libelle: "Éclat", section: "eclat", cle: "taille", min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
@@ -347,10 +378,12 @@ const EFFETS = [["Comètes", "orbite", "cometes"], ["Fissures", "fissures", "act
 const TEINTES = [0, 25, 50, 95, 150, 190, 215, 260, 295, 330];
 const AVANCES = [
   { groupe: "Orbite" },
+  { libelle: "Anneaux de comètes", section: "orbite", cle: "anneaux", min: 1, max: 4, pas: 1, aff: (v) => String(v) },
   { libelle: "Vitesse ajoutée par la basse", section: "orbite", cle: "vitesse_basse", min: 0, max: 40, pas: 0.5, aff: (v) => virgule(+v, 1) },
-  { libelle: "Écart des notes graves", section: "orbite", cle: "eloignement_grave", min: 0, max: 4, pas: 0.1, aff: (v) => "+" + Math.round(v * 100) + " %" },
+  { libelle: "Écart des notes graves", section: "orbite", cle: "eloignement_grave", min: 0, max: 4, pas: 0.1, aff: (v) => "+" + Math.round(v * 100) + " %", vers: (x) => x / 100 },
   { libelle: "Traînée des comètes", section: "orbite", cle: "trainee", min: 0.05, max: 2, pas: 0.05, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Satellites" },
+  { libelle: "Satellites permanents", section: "essaim", cle: "fixes", min: 0, max: 32, pas: 1, aff: (v) => String(v) },
   { libelle: "Ajoutés par kick, au moins", section: "essaim", cle: "par_kick_min", min: 0, max: 10, pas: 1, aff: (v) => String(v) },
   { libelle: "Ajoutés par kick, au plus", section: "essaim", cle: "par_kick_max", min: 0, max: 10, pas: 1, aff: (v) => String(v) },
   { libelle: "Durée de vie", section: "essaim", cle: "duree", min: 0.5, max: 10, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
@@ -361,25 +394,65 @@ const AVANCES = [
   { groupe: "Fissures et bordure" },
   { libelle: "Taille des fissures", section: "fissures", cle: "taille", min: 0.2, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
   { libelle: "Durée des fissures", section: "fissures", cle: "duree", min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
-  { libelle: "Éclat de la bordure sur le kick", section: "bordure", cle: "intensite", min: 0, max: 1, pas: 0.05, aff: (v) => Math.round(v * 100) + " %" },
-  { libelle: "Luminosité de la bordure au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, aff: (v) => Math.round(v * 100) + " %" },
+  { libelle: "Éclat de la bordure sur le kick", section: "bordure", cle: "intensite", min: 0, max: 1, pas: 0.05, ...pourcent },
+  { libelle: "Luminosité de la bordure au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
   { groupe: "Son" },
   { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Cet ordinateur (hors presets)" },
   { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
   { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
-  { bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique" },
+  {
+    bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique",
+    note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,1 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
+  },
 ];
 
-const glissieres = []; // { def, input, sortie }
-const bascules = []; // { section, cle, bouton }
+const glissieres = []; // { def, input, saisie }
+const bascules = []; // { section, cle, bouton, oui? }
 let teintes = [];
+let formes = [];
 
-function glissiere(def, id) {
+function hslCss(h) {
+  const c = 1 - Math.abs(2 * 0.66 - 1), x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = 0.66 - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return `rgb(${Math.round((r + m) * 255)},${Math.round((g + m) * 255)},${Math.round((b + m) * 255)})`;
+}
+
+// Valeur tapée : nombre dans l'unité affichée (« 0,3 s », « 45 % », « écran » = 0).
+function lireSaisie(def, texte) {
+  const m = texte.replace(",", ".").match(/-?\d+(\.\d+)?/);
+  const x = m ? parseFloat(m[0]) : 0;
+  return borne(def.vers ? def.vers(x) : x, def.min, def.max);
+}
+
+function reglageNumerique(def, id, conteneur, avance) {
   const input = el("input");
   Object.assign(input, { type: "range", min: def.min, max: def.max, step: def.pas, id });
   input.setAttribute("aria-label", def.libelle);
-  return input;
+  const saisie = el("input", "valeur-saisie" + (avance ? "" : " t-chiffre"));
+  saisie.type = "text";
+  saisie.spellcheck = false;
+  saisie.setAttribute("aria-label", def.libelle + " (valeur)");
+  saisie.title = "Clique pour taper une valeur";
+  const appliquer = () => {
+    const v = lireSaisie(def, saisie.value);
+    const arrondi = def.pas >= 1 ? Math.round(v) : Math.round(v / def.pas) * def.pas;
+    regler(def.section, def.cle, def.pas >= 1 ? arrondi : +(+arrondi).toFixed(4));
+    majReglages();
+  };
+  saisie.addEventListener("focus", () => saisie.select());
+  saisie.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { appliquer(); saisie.blur(); }
+    if (e.key === "Escape") { saisie.value = def.aff(val(def.section, def.cle)); saisie.blur(); }
+  });
+  saisie.addEventListener("change", appliquer);
+  input.addEventListener("input", () => {
+    regler(def.section, def.cle, +input.value);
+    saisie.value = def.aff(+input.value);
+    majNomActif();
+  });
+  glissieres.push({ def, input, saisie });
+  conteneur(input, saisie);
 }
 
 function construireReglages() {
@@ -390,43 +463,55 @@ function construireReglages() {
     d.append(...contenu);
     grille.append(d);
   };
-  const bascule = (libelle, section, cle) => {
+  const bascule = (libelle, section, cle, oui) => {
     const b = el("button", "puce", libelle);
-    b.addEventListener("click", () => { regler(section, cle, !val(section, cle)); majReglages(); });
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => {
+      const v = val(section, cle);
+      regler(section, cle, oui ? oui(v) : !v);
+      majReglages();
+    });
     bascules.push({ section, cle, bouton: b });
     return b;
   };
-  ligneLarge("Effets", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
-  for (const def of NORMAUX) {
-    const input = glissiere(def, "r-" + def.section + "-" + def.cle);
-    const sortie = el("span", "valeur t-chiffre");
-    const zone = el("div", "glissiere");
-    zone.append(input);
+  const numerique = (def) => reglageNumerique(def, "r-" + def.section + "-" + def.cle, (input, saisie) => {
     const libelle = el("label", "t-label", def.libelle);
     libelle.htmlFor = input.id;
+    const zone = el("div", "glissiere");
+    zone.append(input);
+    const sortie = el("div", "valeur");
+    sortie.append(saisie);
     grille.append(libelle, zone, sortie);
-    input.addEventListener("input", () => { regler(def.section, def.cle, +input.value); sortie.textContent = def.aff(+input.value); majNomActif(); });
-    glissieres.push({ def, input, sortie });
+  }, false);
+
+  ligneLarge("Effets", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
+  formes = FORMES.map(([id, libelle]) => {
+    const b = el("button", "puce", libelle);
+    b.addEventListener("click", () => { regler("orbite", "forme", id); majReglages(); });
+    return { id, b };
+  });
+  ligneLarge("Trajet", formes.map((f) => f.b));
+  for (const def of NORMAUX) {
+    numerique(def);
     if (def.cle === "vitesse_base") {
       teintes = TEINTES.map((h) => {
         const b = el("button", "teinte");
-        const [r, g, bl] = hslCss(h);
-        b.style.background = `rgb(${r},${g},${bl})`;
+        b.style.background = hslCss(h);
         b.setAttribute("aria-label", "Teinte " + h + "°");
         b.addEventListener("click", () => {
           regler("couleur", "teinte", h);
           regler("couleur", "vitesse_teinte", 0);
+          regler("couleur", "application", false);
           regler("couleur", "synchro_prisme", false);
           majReglages();
         });
         return { h, b };
       });
-      ligneLarge("Couleur", [...teintes.map((t) => t.b), (() => {
-        const b = el("button", "puce", "Teinte qui défile");
-        b.addEventListener("click", () => { regler("couleur", "vitesse_teinte", val("couleur", "vitesse_teinte") > 0 ? 0 : 60); majReglages(); });
-        bascules.push({ section: "couleur", cle: "vitesse_teinte", bouton: b });
-        return b;
-      })(), bascule("Éclairage RGB (Prisme)", "couleur", "synchro_prisme")]);
+      ligneLarge("Couleur", [
+        ...teintes.map((t) => t.b),
+        bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
+        bascule("Couleur de l'application", "couleur", "application"),
+      ]);
     }
   }
 
@@ -438,34 +523,24 @@ function construireReglages() {
       g.style.padding = "18px 0 6px";
       avance.append(g);
     } else if (def.bascule) {
-      const l = el("label");
-      l.append(el("span", "entete-reglage", def.bascule));
-      const b = el("button", "puce");
-      b.style.alignSelf = "flex-start";
-      b.addEventListener("click", () => { regler(def.section, def.cle, !val(def.section, def.cle)); majReglages(); });
-      bascules.push({ section: def.section, cle: def.cle, bouton: b, texte: ["Oui", "Non"] });
-      l.append(b);
+      const l = el("div");
+      l.style.cssText = "grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--filet)";
+      l.append(bascule(def.bascule, def.section, def.cle));
+      if (def.note) l.append(el("p", "note", def.note));
       avance.append(l);
     } else {
-      const l = el("label");
-      const tete = el("span", "entete-reglage");
-      const sortie = el("b");
-      tete.append(el("span", "", def.libelle), sortie);
-      const input = glissiere(def, "a-" + def.section + "-" + def.cle);
-      input.addEventListener("input", () => { regler(def.section, def.cle, +input.value); sortie.textContent = def.aff(+input.value); majNomActif(); });
-      l.append(tete, input);
-      avance.append(l);
-      glissieres.push({ def, input, sortie });
+      reglageNumerique(def, "a-" + def.section + "-" + def.cle, (input, saisie) => {
+        const l = el("label");
+        const tete = el("span", "entete-reglage");
+        tete.append(el("span", "", def.libelle), saisie);
+        l.append(tete, input);
+        avance.append(l);
+      }, true);
     }
   }
   $("bascule-avance").addEventListener("click", () => { etat.avance = !etat.avance; memoire.ecrire("avance", etat.avance); majAvance(); });
+  $("avec-preset").addEventListener("click", () => { regler("souris", "avec_preset", !val("souris", "avec_preset")); majReglages(); });
   majAvance();
-}
-
-function hslCss(h) {
-  const c = 1 - Math.abs(2 * 0.66 - 1), x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = 0.66 - c / 2;
-  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
 
 function majAvance() {
@@ -481,22 +556,57 @@ function majNomActif() {
 
 function majReglages() {
   if (!etat.reglages) return;
-  for (const { def, input, sortie } of glissieres) {
+  for (const { def, input, saisie } of glissieres) {
     const v = val(def.section, def.cle);
     if (document.activeElement !== input) input.value = v;
-    sortie.textContent = def.aff(v);
+    if (document.activeElement !== saisie) saisie.value = def.aff(v);
   }
   for (const b of bascules) {
     const v = val(b.section, b.cle);
-    const oui = typeof v === "boolean" ? v : v > 0;
-    b.bouton.setAttribute("aria-pressed", oui);
-    if (b.texte) b.bouton.textContent = oui ? b.texte[0] : b.texte[1];
+    b.bouton.setAttribute("aria-pressed", typeof v === "boolean" ? v : v > 0);
   }
+  for (const f of formes) f.b.setAttribute("aria-pressed", val("orbite", "forme") === f.id);
   const c = etat.reglages.couleur;
   for (const t of teintes) {
-    t.b.setAttribute("aria-pressed", !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
+    t.b.setAttribute("aria-pressed", !c.application && !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
   }
+  $("avec-preset").setAttribute("aria-pressed", !!val("souris", "avec_preset"));
   majNomActif();
+}
+
+// Puissance : temps de calcul par image × images par seconde = part d'un cœur du processeur.
+function recevoirCharge(m) {
+  const part = (m.ms * m.ips) / 1000;
+  const niveau = m.ips < 1 ? "repos" : part < 0.03 ? "faible" : part < 0.1 ? "moyenne" : "eleve";
+  $("puissance").dataset.niveau = niveau;
+  $("puissance-niveau").textContent = { repos: "à l'arrêt", faible: "faible", moyenne: "moyenne", eleve: "élevée" }[niveau];
+  $("puissance-barre").style.width = Math.round(borne(part / 0.15, 0, 1) * 100) + "%";
+  $("puissance-detail").textContent = m.ips < 1
+    ? "Rien à dessiner en ce moment (pause, plein écran ou curseur masqué)."
+    : `${virgule(m.ms, 2)} ms de calcul par image × ${Math.round(m.ips)} images/s : ${virgule(part * 100, 1)} % d'un cœur du processeur, mesuré en direct.` +
+      (niveau === "eleve" ? " Pour alléger : moins de satellites, des traînées plus courtes, ou un plafond d'images par seconde (Avancé)." : "");
+}
+
+function dessinerCurseurs() {
+  const zone = $("curseurs");
+  if (!etat.jeux) return;
+  if (!etat.jeux.length) {
+    zone.replaceChildren(el("span", "t-petit", "Aucun jeu de curseurs trouvé dans Windows."));
+    return;
+  }
+  zone.replaceChildren(...etat.jeux.map((j) => {
+    const b = el("button", "jeu");
+    b.setAttribute("aria-pressed", j.cle === etat.curseurs);
+    if (j.apercu) {
+      const img = el("img");
+      img.src = j.apercu;
+      img.alt = "";
+      b.append(img);
+    }
+    b.append(el("span", "t-petit", j.nom), el("span", "t-label", j.systeme ? "Windows" : "installé"));
+    b.addEventListener("click", () => envoyer({ cmd: "souris", jeu: j.cle }));
+    return b;
+  }));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -504,11 +614,14 @@ function majReglages() {
 
 function montrerVue(v) {
   etat.vue = v;
-  for (const [id, nom] of [["presets", "presets"], ["reglages", "reglages"]]) {
-    $("vue-" + id).hidden = v !== nom;
-    $("onglet-" + id).setAttribute("aria-selected", v === nom);
+  for (const id of ["presets", "reglages"]) {
+    $("vue-" + id).hidden = v !== id;
+    $("onglet-" + id).setAttribute("aria-selected", v === id);
   }
-  if (v === "reglages") requestAnimationFrame(() => grand.dimensionner());
+  if (v === "reglages") {
+    requestAnimationFrame(() => grand.dimensionner());
+    if (!etat.jeux) envoyer({ cmd: "jeux" });
+  }
 }
 
 let minuterieBandeau = 0;
@@ -545,6 +658,7 @@ window.essaim = {
         etat.presets = m.presets;
         etat.actif = m.actif;
         etat.depot = m.depot;
+        etat.curseurs = m.curseurs;
         if (premier) {
           construireReglages();
           chargerCommu(false);
@@ -552,10 +666,18 @@ window.essaim = {
         grand.regler(etat.reglages);
         majReglages();
         dessinerPresets();
+        dessinerCurseurs();
         break;
       }
       case "son":
         recevoirSon(m);
+        break;
+      case "charge":
+        recevoirCharge(m);
+        break;
+      case "jeux":
+        etat.jeux = m.jeux;
+        dessinerCurseurs();
         break;
       case "enregistre":
         fermerPanneau();
@@ -580,12 +702,14 @@ window.essaim = {
 
 const grand = new window.Apercu($("grand-apercu"));
 let derniere = performance.now(), cumul = 0;
+const teinteImposee = (c) => (c && c.couleur.application ? etat.teinte : null);
 
 function boucle(maintenant) {
   const dt = Math.min(0.05, (maintenant - derniere) / 1000);
   derniere = maintenant;
   const son = sonPourApercus(maintenant);
   if (etat.reglages && etat.vue === "reglages") {
+    grand.teinteImposee = teinteImposee(etat.reglages);
     grand.dimensionner();
     grand.avancer(dt, son);
     grand.dessiner();
@@ -597,6 +721,7 @@ function boucle(maintenant) {
     for (const id of visibles) {
       const t = tuiles.get(id);
       if (!t || !t.p.reglages) continue;
+      t.apercu.teinteImposee = teinteImposee(t.p.reglages);
       if (!t.pret) {
         // première image : un peu d'histoire pour que les traînées existent déjà
         t.apercu.dimensionner();

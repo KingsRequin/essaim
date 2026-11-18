@@ -41,9 +41,11 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
 - Le premier plan ne peut pas être changé par script si un dialogue système (« Sécurité
   Windows », `Shell_SystemDim`) est ouvert : l'essai réel de la bordure
   (`bordure_reelle`, `--ignored`) pilote alors `Border` directement sur le Bloc-notes.
-- Essaim ne touche pas aux curseurs : le pointeur est celui de Windows (pack installé par les
-  réglages de la souris). L'overlay ne dessine jamais le pointeur (il aurait une image de
-  retard), seulement ce qui l'entoure (orbes, éclat du kick, fissures).
+- Le pointeur est celui de Windows : l'overlay ne le dessine jamais (il aurait une image de
+  retard), seulement ce qui l'entoure (orbes, éclat du kick, fissures). Essaim ne change le jeu
+  de curseurs que sur demande (choix dans les réglages, preset appliqué avec l'option cochée),
+  comme le panneau de la souris (`souris.rs`). Avant un essai qui en change, sauvegarder
+  `reg export "HKCU\Control Panel\Cursors"` et le réimporter après.
 - Réglages : la page (`ui/`) ne touche à aucun fichier ; elle envoie des demandes JSON à
   `reglages.rs`, qui écrit `config.toml` (`config::set_value`) puis `config::request_reload`.
   Un nouveau réglage s'ajoute à `Config`, au fichier par défaut, à `limits` et, pour la fenêtre,

@@ -14,15 +14,36 @@ function hsl(h, s, l) {
   return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
 
-// Teinte « Prisme » : k = 0 en queue de traînée, 1 en tête (comme render::prisme).
-function prisme(c, t, k) {
-  const base = (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360;
+// Teinte : k = 0 en queue de traînée, 1 en tête (comme render::prisme). `imposee` : teinte de
+// l'application au premier plan, quand le preset la suit.
+function prisme(c, t, k, imposee) {
+  const base = imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360;
   const queue = base + c.ecart_teinte;
   let dh = base - queue;
   if (dh > 180) dh -= 360;
   if (dh < -180) dh += 360;
   return hsl((((queue + dh * k) % 360) + 360) % 360, 1, 0.66);
 }
+
+// Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin).
+function chemin(forme, a) {
+  const poly = (k, r) => {
+    const u = (((a / TAU) * k) % k + k) % k, j = Math.floor(u), f = u - j;
+    const v = (j) => { const th = -Math.PI / 2 + (j * TAU) / k; return [Math.cos(th) * r, Math.sin(th) * r]; };
+    const p = v(j), q = v(j + 1);
+    return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+  };
+  switch (forme) {
+    case "triangle": return poly(3, 1.2);
+    case "losange": return poly(4, 1.15);
+    case "hexagone": return poly(6, 1.05);
+    case "huit": return [1.2 * Math.cos(a), 0.6 * Math.sin(2 * a)];
+    default: return [Math.cos(a), Math.sin(a)];
+  }
+}
+
+// Rayon et vitesse relatifs de l'anneau k (comme render::anneau).
+const anneau = (k) => [1 + 0.55 * k, 1 / (1 + 0.45 * k)];
 
 function rgba([r, g, b], a) {
   return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
@@ -43,11 +64,13 @@ class Apercu {
     this.dir = 1;
     this.spd = 3.5;
     this.far = 1;
-    this.angle = 0;
+    this.angles = [];
     this.hauteur = 60;
     this.env = 0;
-    this.trainees = [[], []];
+    this.trainees = [];
     this.sats = [];
+    this.fixes = [];
+    this.teinteImposee = null;
     this.kicksVus = null;
     this.t = 0;
   }
@@ -66,7 +89,7 @@ class Apercu {
       this.canvas.height = w;
     }
     const o = this.reglages.orbite;
-    const portee = o.rayon * SAT_R_MAX * (1 + o.eloignement_grave * 0.7) + 6;
+    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0] * 1.2) * (1 + o.eloignement_grave * 0.7) + 6;
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
   }
 
@@ -101,16 +124,30 @@ class Apercu {
     const presence = Math.max(0, Math.min(1, son.basse * 2.5));
     this.far += (1 + o.eloignement_grave * grave * presence - this.far) * Math.min(dt * 16, 1);
     const w = this.dir * this.spd;
-    this.angle = (this.angle + w * dt) % TAU;
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2, S = this.echelle || 1;
     const r = o.rayon * S * this.far;
-    this.trainees.forEach((tr, i) => {
-      const a = this.angle + i * Math.PI;
-      pousser(tr, t, cx + Math.cos(a) * r, cy + Math.sin(a) * r, Math.max(0.01, o.trainee));
-    });
+    const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
+    while (this.angles.length < nAnneaux) this.angles.push(0);
+    this.angles.length = nAnneaux;
+    while (this.trainees.length < nAnneaux * nombre) this.trainees.push([]);
+    this.trainees.length = nAnneaux * nombre;
+    for (let k = 0; k < nAnneaux; k++) {
+      const [rk, wk] = anneau(k);
+      this.angles[k] = (this.angles[k] + w * wk * dt) % TAU;
+      for (let i = 0; i < nombre; i++) {
+        const [x, y] = chemin(o.forme, this.angles[k] + (i * TAU) / nombre);
+        pousser(this.trainees[k * nombre + i], t, cx + x * r * rk, cy + y * r * rk, Math.max(0.01, o.trainee));
+      }
+    }
     const duree = Math.max(0.1, e.duree);
     this.sats = this.sats.filter((s) => t - s.ne < duree);
-    for (const s of this.sats) {
+    if (this.fixes.length !== e.fixes) {
+      this.fixes = Array.from({ length: e.fixes }, (_, j) => {
+        const u = (j * 0.618034) % 1;
+        return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [] };
+      });
+    }
+    for (const s of this.sats.concat(this.fixes)) {
       s.a = (s.a + w * s.mul * dt) % TAU;
       const rr = o.rayon * S * s.r * this.far;
       pousser(s.trainee, t, cx + Math.cos(s.a) * rr, cy + Math.sin(s.a) * rr, SAT_TRAINEE);
@@ -126,7 +163,7 @@ class Apercu {
     const trainee = (tr, vie, largeur, al, halo) => {
       if (tr.length < 2) return;
       if (halo) {
-        g.strokeStyle = rgba(prisme(c.couleur, t, 0.7), 0.12 * al);
+        g.strokeStyle = rgba(prisme(c.couleur, t, 0.7, this.teinteImposee), 0.12 * al);
         g.lineWidth = (0.8 + largeur * 0.7) * 2.6;
         g.beginPath();
         tr.forEach(([, x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
@@ -134,7 +171,7 @@ class Apercu {
       }
       for (let i = 0; i + 1 < tr.length; i++) {
         const k = Math.max(0, 1 - (t - tr[i + 1][0]) / vie);
-        g.strokeStyle = rgba(prisme(c.couleur, t, k), k * 0.9 * al);
+        g.strokeStyle = rgba(prisme(c.couleur, t, k, this.teinteImposee), k * 0.9 * al);
         g.lineWidth = 0.8 + k * largeur;
         g.beginPath();
         g.moveTo(tr[i][1], tr[i][2]);
@@ -148,19 +185,19 @@ class Apercu {
       g.arc(x, y, Math.max(0.1, r), 0, TAU);
       g.fill();
     };
-    const lueur = 0.4 + 0.6 * this.env, tete = prisme(c.couleur, t, 1), duree = Math.max(0.1, c.essaim.duree);
+    const lueur = 0.4 + 0.6 * this.env, tete = prisme(c.couleur, t, 1, this.teinteImposee), duree = Math.max(0.1, c.essaim.duree);
     const tetes = [];
-    for (const s of this.sats) {
-      const k = 1 - (t - s.ne) / duree, al = Math.min(1, k * 1.5);
+    for (const s of this.sats.concat(this.fixes)) {
+      const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
       trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S, al, false);
       const p = s.trainee[s.trainee.length - 1];
       if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S, al, devant: Math.sin(s.a) > 0 });
     }
     if (c.orbite.cometes) {
-      this.trainees.forEach((tr, i) => {
+      this.trainees.forEach((tr) => {
         trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S, 1, true);
         const p = tr[tr.length - 1];
-        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S, al: 1, devant: Math.sin(this.angle + i * Math.PI) > 0 });
+        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S, al: 1, devant: p[2] > this.canvas.height / 2 });
       });
     }
     const dessinerTete = (h) => {

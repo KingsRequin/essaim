@@ -102,11 +102,18 @@ button, input { font-family: inherit; color: inherit; }
 .onglet[aria-selected="true"] .num { color: var(--signal-texte); }
 .onglet:hover .num { color: var(--signal-texte); }
 
-.ecoute { display: flex; align-items: center; gap: var(--esp-2); }
-.ecoute .temoin { width: 12px; height: 12px; background: var(--encre-2); }
-.ecoute.actif .temoin { background: var(--encre); }
-.ecoute .temoin.coup { animation: coup var(--battement) ease-out; }
-@keyframes coup { 0% { background: var(--signal); } 100% { background: var(--encre); } }
+/* Sonde : ce que l'essaim entend (kick, niveau et note de la basse). */
+.sonde { display: flex; align-items: center; gap: var(--esp-5); }
+.sonde .kick { display: flex; align-items: center; gap: var(--esp-2); }
+.sonde .temoin { width: 14px; height: 14px; border: var(--trait-controle) solid var(--encre-2); }
+.sonde .temoin.coup { animation: coup var(--battement) ease-out; }
+@keyframes coup { 0% { background: var(--signal); border-color: var(--signal); } 100% { background: transparent; } }
+.sonde .mesure { display: grid; grid-template-columns: auto 72px; column-gap: var(--esp-2); align-items: center; }
+.sonde .jauge { position: relative; height: 6px; background: var(--survol); }
+.sonde .jauge > span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--encre); }
+.sonde .jauge.note > span { width: 4px; background: var(--signal); }
+.sonde .detail { grid-column: 2; font-size: 10.5px; font-weight: 600; color: var(--encre-2); white-space: nowrap; }
+.sonde.silence .jauge > span { visibility: hidden; }
 
 .vue { flex-grow: 1; min-height: 0; display: flex; gap: var(--esp-6); padding: var(--esp-5) var(--esp-6) var(--esp-4); }
 .colonne { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: var(--esp-5); overflow-y: auto; padding-right: 6px; }
@@ -131,24 +138,28 @@ button, input { font-family: inherit; color: inherit; }
 .champ:focus { border-bottom-color: var(--signal); }
 .colonne .champ { font-size: 24px; }
 
-/* Ligne de filtre : libellé à gauche, compte à droite ; la ligne choisie est inversée. */
+/* Ligne de filtre : libellé à gauche, compte à droite ; la ligne choisie a le cadre rouge. */
 .ligne {
   display: flex; justify-content: space-between; align-items: baseline; width: 100%;
   background: none; border: 0; border-top: var(--trait-fin) solid var(--filet);
   padding: 7px var(--esp-1) 6px; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left;
 }
 .ligne:hover { background: var(--survol); }
-.ligne[aria-pressed="true"] { background: var(--encre); color: var(--fond); }
+.ligne[aria-pressed="true"] { box-shadow: inset 0 0 0 var(--trait-controle) var(--signal); font-weight: 800; }
 .ligne .compte { font-variant-numeric: tabular-nums; }
 
-/* Puce : bouton secondaire ou bascule (aria-pressed). */
+/* Puce : bouton secondaire, ou bascule (aria-pressed) avec un voyant carré :
+   éteinte = bord gris et voyant creux ; allumée = cadre rouge et voyant plein. */
 .puce {
   background: none; border: var(--trait-controle) solid var(--encre);
   padding: 6px 10px; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
-  cursor: pointer; white-space: nowrap;
+  cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 7px;
 }
 .puce:hover { background: var(--survol); }
-.puce[aria-pressed="true"] { background: var(--encre); color: var(--fond); }
+.puce[aria-pressed]::before { content: ""; width: 8px; height: 8px; flex-shrink: 0; box-sizing: border-box; border: 1.5px solid currentColor; }
+.puce[aria-pressed="false"] { border-color: var(--filet); color: var(--encre-2); }
+.puce[aria-pressed="true"] { border-color: var(--signal); box-shadow: inset 0 0 0 1px var(--signal); color: var(--encre); }
+.puce[aria-pressed="true"]::before { background: var(--signal); border-color: var(--signal); }
 .puce.petite { padding: 4px 7px; font-size: 10.5px; }
 .puce.danger { border-color: var(--signal); color: var(--signal-texte); }
 .puce:disabled { opacity: 0.45; cursor: default; }
@@ -199,7 +210,40 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 
 /* Nuancier : teintes fixes de l'essaim. */
 .teinte { width: 30px; height: 30px; border: 0; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35); }
-.teinte[aria-pressed="true"] { outline: 3px solid var(--encre); outline-offset: 3px; }
+.teinte[aria-pressed="true"] { outline: 3px solid var(--signal); outline-offset: 3px; }
+
+/* Valeur d'un réglage : se tape au clavier (clic dessus). */
+.valeur-saisie {
+  width: 100%; background: transparent; border: 0; outline: 0; text-align: right; padding: 0 0 2px;
+  border-bottom: var(--trait-controle) solid transparent; cursor: text;
+  -webkit-user-select: text; user-select: text;
+}
+.valeur-saisie:hover { border-bottom-color: var(--filet); }
+.valeur-saisie:focus { border-bottom-color: var(--signal); }
+.avance .valeur-saisie { width: 96px; font-size: 12.5px; font-weight: 900; font-variant-numeric: tabular-nums; }
+
+/* Note sous un réglage (impact, explication). */
+.note { font-size: 12px; font-weight: 500; line-height: 1.4; color: var(--encre-2); margin: 0; }
+
+/* Puissance utilisée par l'essaim, mesurée en direct. */
+.puissance { display: flex; flex-direction: column; gap: 6px; border-top: var(--trait-fin) solid var(--filet); padding-top: var(--esp-3); }
+.puissance .ligne-haut { display: flex; justify-content: space-between; align-items: baseline; }
+.puissance .barre { height: 8px; background: var(--survol); position: relative; }
+.puissance .barre > span { position: absolute; inset: 0 auto 0 0; background: var(--encre); }
+.puissance[data-niveau="eleve"] .barre > span { background: var(--signal); }
+.puissance .niveau { font-size: 13px; font-weight: 900; text-transform: uppercase; }
+.puissance[data-niveau="eleve"] .niveau { color: var(--signal-texte); }
+
+/* Jeux de curseurs de Windows : aperçu et nom ; le jeu installé a le cadre rouge. */
+.curseurs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--esp-3); padding: var(--esp-3) 0 var(--esp-4); }
+.jeu {
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start; text-align: left; cursor: pointer;
+  background: var(--survol); border: 0; padding: var(--esp-3); box-shadow: inset 0 0 0 var(--trait-fin) var(--filet);
+}
+.jeu:hover { box-shadow: inset 0 0 0 var(--trait-controle) var(--encre); }
+.jeu[aria-pressed="true"] { box-shadow: inset 0 0 0 3px var(--signal); }
+.jeu img { height: 30px; image-rendering: auto; }
+.jeu .t-petit { color: var(--encre); font-weight: 700; }
 
 /* Panneau d'enregistrement : rouge, à droite, par-dessus la fenêtre. */
 .voile { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; justify-content: flex-end; z-index: 10; }
@@ -228,6 +272,11 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .vide { padding-top: var(--esp-6); display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-4); max-width: 560px; }
 .vide .zero { font-size: 64px; font-weight: 900; font-stretch: 125%; line-height: 0.9; color: var(--signal-texte); }
 
+@media (max-width: 1320px) {
+  .t-affiche { font-size: 72px; }
+  .entete-droite, .sonde { gap: var(--esp-4); }
+  .sonde .mesure { grid-template-columns: auto 56px; }
+}
 @media (max-width: 1000px) {
   .t-affiche { font-size: 64px; }
   .colonne { width: 230px; }
