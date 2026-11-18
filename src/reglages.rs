@@ -1,195 +1,48 @@
-//! Fenêtre des réglages : profils et réglages principaux, appliqués en direct.
+//! Fenêtre des réglages : une page web (dossier `ui/`, intégré à l'exécutable) affichée par
+//! WebView2 dans une fenêtre Win32, sur son propre fil.
 //!
-//! Elle tourne dans son propre fil (le déplacement d'une fenêtre est une boucle modale qui
-//! figerait l'essaim) et ne parle à la boucle principale que par `config.toml` : chaque réglage
-//! touché y est écrit (commentaires gardés), puis `config::request_reload` fait relire le
-//! fichier tout de suite. Une modification du fichier faite ailleurs (à la main, Horizon) est
-//! reprise ici dans la seconde.
+//! La page ne parle à l'appli que par messages JSON (`window.ipc.postMessage`) ; l'appli lui
+//! répond et la tient à jour par `essaim.recevoir(…)`. Elle ne touche jamais aux fichiers :
+//! les réglages passent par `config.toml` (`config::set_value`, puis `request_reload` pour
+//! un effet immédiat), les presets par `profils`. Le son analysé (kicks, basse, note) lui est
+//! envoyé 30 fois par seconde pour animer les aperçus.
 
-use crate::config::{self, Watched};
-use crate::profils::{self, Profile};
-use serde_json::Value;
+use crate::audio::AudioShared;
+use crate::config::{self, Config};
+use crate::profils;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::num::NonZeroIsize;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, DeleteObject, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MonitorFromPoint, SetBkColor,
-    COLOR_WINDOW, HDC, HFONT, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
+use std::sync::Arc;
+use std::time::SystemTime;
+use windows::core::{w, BOOL, PCWSTR};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
-    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN, TBS_HORZ, TBS_NOTICKS,
-    TRACKBAR_CLASSW,
-};
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow, SystemParametersInfoForDpi};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, GetFocus};
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use wry::raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
+use wry::{WebView, WebViewBuilder, WebViewBuilderExtWindows};
 
 const CLASS: PCWSTR = w!("EssaimReglages");
-const ID_COMBO: usize = 10;
-const ID_SAVE: usize = 11;
-const ID_DELETE: usize = 12;
-const ID_FILE: usize = 13;
-const ID_ITEM: usize = 1000;
-const TIMER_RELOAD: usize = 1;
-const TIMER_FLUSH: usize = 2;
-// absents de `windows` sans la fonction `Win32_System_SystemServices`
-const TBM_GETPOS: u32 = WM_USER;
-const SS_LEFT: u32 = 0;
-const SS_RIGHT: u32 = 2;
-const SS_ENDELLIPSIS: u32 = 0x4000;
+/// Taille à l'ouverture et taille minimale, à 100 % d'échelle.
+const TAILLE: (i32, i32) = (1180, 800);
+const TAILLE_MIN: (i32, i32) = (900, 620);
+const TIMER_SON: usize = 1;
+const TIMER_FICHIERS: usize = 2;
+/// Adresse de la page : wry sert le protocole `essaim` sous `http://essaim.localhost/`.
+const ORIGINE: &str = "http://essaim.localhost/";
 
 /// Fenêtre ouverte (0 = aucune).
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 
-enum Kind {
-    Bool,
-    /// Bornes de la glissière, pas, et texte affiché pour 0 s'il a un sens particulier.
-    Num { min: f64, max: f64, step: f64, zero: Option<&'static str> },
-}
-
-struct Item {
-    section: &'static str,
-    key: &'static str,
-    label: &'static str,
-    kind: Kind,
-}
-
-const fn b(section: &'static str, key: &'static str, label: &'static str) -> Item {
-    Item { section, key, label, kind: Kind::Bool }
-}
-const fn n(section: &'static str, key: &'static str, label: &'static str, min: f64, max: f64, step: f64) -> Item {
-    Item { section, key, label, kind: Kind::Num { min, max, step, zero: None } }
-}
-
-/// Réglages montrés, par colonne puis par groupe.
-const COLUMNS: [&[(&str, &[Item])]; 3] = [
-    &[
-        (
-            "Éclat du kick",
-            &[Item {
-                kind: Kind::Num { min: 0.0, max: 12.0, step: 0.1, zero: Some("aucun") },
-                ..n("eclat", "taille", "Taille sous le pointeur", 0.0, 0.0, 0.0)
-            }],
-        ),
-        (
-            "Orbite et comètes",
-            &[
-                b("orbite", "cometes", "Deux comètes en orbite"),
-                n("orbite", "rayon", "Rayon", 4.0, 80.0, 1.0),
-                n("orbite", "vitesse_base", "Vitesse sans basse", 0.0, 15.0, 0.1),
-                n("orbite", "vitesse_basse", "Vitesse ajoutée (basse)", 0.0, 40.0, 0.5),
-                n("orbite", "eloignement_grave", "Écart des notes graves", 0.0, 4.0, 0.1),
-                n("orbite", "trainee", "Traînée (s)", 0.05, 2.0, 0.05),
-            ],
-        ),
-        (
-            "Fissures au clic",
-            &[
-                b("fissures", "actives", "Fissure sous chaque clic"),
-                n("fissures", "taille", "Taille", 0.2, 6.0, 0.1),
-                n("fissures", "duree", "Durée (s)", 0.2, 15.0, 0.1),
-            ],
-        ),
-    ],
-    &[
-        (
-            "Essaim de satellites",
-            &[
-                n("essaim", "par_kick_min", "Ajoutés par kick (min)", 0.0, 10.0, 1.0),
-                n("essaim", "par_kick_max", "Ajoutés par kick (max)", 0.0, 10.0, 1.0),
-                n("essaim", "maximum", "Satellites au plus", 0.0, 64.0, 1.0),
-                n("essaim", "duree", "Durée de vie (s)", 0.5, 10.0, 0.1),
-            ],
-        ),
-        (
-            "Couleur",
-            &[
-                b("couleur", "synchro_prisme", "Teinte de l'éclairage RGB (Prisme)"),
-                n("couleur", "teinte", "Teinte de départ (°)", 0.0, 360.0, 1.0),
-                Item {
-                    kind: Kind::Num { min: 0.0, max: 360.0, step: 1.0, zero: Some("fixe") },
-                    ..n("couleur", "vitesse_teinte", "Défilement (°/s)", 0.0, 0.0, 0.0)
-                },
-                n("couleur", "ecart_teinte", "Écart tête-queue (°)", 0.0, 360.0, 1.0),
-            ],
-        ),
-        (
-            "Son",
-            &[
-                b("audio", "actif", "Réagir à la musique"),
-                n("audio", "sensibilite_kick", "Sensibilité au kick", 1.0, 10.0, 0.5),
-                n("audio", "delai_kick", "Écart min. des kicks (s)", 0.05, 0.5, 0.01),
-            ],
-        ),
-    ],
-    &[
-        (
-            "Bordure de la fenêtre active",
-            &[
-                b("bordure", "active", "Bordure à la couleur de l'essaim"),
-                n("bordure", "intensite", "Éclat sur le kick", 0.0, 1.0, 0.05),
-                n("bordure", "repos", "Luminosité au repos", 0.0, 1.0, 0.05),
-            ],
-        ),
-        (
-            "Rendu (hors profils)",
-            &[
-                b("rendu", "carte_graphique", "Dessin par la carte graphique"),
-                Item {
-                    kind: Kind::Num { min: 0.0, max: 240.0, step: 1.0, zero: Some("écran") },
-                    ..n("rendu", "cadence", "Images par seconde", 0.0, 0.0, 0.0)
-                },
-                Item {
-                    kind: Kind::Num { min: 0.0, max: 120.0, step: 1.0, zero: Some("aucun") },
-                    ..n("rendu", "cadence_repos", "Images/s au repos", 0.0, 0.0, 0.0)
-                },
-            ],
-        ),
-    ],
-];
-
-fn items() -> impl Iterator<Item = &'static Item> {
-    COLUMNS.iter().flat_map(|c| c.iter()).flat_map(|(_, items)| items.iter())
-}
-
-/// Contrôles d'un réglage : libellé, case ou glissière, valeur affichée.
-struct Ctrl {
-    label: Option<HWND>,
-    input: HWND,
-    value: Option<HWND>,
-}
-
-struct Ui {
-    hwnd: HWND,
-    dpi: u32,
-    font: HFONT,
-    groups: Vec<HWND>,
-    ctrls: Vec<Ctrl>,
-    profile_label: HWND,
-    combo: HWND,
-    save: HWND,
-    delete: HWND,
-    file: HWND,
-    status: HWND,
-    conf: Watched,
-    /// Réglages tels que la fenêtre les connaît (fichier + changements pas encore écrits).
-    values: Value,
-    /// Changements à écrire au prochain tour du minuteur : (indice du réglage, valeur).
-    pending: Vec<(usize, Value)>,
-    profiles: Vec<Profile>,
-    /// Message d'action (profil enregistré, erreur…), prioritaire sur l'état des réglages.
-    message: Option<String>,
-}
-
-thread_local! {
-    static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
-}
-
 /// Ouvre la fenêtre, ou la ramène devant si elle l'est déjà.
-pub fn open() {
+pub fn open(son: Arc<AudioShared>) {
     let h = WINDOW.load(Ordering::Relaxed);
     if h != 0 {
         let hwnd = HWND(h as *mut _);
@@ -201,501 +54,422 @@ pub fn open() {
             }
         }
     }
-    let _ = std::thread::Builder::new().name("essaim-reglages".into()).spawn(|| {
-        if let Err(e) = run() {
-            log::warn!("réglages : fenêtre impossible à ouvrir ({e})");
+    let _ = std::thread::Builder::new().name("essaim-reglages".into()).spawn(move || {
+        if let Err(e) = run(son) {
+            log::warn!("réglages : fenêtre impossible à ouvrir ({e:#})");
         }
         WINDOW.store(0, Ordering::Relaxed);
     });
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(Some(0)).collect()
+// ---------------------------------------------------------------------------------------------
+// Fichiers de la page
+
+/// Fichiers de `ui/` servis à la page : (chemin, type, contenu).
+const FICHIERS: [(&str, &str, &[u8]); 5] = [
+    ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
+    ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
+    ("app.js", "text/javascript; charset=utf-8", include_bytes!("../ui/app.js")),
+    ("apercu.js", "text/javascript; charset=utf-8", include_bytes!("../ui/apercu.js")),
+    ("polices/Archivo.ttf", "font/ttf", include_bytes!("../ui/polices/Archivo.ttf")),
+];
+
+/// La page ne charge que ses propres fichiers ; seul l'index de la bibliothèque vient d'ailleurs.
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; \
+                   connect-src https://raw.githubusercontent.com";
+
+fn servir(req: wry::http::Request<Vec<u8>>) -> wry::http::Response<Cow<'static, [u8]>> {
+    let chemin = req.uri().path().trim_start_matches('/');
+    let chemin = if chemin.is_empty() { "index.html" } else { chemin };
+    let reponse = wry::http::Response::builder().header("Content-Security-Policy", CSP).header("Cache-Control", "no-store");
+    match FICHIERS.iter().find(|(c, ..)| *c == chemin) {
+        Some((_, mime, octets)) => reponse.status(200).header("Content-Type", *mime).body(Cow::Borrowed(*octets)),
+        None => reponse.status(404).body(Cow::Borrowed(&b""[..])),
+    }
+    .unwrap_or_else(|_| wry::http::Response::new(Cow::Borrowed(&b""[..])))
 }
 
-fn set_text(h: HWND, s: &str) {
-    let w = wide(s);
-    unsafe {
-        let _ = SetWindowTextW(h, PCWSTR(w.as_ptr()));
+// ---------------------------------------------------------------------------------------------
+// Messages de la page
+
+#[derive(Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+enum Demande {
+    /// Réglages, presets et dépôt de la bibliothèque.
+    Etat,
+    Regler { section: String, cle: String, valeur: Value },
+    Appliquer { nom: String },
+    /// Enregistre les réglages actuels sous `nom` ; `publier` ouvre la proposition sur GitHub.
+    Enregistrer { nom: String, publier: bool },
+    Supprimer { nom: String },
+    /// Copie un preset de la bibliothèque dans les presets de l'utilisateur.
+    Installer { nom: String, reglages: Value, appliquer: bool },
+    OuvrirConfig,
+    OuvrirDepot,
+}
+
+struct Fenetre {
+    hwnd: HWND,
+    vue: WebView,
+    son: Arc<AudioShared>,
+    /// Dernier son envoyé (kicks, basse) : rien n'est renvoyé s'il n'a pas changé.
+    son_envoye: (u32, u32),
+    /// Dates de `config.toml` et du dossier des presets au dernier état envoyé.
+    dates: (Option<SystemTime>, Option<SystemTime>),
+}
+
+thread_local! {
+    static FENETRE: RefCell<Option<Fenetre>> = const { RefCell::new(None) };
+    /// Messages reçus de la page, traités après chaque message Windows (le gestionnaire de
+    /// wry n'a pas accès à la vue).
+    static RECUS: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+}
+
+fn dates() -> (Option<SystemTime>, Option<SystemTime>) {
+    let date = |p: std::path::PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    (date(config::path()), date(profils::dir()))
+}
+
+impl Fenetre {
+    fn envoyer(&self, v: &Value) {
+        if let Err(e) = self.vue.evaluate_script(&format!("essaim.recevoir({v})")) {
+            log::warn!("réglages : envoi à la page impossible ({e})");
+        }
+    }
+
+    fn etat(&mut self) {
+        self.dates = dates();
+        let cfg = Config::read(&config::path()).unwrap_or_default();
+        let liste = profils::list();
+        let actif = liste.iter().find(|p| profils::same(&p.cfg, &cfg)).map(|p| p.name.clone());
+        let presets: Vec<Value> = liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg })).collect();
+        self.envoyer(&json!({
+            "type": "etat",
+            "reglages": cfg,
+            "presets": presets,
+            "actif": actif,
+            "depot": cfg.bibliotheque.depot,
+        }));
+    }
+
+    fn message(&self, texte: &str) {
+        self.envoyer(&json!({ "type": "message", "texte": texte }));
+    }
+
+    fn erreur(&self, texte: &str) {
+        self.envoyer(&json!({ "type": "erreur", "texte": texte }));
+    }
+
+    fn traiter(&mut self, texte: &str) {
+        let demande = match serde_json::from_str::<Demande>(texte) {
+            Ok(d) => d,
+            Err(e) => return log::warn!("réglages : message de la page illisible ({e})"),
+        };
+        match demande {
+            Demande::Etat => self.etat(),
+            Demande::Regler { section, cle, valeur } => match config::set_value(&section, &cle, &valeur) {
+                Ok(()) => config::request_reload(),
+                Err(e) => self.erreur(&format!("Réglage refusé : {e}.")),
+            },
+            Demande::Appliquer { nom } => {
+                match profils::list().iter().find(|p| p.name == nom).map(profils::apply) {
+                    Some(Ok(())) => config::request_reload(),
+                    Some(Err(e)) => self.erreur(&format!("Preset « {nom} » non appliqué : {e}.")),
+                    None => self.erreur(&format!("Preset « {nom} » introuvable.")),
+                }
+                self.etat();
+            }
+            Demande::Enregistrer { nom, publier } => {
+                let cfg = Config::read(&config::path()).unwrap_or_default();
+                match profils::save(&nom, &cfg) {
+                    Ok(nom) => {
+                        self.etat();
+                        self.envoyer(&json!({ "type": "enregistre", "nom": nom }));
+                        if publier {
+                            self.publier(&nom);
+                        } else {
+                            self.message(&format!("Preset « {nom} » enregistré."));
+                        }
+                    }
+                    Err(e) => self.envoyer(&json!({ "type": "refus", "texte": format!("{}.", majuscule(&e)) })),
+                }
+            }
+            Demande::Supprimer { nom } => match profils::delete(&nom) {
+                Ok(()) => {
+                    self.etat();
+                    self.message(&format!("Preset « {} » supprimé.", nom.trim()));
+                }
+                Err(e) => self.erreur(&format!("{}.", majuscule(&e))),
+            },
+            Demande::Installer { nom, reglages, appliquer } => {
+                let cfg = serde_json::from_value::<Config>(reglages).map_err(|e| format!("preset illisible ({e})"));
+                match cfg.and_then(|cfg| profils::save(&nom, &cfg).map(|n| (n, cfg))) {
+                    Ok((nom, cfg)) => {
+                        if appliquer {
+                            if let Err(e) = config::apply_keys(&cfg, profils::in_profile) {
+                                self.erreur(&format!("Preset « {nom} » installé mais non appliqué : {e}."));
+                            }
+                            config::request_reload();
+                        }
+                        self.etat();
+                        self.message(&format!("Preset « {nom} » installé dans Mes presets."));
+                    }
+                    Err(e) => self.erreur(&format!("Installation impossible : {e}.")),
+                }
+            }
+            Demande::OuvrirConfig => crate::win::open_file(&config::path()),
+            Demande::OuvrirDepot => {
+                let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
+                crate::win::open_url(&format!("https://github.com/{depot}"));
+            }
+        }
+    }
+
+    /// Ouvre dans le navigateur la création du fichier du preset dans le dépôt de la
+    /// bibliothèque : GitHub propose alors une copie du dépôt et une pull request.
+    fn publier(&self, nom: &str) {
+        let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
+        let texte = match std::fs::read_to_string(profils::dir().join(format!("{nom}.toml"))) {
+            Ok(t) => t,
+            Err(e) => return self.erreur(&format!("Preset « {nom} » enregistré, mais illisible pour la publication ({e}).")),
+        };
+        let url = format!(
+            "https://github.com/{depot}/new/main?filename={}&value={}",
+            encoder(&format!("presets/{nom}.toml")),
+            encoder(&texte)
+        );
+        crate::win::open_url(&url);
+        self.message(&format!("Preset « {nom} » enregistré. GitHub s'ouvre pour le proposer à la bibliothèque."));
+    }
+
+    /// Son et fichiers : envoyés à la page quand ils changent.
+    fn tick(&mut self, quoi: usize) {
+        if quoi == TIMER_SON {
+            let au = self.son.view();
+            let cle = (au.kicks, au.bass.to_bits());
+            if cle != self.son_envoye {
+                self.son_envoye = cle;
+                self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch }));
+            }
+        } else if dates() != self.dates {
+            self.etat();
+        }
     }
 }
 
-fn get_text(h: HWND) -> String {
-    let mut buf = [0u16; 256];
-    let n = unsafe { GetWindowTextW(h, &mut buf) };
-    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+fn majuscule(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|p| p.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-fn send(h: HWND, msg: u32, wp: usize, lp: isize) -> isize {
-    unsafe { SendMessageW(h, msg, Some(WPARAM(wp)), Some(LPARAM(lp))).0 }
+/// Encodage d'URL (RFC 3986) : tout sauf les caractères non réservés.
+fn encoder(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
-unsafe fn child(parent: HWND, class: PCWSTR, text: &str, style: u32, id: usize) -> windows::core::Result<HWND> {
-    let t = wide(text);
-    CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        class,
-        PCWSTR(t.as_ptr()),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(style),
-        0,
-        0,
-        0,
-        0,
-        Some(parent),
-        Some(HMENU(id as *mut _)),
-        None,
-        None,
-    )
+// ---------------------------------------------------------------------------------------------
+// Thème : celui des applications de Windows (clair ou sombre)
+
+fn theme_sombre() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut v = 1u32;
+    let mut n = std::mem::size_of::<u32>() as u32;
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut v as *mut u32 as *mut _),
+            Some(&mut n),
+        )
+    }
+    .is_ok();
+    ok && v == 0
 }
 
-fn run() -> windows::core::Result<()> {
+/// Fond de la page (jeton `fond` de la charte), pour la barre de titre et avant le chargement.
+fn fond(sombre: bool) -> (u8, u8, u8) {
+    if sombre { (0x12, 0x12, 0x11) } else { (0xe8, 0xe7, 0xe1) }
+}
+
+/// Barre de titre aux couleurs de la page (Windows 11 ; ignoré ailleurs).
+fn barre_de_titre(hwnd: HWND) {
+    let sombre = theme_sombre();
+    let ((r, g, b), texte) = (fond(sombre), if sombre { 0x00e4ebec } else { 0x00111111 });
+    let fond = r as u32 | (g as u32) << 8 | (b as u32) << 16;
     unsafe {
-        let icc = INITCOMMONCONTROLSEX {
-            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_BAR_CLASSES | ICC_STANDARD_CLASSES,
-        };
-        let _ = InitCommonControlsEx(&icc);
-        let hinst = GetModuleHandleW(None)?;
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            lpfnWndProc: Some(proc),
-            hInstance: hinst.into(),
-            lpszClassName: CLASS,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: GetSysColorBrush(COLOR_WINDOW),
-            ..Default::default()
-        };
-        RegisterClassExW(&wc);
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            CLASS,
-            w!("Essaim - réglages"),
-            style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            100,
-            100,
-            None,
-            None,
-            Some(hinst.into()),
-            None,
-        )?;
-        WINDOW.store(hwnd.0 as isize, Ordering::Relaxed);
-        if let Some(icon) = crate::win::app_icon() {
-            send(hwnd, WM_SETICON, ICON_BIG as usize, icon.0 as isize);
-            send(hwnd, WM_SETICON, ICON_SMALL as usize, icon.0 as isize);
-        }
-        let ui = build(hwnd)?;
-        UI.with(|u| *u.borrow_mut() = Some(ui));
-        with_ui(|ui| {
-            ui.layout(true);
-            ui.refresh_profiles();
-            ui.show_values();
-            ui.select_matching();
-        });
+        let s = BOOL::from(sombre);
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &s as *const _ as *const _, 4);
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &COLORREF(fond) as *const _ as *const _, 4);
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &COLORREF(texte) as *const _ as *const _, 4);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fenêtre
+
+struct Parent(HWND);
+
+impl HasWindowHandle for Parent {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        let h = NonZeroIsize::new(self.0 .0 as isize).ok_or(HandleError::Unavailable)?;
+        // SAFETY : la fenêtre vit tant que la vue (détruite avant elle, dans `run`).
+        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(Win32WindowHandle::new(h))) })
+    }
+}
+
+fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
+    let hwnd = unsafe { creer_fenetre()? };
+    WINDOW.store(hwnd.0 as isize, Ordering::Relaxed);
+    barre_de_titre(hwnd);
+
+    let recus = RECUS.with(|r| r.clone());
+    let (r, g, b) = fond(theme_sombre());
+    let mut contexte = wry::WebContext::new(Some(config::dir().join("webview")));
+    let vue = WebViewBuilder::new_with_web_context(&mut contexte)
+        .with_custom_protocol("essaim".into(), |_, req| servir(req))
+        .with_url(format!("{ORIGINE}index.html"))
+        .with_background_color((r, g, b, 255))
+        .with_ipc_handler(move |req| recus.borrow_mut().push(req.into_body()))
+        .with_navigation_handler(|url| url.starts_with(ORIGINE))
+        .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+        .with_hotkeys_zoom(false)
+        .with_default_context_menus(cfg!(debug_assertions))
+        .with_browser_accelerator_keys(false)
+        .with_devtools(cfg!(debug_assertions))
+        .build(&Parent(hwnd))?;
+    let _ = vue.focus();
+    FENETRE.with(|f| *f.borrow_mut() = Some(Fenetre { hwnd, vue, son, son_envoye: (u32::MAX, 0), dates: (None, None) }));
+    unsafe {
+        SetTimer(Some(hwnd), TIMER_SON, 33, None);
+        SetTimer(Some(hwnd), TIMER_FICHIERS, 700, None);
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
-        SetTimer(Some(hwnd), TIMER_RELOAD, 1000, None);
-
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            if !IsDialogMessageW(hwnd, &msg).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            traiter_recus();
         }
-        UI.with(|u| {
-            if let Some(ui) = u.borrow_mut().take() {
-                let _ = DeleteObject(ui.font.into());
-            }
-        });
     }
+    // la vue avant le contexte et la fenêtre
+    FENETRE.with(|f| f.borrow_mut().take());
+    drop(contexte);
     Ok(())
 }
 
-unsafe fn build(hwnd: HWND) -> windows::core::Result<Ui> {
-    let (st, btn) = (w!("STATIC"), w!("BUTTON"));
-    let tab = WS_TABSTOP.0;
-    let mut groups = Vec::new();
-    let mut ctrls = Vec::new();
-    let mut id = ID_ITEM;
-    for col in COLUMNS {
-        for (title, items) in col {
-            groups.push(child(hwnd, btn, title, BS_GROUPBOX as u32, 0)?);
-            for it in *items {
-                ctrls.push(match it.kind {
-                    Kind::Bool => Ctrl { label: None, input: child(hwnd, btn, it.label, BS_AUTOCHECKBOX as u32 | tab, id)?, value: None },
-                    Kind::Num { min, max, step, .. } => {
-                        let label = child(hwnd, st, it.label, SS_LEFT, 0)?;
-                        let input = child(hwnd, TRACKBAR_CLASSW, "", TBS_HORZ | TBS_NOTICKS | tab, id)?;
-                        let steps = ((max - min) / step).round() as isize;
-                        send(input, TBM_SETRANGEMIN, 0, 0);
-                        send(input, TBM_SETRANGEMAX, 0, steps);
-                        send(input, TBM_SETPAGESIZE, 0, (steps / 10).max(1));
-                        let value = child(hwnd, st, "", SS_RIGHT, 0)?;
-                        Ctrl { label: Some(label), input, value: Some(value) }
-                    }
-                });
-                id += 1;
+fn traiter_recus() {
+    let lot: Vec<String> = RECUS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    if lot.is_empty() {
+        return;
+    }
+    FENETRE.with(|f| {
+        if let Some(f) = f.borrow_mut().as_mut() {
+            for m in &lot {
+                f.traiter(m);
             }
         }
-    }
-    let conf = Watched::load();
-    let values = serde_json::to_value(&conf.cfg).unwrap_or(Value::Null);
-    Ok(Ui {
-        hwnd,
-        dpi: GetDpiForWindow(hwnd).max(96),
-        font: HFONT::default(),
-        groups,
-        ctrls,
-        profile_label: child(hwnd, st, "Profil :", SS_LEFT, 0)?,
-        combo: child(hwnd, w!("COMBOBOX"), "", (CBS_DROPDOWN | CBS_HASSTRINGS | CBS_AUTOHSCROLL) as u32 | WS_VSCROLL.0 | tab, ID_COMBO)?,
-        save: child(hwnd, btn, "Enregistrer", BS_PUSHBUTTON as u32 | tab, ID_SAVE)?,
-        delete: child(hwnd, btn, "Supprimer", BS_PUSHBUTTON as u32 | tab, ID_DELETE)?,
-        file: child(hwnd, btn, "Ouvrir config.toml", BS_PUSHBUTTON as u32 | tab, ID_FILE)?,
-        status: child(hwnd, st, "", SS_LEFT | SS_ENDELLIPSIS, 0)?,
-        conf,
-        values,
-        pending: Vec::new(),
-        profiles: Vec::new(),
-        message: None,
-    })
+    });
 }
 
-fn with_ui<R>(f: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    UI.with(|u| u.try_borrow_mut().ok().and_then(|mut u| u.as_mut().map(f)))
-}
-
-impl Ui {
-    fn px(&self, v: i32) -> i32 {
-        v * self.dpi as i32 / 96
-    }
-
-    /// Police et position de tout à l'échelle de l'écran ; `resize` : taille (et position au
-    /// centre de l'écran de la souris) de la fenêtre.
-    fn layout(&mut self, center: bool) {
-        unsafe {
-            let mut ncm = NONCLIENTMETRICSW { cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32, ..Default::default() };
-            let _ = SystemParametersInfoForDpi(
-                SPI_GETNONCLIENTMETRICS.0,
-                ncm.cbSize,
-                Some(&mut ncm as *mut _ as *mut _),
-                0,
-                self.dpi,
-            );
-            let font = CreateFontIndirectW(&ncm.lfMessageFont);
-            if !font.is_invalid() {
-                if !self.font.is_invalid() {
-                    let _ = DeleteObject(self.font.into());
-                }
-                self.font = font;
-            }
-        }
-        let p = |v| self.px(v);
-        let (margin, col_w, gap) = (p(12), p(316), p(12));
-        let place = |h: HWND, x: i32, y: i32, w: i32, ht: i32| unsafe {
-            let _ = MoveWindow(h, x, y, w, ht, false);
-            send(h, WM_SETFONT, self.font.0 as usize, 0);
-        };
-        // ligne des profils
-        let top = margin;
-        place(self.profile_label, margin, top + p(4), p(48), p(20));
-        place(self.combo, margin + p(52), top, p(230), p(300));
-        place(self.save, margin + p(292), top - p(1), p(100), p(26));
-        place(self.delete, margin + p(400), top - p(1), p(100), p(26));
-        let width = margin * 2 + col_w * 3 + gap * 2;
-        place(self.file, width - margin - p(150), top - p(1), p(150), p(26));
-        // colonnes de groupes
-        let (mut gi, mut ci) = (0, 0);
-        let mut bottom = 0;
-        for (c, col) in COLUMNS.iter().enumerate() {
-            let x = margin + c as i32 * (col_w + gap);
-            let mut y = top + p(40);
-            for (_, items) in col.iter() {
-                let y0 = y;
-                y += p(22);
-                for it in items.iter() {
-                    let ctrl = &self.ctrls[ci];
-                    match it.kind {
-                        Kind::Bool => {
-                            place(ctrl.input, x + p(12), y, col_w - p(24), p(22));
-                            y += p(24);
-                        }
-                        Kind::Num { .. } => {
-                            if let (Some(l), Some(v)) = (ctrl.label, ctrl.value) {
-                                place(l, x + p(12), y + p(4), p(148), p(20));
-                                place(ctrl.input, x + p(160), y, p(104), p(26));
-                                place(v, x + p(264), y + p(4), p(42), p(20));
-                            }
-                            y += p(28);
-                        }
-                    }
-                    ci += 1;
-                }
-                y += p(8);
-                place(self.groups[gi], x, y0, col_w, y - y0);
-                gi += 1;
-                y += p(8);
-            }
-            bottom = bottom.max(y);
-        }
-        place(self.status, margin, bottom + p(2), width - margin * 2, p(20));
-        let height = bottom + p(30);
-        unsafe {
-            let style = WINDOW_STYLE(GetWindowLongW(self.hwnd, GWL_STYLE) as u32);
-            let mut r = RECT { left: 0, top: 0, right: width, bottom: height };
-            let _ = AdjustWindowRectExForDpi(&mut r, style, false, WINDOW_EX_STYLE(0), self.dpi);
-            let (w, h) = (r.right - r.left, r.bottom - r.top);
-            if center {
-                let mut pt = Default::default();
-                let _ = GetCursorPos(&mut pt);
-                let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-                let _ = GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mut mi);
-                let wa = mi.rcWork;
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    wa.left + (wa.right - wa.left - w).max(0) / 2,
-                    wa.top + (wa.bottom - wa.top - h).max(0) / 2,
-                    w,
-                    h,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            } else {
-                let _ = SetWindowPos(self.hwnd, None, 0, 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
-            }
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
-        }
-    }
-
-    fn value(&self, it: &Item) -> Option<&Value> {
-        self.values.get(it.section)?.get(it.key)
-    }
-
-    fn show_values(&self) {
-        for (it, ctrl) in items().zip(&self.ctrls) {
-            let Some(v) = self.value(it) else { continue };
-            match it.kind {
-                Kind::Bool => {
-                    let on = v.as_bool().unwrap_or(false);
-                    send(ctrl.input, BM_SETCHECK, if on { BST_CHECKED.0 } else { BST_UNCHECKED.0 } as usize, 0);
-                }
-                Kind::Num { min, step, .. } => {
-                    let x = v.as_f64().unwrap_or(0.0);
-                    send(ctrl.input, TBM_SETPOS, 1, ((x - min) / step).round() as isize);
-                    if let Some(h) = ctrl.value {
-                        set_text(h, &format_value(it, x));
-                    }
-                }
-            }
-        }
-        self.show_status();
-    }
-
-    fn cfg(&self) -> config::Config {
-        serde_json::from_value(self.values.clone()).unwrap_or_default()
-    }
-
-    fn matching(&self) -> Option<&Profile> {
-        let cfg = self.cfg();
-        self.profiles.iter().find(|p| profils::same(&p.cfg, &cfg))
-    }
-
-    fn show_status(&self) {
-        let text = match (&self.message, self.matching()) {
-            (Some(m), _) => m.clone(),
-            (None, Some(p)) => format!("Réglages actuels : profil « {} »{}.", p.name, if p.builtin { " (préréglage)" } else { "" }),
-            (None, None) => "Réglages modifiés : tape un nom puis « Enregistrer » pour en faire un profil.".into(),
-        };
-        set_text(self.status, &text);
-    }
-
-    fn refresh_profiles(&mut self) {
-        self.profiles = profils::list();
-        let typed = get_text(self.combo);
-        send(self.combo, CB_RESETCONTENT, 0, 0);
-        for p in &self.profiles {
-            let w = wide(&p.name);
-            send(self.combo, CB_ADDSTRING, 0, w.as_ptr() as isize);
-        }
-        set_text(self.combo, &typed);
-    }
-
-    /// Met dans la liste le profil qui correspond aux réglages, s'il y en a un.
-    fn select_matching(&self) {
-        if let Some(i) = self.matching().and_then(|m| self.profiles.iter().position(|p| p.name == m.name)) {
-            send(self.combo, CB_SETCURSEL, i, 0);
-        }
-    }
-
-    /// Relit `config.toml` s'il a changé (sauf pendant un glissement ou avant d'avoir tout écrit).
-    fn reload(&mut self) {
-        if !self.pending.is_empty() || unsafe { !GetCapture().is_invalid() } {
-            return;
-        }
-        if self.conf.reload() {
-            self.values = serde_json::to_value(&self.conf.cfg).unwrap_or(Value::Null);
-            self.show_values();
-        }
-    }
-
-    /// Le réglage `i` a changé dans la fenêtre : affiché tout de suite, écrit au prochain tour.
-    fn changed(&mut self, i: usize) {
-        let Some(it) = items().nth(i) else { return };
-        let ctrl = &self.ctrls[i];
-        let v = match it.kind {
-            Kind::Bool => Value::Bool(send(ctrl.input, BM_GETCHECK, 0, 0) == BST_CHECKED.0 as isize),
-            Kind::Num { min, step, .. } => {
-                let x = min + send(ctrl.input, TBM_GETPOS, 0, 0) as f64 * step;
-                let x = (x / step).round() * step; // pas de 0,30000000000000004
-                if let Some(h) = ctrl.value {
-                    set_text(h, &format_value(it, x));
-                }
-                serde_json::json!(x)
-            }
-        };
-        if let Some(s) = self.values.get_mut(it.section).and_then(|s| s.as_object_mut()) {
-            s.insert(it.key.into(), v.clone());
-        }
-        self.message = None;
-        self.pending.retain(|(j, _)| *j != i);
-        self.pending.push((i, v));
-        unsafe {
-            SetTimer(Some(self.hwnd), TIMER_FLUSH, 60, None);
-        }
-        self.show_status();
-    }
-
-    fn flush(&mut self) {
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_FLUSH);
-        }
-        let all: Vec<_> = items().collect();
-        for (i, v) in std::mem::take(&mut self.pending) {
-            if let Err(e) = config::set_value(all[i].section, all[i].key, &v) {
-                self.message = Some(format!("Réglage refusé : {e}"));
-                self.show_status();
-            }
-        }
-        config::request_reload();
-    }
-
-    fn apply_selected(&mut self) {
-        let i = send(self.combo, CB_GETCURSEL, 0, 0);
-        let Some(p) = usize::try_from(i).ok().and_then(|i| self.profiles.get(i)) else { return };
-        self.pending.clear();
-        self.message = Some(match profils::apply(p) {
-            Ok(()) => format!("Profil « {} » appliqué.", p.name),
-            Err(e) => format!("Profil « {} » non appliqué : {e}", p.name),
-        });
-        config::request_reload();
-        self.conf.reload();
-        self.values = serde_json::to_value(&self.conf.cfg).unwrap_or(Value::Null);
-        self.show_values();
-    }
-
-    fn save_profile(&mut self) {
-        self.flush();
-        let name = get_text(self.combo);
-        self.message = Some(match profils::save(&name, &self.cfg()) {
-            Ok(name) => {
-                self.refresh_profiles();
-                set_text(self.combo, &name);
-                format!("Profil « {name} » enregistré.")
-            }
-            Err(e) => format!("Profil non enregistré : {e}."),
-        });
-        self.show_status();
-    }
-
-    fn delete_profile(&mut self) {
-        let name = get_text(self.combo);
-        self.message = Some(match profils::delete(&name) {
-            Ok(()) => {
-                set_text(self.combo, "");
-                self.refresh_profiles();
-                format!("Profil « {} » supprimé.", name.trim())
-            }
-            Err(e) => format!("Profil non supprimé : {e}."),
-        });
-        self.show_status();
-    }
-}
-
-fn format_value(it: &Item, x: f64) -> String {
-    let Kind::Num { step, zero, .. } = it.kind else { return String::new() };
-    if let (Some(z), true) = (zero, x.abs() < 1e-9) {
-        return z.into();
-    }
-    let decimals = if step >= 1.0 { 0 } else if step >= 0.1 { 1 } else { 2 };
-    format!("{x:.decimals$}").replace('.', ",")
+unsafe fn creer_fenetre() -> windows::core::Result<HWND> {
+    let hinst = GetModuleHandleW(None)?;
+    let wc = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        lpfnWndProc: Some(proc),
+        hInstance: hinst.into(),
+        lpszClassName: CLASS,
+        hCursor: LoadCursorW(None, IDC_ARROW)?,
+        hIcon: crate::win::app_icon().unwrap_or_default(),
+        ..Default::default()
+    };
+    RegisterClassExW(&wc);
+    // au centre de l'écran de la souris, à son échelle
+    let mut pt = POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    let (mut dpi, mut dy) = (96u32, 96u32);
+    let _ = GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dpi, &mut dy);
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    let _ = GetMonitorInfoW(mon, &mut mi);
+    let wa = mi.rcWork;
+    let style = WS_OVERLAPPEDWINDOW;
+    let mut r = RECT { left: 0, top: 0, right: TAILLE.0 * dpi as i32 / 96, bottom: TAILLE.1 * dpi as i32 / 96 };
+    let _ = AdjustWindowRectExForDpi(&mut r, style, false, WINDOW_EX_STYLE(0), dpi);
+    let (w, h) = ((r.right - r.left).min(wa.right - wa.left), (r.bottom - r.top).min(wa.bottom - wa.top));
+    CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        CLASS,
+        w!("Essaim"),
+        style,
+        wa.left + (wa.right - wa.left - w) / 2,
+        wa.top + (wa.bottom - wa.top - h) / 2,
+        w,
+        h,
+        None,
+        None,
+        Some(hinst.into()),
+        None,
+    )
 }
 
 extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
-            // fond des libellés, cases et glissières : celui de la fenêtre (sans toucher à l'état,
-            // ces messages arrivent pendant un dessin déclenché de l'intérieur)
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-                SetBkColor(HDC(wp.0 as *mut _), COLORREF(GetSysColor(COLOR_WINDOW)));
-                return LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize);
-            }
-            WM_HSCROLL => {
-                let src = HWND(lp.0 as *mut _);
-                with_ui(|ui| {
-                    if let Some(i) = ui.ctrls.iter().position(|c| c.input == src) {
-                        ui.changed(i);
+            WM_TIMER => {
+                FENETRE.with(|f| {
+                    if let Ok(mut f) = f.try_borrow_mut() {
+                        if let Some(f) = f.as_mut() {
+                            f.tick(wp.0);
+                        }
                     }
                 });
                 return LRESULT(0);
             }
-            WM_COMMAND => {
-                let (id, code) = (wp.0 & 0xFFFF, (wp.0 >> 16) & 0xFFFF);
-                let done = with_ui(|ui| match id {
-                    ID_COMBO if code == CBN_SELCHANGE as usize => ui.apply_selected(),
-                    // Entrée dans la zone du nom : enregistrer
-                    ID_SAVE => ui.save_profile(),
-                    x if x == IDOK.0 as usize && GetParent(GetFocus()).is_ok_and(|p| p == ui.combo) => ui.save_profile(),
-                    ID_DELETE => ui.delete_profile(),
-                    ID_FILE => crate::win::open_file(&config::path()),
-                    x if x == IDCANCEL.0 as usize => {
-                        let _ = DestroyWindow(hwnd);
-                    }
-                    x if x >= ID_ITEM && code == BN_CLICKED as usize => ui.changed(x - ID_ITEM),
-                    _ => {}
-                });
-                if done.is_some() {
-                    return LRESULT(0);
-                }
-            }
-            WM_TIMER => {
-                with_ui(|ui| match wp.0 {
-                    TIMER_FLUSH => ui.flush(),
-                    _ => ui.reload(),
-                });
+            WM_GETMINMAXINFO => {
+                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                let mm = &mut *(lp.0 as *mut MINMAXINFO);
+                mm.ptMinTrackSize = POINT { x: TAILLE_MIN.0 * dpi / 96, y: TAILLE_MIN.1 * dpi / 96 };
                 return LRESULT(0);
             }
             WM_DPICHANGED => {
-                let dpi = ((wp.0 >> 16) & 0xFFFF) as u32;
                 let r = &*(lp.0 as *const RECT);
-                let _ = SetWindowPos(hwnd, None, r.left, r.top, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE);
-                with_ui(|ui| {
-                    ui.dpi = dpi.max(96);
-                    ui.layout(false);
-                });
+                let _ = SetWindowPos(hwnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
                 return LRESULT(0);
             }
-            WM_CLOSE => {
-                with_ui(|ui| {
-                    if !ui.pending.is_empty() {
-                        ui.flush();
+            WM_SETTINGCHANGE => {
+                // « ImmersiveColorSet » : thème clair/sombre changé (la page suit d'elle-même)
+                barre_de_titre(hwnd);
+            }
+            WM_SETFOCUS => {
+                FENETRE.with(|f| {
+                    if let Ok(f) = f.try_borrow() {
+                        if let Some(f) = f.as_ref() {
+                            let _ = f.vue.focus();
+                        }
                     }
                 });
+            }
+            WM_CLOSE => {
                 let _ = DestroyWindow(hwnd);
                 return LRESULT(0);
             }
             WM_DESTROY => {
+                FENETRE.with(|f| {
+                    if let Ok(f) = f.try_borrow() {
+                        if let Some(f) = f.as_ref() {
+                            let _ = KillTimer(Some(f.hwnd), TIMER_SON);
+                            let _ = KillTimer(Some(f.hwnd), TIMER_FICHIERS);
+                        }
+                    }
+                });
                 PostQuitMessage(0);
                 return LRESULT(0);
             }
@@ -710,37 +484,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chaque_reglage_montre_existe_et_ses_bornes_tiennent() {
-        let known = serde_json::to_value(config::Config::default()).unwrap();
-        let mut seen = std::collections::HashSet::new();
-        for it in items() {
-            let v = known.get(it.section).and_then(|s| s.get(it.key));
-            // le groupe « hors profils » contient exactement ce que les profils ignorent
-            assert_eq!(profils::in_profile(it.section, it.key), it.section != "rendu", "[{}] {}", it.section, it.key);
-            assert!(v.is_some(), "[{}] {} inconnu", it.section, it.key);
-            assert!(seen.insert((it.section, it.key)), "[{}] {} en double", it.section, it.key);
-            match it.kind {
-                Kind::Bool => assert!(v.unwrap().is_boolean()),
-                Kind::Num { min, max, step, .. } => {
-                    assert!(min < max && step > 0.0, "[{}] {}", it.section, it.key);
-                    // les deux bouts de la glissière passent la vérification d'écriture
-                    for x in [min, max] {
-                        let p = std::env::temp_dir().join(format!("essaim-ui-{}-{}.toml", std::process::id(), it.key));
-                        let r = config::set_value_in(&p, it.section, it.key, &serde_json::json!(x));
-                        let _ = std::fs::remove_file(&p);
-                        assert!(r.is_ok(), "[{}] {} = {x} : {r:?}", it.section, it.key);
-                    }
-                }
-            }
+    fn encodage_d_url() {
+        assert_eq!(encoder("presets/Nuit blanche.toml"), "presets%2FNuit%20blanche.toml");
+        assert_eq!(encoder("é=1\n"), "%C3%A9%3D1%0A");
+    }
+
+    #[test]
+    fn la_page_et_ses_fichiers_sont_servis() {
+        let req = |p: &str| wry::http::Request::builder().uri(format!("{ORIGINE}{p}")).body(Vec::new()).unwrap();
+        assert_eq!(servir(req("")).status(), 200);
+        assert_eq!(servir(req("app.js")).headers()["Content-Type"], "text/javascript; charset=utf-8");
+        assert_eq!(servir(req("../src/main.rs")).status(), 404);
+        // chaque fichier nommé par la page existe
+        let page = std::str::from_utf8(FICHIERS[0].2).unwrap();
+        for (chemin, ..) in &FICHIERS[1..4] {
+            assert!(page.contains(chemin), "{chemin} non chargé par index.html");
         }
     }
 
     #[test]
-    fn valeurs_affichees() {
-        let it = items().find(|i| i.key == "trainee").unwrap();
-        assert_eq!(format_value(it, 0.3), "0,30");
-        let it = items().find(|i| i.key == "cadence").unwrap();
-        assert_eq!(format_value(it, 0.0), "écran");
-        assert_eq!(format_value(it, 72.0), "72");
+    fn messages_de_la_page() {
+        let d: Demande = serde_json::from_str(r#"{"cmd":"regler","section":"orbite","cle":"rayon","valeur":30}"#).unwrap();
+        assert!(matches!(d, Demande::Regler { .. }));
+        let d: Demande = serde_json::from_str(r#"{"cmd":"enregistrer","nom":"Nuit","publier":true}"#).unwrap();
+        assert!(matches!(d, Demande::Enregistrer { publier: true, .. }));
+        assert!(serde_json::from_str::<Demande>(r#"{"cmd":"formater_disque"}"#).is_err());
     }
 }

@@ -33,12 +33,16 @@ la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages con
 ## Utilisation
 
 - Icône de notification : *Mettre en pause*, *Réglages…*, *Quitter*.
-- **Fenêtre des réglages** (`essaim.exe --reglages`, ou *Réglages…*) : glissières et cases
-  appliquées en direct (écrites dans `config.toml`, commentaires gardés). En haut, les
-  **profils** : choisir un profil l'applique ; taper un nom puis *Enregistrer* garde les
-  réglages actuels sous ce nom (`%APPDATA%\Essaim\profils\<nom>.toml`), *Supprimer* l'efface.
-  Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*. Les profils ne touchent
-  pas à `[rendu]` (propre à la machine).
+- **Fenêtre des réglages** (`essaim.exe --reglages`, *Réglages…*, ou « Essaim - réglages » dans
+  le menu Démarrer). Elle est claire ou sombre selon le thème des applications de Windows.
+  - *01 Presets* : la grille des presets, chacun animé comme l'essaim autour du pointeur et au
+    rythme du vrai son (en silence, sur un kick de démonstration). Recherche, filtre par source
+    (fournis, mes presets, communauté), aperçus *Direct*, *Survol* ou *Figé*. Un clic applique ;
+    le cadre rouge marque le preset actif. *Enregistrer le preset* garde les réglages actuels
+    (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque.
+  - *02 Réglages* : les réglages courants appliqués en direct, *+ Avancé* pour tous les autres.
+  - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*. Les presets ne touchent
+    pas à `[rendu]` (propre à la machine).
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
 - `essaim.exe --quitter` ferme l'instance en cours.
@@ -127,6 +131,34 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - Limites connues : une note de basse tenue ou une voix grave qui démarre sèchement peut encore
   compter comme un kick (la distinguer demanderait d'écouter plus de 30 ms) ; sur la batterie
   acoustique très propre, l'ancien détecteur faisait un peu mieux (F1 0,93 contre 0,84).
+
+## Bibliothèque de presets (GitHub)
+
+Les presets partagés vivent dans un dépôt GitHub public, `[bibliotheque] depot` dans
+`config.toml` (par défaut `KingsRequin/essaim-presets`). L'appli lit son `index.json` (branche
+`main`) :
+
+```json
+{"version": 1, "presets": [
+  {"nom": "Pollen", "auteur": "pseudo-github", "etiquettes": ["dense", "jaune"],
+   "fichier": "presets/Pollen.toml",
+   "reglages": {"orbite": {"rayon": 26}, "essaim": {"maximum": 40}, "couleur": {"teinte": 50, "vitesse_teinte": 0}}}
+]}
+```
+
+`reglages` reprend les sections de `config.toml` (sauf `[rendu]`) ; les clés absentes prennent
+les valeurs du preset *Défaut*. *Installer* copie le preset dans Mes presets. *Publier* (case du
+panneau d'enregistrement) ouvre GitHub sur la création de `presets/<nom>.toml` dans le dépôt :
+GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index.
+
+## Interface : technique et charte
+
+- La fenêtre est une page web (`ui/`, intégrée à l'exécutable) affichée par WebView2 (fourni
+  avec Windows 10 et 11) via la crate `wry`. Elle n'a accès qu'à ses fichiers et à
+  `raw.githubusercontent.com` ; elle ne parle à l'appli que par messages (`src/reglages.rs`).
+- Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
+  typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
+  `ui/polices/OFL.txt`).
 
 ## Développement
 

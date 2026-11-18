@@ -490,6 +490,18 @@ pub fn open_file(path: &std::path::Path) {
     }
 }
 
+/// Ouvre une page GitHub dans le navigateur (seules ces adresses sont acceptées).
+pub fn open_url(url: &str) {
+    if !url.starts_with("https://github.com/") {
+        log::warn!("adresse refusée : {url}");
+        return;
+    }
+    let wide: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_SHOWNORMAL);
+    }
+}
+
 /// Traite les messages en attente. Renvoie faux quand WM_QUIT est reçu.
 pub fn pump() -> bool {
     unsafe {

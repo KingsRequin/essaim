@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Essaim</title>
+<link rel="stylesheet" href="style.css">
+<script src="apercu.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="fenetre">
+  <header class="entete">
+    <h1 class="t-affiche">ESSAIM</h1>
+    <div class="entete-droite">
+      <div class="ecoute t-label" id="ecoute"><span class="temoin" id="temoin"></span><span id="ecoute-texte">Silence</span></div>
+      <nav class="onglets" role="tablist" aria-label="Vues">
+        <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num">01</span>Presets</button>
+        <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num">02</span>Réglages</button>
+      </nav>
+    </div>
+  </header>
+
+  <section class="vue" id="vue-presets" role="tabpanel" aria-labelledby="onglet-presets">
+    <aside class="colonne">
+      <label style="display: contents"><span class="t-label">Recherche</span>
+        <input class="champ" id="recherche" type="search" placeholder="Nom, @auteur…" autocomplete="off" spellcheck="false">
+      </label>
+      <div>
+        <div class="t-label">Source</div>
+        <div id="sources" style="margin-top: 6px"></div>
+      </div>
+      <div>
+        <div class="t-label">Aperçus animés</div>
+        <div class="groupe-puces" id="modes" style="margin-top: 8px"></div>
+        <p class="t-petit" id="mode-aide" style="margin: 8px 0 0"></p>
+      </div>
+    </aside>
+    <div class="principal">
+      <div class="barre-titre">
+        <span class="t-titre" id="titre-grille">Tous les presets</span>
+        <span class="t-label" id="compte"></span>
+      </div>
+      <p class="t-texte" id="note-commu" hidden></p>
+      <div class="defile" id="defile-grille">
+        <div class="grille" id="grille"></div>
+        <div class="vide" id="vide" hidden></div>
+      </div>
+      <div class="pied">
+        <span class="t-texte" id="pied-texte">Un clic applique le preset. Le cadre rouge marque celui qui tourne autour de ton pointeur.</span>
+        <button class="signal" id="ouvrir-panneau">Enregistrer le preset →</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="vue" id="vue-reglages" role="tabpanel" aria-labelledby="onglet-reglages" hidden>
+    <div class="colonne" style="width: 380px; overflow: visible">
+      <canvas class="scene" id="grand-apercu" style="aspect-ratio: 1"></canvas>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <span class="t-titre" id="nom-actif"></span>
+        <span class="t-petit">Aperçu en direct, calculé comme l'essaim autour de ton pointeur.</span>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <div class="groupe-puces" style="align-items: center; gap: 12px">
+        <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
+        <button class="puce" id="ouvrir-config">Ouvrir config.toml</button>
+      </div>
+    </div>
+    <div class="defile">
+      <div class="reglages" id="reglages"></div>
+      <button class="bascule-avance" id="bascule-avance" aria-expanded="false"><span class="signe" id="signe-avance">+</span> Avancé</button>
+      <div class="avance" id="avance" hidden></div>
+    </div>
+  </section>
+</div>
+
+<div class="voile" id="voile" hidden>
+  <form class="panneau" id="panneau" role="dialog" aria-modal="true" aria-labelledby="titre-panneau">
+    <span class="titre" id="titre-panneau">Nouveau<br>preset</span>
+    <label style="display: flex; flex-direction: column; gap: 6px"><span class="t-label">Nom</span>
+      <input class="champ" id="nom-preset" maxlength="40" placeholder="ex. Nuit blanche" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="case"><input type="checkbox" id="publier"><span>Publier aussi dans la bibliothèque (GitHub). GitHub s'ouvre avec le preset prêt à proposer ; il apparaît pour tous après relecture.</span></label>
+    <p class="t-texte erreur" id="erreur-panneau" role="alert" hidden></p>
+    <div style="flex-grow: 1"></div>
+    <div class="groupe-puces" style="gap: 12px">
+      <button class="signal" type="submit">Enregistrer →</button>
+      <button class="puce" type="button" id="annuler-panneau">Annuler</button>
+    </div>
+  </form>
+</div>
+
+<button class="bandeau" id="bandeau" hidden></button>
+</body>
+</html>

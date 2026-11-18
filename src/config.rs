@@ -15,6 +15,21 @@ pub struct Config {
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
+    pub bibliotheque: Bibliotheque,
+}
+
+/// Bibliothèque de presets partagés, hébergée sur GitHub.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Bibliotheque {
+    /// Dépôt GitHub `propriétaire/nom` : `index.json` à sa racine (branche `main`).
+    pub depot: String,
+}
+
+impl Default for Bibliotheque {
+    fn default() -> Self {
+        Self { depot: "KingsRequin/essaim-presets".into() }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -178,6 +193,9 @@ delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un 
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
 carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
+
+[bibliotheque]
+depot = "KingsRequin/essaim-presets" # dépôt GitHub des presets partagés (index.json à la racine)
 
 [bordure]
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim

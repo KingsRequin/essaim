@@ -132,7 +132,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
 
     let _tray = win::Tray::new()?;
     if open_settings {
-        reglages::open();
+        reglages::open(shared.clone());
     }
     // interface locale pour Horizon, et synchro de teinte avec Prisme
     let ipc_state = Arc::new(ipc::Shared::default());
@@ -176,7 +176,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
                 win::set_paused_label(user_paused);
                 log::info!("{}", if user_paused { "pause" } else { "reprise" });
             }
-            win::CMD_CONFIG => reglages::open(),
+            win::CMD_CONFIG => reglages::open(shared.clone()),
             _ => {}
         }
         while let Ok(c) = ipc_rx.try_recv() {

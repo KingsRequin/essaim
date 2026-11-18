@@ -1,0 +1,239 @@
+/* Essaim — feuille de style de la fenêtre des réglages.
+   Charte : « Essaim » (typographie suisse, un seul accent rouge, tout carré).
+   Clair ou sombre selon le thème des applications de Windows (prefers-color-scheme). */
+
+@font-face {
+  font-family: "Archivo";
+  src: url("polices/Archivo.ttf") format("truetype");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+}
+
+/* ---------- Jetons ---------- */
+:root {
+  --fond: #e8e7e1;
+  --encre: #111111;
+  --encre-2: #3d3c38;
+  --filet: #111111;
+  --survol: #d9d8d1;
+  --signal: #e2231a;
+  --sur-signal: #ffffff;
+  --signal-texte: #b5150e;
+  --scene: #111111;
+  --scene-bord: #111111;
+
+  --esp-1: 4px;
+  --esp-2: 8px;
+  --esp-3: 12px;
+  --esp-4: 16px;
+  --esp-5: 24px;
+  --esp-6: 40px;
+
+  --trait-fin: 1px;
+  --trait-controle: 2px;
+  --trait-souligne: 4px;
+  --trait-epais: 6px;
+
+  --font-affiche: "Archivo", "Arial Narrow", Arial, sans-serif;
+  --battement: 0.45s;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fond: #121211;
+    --encre: #ecebe4;
+    --encre-2: #a3a199;
+    --filet: #3a3935;
+    --survol: #22211e;
+    --signal: #ff3b2f;
+    --sur-signal: #121211;
+    --signal-texte: #ff5a4f;
+    --scene: #000000;
+    --scene-bord: #2c2b28;
+    color-scheme: dark;
+  }
+}
+
+/* ---------- Base ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--fond);
+  color: var(--encre);
+  font-family: var(--font-affiche);
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+button, input { font-family: inherit; color: inherit; }
+:focus-visible { outline: var(--trait-controle) solid var(--signal); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+/* ---------- Typographie ---------- */
+.t-affiche { font-size: 88px; font-weight: 900; font-stretch: 125%; letter-spacing: -0.035em; line-height: 1; margin: 0; }
+.t-chiffre { font-size: 46px; font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
+.t-numero { font-size: 26px; font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
+.t-titre { font-size: 22px; font-weight: 900; font-stretch: 115%; text-transform: uppercase; line-height: 1.1; }
+.t-nav { font-size: 22px; font-weight: 800; font-stretch: 110%; }
+.t-nom { font-size: 16px; font-weight: 900; font-stretch: 110%; text-transform: uppercase; line-height: 1; }
+.t-texte { font-size: 14px; font-weight: 500; line-height: 1.45; }
+.t-petit { font-size: 12px; font-weight: 500; line-height: 1.35; color: var(--encre-2); }
+.t-label { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--encre-2); }
+
+/* ---------- Gabarit ---------- */
+.fenetre { height: 100%; display: flex; flex-direction: column; }
+.entete {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: var(--esp-5);
+  padding: var(--esp-3) var(--esp-6) 0;
+  border-bottom: var(--trait-epais) solid var(--encre);
+  flex-shrink: 0;
+}
+.entete .t-affiche { margin-bottom: -12px; }
+.entete-droite { display: flex; align-items: flex-end; gap: var(--esp-5); padding-bottom: var(--esp-3); }
+.onglets { display: flex; gap: var(--esp-5); }
+.onglet {
+  background: none; border: 0; padding: 0 0 var(--esp-1); cursor: pointer;
+  border-bottom: var(--trait-souligne) solid transparent;
+}
+.onglet .num { margin-right: 6px; }
+.onglet[aria-selected="true"] { border-bottom-color: var(--signal); }
+.onglet[aria-selected="true"] .num { color: var(--signal-texte); }
+.onglet:hover .num { color: var(--signal-texte); }
+
+.ecoute { display: flex; align-items: center; gap: var(--esp-2); }
+.ecoute .temoin { width: 12px; height: 12px; background: var(--encre-2); }
+.ecoute.actif .temoin { background: var(--encre); }
+.ecoute .temoin.coup { animation: coup var(--battement) ease-out; }
+@keyframes coup { 0% { background: var(--signal); } 100% { background: var(--encre); } }
+
+.vue { flex-grow: 1; min-height: 0; display: flex; gap: var(--esp-6); padding: var(--esp-5) var(--esp-6) var(--esp-4); }
+.colonne { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: var(--esp-5); overflow-y: auto; padding-right: 6px; }
+.principal { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--esp-3); }
+.defile { flex-grow: 1; min-height: 0; overflow-y: auto; padding: var(--esp-1) var(--esp-2) var(--esp-1) 0; }
+.barre-titre { display: flex; align-items: baseline; justify-content: space-between; gap: var(--esp-4); border-bottom: var(--trait-fin) solid var(--filet); padding-bottom: var(--esp-2); }
+.pied { display: flex; justify-content: space-between; align-items: center; gap: var(--esp-4); border-top: var(--trait-epais) solid var(--encre); padding-top: var(--esp-3); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--filet); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Composants ---------- */
+
+/* Champ : grande saisie soulignée (recherche, nom d'un preset). */
+.champ {
+  width: 100%; background: transparent; border: 0; outline: 0;
+  border-bottom: var(--trait-souligne) solid var(--encre);
+  font-size: 30px; font-weight: 800; font-stretch: 90%; padding: 2px 0 6px;
+  -webkit-user-select: text; user-select: text;
+}
+.champ::placeholder { color: var(--encre-2); opacity: 0.75; }
+.champ:focus { border-bottom-color: var(--signal); }
+.colonne .champ { font-size: 24px; }
+
+/* Ligne de filtre : libellé à gauche, compte à droite ; la ligne choisie est inversée. */
+.ligne {
+  display: flex; justify-content: space-between; align-items: baseline; width: 100%;
+  background: none; border: 0; border-top: var(--trait-fin) solid var(--filet);
+  padding: 7px var(--esp-1) 6px; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.ligne:hover { background: var(--survol); }
+.ligne[aria-pressed="true"] { background: var(--encre); color: var(--fond); }
+.ligne .compte { font-variant-numeric: tabular-nums; }
+
+/* Puce : bouton secondaire ou bascule (aria-pressed). */
+.puce {
+  background: none; border: var(--trait-controle) solid var(--encre);
+  padding: 6px 10px; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  cursor: pointer; white-space: nowrap;
+}
+.puce:hover { background: var(--survol); }
+.puce[aria-pressed="true"] { background: var(--encre); color: var(--fond); }
+.puce.petite { padding: 4px 7px; font-size: 10.5px; }
+.puce.danger { border-color: var(--signal); color: var(--signal-texte); }
+.puce:disabled { opacity: 0.45; cursor: default; }
+.groupe-puces { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Bouton signal : l'action principale de l'écran, une seule à la fois. */
+.signal {
+  background: var(--signal); color: var(--sur-signal); border: 0;
+  padding: 14px 20px; font-size: 14px; font-weight: 900; font-stretch: 115%; letter-spacing: 0.04em; text-transform: uppercase;
+  cursor: pointer; white-space: nowrap;
+}
+.signal:hover { background: var(--encre); color: var(--fond); }
+
+/* Tuile de preset : numéro, aperçu animé dans un carré sombre, nom, origine. */
+.grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); column-gap: 18px; row-gap: var(--esp-5); }
+.tuile { display: flex; flex-direction: column; gap: 6px; }
+.tuile > button {
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.tuile .tete { display: flex; justify-content: space-between; align-items: baseline; }
+.tuile .scene { aspect-ratio: 1; outline: 0 solid var(--signal); outline-offset: -4px; transition: outline-width 0.1s; }
+.tuile > button:hover .scene { outline-width: 2px; }
+.tuile.active .scene { outline-width: 5px; }
+.tuile.active .t-numero { color: var(--signal-texte); }
+.tuile .actions { display: flex; gap: 6px; min-height: 22px; }
+
+/* Scène : fond des aperçus, toujours sombre (l'essaim est lumineux). */
+.scene { background: var(--scene); box-shadow: inset 0 0 0 1px var(--scene-bord); display: block; width: 100%; }
+
+/* Réglage : libellé, glissière, valeur en grands chiffres. */
+.reglages { display: grid; grid-template-columns: 150px minmax(0, 1fr) 100px; border-top: var(--trait-epais) solid var(--encre); }
+.reglages > * { border-bottom: var(--trait-fin) solid var(--filet); min-height: 62px; display: flex; align-items: center; }
+.reglages > .large { grid-column: span 2; padding: var(--esp-3) 0; flex-wrap: wrap; gap: 6px; }
+.reglages > .glissiere { padding-right: var(--esp-5); }
+.reglages > .valeur { justify-content: flex-end; }
+input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
+
+.avance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 30px; }
+.avance label { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: var(--trait-fin) solid var(--filet); }
+.avance .entete-reglage { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; }
+.avance .entete-reglage b { font-weight: 900; font-variant-numeric: tabular-nums; }
+.bascule-avance {
+  align-self: flex-start; margin-top: var(--esp-3); background: none; border: 0; padding: 6px 0; cursor: pointer;
+  font-size: 20px; font-weight: 900; font-stretch: 115%; text-transform: uppercase;
+}
+.bascule-avance .signe { color: var(--signal-texte); }
+
+/* Nuancier : teintes fixes de l'essaim. */
+.teinte { width: 30px; height: 30px; border: 0; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35); }
+.teinte[aria-pressed="true"] { outline: 3px solid var(--encre); outline-offset: 3px; }
+
+/* Panneau d'enregistrement : rouge, à droite, par-dessus la fenêtre. */
+.voile { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; justify-content: flex-end; z-index: 10; }
+.panneau {
+  width: 460px; max-width: 100%; height: 100%; background: var(--signal); color: var(--sur-signal);
+  padding: var(--esp-6) 36px; display: flex; flex-direction: column; gap: 22px;
+}
+.panneau .t-label { color: var(--sur-signal); }
+.panneau .champ { border-bottom-color: var(--sur-signal); color: var(--sur-signal); }
+.panneau .champ::placeholder { color: var(--sur-signal); opacity: 0.6; }
+.panneau .titre { font-size: 50px; font-weight: 900; font-stretch: 125%; line-height: 0.92; text-transform: uppercase; }
+.panneau .case { display: flex; gap: var(--esp-3); align-items: flex-start; font-size: 14px; font-weight: 600; line-height: 1.45; }
+.panneau .case input { accent-color: var(--encre); width: 18px; height: 18px; margin: 1px 0 0; flex-shrink: 0; }
+.panneau .erreur { font-weight: 800; }
+.panneau .puce { border-color: var(--sur-signal); color: var(--sur-signal); }
+.panneau .signal { background: var(--encre); color: var(--fond); }
+
+/* Bandeau : message bref en bas de la fenêtre. */
+.bandeau {
+  position: fixed; left: var(--esp-6); bottom: var(--esp-4); max-width: 640px; z-index: 20;
+  background: var(--encre); color: var(--fond); border: 0; padding: 14px 18px;
+  font-size: 13px; font-weight: 700; text-align: left; cursor: pointer;
+}
+
+/* État vide ou erreur dans la grille. */
+.vide { padding-top: var(--esp-6); display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-4); max-width: 560px; }
+.vide .zero { font-size: 64px; font-weight: 900; font-stretch: 125%; line-height: 0.9; color: var(--signal-texte); }
+
+@media (max-width: 1000px) {
+  .t-affiche { font-size: 64px; }
+  .colonne { width: 230px; }
+  .vue { gap: var(--esp-5); padding-left: var(--esp-5); padding-right: var(--esp-5); }
+  .entete { padding-left: var(--esp-5); padding-right: var(--esp-5); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ecoute .temoin.coup { animation: none; }
+}

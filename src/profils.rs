@@ -21,7 +21,7 @@ pub struct Profile {
     pub cfg: Config,
 }
 
-fn dir() -> PathBuf {
+pub fn dir() -> PathBuf {
     config::dir().join("profils")
 }
 
