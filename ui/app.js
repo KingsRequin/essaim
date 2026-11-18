@@ -506,6 +506,14 @@ function jaugeImpact(cle) {
 // dans l'unité affichée ; par défaut le nombre lui-même).
 const tpm = { aff: (v) => String(Math.round((v * 60) / (2 * Math.PI))), vers: (x) => (x * 2 * Math.PI) / 60 };
 const pourcent = { aff: (v) => Math.round(v * 100) + " %", vers: (x) => x / 100 };
+// Conditions d'affichage : un réglage dont l'effet est coupé est masqué.
+const SI = {
+  cometes: (r) => r.orbite.cometes,
+  son: (r) => r.audio.actif,
+  fissures: (r) => r.fissures.actives,
+  bordure: (r) => r.bordure.active,
+};
+
 // Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
 // rangée construite à part (effets, trajets, couleur).
 const NORMAUX = [
@@ -513,41 +521,41 @@ const NORMAUX = [
   { special: "effets" },
   { special: "trajet-cometes" },
   { special: "trajet-satellites" },
-  { libelle: "Comètes", section: "orbite", cle: "nombre", min: 1, max: 8, pas: 1, aff: (v) => String(v) },
+  { libelle: "Comètes", section: "orbite", cle: "nombre", si: SI.cometes, min: 1, max: 8, pas: 1, aff: (v) => String(v) },
   { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
   { titre: "Mouvement et couleur" },
   { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
   { libelle: "Rotation du trajet", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
   { special: "couleur" },
   { titre: "Réaction au son" },
-  { libelle: "Satellites", section: "essaim", cle: "maximum", min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
-  { libelle: "Kick", section: "audio", cle: "sensibilite_kick", min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
-  { libelle: "Éclat", section: "eclat", cle: "taille", min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
+  { libelle: "Satellites", section: "essaim", cle: "maximum", si: SI.son, min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
+  { libelle: "Kick", section: "audio", cle: "sensibilite_kick", si: SI.son, min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
+  { libelle: "Éclat", section: "eclat", cle: "taille", si: SI.son, min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
 ];
 const EFFETS = [["Comètes", "orbite", "cometes"], ["Fissures", "fissures", "actives"], ["Bordure", "bordure", "active"], ["Réagir au son", "audio", "actif"]];
 const TEINTES = [0, 25, 50, 95, 150, 190, 215, 260, 295, 330];
 const AVANCES = [
   { groupe: "Orbite" },
-  { libelle: "Anneaux de comètes", section: "orbite", cle: "anneaux", min: 1, max: 4, pas: 1, aff: (v) => String(v) },
-  { libelle: "Vitesse ajoutée par la basse", section: "orbite", cle: "vitesse_basse", min: 0, max: 40, pas: 0.5, aff: (v) => virgule(+v, 1) },
-  { libelle: "Écart des notes graves", section: "orbite", cle: "eloignement_grave", min: 0, max: 4, pas: 0.1, aff: (v) => "+" + Math.round(v * 100) + " %", vers: (x) => x / 100 },
-  { libelle: "Traînée des comètes", section: "orbite", cle: "trainee", min: 0.05, max: 2, pas: 0.05, aff: (v) => virgule(+v, 2) + " s" },
+  { libelle: "Anneaux de comètes", section: "orbite", cle: "anneaux", si: SI.cometes, min: 1, max: 4, pas: 1, aff: (v) => String(v) },
+  { libelle: "Vitesse ajoutée par la basse", section: "orbite", cle: "vitesse_basse", si: SI.son, min: 0, max: 40, pas: 0.5, aff: (v) => virgule(+v, 1) },
+  { libelle: "Écart des notes graves", section: "orbite", cle: "eloignement_grave", si: SI.son, min: 0, max: 4, pas: 0.1, aff: (v) => "+" + Math.round(v * 100) + " %", vers: (x) => x / 100 },
+  { libelle: "Traînée des comètes", section: "orbite", cle: "trainee", si: SI.cometes, min: 0.05, max: 2, pas: 0.05, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Satellites" },
   { libelle: "Satellites permanents", section: "essaim", cle: "fixes", min: 0, max: 32, pas: 1, aff: (v) => String(v) },
-  { libelle: "Ajoutés par kick, au moins", section: "essaim", cle: "par_kick_min", min: 0, max: 10, pas: 1, aff: (v) => String(v) },
-  { libelle: "Ajoutés par kick, au plus", section: "essaim", cle: "par_kick_max", min: 0, max: 10, pas: 1, aff: (v) => String(v) },
-  { libelle: "Durée de vie", section: "essaim", cle: "duree", min: 0.5, max: 10, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+  { libelle: "Ajoutés par kick, au moins", section: "essaim", cle: "par_kick_min", si: SI.son, min: 0, max: 10, pas: 1, aff: (v) => String(v) },
+  { libelle: "Ajoutés par kick, au plus", section: "essaim", cle: "par_kick_max", si: SI.son, min: 0, max: 10, pas: 1, aff: (v) => String(v) },
+  { libelle: "Durée de vie", section: "essaim", cle: "duree", si: SI.son, min: 0.5, max: 10, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
   { groupe: "Couleur" },
   { libelle: "Teinte de départ", section: "couleur", cle: "teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
   { libelle: "Défilement de la teinte", section: "couleur", cle: "vitesse_teinte", min: 0, max: 360, pas: 1, aff: (v) => (+v === 0 ? "fixe" : Math.round(v) + "°/s") },
   { libelle: "Écart tête-queue", section: "couleur", cle: "ecart_teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
   { groupe: "Fissures et bordure" },
-  { libelle: "Taille des fissures", section: "fissures", cle: "taille", min: 0.2, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
-  { libelle: "Durée des fissures", section: "fissures", cle: "duree", min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
-  { libelle: "Éclat de la bordure sur le kick", section: "bordure", cle: "intensite", min: 0, max: 1, pas: 0.05, ...pourcent },
-  { libelle: "Luminosité de la bordure au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
+  { libelle: "Taille des fissures", section: "fissures", cle: "taille", si: SI.fissures, min: 0.2, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+  { libelle: "Durée des fissures", section: "fissures", cle: "duree", si: SI.fissures, min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+  { libelle: "Éclat de la bordure sur le kick", section: "bordure", cle: "intensite", si: SI.bordure, min: 0, max: 1, pas: 0.05, ...pourcent },
+  { libelle: "Luminosité de la bordure au repos", section: "bordure", cle: "repos", si: SI.bordure, min: 0, max: 1, pas: 0.05, ...pourcent },
   { groupe: "Son" },
-  { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
+  { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Cet ordinateur (hors presets)" },
   { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
   { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
@@ -605,11 +613,14 @@ function reglageNumerique(def, id, conteneur, avance) {
   });
   input.addEventListener("dblclick", () => {
     if (!etat.defauts) return;
-    regler(def.section, def.cle, etat.defauts[def.section][def.cle]);
+    const v = etat.defauts[def.section][def.cle];
+    regler(def.section, def.cle, v);
+    input.value = v; // la glissière a le focus : majReglages ne la touche pas
     majReglages();
   });
-  glissieres.push({ def, input, saisie });
-  conteneur(input, saisie);
+  const g = { def, input, saisie, els: [] };
+  glissieres.push(g);
+  g.els = conteneur(input, saisie) || [];
 }
 
 function construireReglages() {
@@ -651,7 +662,9 @@ function construireReglages() {
     zone.append(input);
     const sortie = el("div", "valeur");
     sortie.append(saisie);
-    grille.append(libelleAvecImpact(def.libelle, def.section + "." + def.cle, input.id), zone, sortie);
+    const libelle = libelleAvecImpact(def.libelle, def.section + "." + def.cle, input.id);
+    grille.append(libelle, zone, sortie);
+    return [libelle, zone, sortie];
   }, false);
 
   for (const def of NORMAUX) {
@@ -724,6 +737,7 @@ function construireReglages() {
         tete.append(nom, saisie);
         l.append(tete, input);
         avance.append(l);
+        return [l];
       }, true);
     }
   }
@@ -747,7 +761,9 @@ function majNomActif() {
 
 function majReglages() {
   if (!etat.reglages) return;
-  for (const { def, input, saisie } of glissieres) {
+  for (const { def, input, saisie, els } of glissieres) {
+    const cache = !!def.si && !def.si(etat.reglages);
+    for (const e of els) e.hidden = cache;
     const v = val(def.section, def.cle);
     if (document.activeElement !== input) input.value = v;
     if (document.activeElement !== saisie) saisie.value = def.aff(v);
