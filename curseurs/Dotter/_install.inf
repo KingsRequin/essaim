@@ -1,0 +1,51 @@
+
+[Version]
+signature="$CHICAGO$"
+
+[DefaultInstall]
+CopyFiles = Scheme.Cur, Scheme.Txt
+AddReg    = Scheme.Reg
+
+[DestinationDirs]
+Scheme.Cur = 10,"%CUR_DIR%"
+Scheme.Txt = 10,"%CUR_DIR%"
+
+[Scheme.Reg]
+HKCU,"Control Panel\Cursors\Schemes","%SCHEME_NAME%",,"%10%\%CUR_DIR%\%pointer%,%10%\%CUR_DIR%\%help%,%10%\%CUR_DIR%\%work%,%10%\%CUR_DIR%\%busy%,%10%\%CUR_DIR%\%Cross%,%10%\%CUR_DIR%\%Text%,%10%\%CUR_DIR%\%Hand%,%10%\%CUR_DIR%\%Unavailable%,%10%\%CUR_DIR%\%Vert%,%10%\%CUR_DIR%\%Horz%,%10%\%CUR_DIR%\%Dgn1%,%10%\%CUR_DIR%\%Dgn2%,%10%\%CUR_DIR%\%move%,%10%\%CUR_DIR%\%alternate%,%10%\%CUR_DIR%\%link%,%10%\%CUR_DIR%\%pin%,%10%\%CUR_DIR%\%person%"
+
+; -- Common Information
+
+[Scheme.Cur]
+Dotter.cur
+Clicker.ani
+Cross.ani
+Busy.ani
+Dsize.ani
+Dsize2.ani
+Help.ani
+Hsize.ani
+Move.ani
+Text.ani
+Unna.ani
+Vsize.ani
+Working.ani
+Writing.ani
+
+[Strings]
+CUR_DIR       = "Cursors\Dotter"
+SCHEME_NAME   = "Dotter"
+pointer       = "Dotter.cur"
+help          = "Help.ani"
+work          = "Working.ani"
+busy          = "Busy.ani"
+cross         = "Cross.ani"
+text          = "Text.ani"
+hand          = "Writing.ani"
+unavailable   = "Unna.ani"
+vert          = "Vsize.ani"
+horz          = "Hsize.ani"
+dgn1          = "Dsize.ani"
+dgn2          = "Dsize2.ani"
+move          = "Move.ani"
+alternate     = "Clicker.ani"
+link          = "Clicker.ani"

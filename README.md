@@ -42,8 +42,12 @@ ceux de Windows) avec un aperçu, détaille les 17 curseurs du jeu en place et l
 comme le panneau de la souris (`src/souris.rs`). Les curseurs animés (`.ani`) sont animés dans
 la fenêtre, à leur cadence. Un preset garde le jeu en place quand on l'enregistre, et son
 curseur est dessiné au centre de son aperçu ; avec *Installer les curseurs du preset choisi*,
-appliquer ce preset remet aussi ce jeu. Le pack utilisé avec
-Essaim sera fourni dans ce dépôt, avec le crédit de son auteur.
+appliquer ce preset remet aussi ce jeu.
+
+Le jeu conseillé avec Essaim est fourni dans `curseurs/Dotter` : **Dotter**, par
+[Verticablets](https://www.deviantart.com/verticablets/art/Dotter-856489042), sous licence
+CC BY-NC 3.0 (pas d'utilisation commerciale ; voir `curseurs/Dotter/CREDITS.md`). Son pointeur est
+un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` → *Installer*.
 
 ## Installation
 
