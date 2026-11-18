@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
+# curseurs fournis : fichiers de l'auteur, intacts (fins de ligne CRLF de _install.inf comprises)
+curseurs/** -text
