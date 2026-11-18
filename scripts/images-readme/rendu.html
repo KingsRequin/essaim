@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<body style="margin:0;background:#000">
+<div id="zone"></div>
+<script src="../../ui/apercu.js"></script>
+<script>
+// Son simulé : 120 BPM, kick sur chaque temps, charleston sur les contretemps, basse qui retombe.
+function son(t) {
+  const temps = 0.5, k = Math.floor(t / temps), phase = t - k * temps;
+  return {
+    kicks: k,
+    basse: 0.35 + 0.5 * Math.exp(-phase * 6),
+    hauteur: 42 + 6 * Math.sin(t * 0.7),
+    aigus: Math.floor((t + temps / 2) / temps),
+    brillance: 0.35,
+  };
+}
+
+const curseur = new Promise((ok) => {
+  const img = new Image();
+  img.onload = () => ok({ img, cote: 32, images: 1, durees: [1], chaud: [16, 16] });
+  img.onerror = () => ok(null);
+  img.src = "../../curseurs/Dotter/Dotter.cur";
+});
+
+// Rend `n` images (PNG en data URL) d'un preset, après `chauffe` secondes ; `clics` : numéros
+// d'image où un clic a lieu au centre.
+window.rendre = async (reglages, cote, n, fps, chauffe, clics) => {
+  const c = document.createElement("canvas");
+  c.style.width = c.style.height = cote + "px";
+  document.getElementById("zone").replaceChildren(c);
+  const a = new window.Apercu(c);
+  a.regler(reglages);
+  a.curseur = await curseur;
+  a.dimensionner();
+  let t = 0;
+  for (; t < chauffe; t += 1 / fps) a.avancer(1 / fps, son(t));
+  const images = [];
+  for (let i = 0; i < n; i++, t += 1 / fps) {
+    if ((clics || []).includes(i)) a.clic();
+    a.avancer(1 / fps, son(t));
+    a.dessiner();
+    images.push(c.toDataURL("image/png"));
+  }
+  return images;
+};
+window.pret = true;
+</script>

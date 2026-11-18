@@ -308,6 +308,17 @@ pub fn same(a: &Config, b: &Config) -> bool {
 mod tests {
     use super::*;
 
+    /// Écrit les presets fournis en JSON (`{ nom: réglages }`) dans le fichier `ESSAIM_PRESETS`,
+    /// pour les images du README : `cargo test --release exporter_presets -- --ignored`.
+    #[test]
+    #[ignore]
+    fn exporter_presets() {
+        let sortie = std::env::var("ESSAIM_PRESETS").expect("ESSAIM_PRESETS : fichier de sortie");
+        let presets: serde_json::Map<String, serde_json::Value> =
+            builtins().into_iter().map(|p| (p.name, serde_json::to_value(p.cfg).unwrap())).collect();
+        std::fs::write(sortie, serde_json::to_string(&presets).unwrap()).unwrap();
+    }
+
     #[test]
     fn ecarts_entre_reglages() {
         let a = Config::default();

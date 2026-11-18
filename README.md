@@ -1,240 +1,184 @@
+<div align="center">
+
+<img src="docs/images/logo.png" width="96" alt="Logo d'Essaim">
+
 # Essaim
 
-Surcouche réactive à la musique autour du pointeur de Windows : deux comètes et un essaim de
-satellites en orbite, un éclat sous le pointeur à chaque kick, et des fissures qui s'ouvrent sous
-chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
+**Des comètes et un essaim de satellites qui dansent autour de ton pointeur, au rythme de la
+musique.**
 
-- **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
-- **Quantité de basse** : accélère la rotation.
-- **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
-- **Aigus** (charleston, cymbales) : chaque attaque fait jaillir des étincelles des têtes
-  (`[scintillement]`, passe-haut à 5 kHz, enveloppes rapide et lente).
-- **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
-  moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
-  losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
-  ou un trajet dessiné à la main (`forme = "trace"`, points dans `trace`, parcourus à vitesse
-  constante), qui peut tourner sur lui-même (`rotation`, tours/min) ; les
-  satellites suivent le même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des
-  satellites permanents, même sans musique. Entre deux images, les traînées suivent le vrai
-  trajet (points intermédiaires) : elles restent lisses à grande vitesse.
-- **Couleurs** : une teinte de départ qui tourne en continu ou reste fixe ; ou la couleur
-  dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
-  exécutable ; les icônes grises gardent la teinte précédente) ; dans un navigateur, celle du
-  site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
-  mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
-  précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
-  RGB. Avec `[couleur] musique`, la teinte glisse en plus avec la basse et la brillance du son.
-- **Clics** : une onde de choc (`[clic] onde`) et, au choix, des éclats (`eclats`), en plus des
-  fissures.
-- **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`).
-- **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
-  s'illumine sur chaque kick (Windows 11).
+Une surcouche pour Windows qui écoute le son du PC (Spotify, navigateur, jeux…) : chaque kick
+inverse la rotation et lâche des satellites, la basse accélère et éloigne les orbites, les
+cymbales font jaillir des étincelles.
 
-Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut) : Spotify,
-navigateur, jeux… sans rien configurer.
+[![Licence MIT](https://img.shields.io/badge/licence-MIT-blue?style=flat-square)](LICENSE)
+![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?style=flat-square&logo=windows)
+![Rust](https://img.shields.io/badge/Rust-Direct2D-orange?style=flat-square&logo=rust)
 
-## Curseurs
+[**Installer**](#installation) ·
+[Fonctions](#fonctions) ·
+[Questions](#questions-fréquentes) ·
+[Guide complet](docs/guide.md) ·
+[English](README.en.md)
 
-Essaim ne dessine pas le pointeur : il reste un vrai curseur Windows. On installe un pack de
-curseurs comme d'habitude (clic droit → Installer sur le fichier `.inf` du pack), puis on le
-choisit dans l'onglet *03 Curseurs*, qui liste les jeux installés (ceux de l'utilisateur et
-ceux de Windows) avec un aperçu, détaille les 17 curseurs du jeu en place et les met en place
-comme le panneau de la souris (`src/souris.rs`). Les curseurs animés (`.ani`) sont animés dans
-la fenêtre, à leur cadence. Un preset garde le jeu en place quand on l'enregistre, et son
-curseur est dessiné au centre de son aperçu ; avec *Installer les curseurs du preset choisi*,
-appliquer ce preset remet aussi ce jeu.
+<img src="docs/images/hero.gif" alt="Quatre presets d'Essaim autour du pointeur : cercle, triangle, hexagone et huit, qui pulsent sur les kicks" width="100%">
 
-Le jeu conseillé avec Essaim est fourni dans `curseurs/Dotter` : **Dotter**, par
-[Verticablets](https://www.deviantart.com/verticablets/art/Dotter-856489042), sous licence
-CC BY-NC 3.0 (pas d'utilisation commerciale ; voir `curseurs/Dotter/CREDITS.md`). Son pointeur est
-un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` → *Installer*.
+</div>
+
+## Pourquoi Essaim ?
+
+- **Il écoute vraiment la musique.** Le kick est reconnu par un petit modèle appris sur de vrais
+  morceaux (électro, dubstep, rap, rock…), en 25 ms environ : l'essaim tombe sur le temps, pas
+  après. Rien à brancher : Essaim écoute ce que joue Windows.
+- **Ton pointeur reste le tien.** C'est le vrai curseur de Windows, sans aucun retard ; Essaim
+  dessine seulement autour, dans un calque transparent aux clics.
+- **Léger.** Dessiné par la carte graphique : 0,35 ms de calcul par image au banc d'essai, environ
+  3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
+- **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; des presets animés en
+  direct ; chaque réglage appliqué tout de suite, avec son coût affiché.
+
+## Fonctions
+
+<table>
+<tr>
+<td width="33%" valign="top"><img src="docs/images/kick.gif" alt="Preset Intense qui pulse sur les kicks"></td>
+<td width="33%" valign="top"><img src="docs/images/trace.gif" alt="Comètes sur un trajet en trèfle dessiné à la main"></td>
+<td width="33%" valign="top"><img src="docs/images/clic.gif" alt="Onde de choc et éclats au clic"></td>
+</tr>
+<tr>
+<td valign="top"><b>Il suit la musique</b> : le kick inverse la rotation et ajoute des
+satellites, la basse accélère, une note grave éloigne les orbites, les aigus scintillent.</td>
+<td valign="top"><b>Ton propre trajet</b> : trace une boucle à la souris, les comètes la
+parcourent à vitesse constante. Ou choisis parmi 14 formes, qui peuvent tourner sur elles-mêmes.</td>
+<td valign="top"><b>Il réagit aux clics</b> : onde de choc, éclats et fissures qui se
+referment. Et un sillage de poussière quand la souris file.</td>
+</tr>
+</table>
+
+**La fenêtre des réglages.** Une grille de presets, chacun animé en direct avec ta musique : un
+clic l'applique. Enregistre les tiens, compare-en deux côte à côte, filtre par forme.
+
+<img src="docs/images/presets.png" alt="Onglet Presets : dix presets fournis, animés" width="100%">
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Onglet Réglages : aperçu en grand, formes, glissières"></td>
+<td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Onglet Curseurs : jeux de curseurs installés"></td>
+</tr>
+<tr>
+<td valign="top"><b>Réglages</b> appliqués en direct sur un grand aperçu. À côté de chacun, une
+note de 1 à 10 dit ce qu'il coûte en puissance ; la puissance utilisée est mesurée en direct.</td>
+<td valign="top"><b>Curseurs</b> : tes jeux de curseurs Windows, animés, mis en place d'un clic.
+Un preset peut emporter le sien.</td>
+</tr>
+</table>
+
+| | |
+|---|---|
+| 🥁 **Kick** | Inverse le sens de rotation, ajoute des satellites, éclat sous le pointeur |
+| 🔊 **Basse** | Accélère la rotation ; plus la note est grave, plus les orbites s'éloignent |
+| ✨ **Aigus** | Charleston et cymbales font jaillir des étincelles |
+| 🎨 **Couleur** | Teinte fixe ou qui défile, couleur de l'appli au premier plan, du site ouvert dans le navigateur, ou qui glisse avec la musique |
+| 🪟 **Bordure** | La bordure de la fenêtre active prend la couleur de l'essaim et s'illumine sur chaque kick |
+| 🖱️ **Clics** | Onde de choc, éclats, fissures |
+| 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un widget d'Horizon met Essaim en pause et le règle depuis la barre |
+
+**Et aussi :** preset automatique selon l'appli au premier plan ou l'heure, raccourcis globaux
+(<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> preset suivant, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
+pause), presets dans le menu de l'icône, export de l'aperçu en GIF, *Surprends-moi*, thème clair
+ou sombre comme Windows. Le jeu de curseurs **Dotter** (un simple point) est fourni.
+
+Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## Installation
 
-`scripts\install.ps1` (sans droits administrateur) : compile, copie dans
-`%LOCALAPPDATA%\Programs\Essaim`, lance Essaim à l'ouverture de session (clé Run de HKCU) et
-ajoute au menu Démarrer « Essaim » et « Essaim - réglages ». `-NoBuild` reprend
-la dernière compilation. Désinstaller : `scripts\uninstall.ps1` (réglages conservés).
+Pas encore de version prête à télécharger : Essaim se compile en une commande.
 
-## Utilisation
+1. Installe [Rust](https://rustup.rs) et [Git](https://git-scm.com).
+2. Dans PowerShell :
+   ```powershell
+   git clone https://github.com/KingsRequin/essaim
+   cd essaim
+   powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+   ```
+   Essaim est compilé, copié dans `%LOCALAPPDATA%\Programs\Essaim`, démarre avec Windows et
+   apparaît dans le menu Démarrer (« Essaim » et « Essaim - réglages »). Pas besoin de droits
+   administrateur.
+3. *(Conseillé)* Installe le curseur **Dotter** : clic droit sur
+   `curseurs\Dotter\_install.inf` → *Installer*, puis choisis-le dans l'onglet *03 Curseurs*.
 
-- Icône de notification : *Mettre en pause*, *Réglages…*, *Presets* (celui en place coché),
-  *Quitter*.
-- **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
-  (une bulle de l'icône le nomme), Ctrl+Alt+P pause. Ils passent par `RegisterHotKey` : Windows
-  prévient Essaim de ces seules touches, sans hook sur le clavier.
-- **Preset automatique** (`[automatique]`) : un preset par application au premier plan (nom de
-  l'exécutable, prioritaire) ou par plage horaire (qui peut passer minuit). Quand plus aucune
-  règle ne s'applique, les réglages d'avant reviennent. Les fenêtres d'Essaim ne comptent pas.
-- **Fenêtre des réglages** (`essaim.exe --reglages`, *Réglages…*, ou « Essaim - réglages » dans
-  le menu Démarrer). Elle est claire ou sombre selon le thème des applications de Windows.
-  - *01 Presets* : la grille des presets, chacun animé comme l'essaim autour du pointeur et au
-    rythme du vrai son (en silence, sur un kick de démonstration). Recherche, filtre par source
-    (fournis, mes presets, communauté), aperçus *Direct*, *Survol* ou *Figé*. Un clic applique ;
-    le cadre rouge marque le preset actif. *Enregistrer le preset* garde les réglages actuels
-    (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque. Filtre par
-    forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
-    montre côte à côte avec la liste de leurs réglages différents.
-  - *02 Réglages* : les réglages courants appliqués en direct, *+ Avancé* pour tous les autres.
-    Un réglage dont l'effet est coupé (fissures, bordure, son, comètes…) est masqué. *Dessiné…*
-    ouvre une toile où tracer le trajet d'un geste. Un clic sur l'aperçu y montre l'effet du
-    clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
-    `Images\Essaim` et le montre dans l'Explorateur.
-  - *04 Auto* : les règles du preset automatique et les raccourcis.
-  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Avancé*).
-  - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
-    niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
-    *Aigus* s'allume sur les attaques des aigus.
-  - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
-    (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
-  - Une valeur de réglage se tape au clavier (clic dessus, Entrée) ; double-clic sur une
-    glissière : valeur par défaut.
-  - À côté de chaque réglage, dix cases notent son impact sur la puissance (1 à 10), mesuré par
-    le banc `mesure_impact_reglages` (coût d'une image au minimum puis au maximum du réglage) ;
-    quelques réglages hors du banc ont un score estimé, signalé comme tel. Ce qui pèse : la
-    carte graphique (10), la cadence (7), le rayon (4) ; le reste compte peu.
-  - Presets : favoris, tri (nom, récents), menu *Gérer* (dupliquer ; pour les tiens : renommer,
-    exporter vers l'Explorateur, supprimer), import d'un fichier `.toml` (bouton ou glisser sur
-    la fenêtre). Un preset appliqué s'annule par *Annuler* dans le message ou Ctrl+Z. Le preset
-    dont les réglages en cours s'écartent de peu est marqué *modifié* (cadre pointillé).
-  - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
-  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Avancé*.
-  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 4 onglets,
-    Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause.
-  - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*, *Delta*, *Ruche*,
-    *Huit*, *Pollen*, *Losange*, *Spirale*, chacun refaisable à la main dans les réglages. Les
-    presets ne touchent pas à `[rendu]` (propre à la machine) ni à l'option des curseurs.
-- Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
-- Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
-- `essaim.exe --quitter` ferme l'instance en cours.
-- `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été
-  tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
-  lancement suivant aussi).
+Ensuite : icône d'Essaim dans la zone de notification → *Réglages…*
 
-## Fonctionnement
+Désinstaller : `scripts\uninstall.ps1` (tes réglages sont gardés).
 
-- **Pointeur** : celui de Windows, jamais dessiné par l'appli (il aurait une image de retard).
-  L'appli dessine autour : sphères, éclat du kick sous le pointeur (`[eclat] taille`, 0 = aucun)
-  et fissures.
-- **Rendu** : un calque **immobile** par écran, de la taille de l'écran, transparent aux clics
-  et toujours devant (une fenêtre qui bouge ou apparaît sous la souris fait redemander leur
-  curseur aux applications, et l'Explorateur répondait « flèche »). Seule la zone qui change
-  est effacée et redessinée. Deux moteurs (`backend.rs`), même interface de dessin
-  (`canvas.rs`) :
-  - **carte graphique** (par défaut, `gpu.rs`) : DirectComposition + surface virtuelle Direct2D,
-    tout dessiné en un **lot de sprites** (une pastille ronde recopiée des milliers de fois ; un
-    trait = une rangée de pastilles). Tracer chaque trait avec `DrawLine` coûtait plus que le
-    moteur processeur (Direct2D découpe chaque trait lissé sur le processeur) ;
-  - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
-    modifiée. Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
-  Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
-  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`.
-- **Bordure** (`bordure.rs`, section `[bordure]`) : `DwmSetWindowAttribute(DWMWA_BORDER_COLOR)`
-  sur la fenêtre au premier plan, lue par `GetForegroundWindow` à chaque image (pas de hook).
-  Couleur = tête de l'essaim (teinte Prisme ou cycle propre) à la luminosité `repos` (0,5) ; sur
-  un kick, montée immédiate vers la couleur pleine (`intensite`, 1) puis retombée en 0,35 s.
-  Une seule fenêtre colorée : l'ancienne retrouve la couleur du système au changement de premier
-  plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
-  notée dans `bordure.hwnd` pour le cas où Essaim est tué). Ignorées : fenêtres sans cadre, outils
-  (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, fenêtres d'Essaim, plein écran. Couleur
-  quantifiée, envoyée seulement si elle change (60 fois par seconde au plus) ; une fenêtre qui
-  refuse (appli administrateur) est notée une fois au journal. Essai réel :
-  `cargo test --release bordure_reelle -- --ignored --nocapture` avec un Bloc-notes ouvert.
-- **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
-  d'origine revient.
-- **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
-- **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
-  frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
-  (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
-  écrans change (`WM_DISPLAYCHANGE`).
-- **Kick** : un seul par coup, même long et ondulant (type 808) : un kick est une attaque, et deux
-  attaques doivent être séparées d'au moins `[audio] delai_kick` (0,1 s ; la double pédale du metal
-  descend vers 0,08 s).
-- **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
-- **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
-  tard, puis toutes les 30 s.
+## Questions fréquentes
 
-## Interface locale (widget Horizon)
+<details>
+<summary><b>Est-ce que ça ralentit mon PC ou mes jeux ?</b></summary>
 
-WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 = hooks
-d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
-(`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
-bornées ; par exemple `bordure`/`intensite`), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
-Pages web refusées (en-tête `Origin`), 8 clients au plus, 3 s pour la poignée de main. Le
-widget Essaim d'Horizon s'en sert (pause au clic, réglages en direct dans son panneau).
+Avec la carte graphique, une image coûte 0,35 ms de calcul au banc d'essai ; en usage, environ
+3 % d'un cœur du processeur. Quand une fenêtre passe en plein écran (jeu, vidéo), tout s'arrête ; au repos (souris
+immobile, pas de musique), la cadence baisse. La fenêtre des réglages affiche la puissance
+utilisée, mesurée en direct.
+</details>
 
-## Consommation (mesurée le 2026-11-14)
+<details>
+<summary><b>Essaim remplace-t-il mon curseur ?</b></summary>
 
-Banc d'essai `cargo test --release mesure_moteurs -- --ignored --nocapture` (essaim plein,
-simulation comprise) : **0,35 ms par image** avec la carte graphique, 1,09 ms avec le
-processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le coût de tiny-skia
-est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
-(pas de gain, bugs connus).
+Non. Le pointeur reste un vrai curseur de Windows (il n'aurait pas de retard autrement) : Essaim
+dessine seulement autour. Il ne change de jeu de curseurs que si tu le lui demandes (onglet
+*Curseurs*, ou un preset appliqué avec l'option cochée).
+</details>
 
-## Analyse du son (audio-commun, `src/kick.rs`)
+<details>
+<summary><b>Est-ce qu'Essaim surveille mon clavier ou ma navigation ?</b></summary>
 
-La capture et l'analyse sont dans la bibliothèque partagée `audio-commun` (aussi utilisée par
-Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'affichage.
+Non. Pas de hook clavier ni souris : les clics sont lus à chaque image, et les raccourcis passent
+par `RegisterHotKey` (Windows ne prévient Essaim que pour ces touches-là). La couleur du site
+vient d'une petite bande du haut de la page à l'écran ; le titre de la fenêtre sert seulement à
+voir qu'on a changé de page. L'adresse n'est pas lue, et rien n'est noté ni envoyé : Essaim ne
+se connecte qu'à GitHub, pour la bibliothèque de presets.
+</details>
 
-Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
+<details>
+<summary><b>L'essaim ne réagit pas au son.</b></summary>
 
-- **Kick** : 5 bandes (biquads, pas de FFT) suivies tous les 5 ms ; chaque pic de montée
-  d'énergie est jugé par un petit réseau appris sur de vrais morceaux, 10, 20 ou 30 ms après
-  l'attaque selon sa netteté (délai médian mesuré : 25–30 ms). `sensibilite_kick` règle le dernier
-  seuil ; sans kick depuis 4 s (intro, montée, reprise après une pause), le premier doit être franc.
-  Détails et banc d'essai : README d'`audio-commun`, section « Kick » (F1 0,18 → 0,81 sur 107
-  morceaux d'électro, dubstep, hardstyle, rap, pop et rock ; l'ancien détecteur, qui n'écoutait
-  que le sub, avait 50 à 150 ms de retard en électro, où le sub arrive après l'attaque).
-- **Niveau de basse** : énergie du grave (3 passe-bas à 90 Hz) en dB, rapportée au pic récent du
-  morceau (plage de 20 dB).
-- **Hauteur** : autocorrélation du grave sous-échantillonné à ~1 kHz, 25–83 Hz, mise à jour hors
-  des kicks.
-- Limites connues : une note de basse tenue ou une voix grave qui démarre sèchement peut encore
-  compter comme un kick (la distinguer demanderait d'écouter plus de 30 ms) ; sur la batterie
-  acoustique très propre, l'ancien détecteur faisait un peu mieux (F1 0,93 contre 0,84).
+Essaim écoute la sortie audio *par défaut* de Windows. Si ta musique passe par une autre sortie,
+mets-la par défaut. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
+basse, note).
+</details>
 
-## Bibliothèque de presets (GitHub)
+<details>
+<summary><b>Et Windows 10 ?</b></summary>
 
-Les presets partagés vivent dans un dépôt GitHub public, `[bibliotheque] depot` dans
-`config.toml` (par défaut `KingsRequin/essaim-presets`). L'appli lit son `index.json` (branche
-`main`) :
+Essaim est développé et testé sous Windows 11. La bordure colorée en a besoin ; le reste devrait
+marcher sous Windows 10 (avec WebView2, installé avec Edge), mais n'y a pas été essayé.
+</details>
 
-```json
-{"version": 1, "presets": [
-  {"nom": "Pollen", "auteur": "pseudo-github", "etiquettes": ["dense", "jaune"],
-   "fichier": "presets/Pollen.toml",
-   "reglages": {"orbite": {"rayon": 26}, "essaim": {"maximum": 40}, "couleur": {"teinte": 50, "vitesse_teinte": 0}}}
-]}
-```
+<details>
+<summary><b>Où sont mes réglages ?</b></summary>
 
-`reglages` reprend les sections de `config.toml` (sauf `[rendu]`) ; les clés absentes prennent
-les valeurs du preset *Défaut*. *Installer* copie le preset dans Mes presets. *Publier* (case du
-panneau d'enregistrement) ouvre GitHub sur la création de `presets/<nom>.toml` dans le dépôt :
-GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index.
+Dans `%APPDATA%\Essaim` : `config.toml` (commenté, modifiable à la main), tes presets dans
+`profils\`, et le journal `essaim.log`.
+</details>
 
-## Interface : technique et charte
+## Feuille de route
 
-- La fenêtre est une page web (`ui/`, intégrée à l'exécutable) affichée par WebView2 (fourni
-  avec Windows 10 et 11) via la crate `wry`. Elle n'a accès qu'à ses fichiers et à
-  `raw.githubusercontent.com` ; elle ne parle à l'appli que par messages (`src/reglages.rs`).
-- Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
-  typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
-  `ui/polices/OFL.txt`).
+- **Version prête à télécharger** (Releases GitHub), sans avoir à compiler.
+- **Bibliothèque de presets partagés** sur GitHub : publier les tiens, installer ceux des autres.
+- **D'autres curseurs en point**, pensés pour aller avec l'essaim.
 
-## Développement
+## Fait avec Claude Code
 
-`cargo build --release` suffit : l'analyse du son vient de la bibliothèque
-[audio-commun](https://github.com/KingsRequin/audio-commun) (tag `v0.1.0`), partagée avec Horizon.
-Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
-suivi par git) :
+Essaim a été entièrement écrit avec [Claude Code](https://claude.com/claude-code), l'agent de
+programmation d'Anthropic. [KingsRequin](https://github.com/KingsRequin) l'a conçu et a supervisé
+tout le travail : chaque fonction a été décidée, relue et essayée en vrai sur un PC à quatre
+écrans avant d'être gardée.
 
-```toml
-[patch."https://github.com/KingsRequin/audio-commun"]
-audio-commun = { path = "../audio-commun" }
-```
+## Contribuer
 
-Le même fichier peut fixer le dossier de compilation (`[build] target-dir`). Consignes de
-travail : `CLAUDE.md`.
+Bugs et idées : [issues](https://github.com/KingsRequin/essaim/issues). Fonctionnement interne,
+compilation et analyse du son : [docs/technique.md](docs/technique.md).
 
 ## Licence
 
