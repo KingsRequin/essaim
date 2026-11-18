@@ -177,7 +177,7 @@ mod tests {
         fn cout(cfg: &Config, gpu: bool) -> f64 {
             let dt = 1.0 / 144.0;
             let mut s = Swarm::new();
-            let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0 };
+            let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0, ..Default::default() };
             let mut b = Backend::new(gpu);
             let mons = [(1isize, (0, 0, 1920, 1080))];
             let (chauffe, n) = (150, 250);
@@ -247,7 +247,7 @@ mod tests {
         let dt = 1.0 / 144.0;
         for gpu in [true, false] {
             let mut s = Swarm::new();
-            let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0 };
+            let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0, ..Default::default() };
             let mut b = Backend::new(gpu);
             let mons = [(1isize, (0, 0, 1920, 1080))];
             let n = 300;

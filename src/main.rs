@@ -128,6 +128,7 @@ fn main() {
 
 fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut conf = config::Watched::load();
+    render::set_trace(&conf.cfg.orbite.trace);
     let shared = Arc::new(audio::AudioShared::default());
     shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
     shared.set_min_gap(conf.cfg.audio.delai_kick);
@@ -228,6 +229,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         }
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
+            render::set_trace(&conf.cfg.orbite.trace);
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
             match (conf.cfg.audio.actif, audio_thread.is_some()) {
@@ -285,6 +287,9 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
 
         // clic gauche : nouvelle fissure (son image est faite une fois, puis recopiée)
         let down = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0;
+        if down && !was_down && (cfg.clic.onde || cfg.clic.eclats) {
+            swarm.clic(cursor.0, cursor.1, t, cfg, scale);
+        }
         if down && !was_down && cfg.fissures.actives {
             if cracks.len() >= MAX_CRACKS {
                 cracks.remove(0);
@@ -314,8 +319,10 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         let dt = (now - last).as_secs_f32().clamp(0.0005, 0.05);
         last = now;
 
-        // simulation
+        // simulation ; teinte qui glisse avec la musique, lissée (~150 ms)
         swarm.update(t, dt, cursor, au, cfg, scale);
+        let d = render::decalage();
+        render::set_decalage(d + (render::decalage_vise(&au) - d) * (dt * 6.0).min(1.0));
         // teinte imposée : celle de l'application au premier plan, sinon celle de l'éclairage
         // (Prisme) ; suivie en douceur, en passant par le plus court
         let cible = if cfg.couleur.application || cfg.couleur.site {

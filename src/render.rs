@@ -51,6 +51,76 @@ impl Rng {
 /// Teinte de base imposée par la synchro avec l'éclairage (bits d'un f32 ; NaN = aucune).
 static SYNC_HUE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x7FC0_0000);
 
+/// Décalage de teinte (degrés) suivant la musique (`[couleur] musique`), lissé par la boucle.
+static DECALAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_decalage(d: f32) {
+    DECALAGE.store(d.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn decalage() -> f32 {
+    f32::from_bits(DECALAGE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Décalage visé : jusqu'à 160° quand la basse est forte et la musique brillante.
+pub fn decalage_vise(au: &AudioView) -> f32 {
+    160.0 * (0.6 * au.bass.clamp(0.0, 1.0) + 0.4 * au.brillance.clamp(0.0, 1.0))
+}
+
+/// Trajet dessiné à la main, rééchantillonné à pas égaux (vide : cercle).
+static TRACE: std::sync::RwLock<Vec<(f32, f32)>> = std::sync::RwLock::new(Vec::new());
+
+/// Remplace le trajet dessiné : points rééchantillonnés à 256 pas égaux le long de la courbe
+/// fermée, centrés, et mis à l'échelle (rayon le plus grand : 1,2).
+pub fn set_trace(points: &[[f32; 2]]) {
+    let pts = reechantillonner(points);
+    if let Ok(mut t) = TRACE.write() {
+        *t = pts;
+    }
+}
+
+fn reechantillonner(points: &[[f32; 2]]) -> Vec<(f32, f32)> {
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    let p: Vec<(f32, f32)> = points.iter().map(|q| (q[0], q[1])).collect();
+    let n = p.len();
+    let long = |i: usize| {
+        let (a, b) = (p[i], p[(i + 1) % n]);
+        ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
+    };
+    let total: f32 = (0..n).map(long).sum();
+    if total <= 1e-6 {
+        return Vec::new();
+    }
+    let (mut out, mut i, mut fait) = (Vec::with_capacity(256), 0usize, 0f32);
+    for k in 0..256 {
+        let cible = total * k as f32 / 256.0;
+        while i < n - 1 && fait + long(i) < cible {
+            fait += long(i);
+            i += 1;
+        }
+        let f = if long(i) > 0.0 { ((cible - fait) / long(i)).clamp(0.0, 1.0) } else { 0.0 };
+        let (a, b) = (p[i], p[(i + 1) % n]);
+        out.push((a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f));
+    }
+    let (cx, cy) = out.iter().fold((0.0, 0.0), |s, q| (s.0 + q.0 / 256.0, s.1 + q.1 / 256.0));
+    let r = out.iter().map(|q| ((q.0 - cx).powi(2) + (q.1 - cy).powi(2)).sqrt()).fold(0.0f32, f32::max).max(1e-6);
+    out.iter().map(|q| ((q.0 - cx) / r * 1.2, (q.1 - cy) / r * 1.2)).collect()
+}
+
+fn trace(a: f32) -> (f32, f32) {
+    let Ok(t) = TRACE.read() else { return (a.cos(), a.sin()) };
+    if t.len() < 3 {
+        return (a.cos(), a.sin());
+    }
+    let n = t.len() as f32;
+    let u = (a / TAU * n).rem_euclid(n);
+    let (i, f) = (u.floor() as usize, u.fract());
+    let (p, q) = (t[i % t.len()], t[(i + 1) % t.len()]);
+    (p.0 + (q.0 - p.0) * f, p.1 + (q.1 - p.1) * f)
+}
+
 /// Teinte de base imposée en ce moment (application, Prisme), en degrés.
 pub fn sync_hue() -> Option<f32> {
     Some(f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed))).filter(|h| h.is_finite())
@@ -66,6 +136,7 @@ pub fn set_sync_hue(h: Option<f32>) {
 pub fn prisme(cfg: &Config, t: f64, k: f32) -> (u8, u8, u8) {
     let synced = f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed));
     let base = if synced.is_finite() { synced } else { (cfg.couleur.teinte + t as f32 * cfg.couleur.vitesse_teinte).rem_euclid(360.0) };
+    let base = if cfg.couleur.musique { base + decalage() } else { base };
     let tail = base + cfg.couleur.ecart_teinte;
     let mut dh = base - tail;
     if dh > 180.0 {
@@ -112,6 +183,41 @@ fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
         tr.pop_front();
     }
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Genre {
+    /// Étincelle (aigus, éclats de clic) : point vif qui ralentit et s'éteint.
+    Etincelle,
+    /// Onde de choc d'un clic : anneau qui s'élargit (`taille` = rayon final).
+    Onde,
+    /// Poussière du sillage de la souris.
+    Poussiere,
+}
+
+#[derive(Clone, Copy)]
+struct Particule {
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    ne: f64,
+    vie: f32,
+    taille: f32,
+    genre: Genre,
+}
+
+impl Particule {
+    /// Demi-côté du carré qui contient ce qui est dessiné.
+    fn portee(&self) -> f32 {
+        match self.genre {
+            Genre::Onde => self.taille + 4.0,
+            _ => self.taille * 2.5,
+        }
+    }
+}
+
+/// Particules vivantes au plus (au-delà, les plus vieilles s'en vont).
+const MAX_PARTICULES: usize = 400;
 
 struct Sat {
     a: f32,
@@ -165,6 +271,7 @@ pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
         Forme::Lissajous => (0.9 * (3.0 * a).cos(), 0.85 * (2.0 * a).sin()),
         // astroïde : étoile à quatre branches courbes
         Forme::Astroide => (1.3 * a.cos().powi(3), 1.3 * a.sin().powi(3)),
+        Forme::Trace => trace(a),
     }
 }
 
@@ -189,6 +296,9 @@ pub struct Swarm {
     /// Satellites permanents (`[essaim] fixes`).
     fixes: Vec<Sat>,
     kicks_seen: Option<u32>,
+    aigus_vus: Option<u32>,
+    particules: Vec<Particule>,
+    dernier_curseur: Option<(f32, f32)>,
     center: Option<(f32, f32)>,
     pitch: f32,
     /// Éclat du dernier kick, 1 → 0.
@@ -207,6 +317,9 @@ impl Swarm {
             trails: Vec::new(),
             sats: Vec::new(),
             fixes: Vec::new(),
+            aigus_vus: None,
+            particules: Vec::new(),
+            dernier_curseur: None,
             kicks_seen: None,
             center: None,
             pitch: 50.0,
@@ -220,6 +333,10 @@ impl Swarm {
         // anneau de l'éclat : jusqu'à 7,5 fois sa taille, plus son épaisseur
         let ring = ((eclat * 7.5 + 1.5) * scale - (2.4 * 2.6 + 3.5 * 2.6 + MARGIN) * scale).max(0.0);
         let mut b = (cursor.0 - ring, cursor.1 - ring, cursor.0 + ring, cursor.1 + ring);
+        for p in &self.particules {
+            let e = p.portee();
+            b = (b.0.min(p.x - e), b.1.min(p.y - e), b.2.max(p.x + e), b.3.max(p.y + e));
+        }
         let pts = self.trails.iter().chain(self.sats.iter().chain(&self.fixes).map(|s| &s.trail)).flat_map(|tr| tr.iter());
         for &(_, x, y) in pts {
             b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
@@ -265,6 +382,56 @@ impl Swarm {
             }
         }
         self.env *= (-dt * 9.0).exp();
+
+        // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
+        let nouveaux = self.aigus_vus.map_or(0, |a| au.aigus.wrapping_sub(a)).min(4);
+        self.aigus_vus = Some(au.aigus);
+        if cfg.scintillement.actif {
+            let tetes: Vec<(f32, f32)> =
+                self.trails.iter().chain(self.sats.iter().chain(&self.fixes).map(|s| &s.trail)).filter_map(|tr| tr.back().map(|p| (p.1, p.2))).collect();
+            for _ in 0..nouveaux * cfg.scintillement.quantite.round().max(1.0) as u32 {
+                let (x, y) = if tetes.is_empty() {
+                    let a = self.rng.range(0.0, TAU);
+                    (cx + a.cos() * cfg.orbite.rayon * scale, cy + a.sin() * cfg.orbite.rayon * scale)
+                } else {
+                    tetes[(self.rng.f() * tetes.len() as f32) as usize % tetes.len()]
+                };
+                let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(30.0, 90.0) * scale);
+                let vie = self.rng.range(0.3, 0.55);
+                let taille = self.rng.range(1.1, 2.1) * scale;
+                self.particules.push(Particule { x, y, vx: a.cos() * v, vy: a.sin() * v, ne: t, vie, taille, genre: Genre::Etincelle });
+            }
+        }
+        // sillage : poussière le long du trajet de la souris quand elle file vite
+        if let (true, Some(avant)) = (cfg.sillage.actif, self.dernier_curseur) {
+            let (dx, dy) = (cursor.0 - avant.0, cursor.1 - avant.1);
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist / dt.max(1e-3) > 700.0 * scale && dist < 600.0 * scale {
+                let n = ((cfg.sillage.densite * dist / (60.0 * scale)).round() as usize).min(14);
+                for i in 0..n {
+                    let f = (i as f32 + self.rng.f()) / n.max(1) as f32;
+                    let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(5.0, 30.0) * scale);
+                    let vie = self.rng.range(0.35, 0.7);
+                    let taille = self.rng.range(0.7, 1.7) * scale;
+                    let (x, y) = (avant.0 + dx * f, avant.1 + dy * f);
+                    self.particules.push(Particule { x, y, vx: a.cos() * v - dx / dt * 0.05, vy: a.sin() * v - dy / dt * 0.05, ne: t, vie, taille, genre: Genre::Poussiere });
+                }
+            }
+        }
+        self.dernier_curseur = Some(cursor);
+        // particules : avancent en ralentissant, puis s'éteignent
+        let frein = (-dt * 3.0).exp();
+        for p in &mut self.particules {
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vx *= frein;
+            p.vy *= frein;
+        }
+        self.particules.retain(|p| t - p.ne < p.vie as f64);
+        if self.particules.len() > MAX_PARTICULES {
+            let trop = self.particules.len() - MAX_PARTICULES;
+            self.particules.drain(..trop);
+        }
 
         // basse : vitesse ; note grave : éloignement (lissages courts, ~100 ms et ~60 ms)
         if au.pitch > 0.0 {
@@ -337,6 +504,24 @@ impl Swarm {
         for tr in self.trails.iter_mut().chain(self.sats.iter_mut().chain(self.fixes.iter_mut()).map(|s| &mut s.trail)) {
             tr.retain(near);
         }
+        self.particules.retain(|p| near(&(0.0, p.x, p.y)));
+    }
+
+    /// Effets d'un clic en (x, y) : onde de choc et éclats (`[clic]`).
+    pub fn clic(&mut self, x: f32, y: f32, t: f64, cfg: &Config, scale: f32) {
+        let c = &cfg.clic;
+        if c.onde {
+            let taille = 46.0 * c.taille * scale;
+            self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie: 0.55, taille, genre: Genre::Onde });
+        }
+        if c.eclats {
+            for _ in 0..16 {
+                let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(160.0, 380.0) * c.taille * scale);
+                let vie = self.rng.range(0.45, 0.8);
+                let taille = self.rng.range(1.2, 2.4) * scale;
+                self.particules.push(Particule { x, y, vx: a.cos() * v, vy: a.sin() * v, ne: t, vie, taille, genre: Genre::Etincelle });
+            }
+        }
     }
 
     /// Dessine (coordonnées écran). Le pointeur lui-même est celui de Windows, affiché
@@ -394,6 +579,23 @@ impl Swarm {
             let r = cfg.eclat.taille * scale;
             cv.circle(px, py, r * (2.0 + 2.5 * self.env), (255, 255, 255), 0.35 * self.env);
             cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env);
+        }
+        // particules : étincelles, ondes de choc, poussière
+        for p in &self.particules {
+            let k = ((t - p.ne) as f32 / p.vie).clamp(0.0, 1.0);
+            match p.genre {
+                Genre::Etincelle => {
+                    cv.circle(p.x, p.y, p.taille * 2.2, head_rgb, 0.25 * (1.0 - k));
+                    cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), (255, 255, 255), 1.0 - k);
+                }
+                Genre::Onde => {
+                    let r = p.taille * (1.0 - (1.0 - k).powi(3));
+                    cv.ring(p.x, p.y, r.max(1.0), (2.5 * (1.0 - k) + 0.6) * scale, head_rgb, 0.85 * (1.0 - k));
+                }
+                Genre::Poussiere => {
+                    cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), prisme(cfg, t, 0.5), 0.7 * (1.0 - k));
+                }
+            }
         }
         for h in heads.iter().filter(|h| h.front) {
             draw_head(cv, h);
@@ -522,8 +724,8 @@ mod tests {
     fn basse_grave_eloigne_et_accelere() {
         let cfg = Config::default();
         let mut s = Swarm::new();
-        let quiet = AudioView { kicks: 0, bass: 0.0, pitch: 0.0 };
-        let deep = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+        let quiet = AudioView { kicks: 0, bass: 0.0, pitch: 0.0, ..Default::default() };
+        let deep = AudioView { kicks: 0, bass: 1.0, pitch: 30.0, ..Default::default() };
         for i in 0..60 {
             s.update(i as f64 * 0.016, 0.016, (0.0, 0.0), quiet, &cfg, 1.0);
         }
@@ -593,7 +795,7 @@ mod tests {
         let cfg = Config::default();
         let mut s = Swarm::new();
         let dt = 1.0 / 144.0;
-        let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0 };
+        let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0, ..Default::default() };
         for i in 0..1000 {
             if i % 30 == 0 {
                 au.kicks += 1;
@@ -616,7 +818,7 @@ mod tests {
         // orbite la plus large (basse très grave) : têtes et traînées dans le rectangle
         let cfg = Config::default();
         let mut s = Swarm::new();
-        let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+        let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0, ..Default::default() };
         for i in 0..200 {
             let au = AudioView { kicks: (i / 20) as u32, ..au };
             s.update(i as f64 * 0.007, 0.007, (500.0, 500.0), au, &cfg, 1.5);
@@ -647,7 +849,7 @@ mod tests {
             (cfg.orbite.forme, cfg.orbite.nombre, cfg.orbite.anneaux, cfg.essaim.fixes, cfg.essaim.forme) = (forme, 8, 4, 32, sat);
             cfg.orbite.rotation = 45.0;
             let mut s = Swarm::new();
-            let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+            let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0, ..Default::default() };
             for i in 0..200 {
                 s.update(i as f64 * 0.007, 0.007, (500.0, 500.0), au, &cfg, 1.5);
             }
@@ -686,7 +888,7 @@ mod tests {
         // de traînée, l'angle vu du centre doit rester petit (pas de ligne brisée)
         let cfg = Config::default();
         let mut s = Swarm::new();
-        let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0 };
+        let au = AudioView { kicks: 0, bass: 1.0, pitch: 30.0, ..Default::default() };
         for i in 0..120 {
             s.update(i as f64 / 60.0, 1.0 / 60.0, (400.0, 400.0), au, &cfg, 1.0);
         }
@@ -701,6 +903,46 @@ mod tests {
     }
 
         #[test]
+    fn particules_dans_le_rectangle_et_eteintes() {
+        let mut cfg = Config::default();
+        (cfg.clic.onde, cfg.clic.eclats, cfg.sillage.actif) = (true, true, true);
+        let mut s = Swarm::new();
+        let mut au = AudioView::default();
+        let dt = 1.0 / 144.0;
+        for i in 0..200 {
+            au.aigus = i / 10;
+            // souris qui file : 1200 px/s
+            let cursor = (300.0 + i as f32 * 8.0, 400.0);
+            s.update(i as f64 * dt as f64, dt, cursor, au, &cfg, 1.0);
+            if i == 100 {
+                s.clic(cursor.0, cursor.1, i as f64 * dt as f64, &cfg, 1.0);
+            }
+            let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
+            for p in &s.particules {
+                let e = p.portee();
+                assert!(p.x - e >= x0 && p.x + e <= x1 && p.y - e >= y0 && p.y + e <= y1, "particule hors du rectangle");
+            }
+        }
+        assert!(s.particules.iter().any(|p| p.genre == Genre::Poussiere) || s.particules.len() <= MAX_PARTICULES);
+        // une seconde plus tard, sans rien de nouveau, tout s'est éteint
+        for i in 200..400 {
+            s.update(i as f64 * dt as f64, dt, (1900.0, 400.0), AudioView { aigus: 19, ..au }, &cfg, 1.0);
+        }
+        assert!(s.particules.is_empty(), "{} particules encore là", s.particules.len());
+    }
+
+    #[test]
+    fn trace_reechantillonne_et_borne() {
+        // un carré dessiné grossièrement, décentré
+        let pts = [[10.0, 10.0], [30.0, 10.0], [30.0, 30.0], [10.0, 30.0]];
+        let r = reechantillonner(&pts);
+        assert_eq!(r.len(), 256);
+        let max = r.iter().map(|p| (p.0 * p.0 + p.1 * p.1).sqrt()).fold(0.0f32, f32::max);
+        assert!((max - 1.2).abs() < 1e-3, "{max}");
+        assert!(reechantillonner(&[[0.0, 0.0], [1.0, 1.0]]).is_empty());
+    }
+
+    #[test]
     fn les_trajets_sont_continus() {
         use crate::config::Forme;
         for forme in [

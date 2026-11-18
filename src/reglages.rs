@@ -434,10 +434,10 @@ impl Fenetre {
     fn tick(&mut self, quoi: usize) {
         if quoi == TIMER_SON {
             let au = self.son.view();
-            let cle = (au.kicks, au.bass.to_bits());
+            let cle = (au.kicks ^ au.aigus.rotate_left(16), au.bass.to_bits());
             if cle != self.son_envoye {
                 self.son_envoye = cle;
-                self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "teinte": crate::render::sync_hue() }));
+                self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "aigus": au.aigus, "brillance": au.brillance, "teinte": crate::render::sync_hue() }));
             }
         } else {
             let (ms, ips) = crate::charge::lire();

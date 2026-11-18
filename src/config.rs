@@ -12,11 +12,101 @@ pub struct Config {
     pub essaim: Essaim,
     pub couleur: Couleur,
     pub fissures: Fissures,
+    pub scintillement: Scintillement,
+    pub clic: Clic,
+    pub sillage: Sillage,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
     pub souris: Souris,
+    pub automatique: Automatique,
+    pub raccourcis: Raccourcis,
     pub bibliotheque: Bibliotheque,
+}
+
+/// Étincelles sur les attaques des aigus (charleston, cymbales).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Scintillement {
+    pub actif: bool,
+    /// Étincelles par attaque (1 à 10).
+    pub quantite: f32,
+}
+
+impl Default for Scintillement {
+    fn default() -> Self {
+        Self { actif: true, quantite: 4.0 }
+    }
+}
+
+/// Effets d'un clic, en plus des fissures.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Clic {
+    /// Onde de choc : un anneau qui s'élargit.
+    pub onde: bool,
+    /// Éclats projetés autour du clic.
+    pub eclats: bool,
+    pub taille: f32,
+}
+
+impl Default for Clic {
+    fn default() -> Self {
+        Self { onde: true, eclats: false, taille: 1.0 }
+    }
+}
+
+/// Sillage de poussière derrière la souris quand elle file vite.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Sillage {
+    pub actif: bool,
+    /// Densité de la poussière (1 à 10).
+    pub densite: f32,
+}
+
+impl Default for Sillage {
+    fn default() -> Self {
+        Self { actif: false, densite: 5.0 }
+    }
+}
+
+/// Preset choisi tout seul selon l'application au premier plan ou l'heure.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Automatique {
+    pub actif: bool,
+    /// Application (nom de l'exécutable) → preset ; prioritaire sur les horaires.
+    pub applis: Vec<RegleAppli>,
+    /// Plage horaire (« 22:00 » à « 07:00 », peut passer minuit) → preset.
+    pub horaires: Vec<Horaire>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RegleAppli {
+    pub appli: String,
+    pub preset: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct Horaire {
+    pub debut: String,
+    pub fin: String,
+    pub preset: String,
+}
+
+/// Raccourcis clavier globaux (RegisterHotKey, pas de hook).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Raccourcis {
+    /// Ctrl+Alt+→ / ← : preset suivant / précédent ; Ctrl+Alt+P : pause.
+    pub actif: bool,
+}
+
+impl Default for Raccourcis {
+    fn default() -> Self {
+        Self { actif: true }
+    }
 }
 
 /// Bibliothèque de presets partagés, hébergée sur GitHub.
@@ -88,6 +178,8 @@ pub struct Orbite {
     pub anneaux: u32,
     /// Rotation du trajet lui-même (tours par minute ; négatif : dans l'autre sens).
     pub rotation: f32,
+    /// Trajet dessiné à la main (`forme = "trace"`) : points (x, y), rayon 1 environ.
+    pub trace: Vec<[f32; 2]>,
     pub vitesse_base: f32,
     pub vitesse_basse: f32,
     pub eloignement_grave: f32,
@@ -127,6 +219,7 @@ pub enum FormeSatellites {
     Trefle,
     Lissajous,
     Astroide,
+    Trace,
 }
 
 impl FormeSatellites {
@@ -148,6 +241,7 @@ impl FormeSatellites {
             Self::Trefle => Forme::Trefle,
             Self::Lissajous => Forme::Lissajous,
             Self::Astroide => Forme::Astroide,
+            Self::Trace => Forme::Trace,
         }
     }
 }
@@ -171,6 +265,8 @@ pub enum Forme {
     Trefle,
     Lissajous,
     Astroide,
+    /// Dessiné à la main (`[orbite] trace`).
+    Trace,
 }
 
 /// Jeu de curseurs de Windows.
@@ -202,6 +298,8 @@ pub struct Couleur {
     pub application: bool,
     /// Dans un navigateur, prend la couleur dominante du haut de la page affichée.
     pub site: bool,
+    /// La teinte glisse avec la musique : plus elle est forte et brillante, plus elle s'écarte.
+    pub musique: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -228,7 +326,7 @@ impl Default for Eclat {
 }
 impl Default for Orbite {
     fn default() -> Self {
-        Self { rayon: 22.0, cometes: true, forme: Forme::Cercle, nombre: 2, anneaux: 1, rotation: 0.0, vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
+        Self { rayon: 22.0, cometes: true, forme: Forme::Cercle, nombre: 2, anneaux: 1, rotation: 0.0, trace: Vec::new(), vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
     }
 }
 impl Default for Essaim {
@@ -238,7 +336,7 @@ impl Default for Essaim {
 }
 impl Default for Couleur {
     fn default() -> Self {
-        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false, site: false }
+        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false, site: false, musique: false }
     }
 }
 impl Default for Fissures {
@@ -266,6 +364,7 @@ forme = "cercle"        # trajet : cercle, triangle, losange, hexagone, huit, et
 nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
+trace = []              # trajet dessiné à la main (forme = "trace"), points [x, y]
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
 vitesse_basse = 11      # vitesse ajoutée quand la basse est au maximum
 eloignement_grave = 1.3 # écartement ajouté pour une note très grave (1.3 = +130 %)
@@ -286,11 +385,25 @@ ecart_teinte = 140      # écart de teinte entre la tête et la queue des traîn
 synchro_prisme = true   # prend la teinte de l'éclairage de Prisme quand il tourne
 application = false     # prend la teinte de l'icône de l'application au premier plan
 site = false            # dans un navigateur, prend la couleur du haut de la page affichée
+musique = false         # la teinte glisse avec l'intensité et la brillance de la musique
 
 [fissures]
 actives = true
 duree = 3.0             # secondes avant que la fissure soit refermée
 taille = 1.4
+
+[scintillement]
+actif = true            # étincelles sur les attaques des aigus (charleston, cymbales)
+quantite = 4            # étincelles par attaque (1 à 10)
+
+[clic]
+onde = true             # onde de choc à chaque clic
+eclats = false          # éclats projetés autour du clic
+taille = 1.0
+
+[sillage]
+actif = false           # poussière derrière la souris quand elle file vite
+densite = 5             # 1 à 10
 
 [audio]
 actif = true
@@ -305,6 +418,14 @@ cadence_repos = 30      # images par seconde quand la souris est immobile et san
 [souris]
 jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
 avec_preset = true      # choisir un preset installe aussi son jeu de curseurs
+
+[automatique]
+actif = false           # choisit tout seul un preset selon l'application au premier plan ou l'heure
+applis = []             # [{ appli = "jeu.exe", preset = "Discret" }]
+horaires = []           # [{ debut = "22:00", fin = "07:00", preset = "Discret" }]
+
+[raccourcis]
+actif = true            # Ctrl+Alt+→ / ← : preset suivant / précédent ; Ctrl+Alt+P : pause
 
 [bibliotheque]
 depot = "KingsRequin/essaim-presets" # dépôt GitHub des presets partagés (index.json à la racine)
@@ -342,6 +463,9 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("orbite", "rotation") => (-60.0, 60.0),
         ("orbite", _) => (0.0, 100.0),
         ("essaim", "fixes") => (0.0, 32.0),
+        ("scintillement", "quantite") => (1.0, 10.0),
+        ("clic", "taille") => (0.3, 3.0),
+        ("sillage", "densite") => (1.0, 10.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -448,6 +572,8 @@ fn set_in_doc(
             ((n.as_f64().unwrap_or(0.0) * 1e4).round() / 1e4).into()
         }
         (serde_json::Value::Number(_), serde_json::Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64)).unwrap_or(0).into(),
+        // tableaux (tracé, règles) : la lecture de la config qui suit vérifie leur forme
+        (serde_json::Value::Array(_), serde_json::Value::Array(_)) => vers_toml(value).ok_or(format!("[{section}] {key} : valeur illisible"))?,
         _ => return Err(format!("[{section}] {key} : valeur du mauvais type")),
     };
     if doc.get(section).is_none() {
@@ -463,6 +589,31 @@ fn set_in_doc(
     }
     doc[section][key] = toml_edit::Item::Value(v);
     Ok(())
+}
+
+/// Valeur JSON → valeur TOML (tableaux et tables en ligne compris), nombres à 4 décimales.
+fn vers_toml(v: &serde_json::Value) -> Option<toml_edit::Value> {
+    Some(match v {
+        serde_json::Value::Bool(b) => (*b).into(),
+        serde_json::Value::String(s) => s.as_str().into(),
+        serde_json::Value::Number(n) if n.is_f64() => ((n.as_f64()? * 1e4).round() / 1e4).into(),
+        serde_json::Value::Number(n) => n.as_i64()?.into(),
+        serde_json::Value::Array(a) => {
+            let mut t = toml_edit::Array::new();
+            for x in a {
+                t.push(vers_toml(x)?);
+            }
+            toml_edit::Value::Array(t)
+        }
+        serde_json::Value::Object(o) => {
+            let mut t = toml_edit::InlineTable::new();
+            for (k, x) in o {
+                t.insert(k, vers_toml(x)?);
+            }
+            toml_edit::Value::InlineTable(t)
+        }
+        serde_json::Value::Null => return None,
+    })
 }
 
 fn same(a: &toml_edit::Value, b: &toml_edit::Value) -> bool {
@@ -562,6 +713,13 @@ mod tests {
         assert!(super::set_value_in(&p, "orbite", "forme", &serde_json::json!("rond")).is_err());
         let c: super::Config = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(c.orbite.forme, super::Forme::Huit);
+        // tableaux : un tracé et des règles
+        super::set_value_in(&p, "orbite", "trace", &serde_json::json!([[0.5, -1.0], [1.0, 0.25], [-0.75, 0.5]])).unwrap();
+        super::set_value_in(&p, "automatique", "applis", &serde_json::json!([{ "appli": "jeu.exe", "preset": "Discret" }])).unwrap();
+        assert!(super::set_value_in(&p, "automatique", "applis", &serde_json::json!([{ "appli": 3 }])).is_err());
+        let c: super::Config = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(c.orbite.trace, vec![[0.5, -1.0], [1.0, 0.25], [-0.75, 0.5]]);
+        assert_eq!(c.automatique.applis[0].preset, "Discret");
         let _ = std::fs::remove_file(&p);
     }
 
