@@ -70,7 +70,13 @@ mod tests {
 
     /// Fait passer `n` secondes à `ms` par image et `ips` images/s ; renvoie les plafonds vus.
     fn secondes(a: &mut Adaptatif, n: usize, ms: f32, ips: f32) -> Vec<u32> {
-        (0..n).filter_map(|_| a.mesure(ms, ips).then(|| a.plafond())).collect()
+        let mut vus = Vec::new();
+        for _ in 0..n {
+            if a.mesure(ms, ips) {
+                vus.push(a.plafond());
+            }
+        }
+        vus
     }
 
     #[test]
