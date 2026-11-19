@@ -711,6 +711,12 @@ pub struct Crack {
     /// Demi-largeur du carré qui contient la fissure.
     pub ext: f32,
     pub born: f64,
+    /// Passes fixes (trait sombre et reflet) déjà tracées, pour les moteurs qui recopient des
+    /// images (processeur) : faites à la première image, recopiées ensuite.
+    fixe: std::cell::RefCell<Option<tiny_skia::Pixmap>>,
+    /// Branches de la fissure (suites de segments bout à bout), en coordonnées écran : l'éclat,
+    /// de largeur constante, est tracé branche par branche plutôt que segment par segment.
+    branches: Vec<Vec<(f32, f32)>>,
 }
 
 impl Crack {
@@ -740,7 +746,15 @@ impl Crack {
             }
         }
         let ext = segs.iter().fold(8.0f32, |m, s| m.max(s[0].abs()).max(s[1].abs()).max(s[2].abs()).max(s[3].abs())) + 6.0;
-        Self { x, y, segs, ext, born: t }
+        let mut branches: Vec<Vec<(f32, f32)>> = Vec::new();
+        for s in &segs {
+            let (a, b) = ((x + s[0], y + s[1]), (x + s[2], y + s[3]));
+            match branches.last_mut() {
+                Some(br) if br.last() == Some(&a) => br.push(b),
+                _ => branches.push(vec![a, b]),
+            }
+        }
+        Self { x, y, segs, ext, born: t, fixe: Default::default(), branches }
     }
 
     /// Rectangle écran (gauche, haut, droite, bas) qui contient la fissure.
@@ -750,7 +764,40 @@ impl Crack {
     }
 
     /// Dessine la fissure (coordonnées écran) ; `glow` 0..1 = éclat coloré, `opacity` = fondu.
+    /// Sur processeur, les deux passes fixes sont recopiées d'une image faite une fois (tracer
+    /// chaque segment à chaque image coûtait plusieurs millisecondes pour 12 fissures) ; seul
+    /// l'éclat, qui change de couleur et d'intensité, est retracé.
     pub fn draw(&self, cv: &mut dyn Canvas, glow: f32, rgb: (u8, u8, u8), opacity: f32) {
+        if cv.images() {
+            let (l, t, r, b) = self.rect();
+            let mut fixe = self.fixe.borrow_mut();
+            if fixe.is_none() {
+                *fixe = tiny_skia::Pixmap::new((r - l) as u32, (b - t) as u32).map(|mut pm| {
+                    self.passes_fixes(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (l as f32, t as f32) }, 1.0);
+                    pm
+                });
+            }
+            match fixe.as_ref() {
+                Some(pm) => {
+                    cv.image(pm, l, t, opacity);
+                }
+                None => self.passes_fixes(cv, opacity),
+            }
+        } else {
+            self.passes_fixes(cv, opacity);
+        }
+        if glow > 0.02 {
+            for br in &self.branches {
+                cv.polyline(br, 3.5, rgb, glow * 0.3 * opacity, true);
+            }
+            for br in &self.branches {
+                cv.polyline(br, 1.2, rgb, glow * opacity, true);
+            }
+        }
+    }
+
+    /// Trait sombre puis reflet décalé.
+    fn passes_fixes(&self, cv: &mut dyn Canvas, opacity: f32) {
         let (x, y) = (self.x, self.y);
         for s in &self.segs {
             cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), s[4], (2, 3, 8), 0.92 * opacity, true);
@@ -758,14 +805,6 @@ impl Crack {
         for s in &self.segs {
             let w = (s[4] * 0.35).max(0.5);
             cv.line((x + s[0] + 0.8, y + s[1] + 0.8), (x + s[2] + 0.8, y + s[3] + 0.8), w, (170, 185, 250), 0.25 * opacity, true);
-        }
-        if glow > 0.02 {
-            for s in &self.segs {
-                cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), 3.5, rgb, glow * 0.3 * opacity, true);
-            }
-            for s in &self.segs {
-                cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), 1.2, rgb, glow * opacity, true);
-            }
         }
     }
 }
@@ -960,6 +999,61 @@ mod tests {
         }
         let per = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
         eprintln!("{} satellites, image {size} px de large : {per:.3} ms par image", s.sats.len());
+    }
+
+    /// Coût du dessin de 12 fissures (le maximum) sur processeur :
+    /// `cargo test --release mesure_fissures -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn mesure_fissures() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let cracks: Vec<Crack> = (0..12).map(|i| Crack::new(200.0 + 60.0 * i as f32, 300.0, 0.0, 1.5, &mut rng)).collect();
+        let segs: usize = cracks.iter().map(|c| c.segs.len()).sum();
+        let mut pm = Pixmap::new(1200, 600).unwrap();
+        for glow in [0.0f32, 1.0] {
+            let n = 200;
+            let t0 = std::time::Instant::now();
+            for _ in 0..n {
+                let cv = &mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) };
+                for c in &cracks {
+                    c.draw(cv, glow, (120, 160, 255), 1.0);
+                }
+            }
+            eprintln!("12 fissures ({segs} segments), éclat {glow} : {:.3} ms par image", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        }
+    }
+
+    #[test]
+    fn fissure_recopiee_comme_tracee() {
+        // l'image des passes fixes, recopiée, donne le même dessin que le tracé direct
+        struct SansImage<'a>(crate::canvas::PixCanvas<'a>);
+        impl Canvas for SansImage<'_> {
+            fn line(&mut self, a: (f32, f32), b: (f32, f32), w: f32, c: (u8, u8, u8), al: f32, sm: bool) {
+                self.0.line(a, b, w, c, al, sm);
+            }
+            fn polyline(&mut self, p: &[(f32, f32)], w: f32, c: (u8, u8, u8), al: f32, sm: bool) {
+                self.0.polyline(p, w, c, al, sm);
+            }
+            fn circle(&mut self, x: f32, y: f32, r: f32, c: (u8, u8, u8), al: f32) {
+                self.0.circle(x, y, r, c, al);
+            }
+            fn ring(&mut self, x: f32, y: f32, r: f32, w: f32, c: (u8, u8, u8), al: f32) {
+                self.0.ring(x, y, r, w, c, al);
+            }
+        }
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let c = Crack::new(300.0, 200.0, 0.0, 1.5, &mut rng);
+        let points: usize = c.branches.iter().map(Vec::len).sum();
+        assert_eq!(points, c.segs.len() + c.branches.len(), "branches incomplètes");
+        let (mut a, mut b) = (Pixmap::new(600, 400).unwrap(), Pixmap::new(600, 400).unwrap());
+        for _ in 0..2 {
+            a.fill(tiny_skia::Color::TRANSPARENT);
+            c.draw(&mut crate::canvas::PixCanvas { pm: &mut a, origin: (10.0, 20.0) }, 0.0, (255, 0, 0), 1.0);
+        }
+        c.draw(&mut SansImage(crate::canvas::PixCanvas { pm: &mut b, origin: (10.0, 20.0) }), 0.0, (255, 0, 0), 1.0);
+        let ecart = a.data().iter().zip(b.data()).map(|(p, q)| p.abs_diff(*q) as u32).max().unwrap();
+        let peint = a.data().chunks_exact(4).filter(|p| p[3] > 100).count();
+        assert!(peint > 100 && ecart <= 40, "{peint} pixels, écart {ecart}");
     }
 
     #[test]
