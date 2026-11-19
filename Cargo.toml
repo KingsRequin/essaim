@@ -22,7 +22,11 @@ wry = { version = "=0.57.1", default-features = false }
 [dependencies.windows]
 version = "0.62"
 features = [
+    "Foundation",
     "Foundation_Numerics",
+    "Graphics_Imaging",
+    "Media_Control",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",

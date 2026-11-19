@@ -22,6 +22,7 @@ mod gpu;
 mod ipc;
 mod layer;
 mod maj;
+mod media;
 mod prisme;
 mod profils;
 mod reglages;
@@ -280,7 +281,10 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let prisme = prisme::start();
     let mut appli = appli::TeinteAppli::default();
     let mut sync_hue: Option<f32> = None;
-    let mut synced = false;
+    let mut source_teinte: Option<media::Source> = None;
+    // morceau en cours (titre, pochette, changements de piste), lu sur son propre fil
+    media::demarrer();
+    let mut pistes_vues = media::pistes();
     // écrans : relus quand leur configuration change (WM_DISPLAYCHANGE)
     let mut monitors = win::monitors();
     let (mut last_pos, mut last_move, mut last_sound, mut last_click, mut last_kicks) =
@@ -305,7 +309,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     // veille profonde : niveau du fondu (1 = éveillé, 0 = éteint) et extinction complète
     let (mut eveil, mut profond) = (1.0f32, false);
     // icône : état montré (pause, veille, génération des réglages) et preset en place
-    let mut icone: Option<(bool, bool, u32)> = None;
+    let mut icone: Option<(bool, bool, u32, u32)> = None;
     let mut preset: Option<(u32, Option<String>)> = None;
     let mut next_conf = start;
     let mut next_fs = start;
@@ -417,15 +421,15 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             }));
             published = Some(fields);
         }
-        // icône : grisée en pause, infobulle avec le preset en place et l'état
-        let montre = (user_paused, fs_paused || profond, conf_gen);
+        // icône : grisée en pause, infobulle avec le preset en place, l'état et le morceau
+        let montre = (user_paused, fs_paused || profond, conf_gen, media::version());
         if icone != Some(montre) {
             if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
                 let nom = profils::list().into_iter().find(|p| profils::same(&p.cfg, cfg)).map(|p| p.name);
                 preset = Some((conf_gen, nom));
             }
             let nom = preset.as_ref().and_then(|p| p.1.as_deref());
-            win::etat_icone(user_paused, &win::infobulle(nom, montre.0, montre.1));
+            win::etat_icone(user_paused, &media::infobulle(&win::infobulle(nom, montre.0, montre.1)));
             icone = Some(montre);
         }
 
@@ -449,6 +453,10 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         if down {
             last_click = now;
         }
+        // changement de piste : vu même en pause (pas de rafale en retard à la reprise)
+        let pistes = media::pistes();
+        let nouvelle_piste = pistes != pistes_vues;
+        pistes_vues = pistes;
         let Some(cur) = cur.filter(|c| active && c.showing) else {
             // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
             border.tick(active, &cfg.bordure, render::prisme(cfg, t, 1.0), au.kicks, now);
@@ -484,6 +492,9 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             cracks.push(Crack::new(cursor.0, cursor.1, t, cfg.fissures.taille * scale, &mut rng));
         }
         was_down = down;
+        if nouvelle_piste && cfg.musique.rafale_piste {
+            swarm.rafale(cursor.0, cursor.1, t, cfg, scale);
+        }
         if cur.pos != last_pos {
             last_pos = cur.pos;
             last_move = now;
@@ -538,15 +549,15 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         swarm.avance(t, dt, cursor, au, cfg, scale);
         let d = render::decalage();
         render::set_decalage(d + (render::decalage_vise(&au) - d) * (dt * 6.0).min(1.0));
-        // teinte imposée : celle de l'application au premier plan, sinon celle de l'éclairage
-        // (Prisme) ; suivie en douceur, en passant par le plus court
-        let cible = if cfg.couleur.application || cfg.couleur.site {
-            appli.courante(cfg.couleur.application, cfg.couleur.site, now)
-        } else if cfg.couleur.synchro_prisme {
-            prisme.current()
-        } else {
-            None
-        };
+        // teinte imposée : la pochette du morceau qui joue, sinon l'application ou le site au
+        // premier plan, sinon l'éclairage (Prisme) ; suivie en douceur, par le plus court
+        let c = &cfg.couleur;
+        let imposee = media::teinte_imposee(
+            if c.pochette { media::teinte_pochette() } else { None },
+            || if c.application || c.site { appli.courante(c.application, c.site, now) } else { None },
+            || if c.synchro_prisme { prisme.current() } else { None },
+        );
+        let cible = imposee.map(|(h, _)| h);
         sync_hue = match (cible, sync_hue) {
             (Some(target), Some(h)) => {
                 let d = (target - h + 540.0).rem_euclid(360.0) - 180.0;
@@ -556,10 +567,10 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             _ => None,
         };
         render::set_sync_hue(sync_hue);
-        if sync_hue.is_some() != synced {
-            synced = sync_hue.is_some();
-            let source = if cfg.couleur.application || cfg.couleur.site { "celle de l'application ou du site au premier plan" } else { "celle de l'éclairage (Prisme)" };
-            log::info!("teinte : {}", if synced { source } else { "cycle propre" });
+        let source = imposee.map(|(_, s)| s);
+        if source != source_teinte {
+            source_teinte = source;
+            log::info!("teinte : {}", source.map_or("cycle propre", media::Source::nom));
         }
         let life = cfg.fissures.duree.max(0.2) as f64;
         cracks.retain(|c| t - c.born <= life);

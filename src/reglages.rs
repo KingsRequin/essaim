@@ -494,6 +494,11 @@ impl Fenetre {
                 "pause": crate::charge::pause(),
                 "capture": crate::charge::capture(),
                 "veille": crate::charge::veille(),
+                // morceau en cours ({titre, artiste} ou null), lecture (null sans session) et compteur des
+                // changements de piste
+                "morceau": crate::media::json(),
+                "lecture": crate::media::en_lecture(),
+                "pistes": crate::media::pistes(),
             }));
             if dates() != self.dates {
                 self.etat();
