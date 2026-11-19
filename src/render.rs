@@ -281,8 +281,9 @@ fn liens(tetes: &[(f32, f32)], portee: f32, sortie: &mut Vec<(usize, usize, f32)
     }
 }
 
-/// Liens de la constellation dessinés au plus.
+/// Liens de la constellation dessinés au plus, et leur portée (en rayons de l'orbite).
 const LIENS_MAX: usize = 160;
+const LIENS_PORTEE: f32 = 1.1;
 /// Carré d'une caisse claire : demi-diagonale (px à 100 %) et durée (s).
 const CARRE_CAISSE: (f32, f32) = (30.0, 0.32);
 /// Drop : onde (px à 100 %, durée en s) et étincelles projetées.
@@ -860,11 +861,11 @@ impl Swarm {
         if cfg.essaim.constellation {
             points.clear();
             points.extend(heads.iter().map(|h| (h.x, h.y)));
-            liens(points, o.rayon * scale * self.far.max(0.2), paires);
+            liens(points, LIENS_PORTEE * o.rayon * scale * self.far.max(0.2), paires);
             let rgb = prisme(cfg, t, 0.85);
             for &(i, j, f) in paires.iter() {
-                let al = 0.4 * f * heads[i].al.min(heads[j].al);
-                cv.line((heads[i].x, heads[i].y), (heads[j].x, heads[j].y), 0.9 * scale, rgb, al, false);
+                let al = (0.25 + 0.5 * f) * heads[i].al.min(heads[j].al);
+                cv.line((heads[i].x, heads[i].y), (heads[j].x, heads[j].y), 1.2 * scale, rgb, al, false);
             }
         }
         let draw_head = |cv: &mut dyn Canvas, h: &Head| {

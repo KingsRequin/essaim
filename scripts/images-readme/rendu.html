@@ -4,16 +4,36 @@
 <div id="zone"></div>
 <script src="../../ui/apercu.js"></script>
 <script>
-// Son simulé : 120 BPM, kick sur chaque temps, charleston sur les contretemps, basse qui retombe.
+// Son simulé : 120 BPM, kick sur chaque temps, caisse claire sur les temps 2 et 4, charleston sur
+// les contretemps, basse qui retombe.
 function son(t) {
   const temps = 0.5, k = Math.floor(t / temps), phase = t - k * temps;
   return {
     kicks: k,
+    caisses: Math.floor(k / 2),
     basse: 0.35 + 0.5 * Math.exp(-phase * 6),
     hauteur: 42 + 6 * Math.sin(t * 0.7),
     aigus: Math.floor((t + temps / 2) / temps),
     brillance: 0.35,
+    bpm: 120,
+    phase: phase / temps,
   };
+}
+
+// Montée puis drop : groove jusqu'à `debut`, puis 2 s sans kick (roulement de caisse claire qui
+// s'accélère, tension qui monte), puis le drop et le groove qui reprend.
+function sonMontee(t, debut = 2) {
+  const g = son(t);
+  if (t < debut) return g;
+  const fin = debut + 2, avant = son(debut);
+  if (t < fin) {
+    const x = (t - debut) / 2; // 0 → 1
+    // roulement : 4 puis 16 caisses par seconde (nombre de coups depuis le début de la montée)
+    const coups = Math.floor(4 * (t - debut) + 3 * (t - debut) ** 2);
+    return { ...avant, caisses: avant.caisses + coups, tension: Math.min(1, x * 1.2), basse: 0.2, brillance: 0.35 + 0.4 * x, aigus: g.aigus };
+  }
+  const apres = son(t - fin);
+  return { ...apres, kicks: avant.kicks + 1 + apres.kicks, caisses: avant.caisses + 20 + apres.caisses, drops: 1, tension: 0 };
 }
 
 const curseur = new Promise((ok) => {
@@ -24,8 +44,9 @@ const curseur = new Promise((ok) => {
 });
 
 // Rend `n` images (PNG en data URL) d'un preset, après `chauffe` secondes ; `clics` : numéros
-// d'image où un clic a lieu au centre.
-window.rendre = async (reglages, cote, n, fps, chauffe, clics) => {
+// d'image où un clic a lieu au centre ; `scenario` : "montee" pour une montée suivie d'un drop.
+window.rendre = async (reglages, cote, n, fps, chauffe, clics, scenario) => {
+  const sonA = scenario === "montee" ? (t) => sonMontee(t, chauffe + 0.8) : son;
   const c = document.createElement("canvas");
   c.style.width = c.style.height = cote + "px";
   document.getElementById("zone").replaceChildren(c);
@@ -34,11 +55,11 @@ window.rendre = async (reglages, cote, n, fps, chauffe, clics) => {
   a.curseur = await curseur;
   a.dimensionner();
   let t = 0;
-  for (; t < chauffe; t += 1 / fps) a.avancer(1 / fps, son(t));
+  for (; t < chauffe; t += 1 / fps) a.avancer(1 / fps, sonA(t));
   const images = [];
   for (let i = 0; i < n; i++, t += 1 / fps) {
     if ((clics || []).includes(i)) a.clic();
-    a.avancer(1 / fps, son(t));
+    a.avancer(1 / fps, sonA(t));
     a.dessiner();
     images.push(c.toDataURL("image/png"));
   }

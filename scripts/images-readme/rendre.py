@@ -1,8 +1,8 @@
 """Refait les animations du README (docs/images/*.gif).
 
 Les aperçus sont ceux de la fenêtre des réglages (`ui/apercu.js`, calculés comme l'essaim),
-rendus dans Edge sans fenêtre (protocole CDP) sur un son simulé à 120 BPM, puis assemblés en
-GIF. Les réglages des presets fournis viennent du test `exporter_presets`.
+rendus dans Edge sans fenêtre (protocole CDP) sur un son simulé à 120 BPM (et une montée suivie
+d'un drop pour `drop.gif`), puis assemblés en GIF. Les réglages des presets fournis viennent du test `exporter_presets`.
 
     pip install websocket-client pillow
     python scripts/images-readme/rendre.py
@@ -53,8 +53,8 @@ try:
     while not evaluer("window.pret === true"):
         time.sleep(0.2)
 
-    def images(reglages, cote, clics=()):
-        urls = evaluer(f"rendre({json.dumps(reglages)}, {cote}, {N}, {FPS}, 3, {json.dumps(list(clics))})")
+    def images(reglages, cote, clics=(), scenario="groove", n=N):
+        urls = evaluer(f"rendre({json.dumps(reglages)}, {cote}, {n}, {FPS}, 3, {json.dumps(list(clics))}, {json.dumps(scenario)})")
         out = []
         for u in urls:
             im = Image.open(io.BytesIO(base64.b64decode(u.split(",", 1)[1]))).convert("RGBA")
@@ -94,6 +94,10 @@ try:
     clic = copy.deepcopy(presets["Spirale"])
     clic["clic"]["onde"], clic["clic"]["eclats"] = True, True
     gif("clic.gif", images(clic, 320, clics=(4, 34)))
+    # montée puis drop (Festival : palette de trois teintes, contretemps)
+    gif("drop.gif", images(presets["Festival"], 320, scenario="montee", n=90))
+    # constellation
+    gif("constellation.gif", images(presets["Constellation"], 320))
 finally:
     edge.kill()
     edge.wait()

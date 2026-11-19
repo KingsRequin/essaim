@@ -18,11 +18,13 @@ const TRAIL_CHUNK = 4;
 const MAX_PARTICULES = 400;
 // Onde d'un changement de piste : taille (px à 100 %) et durée (s), comme ONDE_PISTE.
 const ONDE_PISTE = [90, 0.8];
-// Caisse claire, drop, constellation : comme CARRE_CAISSE, ONDE_DROP, ETINCELLES_DROP, LIENS_MAX.
+// Caisse claire, drop, constellation : comme CARRE_CAISSE, ONDE_DROP, ETINCELLES_DROP, LIENS_MAX,
+// LIENS_PORTEE.
 const CARRE_CAISSE = [30, 0.32];
 const ONDE_DROP = [130, 0.9];
 const ETINCELLES_DROP = 28;
 const LIENS_MAX = 160;
+const LIENS_PORTEE = 1.1;
 // Réticule et anneau de spectre : comme src/effets.rs.
 const RETICULE_VIDE = 12;
 const RETICULE_LARGEUR = 1.2;
@@ -566,15 +568,15 @@ class Apercu {
     }
     // constellation : fines lignes entre les têtes proches (comme render::liens), sous les têtes
     if (c.essaim.constellation) {
-      const portee = c.orbite.rayon * S * Math.max(0.2, this.far), lien = couleur(0.85);
+      const portee = LIENS_PORTEE * c.orbite.rayon * S * Math.max(0.2, this.far), lien = couleur(0.85);
       let n = 0;
-      g.lineWidth = 0.9 * S;
+      g.lineWidth = 1.2 * S;
       for (let i = 0; i < tetes.length && n < LIENS_MAX; i++) {
         for (let j = i + 1; j < tetes.length && n < LIENS_MAX; j++) {
           const d = Math.hypot(tetes[i].x - tetes[j].x, tetes[i].y - tetes[j].y);
           if (d >= portee) continue;
           n++;
-          g.strokeStyle = rgba(lien, 0.4 * (1 - d / portee) * Math.min(tetes[i].al, tetes[j].al));
+          g.strokeStyle = rgba(lien, (0.25 + 0.5 * (1 - d / portee)) * Math.min(tetes[i].al, tetes[j].al));
           g.beginPath();
           g.moveTo(tetes[i].x, tetes[i].y);
           g.lineTo(tetes[j].x, tetes[j].y);
