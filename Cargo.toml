@@ -14,8 +14,9 @@ tiny-skia = { version = "0.11", default-features = false, features = ["std", "si
 toml = "0.8"
 toml_edit = "0.22"
 tungstenite = "0.30"
-# Capture du son et détection du kick, partagées avec Prisme et Horizon (dépôt voisin).
-audio-commun = { git = "https://github.com/KingsRequin/audio-commun", tag = "v0.2.0", default-features = false, features = ["capture"] }
+# Capture du son et détection du kick, partagées avec Prisme et Horizon (dépôt voisin). Figée
+# par son commit (tag v0.2.0) : un tag peut être déplacé, un commit non.
+audio-commun = { git = "https://github.com/KingsRequin/audio-commun", rev = "734c6590ddce6358233fd6c175928e0d4df3dcf1", default-features = false, features = ["capture"] }
 windows-numerics = "0.3"
 wry = { version = "=0.57.1", default-features = false }
 

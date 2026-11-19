@@ -1,22 +1,32 @@
 # Publication d'une version : pousser un tag `vX.Y.Z` (égal à la version de Cargo.toml) compile
-# Essaim sous Windows, lance les tests et crée la version GitHub avec :
+# Essaim sous Windows, lance les tests et crée la version GitHub EN BROUILLON avec :
 #   - essaim.exe : l'appli, prête à lancer (c'est ce fichier que les mises à jour automatiques
 #     téléchargent : son nom ne doit pas changer) ;
 #   - curseur-Dotter.zip : le jeu de curseurs conseillé.
+# Le brouillon n'est proposé à personne : l'auteur le signe puis le publie depuis son PC
+# (`scripts/signer-version.ps1`, clé jamais présente sur GitHub). Les mises à jour automatiques
+# refusent un exécutable sans signature valide.
+#
+# Sécurité : la compilation (code de toutes les dépendances : build.rs, macros) tourne sans
+# aucun droit d'écriture ni jeton conservé ; seule l'étape de publication, qui ne compile rien,
+# peut créer la version. Actions de GitHub seulement, figées par leur commit.
 name: Publication
 
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  windows:
+  compilation:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Le tag correspond à la version de Cargo.toml
         shell: pwsh
@@ -26,8 +36,6 @@ jobs:
             throw "Le tag $env:GITHUB_REF_NAME ne correspond pas à la version $version de Cargo.toml"
           }
 
-      # Pas d'action tierce (cache compris) : cet exécutable est celui que les mises à jour
-      # automatiques installent chez tout le monde.
       - name: Tests
         run: cargo test --release
 
@@ -41,10 +49,29 @@ jobs:
           Copy-Item target/release/essaim.exe dist/
           Compress-Archive -Path curseurs/Dotter -DestinationPath dist/curseur-Dotter.zip
 
-      - name: Création de la version
-        shell: pwsh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: version
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publication:
+    needs: compilation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: version
+          path: dist
+
+      - name: Création de la version (brouillon, à signer)
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release create $env:GITHUB_REF_NAME dist/essaim.exe dist/curseur-Dotter.zip `
-            --title "Essaim $env:GITHUB_REF_NAME" --generate-notes
+          gh release create "$TAG" dist/essaim.exe dist/curseur-Dotter.zip \
+            --draft --verify-tag --title "Essaim $TAG" --generate-notes

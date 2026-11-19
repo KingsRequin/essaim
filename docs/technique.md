@@ -86,8 +86,12 @@ WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 
 d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
 (`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
 bornées ; par exemple `bordure`/`intensite`), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
-Pages web refusées (en-tête `Origin`), 8 clients au plus, 3 s pour la poignée de main. Le
-widget Essaim d'Horizon s'en sert (pause au clic, réglages en direct dans son panneau).
+Toute connexion avec un en-tête `Origin` est refusée (pages web, mais aussi applis web locales :
+Tauri, Electron) ; 8 clients au plus, 3 s pour la poignée de main, messages de 64 Ko au plus,
+client fermé après 60 s sans message. `set_config` refuse les sections `mise_a_jour`,
+`bibliotheque`, `automatique` et `pause` (elles ne changent que par la fenêtre des réglages ou
+le fichier). Le widget Essaim d'Horizon s'en sert depuis son côté Rust (pause au clic, réglages
+en direct dans son panneau).
 
 ## Consommation (mesurée le 2026-11-14)
 
@@ -162,21 +166,36 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 `src/maj.rs` : fil « mise à jour », WinHTTP (proxy et certificats du système, aucune dépendance
 de plus). Il lit `releases/latest` de l'API GitHub, compare le tag à `CARGO_PKG_VERSION`,
 télécharge l'élément `essaim.exe` (adresse limitée à `github.com/KingsRequin/essaim/releases/download/`),
-vérifie l'en-tête `MZ` et l'empreinte `digest` (SHA-256 par `BCryptHash`), puis renomme
+vérifie l'en-tête `MZ`, l'empreinte `digest` (SHA-256 par `BCryptHash`) et la signature
+`essaim.exe.sig` : ECDSA P-256 (r puis s, 64 octets) sur « essaim.exe <version> <sha256> », par
+l'une des deux clés publiques de `CLES` (principale, secours), vérifiée par BCrypt. Sans
+signature valide, rien n'est installé : GitHub seul (compte, workflow, dépendance de
+compilation piégée) ne peut pas pousser un exécutable chez les utilisateurs. Il renomme ensuite
 l'exécutable en cours en `.ancien` et met le nouveau à sa place (Windows autorise le renommage
 d'un exécutable lancé). Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
 d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
 ne vérifie rien.
 
-Publier une version : monter `version` dans `Cargo.toml`, commiter, puis pousser un tag
-`vX.Y.Z` identique. Le workflow `.github/workflows/publication.yml` (Windows) vérifie le tag,
-lance les tests, compile, et crée la version GitHub avec `essaim.exe` (nom attendu par les
-mises à jour) et `curseur-Dotter.zip`.
+Publier une version :
+
+1. monter `version` dans `Cargo.toml`, commiter, puis pousser un tag `vX.Y.Z` identique ;
+2. le workflow `.github/workflows/publication.yml` vérifie le tag, lance les tests, compile
+   (job sans droit d'écriture ni jeton conservé), puis un second job, qui ne compile rien, crée
+   la version **en brouillon** avec `essaim.exe` (nom attendu par les mises à jour) et
+   `curseur-Dotter.zip` ;
+3. sur le PC de l'auteur, `pwsh scripts\signer-version.ps1` vérifie que le tag de GitHub est
+   le commit local, signe l'exe du brouillon, y dépose `essaim.exe.sig` et publie la version.
+
+Clés (`scripts\creer-cles-signature.ps1`, une seule fois) : la principale est dans
+`%USERPROFILE%\.essaim-signature\principale.cle`, chiffrée par DPAPI pour la session Windows de
+l'auteur ; la clé de secours est rangée hors du PC. Si la principale est perdue : signer avec
+`-Secours <fichier>` une version dont `CLES` contient une nouvelle clé principale.
 
 ## Développement
 
 `cargo build --release` suffit : l'analyse du son vient de la bibliothèque
-[audio-commun](https://github.com/KingsRequin/audio-commun) (tag `v0.2.0`), partagée avec Horizon.
+[audio-commun](https://github.com/KingsRequin/audio-commun) (figée par commit, celui du tag
+`v0.2.0` : `rev` dans `Cargo.toml`), partagée avec Horizon.
 Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
 suivi par git) :
 
