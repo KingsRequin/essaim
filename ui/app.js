@@ -81,6 +81,9 @@ const etat = {
   renommages: [], // { ancien, nouveau } demandés, suivis à l'état suivant (favoris)
   capture: null, // écoute du son : "active", "coupee", "erreur" (absent : inconnu)
   veille: false,
+  morceau: null, // morceau en cours { titre, artiste } (API média de Windows), ou null
+  lecture: null, // le morceau joue (vrai), est en pause (faux) ; null : aucune session
+  pistes: null, // compteur des changements de piste de l'appli (rafale dans le grand aperçu)
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -144,7 +147,7 @@ const FORMES_REGLAGE = [...FORMES, ["trace", "Dessiné…"]];
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
-const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris"];
+const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris", "musique"];
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
@@ -865,6 +868,7 @@ function construireReglages() {
         bascule("Onde au clic", "clic", "onde"),
         bascule("Éclats au clic", "clic", "eclats"),
         bascule("Sillage de la souris", "sillage", "actif"),
+        bascule("Rafale au changement de piste", "musique", "rafale_piste"),
       ]);
     } else if (def.special === "couleur") {
       teintes = TEINTES.map((h) => {
@@ -876,6 +880,7 @@ function construireReglages() {
           regler("couleur", "vitesse_teinte", 0);
           regler("couleur", "application", false);
           regler("couleur", "site", false);
+          regler("couleur", "pochette", false);
           regler("couleur", "synchro_prisme", false);
           majReglages();
         });
@@ -884,11 +889,14 @@ function construireReglages() {
       // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet
       const synchro = bascule("Synchro Prisme", "couleur", "synchro_prisme");
       synchro.title = "Prend la teinte de l'éclairage RGB de Prisme quand il tourne";
+      const pochette = bascule("Couleur de la pochette", "couleur", "pochette");
+      pochette.title = "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application, le site et Prisme";
       ligneLarge("Couleur", "couleur.teinte", [
         ...teintes.map((t) => t.b),
         bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
         bascule("Couleur de l'application", "couleur", "application"),
         bascule("Couleur du site (navigateur)", "couleur", "site"),
+        pochette,
         bascule("Suit la musique", "couleur", "musique"),
         synchro,
       ]);
@@ -987,7 +995,7 @@ function majReglages() {
   }
   const c = etat.reglages.couleur;
   for (const t of teintes) {
-    t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
+    t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.pochette && !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
   }
   $("avec-preset").setAttribute("aria-pressed", !!val("souris", "avec_preset"));
   const d = $("demarrage");
@@ -1008,7 +1016,7 @@ function surprise() {
   Object.assign(c.essaim, { maximum: ri(0, 30), fixes: c.orbite.cometes ? ri(0, 6) : ri(6, 18), forme: Math.random() < 0.75 ? "cometes" : parmi(FORMES)[0] });
   Object.assign(c.couleur, {
     teinte: ri(0, 359), vitesse_teinte: Math.random() < 0.5 ? 0 : ri(20, 120), ecart_teinte: ri(20, 200),
-    application: false, site: false, synchro_prisme: false,
+    application: false, site: false, pochette: false, synchro_prisme: false,
   });
   c.eclat.taille = +r(1.5, 6).toFixed(1);
   envoyer({ cmd: "appliquer_reglages", nom: "Surprise", reglages: c });
@@ -1022,10 +1030,20 @@ function majEtatEssaim() {
   const parts = [];
   if (etat.capture) parts.push({ active: "Son capté", coupee: "Son coupé", erreur: "Son : erreur" }[etat.capture]);
   if (etat.veille) parts.push("En veille");
-  e.hidden = !parts.length;
-  if (e.dataset.texte !== parts.join("|")) {
-    e.dataset.texte = parts.join("|");
-    e.replaceChildren(...parts.map((t) => el("span", "", t)));
+  // morceau en cours : son titre, tronqué ; titre et artiste en entier au survol
+  const m = etat.morceau;
+  const titre = m ? m.titre || m.artiste : "";
+  e.hidden = !parts.length && !titre;
+  const cle = parts.join("|") + "|" + (m ? m.titre + "|" + m.artiste : "");
+  if (e.dataset.texte !== cle) {
+    e.dataset.texte = cle;
+    const spans = parts.map((t) => el("span", "", t));
+    if (titre) {
+      const s = el("span", "morceau", titre);
+      s.title = m.titre && m.artiste ? `${m.titre} — ${m.artiste}` : titre;
+      spans.push(s);
+    }
+    e.replaceChildren(...spans);
   }
   e.dataset.etat = etat.capture || "";
   e.title = { active: "Essaim entend le son de Windows.", coupee: "Écoute coupée : « Réagir au son » est désactivé.", erreur: "La capture du son de Windows a échoué (voir le journal)." }[etat.capture] || "";
@@ -1037,6 +1055,14 @@ function recevoirCharge(m) {
   // champs ajoutés plus tard par l'appli : ignorés s'ils manquent
   etat.capture = ["active", "coupee", "erreur"].includes(m.capture) ? m.capture : null;
   etat.veille = m.veille === true;
+  const mo = m.morceau;
+  etat.morceau = mo && typeof mo === "object" ? { titre: String(mo.titre || ""), artiste: String(mo.artiste || "") } : null;
+  etat.lecture = typeof m.lecture === "boolean" ? m.lecture : null;
+  // changement de piste vu par l'appli : la même rafale dans le grand aperçu
+  if (typeof m.pistes === "number") {
+    if (etat.pistes !== null && m.pistes !== etat.pistes && etat.reglages && etat.reglages.musique && etat.reglages.musique.rafale_piste) grand.rafale();
+    etat.pistes = m.pistes;
+  }
   $("pause").setAttribute("aria-pressed", etat.pause);
   $("pause").textContent = etat.pause ? "En pause" : "Pause";
   majEtatEssaim();
@@ -1278,7 +1304,8 @@ function libelleReglage(section, cle) {
     "orbite.forme": "Trajet des comètes", "essaim.forme": "Trajet des satellites", "couleur.application": "Couleur de l'application",
     "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique", "scintillement.actif": "Étincelles sur les aigus",
     "clic.onde": "Onde au clic", "clic.eclats": "Éclats au clic", "sillage.actif": "Sillage de la souris", "souris.jeu": "Curseurs",
-    "couleur.synchro_prisme": "Synchro Prisme",
+    "couleur.synchro_prisme": "Synchro Prisme", "couleur.pochette": "Couleur de la pochette",
+    "musique.rafale_piste": "Rafale au changement de piste",
   };
   return [noms[section + "." + cle] || section + "." + cle];
 }
@@ -1790,9 +1817,11 @@ window.essaim = {
 const grand = new window.Apercu($("grand-apercu"));
 let derniere = performance.now(), cumul = 0;
 
-// Teinte imposée à un aperçu : celle que l'appli suit en ce moment (application ou site au
-// premier plan, sinon éclairage de Prisme), si le preset suit la même source.
-const sourceTeinte = (c) => (c.couleur.application || c.couleur.site ? "appli" : c.couleur.synchro_prisme ? "prisme" : null);
+// Teinte imposée à un aperçu : celle que l'appli suit en ce moment (pochette du morceau qui joue,
+// sinon application ou site au premier plan, sinon éclairage de Prisme), si le preset suit la
+// même source.
+const sourceTeinte = (c) => (c.couleur.pochette && etat.lecture === true ? "pochette"
+  : c.couleur.application || c.couleur.site ? "appli" : c.couleur.synchro_prisme ? "prisme" : null);
 function teinteImposee(c) {
   if (!c || etat.teinte === null || !etat.reglages) return null;
   const s = sourceTeinte(c);
