@@ -165,7 +165,8 @@ Trente secondes après le lancement, puis toutes les six heures, Essaim regarde 
 version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus récente :
 
 1. une notification annonce le téléchargement de `essaim.exe` ;
-2. son empreinte SHA-256 est comparée à celle publiée par GitHub (fichier refusé sinon) ;
+2. son empreinte SHA-256 est comparée à celle publiée par GitHub, et sa signature à la clé
+   de l'auteur intégrée à Essaim : un fichier abîmé ou qui ne vient pas de l'auteur est refusé ;
 3. le nouveau fichier prend la place de l'exécutable en cours, et l'ancien devient
    `essaim.exe.ancien` (effacé au lancement suivant) ;
 4. une seconde notification propose de redémarrer. Clic dessus, ou *Redémarrer avec la version…*

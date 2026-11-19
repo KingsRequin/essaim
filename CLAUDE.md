@@ -24,6 +24,13 @@ de l'auteur (chemins, exécutable) : `CLAUDE.local.md`. Exécutable :
 Essaim est installé (`scripts\install.ps1`, démarrage avec la session) : après une
 modification vérifiée, réinstaller avec ce script (il arrête l'instance installée).
 
+## Publication
+
+Un tag `vX.Y.Z` fait compiler le workflow, qui crée la version en brouillon. Elle n'est publiée
+qu'une fois signée sur le PC de l'auteur (`pwsh scripts\signer-version.ps1`) : les mises à jour
+automatiques refusent un `essaim.exe` sans `essaim.exe.sig` valide (`docs/technique.md`,
+« Mises à jour et publication »). Ne jamais mettre de clé privée dans le dépôt ni sur GitHub.
+
 ## Essai en vrai
 
 - Fermer l'instance avant de recompiler : `essaim.exe --quitter` (sinon l'exe est verrouillé).
