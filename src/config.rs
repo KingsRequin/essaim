@@ -31,6 +31,7 @@ pub struct Config {
     pub musique: Musique,
     pub pause: Pause,
     pub stream: Stream,
+    pub modulations: Modulations,
 }
 
 /// Fenêtre pour le stream (`stream.rs`), propre à la machine : hors presets.
@@ -75,10 +76,12 @@ impl Default for Musique {
     }
 }
 
-impl Musique {
-    /// Un effet demande-t-il l'analyse musicale (caisse claire, montée, drop) ?
-    pub fn analyse_voulue(&self) -> bool {
-        self.montee || self.caisse_claire
+impl Config {
+    /// Un effet ou une modulation demande-t-il l'analyse musicale (caisse claire, montée, drop) ?
+    pub fn analyse_musicale(&self) -> bool {
+        self.musique.montee
+            || self.musique.caisse_claire
+            || self.modulations.liste.iter().any(|m| matches!(m.source, Source::Caisse | Source::Montee | Source::Drop))
     }
 }
 
@@ -387,14 +390,16 @@ pub struct Orbite {
     pub anneaux: u32,
     /// Rotation du trajet lui-même (tours par minute ; négatif : dans l'autre sens).
     pub rotation: f32,
+    /// Ce qui tourne avec le trajet : comètes, satellites ou tout.
+    pub rotation_sur: Groupe,
+    /// Chaque kick inverse le sens de rotation des comètes et des satellites.
+    pub inverse_au_kick: bool,
     /// Trajet dessiné à la main (`forme = "trace"`) : points (x, y), rayon 1 environ.
     pub trace: Vec<[f32; 2]>,
     /// Inertie du centre de l'orbite : 0 = suit le pointeur de près, 1 = ressort souple qui
     /// traîne derrière la souris et la dépasse un peu à l'arrêt.
     pub inertie: f32,
     pub vitesse_base: f32,
-    pub vitesse_basse: f32,
-    pub eloignement_grave: f32,
     pub trainee: f32,
 }
 
@@ -411,6 +416,195 @@ pub struct Essaim {
     pub forme: FormeSatellites,
     /// Constellation : fines lignes entre les satellites et les comètes proches.
     pub constellation: bool,
+}
+
+/// À qui s'applique une rotation ou une modulation.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Groupe {
+    #[default]
+    Tout,
+    Cometes,
+    Satellites,
+}
+
+impl Groupe {
+    /// Comprend-il les comètes (`satellites = false`) ou les satellites (`true`) ?
+    pub fn inclut(self, satellites: bool) -> bool {
+        match self {
+            Self::Tout => true,
+            Self::Cometes => !satellites,
+            Self::Satellites => satellites,
+        }
+    }
+}
+
+/// Modulations (`[modulations] liste`) : chacune fait agir une source du son sur un paramètre
+/// de l'essaim, pour les comètes, les satellites ou les deux (`modulation.rs`).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Modulations {
+    pub liste: Vec<Modulation>,
+}
+
+impl Default for Modulations {
+    fn default() -> Self {
+        Self { liste: reactions_de_base(VITESSE_BASSE, ELOIGNEMENT_GRAVE) }
+    }
+}
+
+/// Réactions de base à la basse, par défaut : vitesse ajoutée quand la basse est au maximum
+/// (radians/s), écartement de l'orbite pour une note très grave (1,3 = +130 %).
+pub const VITESSE_BASSE: f32 = 11.0;
+pub const ELOIGNEMENT_GRAVE: f32 = 1.3;
+
+/// Modulations des réactions de base : la basse accélère (`vitesse` radians/s ajoutés à fond),
+/// une note grave éloigne l'orbite (`eloignement` : part du rayon ajoutée). Une réaction nulle
+/// est omise. Ce sont les anciens `[orbite] vitesse_basse` et `eloignement_grave`.
+pub fn reactions_de_base(vitesse: f32, eloignement: f32) -> Vec<Modulation> {
+    use crate::modulation::{RAYON, VITESSE};
+    let m = |source, cible, quantite: f32| Modulation { source, cible, sur: Groupe::Tout, quantite: (quantite * 1e4).round() / 1e4 };
+    let mut l = Vec::new();
+    if vitesse != 0.0 {
+        l.push(m(Source::Basse, Cible::Vitesse, (vitesse / VITESSE).clamp(-1.0, 1.0)));
+    }
+    if eloignement != 0.0 {
+        l.push(m(Source::Grave, Cible::Rayon, (eloignement / RAYON).clamp(-1.0, 1.0)));
+    }
+    l
+}
+
+/// Réglages d'avant les modulations dans une table TOML (fichier de réglages ou preset) :
+/// `[orbite] vitesse_basse` et `eloignement_grave` deviennent les modulations de base, placées
+/// en tête de `[modulations] liste`. Si la liste en a déjà une de même source et même cible
+/// (basse → vitesse, grave → rayon), celle-là est gardée et l'ancienne clé oubliée. Renvoie
+/// vrai si la table a changé.
+fn migrer(t: &mut toml::Table) -> bool {
+    let Some(orbite) = t.get_mut("orbite").and_then(|o| o.as_table_mut()) else { return false };
+    let lire = |v: Option<toml::Value>| v.and_then(|v| v.as_float().or(v.as_integer().map(|i| i as f64)));
+    let (vb, eg) = (lire(orbite.remove("vitesse_basse")), lire(orbite.remove("eloignement_grave")));
+    if vb.is_none() && eg.is_none() {
+        return false;
+    }
+    let base = reactions_de_base(vb.unwrap_or(VITESSE_BASSE as f64) as f32, eg.unwrap_or(ELOIGNEMENT_GRAVE as f64) as f32);
+    let modulations = t.entry("modulations").or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(m) = modulations.as_table_mut() else { return true };
+    let mut liste = match m.remove("liste") {
+        Some(toml::Value::Array(a)) => a,
+        _ => Vec::new(),
+    };
+    let texte = |v: &toml::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
+    fn nom<T: Serialize>(x: T) -> Option<String> {
+        toml::Value::try_from(x).ok().and_then(|v| v.as_str().map(str::to_owned))
+    }
+    let mut tete: Vec<toml::Value> = base
+        .iter()
+        .filter(|r| !liste.iter().any(|v| texte(v, "source") == nom(r.source) && texte(v, "cible") == nom(r.cible)))
+        .filter_map(|r| toml::Value::try_from(r).ok())
+        .collect();
+    tete.append(&mut liste);
+    m.insert("liste".into(), toml::Value::Array(tete));
+    true
+}
+
+/// Réglages lus d'un texte TOML, réglages d'avant les modulations convertis (`migrer`).
+pub fn de_texte(texte: &str) -> Result<Config, toml::de::Error> {
+    let mut t: toml::Table = toml::from_str(texte)?;
+    migrer(&mut t);
+    Config::deserialize(t)
+}
+
+/// Convertit `config.toml` une fois pour toutes : les anciennes clés de la basse sont retirées et
+/// remplacées par leurs modulations (si le fichier n'en a pas déjà), commentaires gardés.
+pub fn migrer_fichier() -> Result<(), String> {
+    migrer_fichier_in(&path())
+}
+
+pub(crate) fn migrer_fichier_in(p: &Path) -> Result<(), String> {
+    if !p.exists() {
+        return Ok(());
+    }
+    edit_file(p, |doc, known| {
+        let mut t: toml::Table = toml::from_str(&doc.to_string()).map_err(|e| format!("config.toml illisible : {e}"))?;
+        if !migrer(&mut t) {
+            return Ok(());
+        }
+        let cfg = Config::deserialize(t).map_err(|e| format!("config.toml illisible : {e}"))?;
+        if let Some(o) = doc.get_mut("orbite").and_then(|o| o.as_table_like_mut()) {
+            o.remove("vitesse_basse");
+            o.remove("eloignement_grave");
+        }
+        let liste = serde_json::to_value(&cfg.modulations.liste).map_err(|e| e.to_string())?;
+        set_in_doc(doc, known, "modulations", "liste", &liste)?;
+        log::info!("config : réactions à la basse converties en modulations");
+        Ok(())
+    })
+}
+
+/// Modulations gardées au plus.
+pub const MODULATIONS_MAX: usize = 16;
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+pub struct Modulation {
+    pub source: Source,
+    pub cible: Cible,
+    pub sur: Groupe,
+    /// Force, de -1 à 1 (négatif : dans l'autre sens).
+    pub quantite: f32,
+}
+
+impl Default for Modulation {
+    fn default() -> Self {
+        Self { source: Source::Basse, cible: Cible::Rotation, sur: Groupe::Tout, quantite: 0.5 }
+    }
+}
+
+/// Source d'une modulation, ramenée de 0 à 1 (stéréo : -1 à gauche, 1 à droite). Une source
+/// inconnue (preset d'une version plus récente) ne fait rien.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// Quantité de basse.
+    Basse,
+    /// Basse présente et note grave.
+    Grave,
+    /// Basse présente et note haute.
+    Aigu,
+    /// Coup de chaque kick, qui retombe vite.
+    Kick,
+    /// Coup de chaque caisse claire (ou clap).
+    Caisse,
+    /// Attaques des aigus (charleston, cymbales).
+    Charleston,
+    /// Tension d'une montée, avant le drop.
+    Montee,
+    /// Drop : 1 au drop, retombe en deux secondes environ.
+    Drop,
+    /// Côté qui joue le plus fort.
+    Stereo,
+    /// Battement du tempo (1 sur chaque temps), quand il est régulier.
+    Tempo,
+    #[serde(other)]
+    Aucune,
+}
+
+/// Paramètre modulé. Une cible inconnue ne fait rien.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Cible {
+    /// Rotation du trajet (tours par minute ajoutés).
+    Rotation,
+    /// Vitesse sur le trajet.
+    Vitesse,
+    /// Rayon de l'orbite.
+    Rayon,
+    /// Taille des têtes et épaisseur des traînées.
+    Taille,
+    /// Teinte (degrés ajoutés).
+    Teinte,
+    #[serde(other)]
+    Aucune,
 }
 
 /// Trajet des satellites : celui des comètes, ou une forme à eux.
@@ -560,11 +754,11 @@ impl Default for Orbite {
             nombre: 2,
             anneaux: 1,
             rotation: 0.0,
+            rotation_sur: Groupe::Tout,
+            inverse_au_kick: true,
             trace: Vec::new(),
             inertie: 0.0,
             vitesse_base: 3.5,
-            vitesse_basse: 11.0,
-            eloignement_grave: 1.3,
             trainee: 0.3,
         }
     }
@@ -615,11 +809,11 @@ forme = "cercle"        # trajet : cercle, triangle, losange, hexagone, huit, et
 nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
+rotation_sur = "tout"   # ce qui tourne avec le trajet : "tout", "cometes" ou "satellites"
+inverse_au_kick = true  # chaque kick inverse le sens de rotation des comètes et des satellites
 trace = []              # trajet dessiné à la main (forme = "trace"), points [x, y]
 inertie = 0             # 0 = l'orbite suit le pointeur de près, 1 = ressort souple qui traîne derrière
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
-vitesse_basse = 11      # vitesse ajoutée quand la basse est au maximum
-eloignement_grave = 1.3 # écartement ajouté pour une note très grave (1.3 = +130 %)
 trainee = 0.3           # durée de la traînée des comètes (s)
 
 [essaim]
@@ -669,6 +863,20 @@ montee = true           # l'essaim se resserre et accélère pendant une montée
 caisse_claire = true    # un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire (ou clap)
 contretemps = false     # petite pulsation sur chaque contretemps, quand le tempo est connu
 stereo = 0              # l'essaim penche vers le côté qui joue le plus fort (0 = jamais, 1 = beaucoup)
+
+[modulations]
+# Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
+# satellites ou tout (16 au plus) :
+#   source   : basse, grave, aigu (note de la basse), kick, caisse, charleston, montee, drop,
+#              stereo (côté qui joue), tempo (battement)
+#   cible    : rotation (du trajet, 1 = +90 tr/min), vitesse (1 = +40 radians/s), rayon
+#              (1 = +400 %), taille (1 = +150 %), teinte (1 = +180°)
+#   sur      : "tout", "cometes" ou "satellites"
+#   quantite : de -1 à 1 (négatif : dans l'autre sens)
+# Par défaut, les réactions de base : la basse accélère (vitesse : 1 = +40 radians/s), une note
+# grave éloigne l'orbite (rayon : 1 = +400 %). Autre exemple : le trajet des satellites qui
+# s'emballe au drop, { source = "drop", cible = "rotation", sur = "satellites", quantite = 0.8 }
+liste = [{ source = "basse", cible = "vitesse", sur = "tout", quantite = 0.275 }, { source = "grave", cible = "rayon", sur = "tout", quantite = 0.325 }]
 
 [projecteur]
 actif = true            # secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur
@@ -801,7 +1009,7 @@ fn dans_les_bornes(f: f64, lo: f64, hi: f64) -> bool {
 impl Config {
     /// Lit un fichier de réglages (manquants : valeurs par défaut), bornes appliquées.
     pub fn read(p: &Path) -> anyhow::Result<Config> {
-        Ok(toml::from_str::<Config>(&std::fs::read_to_string(p)?)?.clamped())
+        Ok(de_texte(&std::fs::read_to_string(p)?)?.clamped())
     }
 
     /// Ramène chaque réglage numérique dans ses bornes.
@@ -810,6 +1018,10 @@ impl Config {
         // JSON, où un point non fini empêcherait toute la relecture)
         self.orbite.trace.retain(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e6));
         self.orbite.trace.truncate(2000);
+        self.modulations.liste.truncate(MODULATIONS_MAX);
+        for m in &mut self.modulations.liste {
+            m.quantite = if m.quantite.is_finite() { m.quantite.clamp(-1.0, 1.0) } else { 0.0 };
+        }
         if !depot_valide(&self.bibliotheque.depot) {
             log::warn!("config : [bibliotheque] depot « {} » invalide, dépôt par défaut utilisé", self.bibliotheque.depot);
             self.bibliotheque = Bibliotheque::default();
@@ -890,7 +1102,7 @@ pub fn modifier(change: impl FnOnce(&mut Config)) -> Result<(), String> {
 
 pub(crate) fn modifier_in(p: &Path, change: impl FnOnce(&mut Config)) -> Result<(), String> {
     edit_file(p, |doc, known| {
-        let lu: Config = toml::from_str(&doc.to_string()).map_err(|e| format!("config.toml illisible : {e}"))?;
+        let lu: Config = de_texte(&doc.to_string()).map_err(|e| format!("config.toml illisible : {e}"))?;
         let mut cfg = lu.clone();
         change(&mut cfg);
         let json = |c: &Config| serde_json::to_value(c).map_err(|e| e.to_string());
@@ -972,7 +1184,7 @@ fn edit_text(
     if new == text {
         return Ok(None);
     }
-    toml::from_str::<Config>(&new).map_err(|e| format!("valeur refusée : {e}"))?;
+    de_texte(&new).map_err(|e| format!("valeur refusée : {e}"))?;
     Ok(Some(new))
 }
 
@@ -1193,6 +1405,74 @@ mod tests {
     }
 
     #[test]
+    fn reactions_a_la_basse_d_avant_converties_en_modulations() {
+        use super::{reactions_de_base, Cible, Source};
+        // preset ou réglages d'avant : valeurs gardées, en modulations
+        let ancien = "[orbite]\nrayon = 28\nvitesse_basse = 18\neloignement_grave = 1.8\n";
+        let c = super::de_texte(ancien).unwrap();
+        assert_eq!(c.modulations.liste, reactions_de_base(18.0, 1.8));
+        assert_eq!(c.orbite.rayon, 28.0);
+        // une seule des deux : l'autre garde sa valeur par défaut ; à zéro : pas de modulation
+        let c = super::de_texte("[orbite]\nvitesse_basse = 0\n").unwrap();
+        assert_eq!(c.modulations.liste.len(), 1);
+        assert_eq!((c.modulations.liste[0].source, c.modulations.liste[0].cible), (Source::Grave, Cible::Rayon));
+        // des modulations déjà là : les réactions passent en tête, sans doubler celles déjà là
+        let c = super::de_texte("[orbite]\nvitesse_basse = 18\n[modulations]\nliste = [{ source = \"kick\", cible = \"taille\" }]\n").unwrap();
+        let attendu: Vec<_> = reactions_de_base(18.0, super::ELOIGNEMENT_GRAVE).into_iter().chain([super::Modulation { source: Source::Kick, cible: Cible::Taille, ..Default::default() }]).collect();
+        assert_eq!(c.modulations.liste, attendu);
+        let c = super::de_texte("[orbite]\nvitesse_basse = 18\n[modulations]\nliste = [{ source = \"basse\", cible = \"vitesse\", quantite = 0.1 }]\n").unwrap();
+        assert_eq!(c.modulations.liste.len(), 2);
+        assert_eq!(c.modulations.liste[1].quantite, 0.1, "celle déjà là est gardée");
+        // le fichier est converti une fois, commentaires gardés
+        let d = dossier("conversion");
+        let p = d.join("config.toml");
+        std::fs::write(&p, "# mes réglages\n[orbite]\nrayon = 30 # grand\nvitesse_basse = 5\neloignement_grave = 0.6\n").unwrap();
+        super::migrer_fichier_in(&p).unwrap();
+        let texte = std::fs::read_to_string(&p).unwrap();
+        assert!(!texte.contains("vitesse_basse") && !texte.contains("eloignement_grave") && texte.contains("rayon = 30 # grand"), "{texte}");
+        assert_eq!(super::Config::read(&p).unwrap().modulations.liste, reactions_de_base(5.0, 0.6));
+        super::migrer_fichier_in(&p).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), texte, "rien de plus la deuxième fois");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn modulations_ecrites_lues_et_bornees() {
+        use super::{Cible, Groupe, Source};
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        // par défaut, les réactions de base ; le fichier par défaut dit la même chose
+        assert_eq!(c.modulations.liste, super::Modulations::default().liste);
+        assert_eq!(c.modulations.liste.len(), 2);
+        assert!(c.orbite.inverse_au_kick && c.orbite.rotation_sur == Groupe::Tout);
+        assert!(crate::profils::in_profile("modulations", "liste") && crate::profils::in_profile("orbite", "rotation_sur"));
+        let d = dossier("modulations");
+        let p = d.join("config.toml");
+        std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        let liste = serde_json::json!([{ "source": "drop", "cible": "rotation", "sur": "satellites", "quantite": 0.8 }]);
+        super::set_value_in(&p, "modulations", "liste", &liste).unwrap();
+        assert!(super::set_value_in(&p, "modulations", "liste", &serde_json::json!([{ "quantite": "fort" }])).is_err());
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!(c.modulations.liste.len(), 1);
+        let m = c.modulations.liste[0];
+        assert_eq!((m.source, m.cible, m.sur, m.quantite), (Source::Drop, Cible::Rotation, Groupe::Satellites, 0.8));
+        // la musique analysée seulement si une source la demande
+        let mut a = super::Config::default();
+        a.musique.montee = false;
+        a.musique.caisse_claire = false;
+        assert!(!a.analyse_musicale());
+        a.modulations.liste = c.modulations.liste.clone();
+        assert!(a.analyse_musicale());
+        // source ou cible d'une version plus récente : ignorée ; quantité bornée ; 16 au plus
+        let texte = "[modulations]\nliste = [{ source = \"futur\", cible = \"autre\", quantite = 9 }]";
+        let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
+        assert_eq!((c.modulations.liste[0].source, c.modulations.liste[0].cible, c.modulations.liste[0].quantite), (Source::Aucune, Cible::Aucune, 1.0));
+        let mut c = super::Config::default();
+        c.modulations.liste = vec![super::Modulation::default(); 40];
+        assert_eq!(c.clamped().modulations.liste.len(), super::MODULATIONS_MAX);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn effets_projecteur_reticule_spectre_lus_et_bornes() {
         // fichier par défaut : mêmes valeurs que les réglages par défaut
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
@@ -1382,7 +1662,7 @@ mod tests {
         let c = super::Config::read(&p).unwrap();
         assert_eq!(c.automatique.applis[0].preset, "Nuit");
         assert_eq!(c.orbite.rayon, 25.0);
-        assert!(text.contains("# rayon de l'orbite sans basse") && text.contains("eloignement_grave = 1.3 "), "{text}");
+        assert!(text.contains("# rayon de l'orbite sans basse") && text.contains("trainee = 0.3 "), "{text}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

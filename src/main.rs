@@ -26,6 +26,7 @@ mod ipc;
 mod layer;
 mod maj;
 mod media;
+mod modulation;
 mod pauses;
 mod prisme;
 mod profils;
@@ -280,12 +281,16 @@ impl Son {
 fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     // premier lancement (aucun réglage encore) : la fenêtre des réglages et son accueil
     let premier = !config::path().exists();
+    // réglages d'une version d'avant les modulations : convertis une fois pour toutes
+    if let Err(e) = config::migrer_fichier() {
+        log::warn!("config : conversion des réactions à la basse impossible ({e})");
+    }
     let mut conf = config::Watched::load();
     render::set_trace(&conf.cfg.orbite.trace);
     let shared = Arc::new(audio::AudioShared::default());
     shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
     shared.set_min_gap(conf.cfg.audio.delai_kick);
-    shared.set_musique(conf.cfg.musique.analyse_voulue());
+    shared.set_musique(conf.cfg.analyse_musicale());
     // capture lancée au premier tour de boucle ; un échec n'empêche pas Essaim de tourner
     let mut son = Son::default();
 
@@ -455,7 +460,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             }
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
-            shared.set_musique(conf.cfg.musique.analyse_voulue());
+            shared.set_musique(conf.cfg.analyse_musicale());
             maj::regler(conf.cfg.mise_a_jour.auto);
             win::masquer_captures(conf.cfg.rendu.masquer_captures);
         }

@@ -7,11 +7,13 @@
 //!
 //! Au-delà du kick (`[musique]`) : pendant une montée l'essaim se resserre et accélère, puis
 //! explose au drop ; un carré s'ouvre sur chaque caisse claire ; les têtes pulsent sur les
-//! contretemps ; l'essaim penche vers le côté qui joue le plus fort. Tout est reproduit dans
-//! `ui/apercu.js`.
+//! contretemps ; l'essaim penche vers le côté qui joue le plus fort. Les modulations
+//! (`modulation.rs`) font agir une source du son sur la rotation, la vitesse, le rayon, la
+//! taille ou la teinte des comètes ou des satellites. Tout est reproduit dans `ui/apercu.js`.
 
 use crate::audio::AudioView;
 use crate::config::{Config, Forme};
+use crate::modulation::{Effet, Sources};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 use crate::canvas::Canvas;
@@ -150,9 +152,10 @@ pub fn prisme(cfg: &Config, t: f64, k: f32) -> (u8, u8, u8) {
 
 /// Teinte `j` de la palette (`[couleur] palette`, 1 à 3 teintes) : celle de `prisme`, décalée de
 /// `j` fois `ecart_palette` degrés (les comètes et satellites se partagent la palette).
-pub fn prisme_palette(cfg: &Config, t: f64, k: f32, j: usize) -> (u8, u8, u8) {
+/// `decale` : degrés ajoutés (modulation de la teinte).
+fn prisme_palette(cfg: &Config, t: f64, k: f32, j: usize, decale: f32) -> (u8, u8, u8) {
     let n = cfg.couleur.palette.clamp(1, 3) as usize;
-    prisme_decale(cfg, t, k, (j % n) as f32 * cfg.couleur.ecart_palette)
+    prisme_decale(cfg, t, k, (j % n) as f32 * cfg.couleur.ecart_palette + decale)
 }
 
 fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u8, u8) {
@@ -391,8 +394,14 @@ pub struct Swarm {
     far: f32,
     /// Angle de chaque anneau.
     angles: Vec<f32>,
-    /// Rotation du trajet lui-même.
+    /// Rotation du trajet lui-même : celui des comètes, celui des satellites.
     rot: f32,
+    rot_sats: f32,
+    /// Sources des modulations (enveloppes des coups, montée suivie), et effets lissés sur les
+    /// comètes (`[0]`) et les satellites (`[1]`), à cette image et à la précédente.
+    sources: Sources,
+    mods: [Effet; 2],
+    mods_avant: [Effet; 2],
     /// Traînées des comètes, anneau par anneau.
     trails: Vec<Trail>,
     sats: Vec<Sat>,
@@ -429,6 +438,15 @@ pub struct Swarm {
     tampons: std::cell::RefCell<Tampons>,
 }
 
+/// Trajet d'un groupe pendant une image : rotation au début et son avance, rayon au début et à
+/// la fin.
+struct Pose {
+    rot0: f32,
+    drot: f32,
+    rayon0: f32,
+    rayon: f32,
+}
+
 /// Tête d'une traînée à dessiner.
 struct Head {
     x: f32,
@@ -457,6 +475,10 @@ impl Swarm {
             far: 1.0,
             angles: Vec::new(),
             rot: 0.0,
+            rot_sats: 0.0,
+            sources: Sources::default(),
+            mods: [Effet::default(); 2],
+            mods_avant: [Effet::default(); 2],
             trails: Vec::new(),
             sats: Vec::new(),
             fixes: Vec::new(),
@@ -496,10 +518,12 @@ impl Swarm {
         for &(_, x, y) in pts {
             b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
         }
-        // halo des comètes (le plus large) + marge. Pas de rognage : tout ce qui est dessiné doit
-        // être dans ce rectangle, sinon ce qui en sort n'est jamais effacé (les points trop
-        // loin du pointeur sont retirés des traînées par `update`).
-        let pad = (2.4 * 2.6 + 3.5 * 2.6 + MARGIN) * scale;
+        // halo des comètes (le plus large, grossi par une modulation de la taille) + marge. Pas de
+        // rognage : tout ce qui est dessiné doit être dans ce rectangle, sinon ce qui en sort
+        // n'est jamais effacé (les points trop loin du pointeur sont retirés des traînées par
+        // `update`).
+        let taille = self.mods.iter().map(|m| m.taille).fold(1.0f32, f32::max);
+        let pad = ((2.4 * 2.6 + 3.5 * 2.6) * taille + MARGIN) * scale;
         (b.0 - pad, b.1 - pad, b.2 + pad, b.3 + pad)
     }
 
@@ -564,7 +588,9 @@ impl Swarm {
         self.kicks_seen = Some(au.kicks);
         let e = &cfg.essaim;
         for _ in 0..new {
-            self.dir = -self.dir;
+            if cfg.orbite.inverse_au_kick {
+                self.dir = -self.dir;
+            }
             self.eclater(t);
             let (lo, hi) = (e.par_kick_min.min(e.par_kick_max), e.par_kick_max.max(e.par_kick_min));
             let n = self.rng.range(lo as f32, hi as f32 + 0.999) as u32;
@@ -665,11 +691,13 @@ impl Swarm {
         }
         let depth = ((80.0 - self.pitch) / 50.0).clamp(0.0, 1.0);
         let o = &cfg.orbite;
-        // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant
+        // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant. La
+        // basse (vitesse) et la note grave (rayon) agissent par les modulations, plus bas.
         let tension = self.tension.clamp(0.0, 1.0);
-        self.spd += ((o.vitesse_base + o.vitesse_basse * au.bass) * (1.0 + 1.2 * tension) - self.spd) * (dt * 10.0).min(1.0);
+        let accel = 1.0 + 1.2 * tension;
+        self.spd += (o.vitesse_base * accel - self.spd) * (dt * 10.0).min(1.0);
         let presence = (au.bass * 2.5).clamp(0.0, 1.0);
-        let vise = (1.0 + o.eloignement_grave * depth * presence) * (1.0 - 0.45 * tension) * (1.0 + 0.06 * self.contre);
+        let vise = (1.0 - 0.45 * tension) * (1.0 + 0.06 * self.contre);
         self.far += (vise - self.far) * (dt * 16.0).min(1.0);
         // une valeur non finie (son abîmé) figerait l'essaim pour toujours : retour au repos
         if !self.spd.is_finite() {
@@ -681,8 +709,16 @@ impl Swarm {
         if !self.pitch.is_finite() {
             self.pitch = 50.0;
         }
+        // modulations : sources du moment, effets lissés (~50 ms) sur les comètes et les satellites
+        self.sources.avancer(dt, [new, caisses, nouveaux, drops], au.tension);
+        let sources = self.sources;
+        let vise = crate::modulation::effets(&cfg.modulations.liste, |src| sources.valeur(src, &au, depth, presence));
+        self.mods_avant = self.mods;
+        let k = (dt * 20.0).min(1.0);
+        for (m, v) in self.mods.iter_mut().zip(&vise) {
+            m.lisser(v, k);
+        }
 
-        let w = self.dir * self.spd;
         // comètes : `nombre` par anneau, réparties sur le trajet
         let (anneaux, nombre) = (o.anneaux.max(1) as usize, o.nombre.max(1) as usize);
         self.angles.resize(anneaux, 0.0);
@@ -690,27 +726,38 @@ impl Swarm {
         let life = o.trainee.max(0.01) as f64;
         // position sur le trajet à la fraction `f` de l'image (centre et rayon interpolés) : les
         // points intermédiaires suivent la vraie forme, coins compris
+        // rotation du trajet (`rotation_sur` : comètes, satellites ou tout) et modulations :
+        // une pose par groupe (rotation et rayon au début et à la fin de l'image)
         let (rayon, rayon0) = (o.rayon * scale * self.far, o.rayon * scale * far0);
-        let drot = o.rotation * TAU / 60.0 * dt;
-        let (rot0, drot) = (if self.rot.is_finite() { self.rot } else { 0.0 }, if drot.is_finite() { drot } else { 0.0 });
-        self.rot = (rot0 + drot).rem_euclid(TAU);
-        let point = |forme, a: f32, rel: f32, f: f32| {
+        let pose = |g: usize, rot: &mut f32, mods: &[Effet; 2], avant: &[Effet; 2]| {
+            let base = if o.rotation_sur.inclut(g == 1) { o.rotation } else { 0.0 };
+            let drot = (base + mods[g].rotation) * TAU / 60.0 * dt;
+            let (rot0, drot) = (if rot.is_finite() { *rot } else { 0.0 }, if drot.is_finite() { drot } else { 0.0 });
+            *rot = (rot0 + drot).rem_euclid(TAU);
+            Pose { rot0, drot, rayon0: rayon0 * avant[g].rayon, rayon: rayon * mods[g].rayon }
+        };
+        let poses = [pose(0, &mut self.rot, &self.mods, &self.mods_avant), pose(1, &mut self.rot_sats, &self.mods, &self.mods_avant)];
+        let point = |p: &Pose, forme, a: f32, rel: f32, f: f32| {
             let (x, y) = chemin(forme, a);
-            let (sin, cos) = (rot0 + drot * f).sin_cos();
+            let (sin, cos) = (p.rot0 + p.drot * f).sin_cos();
             let (x, y) = (x * cos - y * sin, x * sin + y * cos);
-            let rr = (rayon0 + (rayon - rayon0) * f) * rel;
+            let rr = (p.rayon0 + (p.rayon - p.rayon0) * f) * rel;
             (c0.0 + (cx - c0.0) * f + x * rr, c0.1 + (cy - c0.1) * f + y * rr)
         };
+        // vitesse : celle du trajet plus celle des modulations (accélérée aussi par la montée),
+        // jamais négative
+        let vitesse = |g: usize| self.dir * (self.spd + self.mods[g].vitesse * accel).max(0.0);
+        let (w_cometes, w_sats) = (vitesse(0), vitesse(1));
         for (k, angle) in self.angles.iter_mut().enumerate() {
             let (rk, wk) = anneau(k);
-            let (a0, da) = (*angle, w * wk * dt);
+            let (a0, da) = (*angle, w_cometes * wk * dt);
             *angle = (a0 + da).rem_euclid(TAU);
-            let n = sous_pas(da, rayon * rk * 1.2, FINESSE_COMETES);
+            let n = sous_pas(da, poses[0].rayon * rk * 1.2, FINESSE_COMETES);
             for i in 0..nombre {
                 let decale = i as f32 * TAU / nombre as f32;
                 for j in 1..=n {
                     let f = j as f32 / n as f32;
-                    let (x, y) = point(o.forme, a0 + da * f + decale, rk, f);
+                    let (x, y) = point(&poses[0], o.forme, a0 + da * f + decale, rk, f);
                     push_trail(&mut self.trails[k * nombre + i], t - dt as f64 * (1.0 - f) as f64, x, y, life, FINESSE_COMETES.1);
                 }
             }
@@ -729,12 +776,12 @@ impl Swarm {
         // satellites : sur le trajet des comètes, ou le leur, à des distances variées
         let forme = e.forme.suivie(o.forme);
         for s in self.sats.iter_mut().chain(self.fixes.iter_mut()) {
-            let (a0, da) = (s.a, w * s.mul * dt);
+            let (a0, da) = (s.a, w_sats * s.mul * dt);
             s.a = (a0 + da).rem_euclid(TAU);
-            let n = sous_pas(da, rayon * s.r * 1.2, FINESSE_SATELLITES);
+            let n = sous_pas(da, poses[1].rayon * s.r * 1.2, FINESSE_SATELLITES);
             for j in 1..=n {
                 let f = j as f32 / n as f32;
-                let (x, y) = point(forme, a0 + da * f, s.r, f);
+                let (x, y) = point(&poses[1], forme, a0 + da * f, s.r, f);
                 push_trail(&mut s.trail, t - dt as f64 * (1.0 - f) as f64, x, y, SAT_TRAIL, FINESSE_SATELLITES.1);
             }
         }
@@ -836,13 +883,15 @@ impl Swarm {
         let pulse = 1.0 + 0.5 * self.contre;
 
         // satellites (traînées sans halo, pour rester léger) ; les permanents restent à 0,8
+        // modulations : taille (têtes et traînées) et teinte de chaque groupe
+        let [mc, ms] = self.mods;
         for s in self.sats.iter().chain(&self.fixes) {
             let k = if s.born.is_finite() { (1.0 - (t - s.born) / dur) as f32 } else { 0.8 };
             let al = (k * 1.5).min(1.0);
-            draw_trail(cv, xy, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg, s.couleur);
+            draw_trail(cv, xy, &s.trail, t, SAT_TRAIL, 2.6 * k * scale * ms.taille, al, false, cfg, (s.couleur, ms.teinte));
             if let Some(&(_, x, y)) = s.trail.back() {
-                let rgb = prisme_palette(cfg, t, 1.0, s.couleur);
-                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale * pulse, al, front: y > self.center.map_or(0.0, |c| c.1), rgb });
+                let rgb = prisme_palette(cfg, t, 1.0, s.couleur, ms.teinte);
+                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale * pulse * ms.taille, al, front: y > self.center.map_or(0.0, |c| c.1), rgb });
             }
         }
         // les comètes (devant : sous le centre de l'orbite, comme vues de biais) ; chacune prend
@@ -850,9 +899,9 @@ impl Swarm {
         if o.cometes {
             let cy = self.center.map_or(0.0, |c| c.1);
             for (i, tr) in self.trails.iter().enumerate() {
-                draw_trail(cv, xy, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg, i);
+                draw_trail(cv, xy, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale * mc.taille, 1.0, true, cfg, (i, mc.teinte));
                 if let Some(&(_, x, y)) = tr.back() {
-                    heads.push(Head { x, y, s: 2.4 * scale * pulse, al: 1.0, front: y > cy, rgb: prisme_palette(cfg, t, 1.0, i) });
+                    heads.push(Head { x, y, s: 2.4 * scale * pulse * mc.taille, al: 1.0, front: y > cy, rgb: prisme_palette(cfg, t, 1.0, i, mc.teinte) });
                 }
             }
         }
@@ -929,9 +978,10 @@ impl Swarm {
 /// réservé aux comètes.
 const TRAIL_CHUNK: usize = 4;
 
-/// Dessine une traînée dans la teinte `j` de la palette.
+/// Dessine une traînée dans la teinte `j` de la palette, décalée de `decale` degrés
+/// (`teinte = (j, decale)`).
 #[allow(clippy::too_many_arguments)]
-fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config, j: usize) {
+fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config, (j, decale): (usize, f32)) {
     if tr.len() < 2 {
         return;
     }
@@ -940,7 +990,7 @@ fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
     xy.clear();
     xy.extend(tr.iter().map(|&(_, x, y)| (x, y)));
     if halo {
-        cv.polyline(xy, (0.8 + width * 0.7) * 2.6, prisme_palette(cfg, t, 0.7, j), 0.12 * al, false);
+        cv.polyline(xy, (0.8 + width * 0.7) * 2.6, prisme_palette(cfg, t, 0.7, j, decale), 0.12 * al, false);
     }
     // les comètes (avec halo) sont lissées ; les satellites non, en deux morceaux (tête vive,
     // queue pâle) : c'est le poste le plus coûteux sur processeur
@@ -950,7 +1000,7 @@ fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
     while i + 1 < xy.len() {
         let end = (i + chunk).min(xy.len() - 1);
         let k = (q(i) + q(end)) * 0.5;
-        cv.polyline(&xy[i..=end], 0.8 + k * width, prisme_palette(cfg, t, k, j), k * 0.9 * al, smooth);
+        cv.polyline(&xy[i..=end], 0.8 + k * width, prisme_palette(cfg, t, k, j, decale), k * 0.9 * al, smooth);
         i = end;
     }
 }
@@ -1233,9 +1283,9 @@ mod tests {
         let mut cfg = Config::default();
         (cfg.couleur.vitesse_teinte, cfg.couleur.synchro_prisme) = (0.0, false);
         // une seule teinte : toutes pareilles
-        assert_eq!(prisme_palette(&cfg, 0.0, 1.0, 0), prisme_palette(&cfg, 0.0, 1.0, 1));
+        assert_eq!(prisme_palette(&cfg, 0.0, 1.0, 0, 0.0), prisme_palette(&cfg, 0.0, 1.0, 1, 0.0));
         cfg.couleur.palette = 3;
-        let t: Vec<_> = (0..4).map(|j| prisme_palette(&cfg, 0.0, 1.0, j)).collect();
+        let t: Vec<_> = (0..4).map(|j| prisme_palette(&cfg, 0.0, 1.0, j, 0.0)).collect();
         assert_ne!(t[0], t[1]);
         assert_ne!(t[1], t[2]);
         assert_eq!(t[0], t[3], "la palette revient à sa première teinte");
@@ -1311,6 +1361,79 @@ mod tests {
         s.update(0.03, 0.01, (100.0, 100.0), AudioView::default(), &cfg, 1.0);
         let (x0, y0, x1, y1) = s.bounds((100.0, 100.0), 1.0, cfg.eclat.taille);
         assert!(x0 <= 100.0 - ONDE_PISTE.0 && x1 >= 100.0 + ONDE_PISTE.0 && y0 <= 100.0 - ONDE_PISTE.0 && y1 >= 100.0 + ONDE_PISTE.0);
+    }
+
+    #[test]
+    fn rotation_du_trajet_sur_les_satellites_seulement() {
+        let mut cfg = Config::default();
+        cfg.orbite.rotation = 30.0;
+        cfg.orbite.rotation_sur = crate::config::Groupe::Satellites;
+        let mut s = Swarm::new();
+        for i in 0..60 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, AudioView::default(), &cfg, 1.0);
+        }
+        // une seconde à 30 tr/min : un demi-tour pour les satellites, rien pour les comètes
+        assert_eq!(s.rot, 0.0);
+        assert!((s.rot_sats - PI).abs() < 0.01, "{}", s.rot_sats);
+    }
+
+    #[test]
+    fn drop_module_la_rotation_des_satellites() {
+        use crate::config::{Cible, Groupe, Modulation, Source};
+        let mut cfg = Config::default();
+        cfg.modulations.liste = vec![Modulation { source: Source::Drop, cible: Cible::Rotation, sur: Groupe::Satellites, quantite: 1.0 }];
+        let mut s = Swarm::new();
+        let mut au = AudioView::default();
+        for i in 0..30 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, au, &cfg, 1.0);
+        }
+        assert_eq!((s.rot, s.rot_sats), (0.0, 0.0), "rien avant le drop");
+        au.drops = 1;
+        for i in 30..90 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, au, &cfg, 1.0);
+        }
+        // après le drop, le trajet des satellites tourne (jusqu'à 90 tr/min), pas celui des comètes
+        assert_eq!(s.rot, 0.0);
+        assert!(s.rot_sats > 1.0, "{}", s.rot_sats);
+        assert!(s.mods[1].rotation > 10.0 && s.mods[0].rotation == 0.0);
+    }
+
+    #[test]
+    fn basse_module_rayon_et_taille_qui_tiennent_dans_le_rectangle() {
+        use crate::config::{Cible, Groupe, Modulation, Source};
+        let mut cfg = Config::default();
+        cfg.modulations.liste = vec![
+            Modulation { source: Source::Basse, cible: Cible::Rayon, sur: Groupe::Cometes, quantite: 1.0 },
+            Modulation { source: Source::Basse, cible: Cible::Taille, sur: Groupe::Tout, quantite: 1.0 },
+        ];
+        let (mut calme, mut module) = (Swarm::new(), Swarm::new());
+        let au = AudioView { bass: 1.0, pitch: 60.0, ..Default::default() };
+        for i in 0..120 {
+            let t = i as f64 / 60.0;
+            calme.update(t, 1.0 / 60.0, C, au, &Config::default(), 1.0);
+            module.update(t, 1.0 / 60.0, C, au, &cfg, 1.0);
+        }
+        assert!(ecart_moyen(&module) > 1.8 * ecart_moyen(&calme), "{} contre {}", ecart_moyen(&module), ecart_moyen(&calme));
+        assert!((module.mods[0].taille - 2.5).abs() < 0.01);
+        // têtes grossies : le dessin tient dans le rectangle (rien en dehors ne serait effacé)
+        let (pm, _) = render(&module, C, 2.0, &cfg, 1.0);
+        let bord = |x: u32, y: u32| pm.pixel(x, y).map_or(0, |p| p.alpha());
+        let (w, h) = (pm.width(), pm.height());
+        assert!((0..w).all(|x| bord(x, 0) == 0 && bord(x, h - 1) == 0) && (0..h).all(|y| bord(0, y) == 0 && bord(w - 1, y) == 0));
+    }
+
+    #[test]
+    fn kick_sans_inversion_du_sens() {
+        let mut cfg = Config::default();
+        cfg.orbite.inverse_au_kick = false;
+        let mut s = Swarm::new();
+        let mut au = AudioView::default();
+        s.update(0.0, 0.016, C, au, &cfg, 1.0);
+        let dir = s.dir;
+        au.kicks = 1;
+        s.update(0.016, 0.016, C, au, &cfg, 1.0);
+        assert_eq!(s.dir, dir);
+        assert!(!s.sats.is_empty(), "les satellites arrivent quand même");
     }
 
     #[test]
@@ -1437,12 +1560,23 @@ mod tests {
         for i in 0..60 {
             s.update(i as f64 * 0.016, 0.016, (0.0, 0.0), quiet, &cfg, 1.0);
         }
-        let (far0, spd0) = (s.far, s.spd);
+        // par les modulations de base : rayon et vitesse effectifs des comètes
+        let effectifs = |s: &Swarm| (s.far * s.mods[0].rayon, s.spd + s.mods[0].vitesse);
+        let (far0, spd0) = effectifs(&s);
         for i in 60..90 {
             s.update(i as f64 * 0.016, 0.016, (0.0, 0.0), deep, &cfg, 1.0);
         }
-        assert!(s.far > far0 + 1.0, "éloignement {} → {}", far0, s.far);
-        assert!(s.spd > spd0 + 8.0, "vitesse {} → {}", spd0, s.spd);
+        let (far, spd) = effectifs(&s);
+        assert!(far > far0 + 1.0, "éloignement {far0} → {far}");
+        assert!(spd > spd0 + 8.0, "vitesse {spd0} → {spd}");
+        // sans les modulations, la basse ne change plus rien
+        let mut sans = Config::default();
+        sans.modulations.liste.clear();
+        let mut t = Swarm::new();
+        for i in 0..90 {
+            t.update(i as f64 * 0.016, 0.016, (0.0, 0.0), deep, &sans, 1.0);
+        }
+        assert!((effectifs(&t).0 - 1.0).abs() < 0.01 && (effectifs(&t).1 - sans.orbite.vitesse_base).abs() < 0.05, "{:?}", effectifs(&t));
     }
 
     #[test]
@@ -1658,7 +1792,7 @@ mod tests {
         for i in 0..120 {
             s.update(i as f64 / 60.0, 1.0 / 60.0, (400.0, 400.0), au, &cfg, 1.0);
         }
-        assert!(s.spd > 12.0, "vitesse {}", s.spd);
+        assert!(s.spd + s.mods[0].vitesse > 12.0, "vitesse {}", s.spd + s.mods[0].vitesse);
         let tr = &s.trails[0];
         assert!(tr.len() > 30, "{} points", tr.len());
         let angle = |p: &(f64, f32, f32)| (p.2 - 400.0).atan2(p.1 - 400.0);

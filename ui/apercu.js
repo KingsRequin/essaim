@@ -1,4 +1,5 @@
-// Aperçu d'un preset : le même calcul que l'essaim autour du pointeur (src/render.rs), dessiné
+// Aperçu d'un preset : le même calcul que l'essaim autour du pointeur (src/render.rs et
+// src/modulation.rs), dessiné
 // dans un canevas. Kick : inverse le sens et ajoute des satellites ; basse : vitesse ; note
 // grave : orbites plus larges. Le pointeur est au centre. Toute formule de render.rs (Swarm::update,
 // Swarm::draw, draw_trail…) est reprise ici telle quelle : la modifier là oblige à la reporter ici.
@@ -33,6 +34,38 @@ const SPECTRE_BARRE_MIN = 1.5;
 const SPECTRE_MONTEE = 30;
 const SPECTRE_DESCENTE = 8;
 const BANDES_MAX = 32;
+// Modulations : comme src/modulation.rs (effet à fond de chaque cible : tr/min, radians/s,
+// parts du rayon et de la taille, degrés ; retombée des coups : kick, caisse claire, charleston,
+// drop ; suivi de la montée). La basse qui accélère et la note grave qui éloigne l'orbite sont
+// deux modulations, présentes par défaut.
+const MODULATION = { rotation: 90, vitesse: 40, rayon: 4, taille: 1.5, teinte: 180 };
+const RETOMBEE = [7, 8, 10, 0.9];
+const SUIVI_MONTEE = 6;
+const effetNeutre = () => ({ rotation: 0, vitesse: 0, rayon: 1, taille: 1, teinte: 0 });
+const finiOu = (v, d) => (Number.isFinite(v) ? v : d);
+
+// Effets des modulations sur les comètes ([0]) et les satellites ([1]), comme
+// modulation::effets ; `valeur(source)` donne la valeur de chaque source.
+function effetsModulations(liste, valeur) {
+  const somme = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]];
+  const cibles = ["rotation", "vitesse", "rayon", "taille", "teinte"];
+  for (const m of Array.isArray(liste) ? liste : []) {
+    const i = cibles.indexOf(m && m.cible);
+    if (i < 0) continue;
+    const q = Math.max(-1, Math.min(1, finiOu(+m.quantite, 0)));
+    const v = q * valeur(m.source);
+    const sur = m.sur || "tout";
+    if (sur !== "satellites") somme[0][i] += v;
+    if (sur !== "cometes") somme[1][i] += v;
+  }
+  return somme.map((s) => ({
+    rotation: s[0] * MODULATION.rotation,
+    vitesse: s[1] * MODULATION.vitesse,
+    rayon: Math.min(5, Math.max(0.1, 1 + s[2] * MODULATION.rayon)),
+    taille: Math.min(4, Math.max(0, 1 + s[3] * MODULATION.taille)),
+    teinte: s[4] * MODULATION.teinte,
+  }));
+}
 
 function hsl(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
@@ -42,11 +75,12 @@ function hsl(h, s, l) {
 
 // Teinte : k = 0 en queue de traînée, 1 en tête (comme render::prisme). `imposee` : teinte de
 // l'application au premier plan ou de l'éclairage, quand le preset la suit ; `decalage` :
-// glissement musical ; `j` : teinte de la palette (comme render::prisme_palette).
-function prisme(c, t, k, imposee, decalage = 0, j = 0) {
+// glissement musical ; `j` : teinte de la palette (comme render::prisme_palette) ; `plus` :
+// degrés ajoutés par une modulation de la teinte.
+function prisme(c, t, k, imposee, decalage = 0, j = 0, plus = 0) {
   const n = Math.min(3, Math.max(1, Math.round(c.palette || 1)));
   const palette = (j % n) * (c.ecart_palette ?? 120);
-  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0) + palette;
+  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0) + palette + finiOu(plus, 0);
   const queue = base + c.ecart_teinte;
   let dh = base - queue;
   if (dh > 180) dh -= 360;
@@ -172,6 +206,15 @@ class Apercu {
     this.far = 1;
     this.angles = [];
     this.rot = 0;
+    this.rotSats = 0;
+    // modulations : enveloppes des coups et montée suivie (modulation::Sources), effets lissés
+    // sur les comètes et les satellites, à cette image et à la précédente
+    this.sources = { kick: 0, caisse: 0, charleston: 0, drop: 0, montee: 0 };
+    this.mods = [effetNeutre(), effetNeutre()];
+    this.modsAvant = [effetNeutre(), effetNeutre()];
+    this.sonVu = null;
+    this.grave = 0;
+    this.presence = 0;
     this.hauteur = 50;
     this.env = 0;
     this.trainees = [];
@@ -216,7 +259,11 @@ class Apercu {
       this.canvas.height = w;
     }
     const o = this.reglages.orbite;
-    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0]) * 1.3 * (1 + o.eloignement_grave * 0.7) + 6;
+    // une modulation du rayon (note grave…) élargit l'orbite : 70 % de la plus grande qu'elle
+    // permet tient aussi
+    const liste = (this.reglages.modulations || {}).liste;
+    const rayonMax = effetsModulations(liste, () => 1).concat(effetsModulations(liste, () => -1)).reduce((m, e) => Math.max(m, e.rayon), 1);
+    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0]) * 1.3 * (1 + (rayonMax - 1) * 0.7) + 6;
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
   }
 
@@ -300,7 +347,7 @@ class Apercu {
     const nouveaux = Math.min(4, (son.kicks - this.kicksVus) >>> 0);
     this.kicksVus = son.kicks;
     for (let i = 0; i < nouveaux; i++) {
-      this.dir = -this.dir;
+      if (o.inverse_au_kick !== false) this.dir = -this.dir;
       this.env = 1;
       const bas = Math.min(e.par_kick_min, e.par_kick_max), haut = Math.max(e.par_kick_min, e.par_kick_max);
       this.ajouterSatellites(Math.floor(entre(bas, haut + 0.999)), t, e.maximum);
@@ -361,13 +408,27 @@ class Apercu {
     // basse : vitesse ; note grave : éloignement
     if (son.hauteur > 0) this.hauteur += (son.hauteur - this.hauteur) * Math.min(dt * 25, 1);
     const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
-    // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant
+    // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant. La
+    // basse (vitesse) et la note grave (rayon) agissent par les modulations, plus bas.
     const tension = Math.max(0, Math.min(1, this.tension));
-    this.spd += ((o.vitesse_base + o.vitesse_basse * son.basse) * (1 + 1.2 * tension) - this.spd) * Math.min(dt * 10, 1);
+    const accel = 1 + 1.2 * tension;
+    this.spd += (o.vitesse_base * accel - this.spd) * Math.min(dt * 10, 1);
     const presence = Math.max(0, Math.min(1, son.basse * 2.5));
-    const loin = (1 + o.eloignement_grave * grave * presence) * (1 - 0.45 * tension) * (1 + 0.06 * this.contre);
+    const loin = (1 - 0.45 * tension) * (1 + 0.06 * this.contre);
     this.far += (loin - this.far) * Math.min(dt * 16, 1);
-    const w = this.dir * this.spd;
+    // modulations : sources du moment, effets lissés (~50 ms) sur les comètes et les satellites
+    this.avancerSources(dt, [nouveaux, caisses, aigus, drops], son.tension || 0);
+    this.sonVu = son;
+    this.grave = grave;
+    this.presence = presence;
+    const viseMods = effetsModulations((c.modulations || {}).liste, (src) => this.valeurSource(src));
+    this.modsAvant = this.mods.map((m) => ({ ...m }));
+    const km = Math.min(1, dt * 20);
+    this.mods = this.mods.map((m, g) => {
+      const r = {};
+      for (const cle of Object.keys(m)) r[cle] = m[cle] + (viseMods[g][cle] - m[cle]) * km;
+      return Object.values(r).every(Number.isFinite) ? r : effetNeutre();
+    });
     // comètes : `nombre` par anneau, réparties sur le trajet
     const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
     while (this.angles.length < nAnneaux) this.angles.push(0);
@@ -377,26 +438,38 @@ class Apercu {
     const vie = Math.max(0.01, o.trainee);
     // position sur le trajet à la fraction `f` de l'image (rayon et rotation interpolés) : les
     // points intermédiaires suivent la vraie forme, coins compris
+    // rotation du trajet (`rotation_sur` : comètes, satellites ou tout) et modulations : une pose
+    // par groupe (rotation et rayon au début et à la fin de l'image), comme render::Pose
     const rayon = o.rayon * S * this.far, rayon0 = o.rayon * S * far0;
-    const rot0 = this.rot, drot = (((o.rotation || 0) * TAU) / 60) * dt;
-    this.rot = reste(rot0 + drot, TAU);
-    const point = (forme, a, rel, f) => {
+    const sur = o.rotation_sur || "tout";
+    const pose = (g, rot) => {
+      const base = (g === 1 ? sur !== "cometes" : sur !== "satellites") ? o.rotation || 0 : 0;
+      const drot = finiOu((((base + this.mods[g].rotation) * TAU) / 60) * dt, 0);
+      return { rot0: finiOu(rot, 0), drot, rayon0: rayon0 * this.modsAvant[g].rayon, rayon: rayon * this.mods[g].rayon };
+    };
+    const poses = [pose(0, this.rot), pose(1, this.rotSats)];
+    this.rot = reste(poses[0].rot0 + poses[0].drot, TAU);
+    this.rotSats = reste(poses[1].rot0 + poses[1].drot, TAU);
+    const point = (p, forme, a, rel, f) => {
       const [x, y] = chemin(forme, a, o.trace);
-      const th = rot0 + drot * f, cos = Math.cos(th), sin = Math.sin(th);
-      const rr = (rayon0 + (rayon - rayon0) * f) * rel;
+      const th = p.rot0 + p.drot * f, cos = Math.cos(th), sin = Math.sin(th);
+      const rr = (p.rayon0 + (p.rayon - p.rayon0) * f) * rel;
       return [cx + (x * cos - y * sin) * rr, cy + (x * sin + y * cos) * rr];
     };
+    // vitesse : celle du trajet plus celle des modulations (accélérée par la montée), jamais négative
+    const vitesse = (g) => this.dir * Math.max(0, this.spd + this.mods[g].vitesse * accel);
+    const wCometes = vitesse(0), wSats = vitesse(1);
     // les écarts de render.rs sont en pixels d'écran : ici, à l'échelle de l'aperçu
     const finCometes = [FINESSE_COMETES[0], FINESSE_COMETES[1] * S], finSats = [FINESSE_SATELLITES[0], FINESSE_SATELLITES[1] * S];
     for (let k = 0; k < nAnneaux; k++) {
       const [rk, wk] = anneau(k);
-      const a0 = this.angles[k], da = w * wk * dt;
+      const a0 = this.angles[k], da = wCometes * wk * dt;
       this.angles[k] = reste(a0 + da, TAU);
-      const n = sousPas(da, rayon * rk * 1.2, finCometes);
+      const n = sousPas(da, poses[0].rayon * rk * 1.2, finCometes);
       for (let i = 0; i < nombre; i++) {
         const decale = (i * TAU) / nombre;
         for (let j = 1; j <= n; j++) {
-          const f = j / n, [x, y] = point(o.forme, a0 + da * f + decale, rk, f);
+          const f = j / n, [x, y] = point(poses[0], o.forme, a0 + da * f + decale, rk, f);
           pousser(this.trainees[k * nombre + i], t - dt * (1 - f), x, y, vie, finCometes[1]);
         }
       }
@@ -413,17 +486,43 @@ class Apercu {
     // satellites : sur le trajet des comètes, ou le leur, à des distances variées
     const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
     for (const s of this.sats.concat(this.fixes)) {
-      const a0 = s.a, da = w * s.mul * dt;
+      const a0 = s.a, da = wSats * s.mul * dt;
       s.a = reste(a0 + da, TAU);
-      const n = sousPas(da, rayon * s.r * 1.2, finSats);
+      const n = sousPas(da, poses[1].rayon * s.r * 1.2, finSats);
       for (let j = 1; j <= n; j++) {
-        const f = j / n, [x, y] = point(forme, a0 + da * f, s.r, f);
+        const f = j / n, [x, y] = point(poses[1], forme, a0 + da * f, s.r, f);
         pousser(s.trainee, t - dt * (1 - f), x, y, SAT_TRAINEE, finSats[1]);
       }
     }
     // glissement de teinte avec la musique (render::decalage_vise, lissé comme dans main.rs)
     const vise = 160 * (0.6 * Math.max(0, Math.min(1, son.basse)) + 0.4 * Math.max(0, Math.min(1, son.brillance || 0)));
     this.decalage += (vise - this.decalage) * Math.min(dt * 6, 1);
+  }
+
+  // Enveloppes des coups (`coups` : nouveaux kicks, caisses claires, attaques des aigus, drops)
+  // et montée suivie, comme modulation::Sources::avancer.
+  avancerSources(dt, coups, tension) {
+    const s = this.sources;
+    ["kick", "caisse", "charleston", "drop"].forEach((nom, i) => {
+      s[nom] = coups[i] > 0 ? 1 : finiOu(s[nom] * Math.exp(-dt * RETOMBEE[i]), 0);
+    });
+    const vise = Math.max(0, Math.min(1, finiOu(tension, 0)));
+    s.montee = finiOu(s.montee + (vise - s.montee) * Math.min(1, dt * SUIVI_MONTEE), 0);
+  }
+
+  // Valeur d'une source de modulation en ce moment (comme modulation::Sources::valeur) : 0 à 1,
+  // stéréo de -1 à 1. Sert aussi aux jauges des modulations dans la page.
+  valeurSource(source) {
+    const son = this.sonVu || {}, s = this.sources;
+    const v = {
+      basse: Math.max(0, Math.min(1, son.basse || 0)),
+      grave: this.grave * this.presence,
+      aigu: (1 - this.grave) * this.presence,
+      kick: s.kick, caisse: s.caisse, charleston: s.charleston, montee: s.montee, drop: s.drop,
+      stereo: Math.max(-1, Math.min(1, son.balance || 0)),
+      tempo: son.bpm ? 0.5 + 0.5 * Math.cos(TAU * (son.phase || 0)) : 0,
+    }[source];
+    return finiOu(v, 0);
   }
 
   // Effets d'un clic au centre (onde de choc, éclats), comme Swarm::clic.
@@ -486,7 +585,7 @@ class Apercu {
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.lineCap = "round";
     g.lineJoin = "round";
-    const teinte = (k, j) => prisme(c.couleur, t, k, this.teinteImposee, this.decalage, j);
+    const teinte = (k, j, plus = 0) => prisme(c.couleur, t, k, this.teinteImposee, this.decalage, j, plus);
     const ligne = (tr, debut, fin) => {
       g.beginPath();
       g.moveTo(tr[debut][1], tr[debut][2]);
@@ -495,18 +594,18 @@ class Apercu {
     };
     // traînée par morceaux (render::draw_trail) : comètes par TRAIL_CHUNK segments, satellites en
     // deux morceaux ; chaque morceau prend la couleur, l'épaisseur et l'opacité de son milieu
-    const trainee = (tr, vie, largeur, al, halo, j) => {
+    const trainee = (tr, vie, largeur, al, halo, j, plus) => {
       if (tr.length < 2) return;
       const q = tr.map((p) => Math.max(0, 1 - (t - p[0]) / vie));
       if (halo) {
-        g.strokeStyle = rgba(teinte(0.7, j), 0.12 * al);
+        g.strokeStyle = rgba(teinte(0.7, j, plus), 0.12 * al);
         g.lineWidth = (0.8 + largeur * 0.7) * 2.6;
         ligne(tr, 0, tr.length - 1);
       }
       const morceau = halo ? TRAIL_CHUNK : Math.max(1, Math.ceil((tr.length - 1) / 2));
       for (let i = 0; i + 1 < tr.length;) {
         const fin = Math.min(i + morceau, tr.length - 1), k = (q[i] + q[fin]) * 0.5;
-        g.strokeStyle = rgba(teinte(k, j), k * 0.9 * al);
+        g.strokeStyle = rgba(teinte(k, j, plus), k * 0.9 * al);
         g.lineWidth = 0.8 + k * largeur;
         ligne(tr, i, fin);
         i = fin;
@@ -550,20 +649,22 @@ class Apercu {
     const tetes = [];
     // contretemps : les têtes grossissent un instant
     const pulse = 1 + 0.5 * this.contre;
+    // modulations : taille (têtes et traînées) et teinte de chaque groupe
+    const [mc, ms] = this.mods;
     // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {
       const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
-      trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S, al, false, s.couleur || 0);
+      trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
       const p = s.trainee[s.trainee.length - 1];
-      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * pulse, al, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0) });
+      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * pulse * ms.taille, al, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0, ms.teinte) });
     }
     // les comètes (devant : sous le centre de l'orbite, comme vues de biais), chacune dans une
     // teinte de la palette
     if (c.orbite.cometes) {
       this.trainees.forEach((tr, i) => {
-        trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S, 1, true, i);
+        trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S * mc.taille, 1, true, i, mc.teinte);
         const p = tr[tr.length - 1];
-        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * pulse, al: 1, devant: p[2] > cy, rgb: teinte(1, i) });
+        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * pulse * mc.taille, al: 1, devant: p[2] > cy, rgb: teinte(1, i, mc.teinte) });
       });
     }
     // constellation : fines lignes entre les têtes proches (comme render::liens), sous les têtes

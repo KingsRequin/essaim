@@ -10,9 +10,9 @@ use crate::config::{self, Config, Forme};
 use std::path::PathBuf;
 
 /// Sections enregistrées dans un profil.
-const SECTIONS: [&str; 15] = [
+const SECTIONS: [&str; 16] = [
     "eclat", "orbite", "essaim", "couleur", "fissures", "scintillement", "clic", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure",
-    "souris", "musique",
+    "souris", "musique", "modulations",
 ];
 
 /// Le réglage `[section] key` fait-il partie des profils ?
@@ -41,16 +41,16 @@ fn builtins() -> Vec<Profile> {
     vec![
         make("Défaut", |_| {}),
         make("Discret", |c| {
-            (c.orbite.rayon, c.orbite.vitesse_base, c.orbite.vitesse_basse) = (16.0, 2.0, 5.0);
-            (c.orbite.eloignement_grave, c.orbite.trainee) = (0.6, 0.2);
+            (c.orbite.rayon, c.orbite.vitesse_base, c.orbite.trainee) = (16.0, 2.0, 0.2);
+            c.modulations.liste = config::reactions_de_base(5.0, 0.6);
             (c.essaim.par_kick_min, c.essaim.par_kick_max, c.essaim.maximum, c.essaim.duree) = (1, 2, 8, 2.0);
             (c.couleur.vitesse_teinte, c.couleur.ecart_teinte) = (20.0, 90.0);
             (c.fissures.taille, c.fissures.duree) = (1.0, 2.0);
             (c.bordure.intensite, c.bordure.repos) = (0.5, 0.3);
         }),
         make("Intense", |c| {
-            (c.orbite.rayon, c.orbite.vitesse_base, c.orbite.vitesse_basse) = (28.0, 5.0, 18.0);
-            (c.orbite.eloignement_grave, c.orbite.trainee) = (1.8, 0.6);
+            (c.orbite.rayon, c.orbite.vitesse_base, c.orbite.trainee) = (28.0, 5.0, 0.6);
+            c.modulations.liste = config::reactions_de_base(18.0, 1.8);
             (c.essaim.par_kick_min, c.essaim.par_kick_max, c.essaim.maximum, c.essaim.duree) = (3, 5, 40, 3.5);
             (c.couleur.vitesse_teinte, c.couleur.ecart_teinte) = (120.0, 200.0);
             (c.fissures.taille, c.fissures.duree) = (2.2, 4.0);
@@ -115,6 +115,18 @@ fn builtins() -> Vec<Profile> {
             (c.essaim.maximum, c.essaim.par_kick_max) = (30, 4);
             (c.musique.contretemps, c.musique.stereo) = (true, 0.6);
             (c.clic.eclats, c.couleur.palette, c.couleur.ecart_palette, c.couleur.vitesse_teinte) = (true, 3, 120.0, 40.0);
+        }),
+        // modulations : le trajet des satellites, à part, s'emballe au drop ; l'orbite s'ouvre
+        // sur les graves ; les comètes grossissent au kick
+        make("Tourbillon", |c| {
+            use crate::config::{Cible, FormeSatellites, Groupe, Modulation, Source};
+            (c.orbite.forme, c.orbite.rotation, c.orbite.rotation_sur) = (Forme::Etoile, 12.0, Groupe::Satellites);
+            (c.essaim.forme, c.essaim.maximum, c.essaim.fixes) = (FormeSatellites::Cercle, 24, 6);
+            let m = |source, cible, sur, quantite| Modulation { source, cible, sur, quantite };
+            // la basse accélère comme d'habitude ; la note grave éloigne un peu moins (+60 %)
+            c.modulations.liste = config::reactions_de_base(config::VITESSE_BASSE, 0.6);
+            c.modulations.liste.extend([m(Source::Drop, Cible::Rotation, Groupe::Satellites, 0.8), m(Source::Kick, Cible::Taille, Groupe::Cometes, 0.6)]);
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.palette, c.couleur.ecart_palette, c.couleur.synchro_prisme) = (280.0, 0.0, 2, 60.0, false);
         }),
     ]
 }
@@ -352,6 +364,13 @@ fn pareilles(v: &serde_json::Value, w: Option<&serde_json::Value>, vide_neutre: 
         (serde_json::Value::Number(m), Some(serde_json::Value::Number(n))) => {
             let (m, n) = (m.as_f64().unwrap_or(0.0), n.as_f64().unwrap_or(0.0));
             (m - n).abs() <= 1e-3 * m.abs().max(n.abs()).max(1.0)
+        }
+        // listes (modulations, tracé) : élément par élément, nombres aux arrondis près
+        (serde_json::Value::Array(a), Some(serde_json::Value::Array(b))) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| pareilles(x, Some(y), false))
+        }
+        (serde_json::Value::Object(a), Some(serde_json::Value::Object(b))) => {
+            a.len() == b.len() && a.iter().all(|(k, x)| pareilles(x, b.get(k), false))
         }
         (v, w) => Some(v) == w,
     }
