@@ -1,11 +1,13 @@
 //! Teinte de l'application au premier plan : la couleur dominante de l'icône de son exécutable
 //! (`[couleur] application`), calculée une fois par exécutable ; et, dans un navigateur, celle du
 //! site affiché (`[couleur] site`) : la couleur dominante du haut de la page, sous la barre
-//! d'adresse, mesurée quand le titre de la fenêtre change et toutes les 3 s. La fenêtre au premier
-//! plan est lue à chaque image (`GetForegroundWindow`, sans hook).
+//! d'adresse, mesurée quand le titre de la fenêtre change et toutes les 3 s, sur un fil à part
+//! (la copie d'écran ne retarde pas l'image). La fenêtre au premier plan est lue à chaque image
+//! (`GetForegroundWindow`, sans hook), son titre toutes les 250 ms au plus.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND};
@@ -39,8 +41,38 @@ pub struct TeinteAppli {
     /// Titre de la fenêtre du navigateur à la dernière lecture, et prochaine mesure de la page.
     titre: String,
     mesure: Option<Instant>,
+    /// Dernière lecture du titre.
+    titre_lu: Option<Instant>,
     teinte: Option<f32>,
     cache: HashMap<String, Option<f32>>,
+    /// Fil de mesure de la page, lancé à la première mesure.
+    mesureur: Option<Mesureur>,
+}
+
+/// Lecture d'écran sur un fil à part : on lui envoie une fenêtre, il répond (fenêtre, teinte).
+struct Mesureur {
+    demandes: Sender<isize>,
+    reponses: Receiver<(isize, Option<f32>)>,
+    en_cours: bool,
+}
+
+impl Mesureur {
+    fn lancer() -> Option<Self> {
+        let (demandes, recues) = channel::<isize>();
+        let (envoi, reponses) = channel();
+        std::thread::Builder::new()
+            .name("essaim-teinte".into())
+            .spawn(move || {
+                for h in recues {
+                    if envoi.send((h, teinte_page(HWND(h as *mut c_void)))).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| log::warn!("teinte du site : fil impossible ({e})"))
+            .ok()?;
+        Some(Self { demandes, reponses, en_cours: false })
+    }
 }
 
 impl TeinteAppli {
@@ -62,23 +94,36 @@ impl TeinteAppli {
                 log::info!("teinte de {nom} : {}", t.map_or("grise, ignorée".into(), |h| format!("{h:.0}°")));
                 t
             });
-            (self.titre, self.mesure) = (String::new(), Some(now + Duration::from_millis(300)));
+            (self.titre, self.mesure, self.titre_lu) = (String::new(), Some(now + Duration::from_millis(300)), None);
         }
         if site && self.navigateur {
             // nouvelle page (titre changé) : mesure un peu après, le temps qu'elle s'affiche
-            let titre = titre(fg);
-            if titre != self.titre {
-                self.titre = titre;
-                self.mesure = Some(now + Duration::from_millis(700));
-            }
-            if self.mesure.is_some_and(|m| now >= m) {
-                self.mesure = Some(now + Duration::from_secs(3));
-                let page = teinte_page(fg);
-                if let Some(h) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
-                    log::info!("teinte du site : {h:.0}°");
+            if self.titre_lu.is_none_or(|t| now - t >= Duration::from_millis(250)) {
+                self.titre_lu = Some(now);
+                let titre = titre(fg);
+                if titre != self.titre {
+                    self.titre = titre;
+                    self.mesure = Some(now + Duration::from_millis(700));
                 }
-                if let Some(h) = page.or(if appli { self.icone } else { None }) {
-                    self.teinte = Some(h);
+            }
+            if self.mesure.is_some_and(|m| now >= m) && !self.mesureur.as_ref().is_some_and(|m| m.en_cours) {
+                self.mesure = Some(now + Duration::from_secs(3));
+                if self.mesureur.is_none() {
+                    self.mesureur = Mesureur::lancer();
+                }
+                if let Some(m) = &mut self.mesureur {
+                    m.en_cours = m.demandes.send(self.fenetre).is_ok();
+                }
+            }
+            // réponse du fil de mesure (ignorée si la fenêtre a changé entre-temps)
+            if let Some((h, page)) = self.mesureur.as_mut().and_then(|m| m.reponses.try_recv().ok().inspect(|_| m.en_cours = false)) {
+                if h == self.fenetre {
+                    if let Some(t) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
+                        log::info!("teinte du site : {t:.0}°");
+                    }
+                    if let Some(t) = page.or(if appli { self.icone } else { None }) {
+                        self.teinte = Some(t);
+                    }
                 }
             }
             return self.teinte;
