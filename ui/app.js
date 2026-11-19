@@ -9,6 +9,19 @@ const el = (tag, cls, texte) => {
   if (texte !== undefined) e.textContent = texte;
   return e;
 };
+// Remplace les enfants d'un conteneur sans perdre le focus clavier : l'élément qui l'avait le
+// retrouve par sa clé (data-cle) parmi les nouveaux. Rien n'est touché si les enfants sont déjà
+// les mêmes, dans le même ordre (retirer un élément du document lui ôte le focus).
+function remplacer(conteneur, enfants) {
+  const avant = conteneur.children;
+  if (avant.length === enfants.length && enfants.every((e, i) => avant[i] === e)) return;
+  const actif = document.activeElement;
+  const cle = actif && actif !== conteneur && conteneur.contains(actif) ? actif.dataset.cle : undefined;
+  conteneur.replaceChildren(...enfants);
+  if (cle === undefined || conteneur.contains(actif)) return;
+  const cible = [...conteneur.querySelectorAll("[data-cle]")].find((e) => e.dataset.cle === cle);
+  if (cible) cible.focus({ preventScroll: true });
+}
 const envoyer = (demande) => window.ipc && window.ipc.postMessage(JSON.stringify(demande));
 const memoire = {
   lire(cle, defaut) {
@@ -21,6 +34,16 @@ const memoire = {
 const virgule = (x, d) => x.toFixed(d).replace(".", ",");
 const deux = (n) => String(n).padStart(2, "0");
 const borne = (x, a, b) => Math.max(a, Math.min(b, x));
+const estObjet = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// Égalité de deux valeurs de réglage à la tolérance de profils::same (nombres : 1e-3 relatif,
+// au moins 1e-3), en descendant dans les listes et les objets : les f32 de l'appli, élargis en
+// f64 dans le JSON (0.30000001…), ne comptent pas comme des différences.
+function memeValeur(a, b) {
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= 1e-3 * Math.max(Math.abs(a), Math.abs(b), 1);
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => memeValeur(x, b[i]));
+  if (estObjet(a) && estObjet(b)) return [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) => memeValeur(a[k], b[k]));
+  return a === b;
+}
 const animationsReduites = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const enSaisie = () => ["INPUT", "TEXTAREA"].includes(document.activeElement && document.activeElement.tagName) && document.activeElement.type !== "range";
 
@@ -55,6 +78,9 @@ const etat = {
   comparer: null, // premier preset choisi pour une comparaison
   applis: [],
   gif: null, // enregistrement d'un GIF en cours
+  renommages: [], // { ancien, nouveau } demandés, suivis à l'état suivant (favoris)
+  capture: null, // écoute du son : "active", "coupee", "erreur" (absent : inconnu)
+  veille: false,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -117,11 +143,37 @@ const FORMES = [
 const FORMES_REGLAGE = [...FORMES, ["trace", "Dessiné…"]];
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
+// Sections enregistrées dans un preset (comme profils::SECTIONS).
+const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris"];
 
+const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
+const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
+
+// Valeur distante acceptable à la place de `defaut` : même type (nombre fini, booléen, texte,
+// liste) ; une forme inconnue ou un trajet mal formé est refusé.
+function valeurValide(cle, v, defaut) {
+  if (typeof defaut === "number") return Number.isFinite(v);
+  if (typeof defaut === "boolean") return typeof v === "boolean";
+  if (typeof defaut === "string") return typeof v === "string" && (cle !== "forme" || FORMES_CONNUES.has(v));
+  if (Array.isArray(defaut)) return Array.isArray(v) && (cle !== "trace" || v.every(pointValide));
+  return false;
+}
+
+// Réglages d'un preset distant posés sur `base` : seules les clés connues de `base`, de même
+// type, dans les sections d'un preset (pas `[rendu]`, propre à la machine), sont reprises ; le
+// reste garde la valeur de base. Renvoie null si une section est là sans être un objet (preset
+// mal formé, ignoré).
 function fusion(base, partiel) {
-  const r = Array.isArray(base) ? [...base] : { ...base };
-  for (const [k, v] of Object.entries(partiel || {})) {
-    r[k] = v && typeof v === "object" && !Array.isArray(v) && base && typeof base[k] === "object" ? fusion(base[k], v) : v;
+  if (!estObjet(partiel)) return null;
+  const r = {};
+  for (const [s, sec] of Object.entries(base)) {
+    const distant = partiel[s];
+    if (distant === undefined || !estObjet(sec) || !SECTIONS_PRESET.includes(s)) { r[s] = sec; continue; }
+    if (!estObjet(distant)) return null;
+    r[s] = { ...sec };
+    for (const [k, defaut] of Object.entries(sec)) {
+      if (k !== "avec_preset" && k in distant && valeurValide(k, distant[k], defaut)) r[s][k] = distant[k];
+    }
   }
   return r;
 }
@@ -137,6 +189,24 @@ function tousLesPresets() {
   }));
   const commu = etat.commu.liste.map((p) => ({ ...p, id: "c:" + p.nom, origine: "commu", date: 0 }));
   return locaux.concat(commu);
+}
+
+// Favoris : gardés par identifiant (« p:nom »). Un renommage demandé par la page est suivi quand
+// l'état reçu ne contient plus l'ancien nom mais contient le nouveau (à la casse près : l'appli
+// peut l'ajuster).
+function suivreRenommages() {
+  if (!etat.renommages.length) return;
+  const noms = new Set(etat.presets.filter((p) => !p.fourni).map((p) => p.nom));
+  let change = false;
+  etat.renommages = etat.renommages.filter(({ ancien, nouveau, quand }) => {
+    // pas encore fait : attendu quelques secondes (un renommage refusé est oublié)
+    if (noms.has(ancien)) return performance.now() - quand < 5000;
+    const fait = [...noms].find((n) => n.toLowerCase() === nouveau.toLowerCase());
+    if (fait && etat.favoris.delete("p:" + ancien)) { etat.favoris.add("p:" + fait); change = true; }
+    if (fait && etat.comparer === "p:" + ancien) etat.comparer = "p:" + fait;
+    return false;
+  });
+  if (change) memoire.ecrire("favoris", [...etat.favoris]);
 }
 
 function installe(nom) {
@@ -169,14 +239,15 @@ async function chargerCommu(forcer) {
     if (!r.ok) throw new Error("http " + r.status);
     const index = await r.json();
     const base = reglagesDeBase();
-    const liste = (Array.isArray(index.presets) ? index.presets : [])
-      .filter((p) => p && typeof p.nom === "string" && p.nom.trim() && p.nom.length <= 40 && p.reglages && typeof p.reglages === "object")
+    const liste = (estObjet(index) && Array.isArray(index.presets) ? index.presets : [])
+      .filter((p) => estObjet(p) && typeof p.nom === "string" && p.nom.trim() && p.nom.length <= 40)
       .map((p) => ({
         nom: p.nom.trim(),
         auteur: typeof p.auteur === "string" ? "@" + p.auteur.replace(/^@/, "").slice(0, 39) : "",
         etiquettes: Array.isArray(p.etiquettes) ? p.etiquettes.filter((e) => typeof e === "string").slice(0, 8) : [],
         reglages: fusion(base, p.reglages),
-      }));
+      }))
+      .filter((p) => p.reglages);
     etat.commu = { etat: "ok", liste, message: "" };
   } catch (e) {
     etat.commu = {
@@ -220,6 +291,7 @@ function creerTuile(p) {
   const racine = el("div", "tuile");
   racine.dataset.id = p.id;
   const bouton = el("button");
+  bouton.dataset.cle = p.id;
   const tete = el("span", "tete");
   const numero = el("span", "t-numero");
   const origine = el("span", "t-label");
@@ -231,7 +303,7 @@ function creerTuile(p) {
   const actions = el("div", "actions");
   racine.append(bouton, actions);
   const apercu = new window.Apercu(canvas);
-  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, p, pret: false, confirmer: 0 };
+  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, p, signature: signature(p), pret: false, erreur: false, confirmer: 0 };
   bouton.addEventListener("click", () => { if (etat.renomme !== t.p.id) choisir(t.p); });
   bouton.addEventListener("mouseenter", () => { etat.survol = p.id; montrerLoupe(t); });
   bouton.addEventListener("mouseleave", () => { if (etat.survol === p.id) etat.survol = null; cacherLoupe(); });
@@ -248,8 +320,10 @@ function choisir(p) {
   }
 }
 
-function puce(libelle, action, classe) {
+// Petite puce d'action ; `cle` la retrouve après une reconstruction (focus clavier gardé).
+function puce(libelle, action, classe, cle) {
   const b = el("button", "puce petite" + (classe ? " " + classe : ""), libelle);
+  if (cle) b.dataset.cle = cle;
   b.addEventListener("click", (e) => { e.stopPropagation(); action(b); });
   return b;
 }
@@ -263,7 +337,10 @@ function renommer(t) {
     if (etat.renomme !== t.p.id) return;
     etat.renomme = null;
     const nouveau = champ.value.trim();
-    if (valider && nouveau && nouveau !== t.p.nom) envoyer({ cmd: "renommer", ancien: t.p.nom, nouveau });
+    if (valider && nouveau && nouveau !== t.p.nom) {
+      etat.renommages.push({ ancien: t.p.nom, nouveau, quand: performance.now() });
+      envoyer({ cmd: "renommer", ancien: t.p.nom, nouveau });
+    }
     champ.replaceWith(t.nom);
   };
   champ.addEventListener("keydown", (e) => {
@@ -278,8 +355,13 @@ function renommer(t) {
   champ.select();
 }
 
+// Signature des réglages d'un preset : une vignette n'est préchauffée de nouveau que si elle change
+// (tousLesPresets recrée les objets à chaque message).
+const signature = (p) => JSON.stringify(p.reglages);
+
 function majTuile(t, p, rang) {
-  if (t.p !== p) t.pret = false;
+  const sig = signature(p);
+  if (sig !== t.signature) { t.signature = sig; t.pret = false; t.erreur = false; }
   t.p = p;
   t.apercu.regler(p.reglages);
   t.numero.textContent = deux(rang);
@@ -297,31 +379,36 @@ function majTuile(t, p, rang) {
   else t.bouton.removeAttribute("title");
 
   // actions : favori, et un menu « Gérer » selon l'origine
-  t.actions.replaceChildren();
+  remplacer(t.actions, actionsTuile(t, p));
+}
+
+// Actions d'une tuile : favori, comparer, et un menu « Gérer » selon l'origine.
+function actionsTuile(t, p) {
+  const cle = (nom) => p.id + "|" + nom;
   const fav = puce("Favori", () => {
     if (etat.favoris.has(p.id)) etat.favoris.delete(p.id); else etat.favoris.add(p.id);
     memoire.ecrire("favoris", [...etat.favoris]);
     dessinerPresets();
-  });
+  }, "", cle("favori"));
   fav.setAttribute("aria-pressed", etat.favoris.has(p.id));
-  const comp = puce(etat.comparer === p.id ? "Comparer…" : "Comparer", () => comparer(p));
+  fav.setAttribute("aria-label", `Favori : ${p.nom}`);
+  const comp = puce(etat.comparer === p.id ? "Comparer…" : "Comparer", () => comparer(p), "", cle("comparer"));
   comp.setAttribute("aria-pressed", etat.comparer === p.id);
   comp.title = "Compare deux presets côte à côte, avec leurs réglages différents";
-  t.actions.append(fav, comp);
   if (p.origine === "commu") {
     const fait = installe(p.nom);
-    const b = puce(fait ? "Installé" : "+ Installer", () => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }));
+    const b = puce(fait ? "Installé" : "+ Installer", () => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }), "", cle("installer"));
     if (fait) { b.setAttribute("aria-pressed", "true"); b.disabled = true; }
-    t.actions.append(b);
-    return;
+    return [fav, comp, b];
   }
   const ouvert = etat.menu === p.id;
-  t.actions.append(puce(ouvert ? "Gérer ▴" : "Gérer ▾", () => { etat.menu = ouvert ? null : p.id; dessinerPresets(); }));
-  if (!ouvert) return;
+  const gerer = puce(ouvert ? "Gérer ▴" : "Gérer ▾", () => { etat.menu = ouvert ? null : p.id; dessinerPresets(); }, "", cle("gerer"));
+  gerer.setAttribute("aria-expanded", ouvert);
+  if (!ouvert) return [fav, comp, gerer];
   const menu = el("div", "menu-tuile");
-  menu.append(puce("Dupliquer", () => envoyer({ cmd: "dupliquer", nom: p.nom })));
+  menu.append(puce("Dupliquer", () => envoyer({ cmd: "dupliquer", nom: p.nom }), "", cle("dupliquer")));
   if (p.origine === "mien") {
-    menu.append(puce("Renommer", () => renommer(t)), puce("Exporter", () => envoyer({ cmd: "exporter", nom: p.nom })));
+    menu.append(puce("Renommer", () => renommer(t), "", cle("renommer")), puce("Exporter", () => envoyer({ cmd: "exporter", nom: p.nom }), "", cle("exporter")));
     const confirmer = t.confirmer > performance.now();
     menu.append(puce(confirmer ? "Confirmer la suppression" : "Supprimer", () => {
       if (t.confirmer > performance.now()) {
@@ -332,15 +419,16 @@ function majTuile(t, p, rang) {
         setTimeout(dessinerPresets, 4100);
       }
       dessinerPresets();
-    }, confirmer ? "danger" : ""));
+    }, confirmer ? "danger" : "", cle("supprimer")));
   }
-  t.actions.append(menu);
+  return [fav, comp, gerer, menu];
 }
 
 function dessinerSources(liste) {
   const sources = [["tout", "Tout"], ["fourni", "Fournis"], ["mien", "Mes presets"], ["favoris", "Favoris"], ["commu", "Communauté (GitHub)"]];
-  $("sources").replaceChildren(...sources.map(([id, libelle]) => {
+  remplacer($("sources"), sources.map(([id, libelle]) => {
     const b = el("button", "ligne");
+    b.dataset.cle = id;
     b.setAttribute("aria-pressed", etat.source === id);
     const n = id === "tout" ? liste.length : id === "favoris" ? liste.filter((p) => etat.favoris.has(p.id)).length : liste.filter((p) => p.origine === id).length;
     const compte = id === "commu" && etat.commu.etat !== "ok" ? (etat.commu.etat === "erreur" ? "—" : "··") : deux(n);
@@ -355,8 +443,9 @@ function dessinerSources(liste) {
 }
 
 function groupeChoix(conteneur, choix, actuel, choisir) {
-  $(conteneur).replaceChildren(...choix.map(([id, libelle]) => {
+  remplacer($(conteneur), choix.map(([id, libelle]) => {
     const b = el("button", "puce", libelle);
+    b.dataset.cle = id;
     b.setAttribute("aria-pressed", actuel === id);
     b.addEventListener("click", () => choisir(id));
     return b;
@@ -413,7 +502,7 @@ function dessinerPresets() {
   for (const [id, t] of tuiles) {
     if (!liste.some((p) => p.id === id)) { observateur.unobserve(t.racine); tuiles.delete(id); visibles.delete(id); }
   }
-  $("grille").replaceChildren(...enfants);
+  remplacer($("grille"), enfants);
 
   const vide = $("vide");
   const attente = etat.source === "commu" && etat.commu.etat === "charge";
@@ -448,8 +537,9 @@ function dessinerFiltreFormes(liste) {
   const presentes = new Set(liste.map((p) => p.reglages.orbite.forme));
   if (etat.filtreForme && !presentes.has(etat.filtreForme)) etat.filtreForme = null;
   const choix = [["", "Toutes"], ...FORMES_REGLAGE.filter(([id]) => presentes.has(id))];
-  $("filtre-formes").replaceChildren(...choix.map(([id, libelle]) => {
+  remplacer($("filtre-formes"), choix.map(([id, libelle]) => {
     const b = el("button", "puce petite forme");
+    b.dataset.cle = id || "toutes";
     if (id) b.append(picto(id));
     b.append(document.createTextNode(id ? NOMS_FORMES[id] : libelle));
     b.setAttribute("aria-pressed", (etat.filtreForme || "") === id);
@@ -494,14 +584,36 @@ function picto(forme, trace) {
 }
 
 const val = (section, cle) => etat.reglages[section][cle];
-const envois = new Map();
+// Valeurs changées dans la page, envoyées 60 ms après le dernier changement : « section.cle » →
+// { section, cle, valeur, minuterie, envoyee }. Tant que l'appli ne les a pas reprises, elles
+// restent posées sur l'état qu'elle envoie (sinon un état parti avant l'envoi ferait revenir
+// la glissière en arrière).
+const attente = new Map();
+const poser = (r, section, cle, valeur) => ({ ...r, [section]: { ...r[section], [cle]: valeur } });
 function regler(section, cle, valeur) {
-  etat.reglages = { ...etat.reglages, [section]: { ...etat.reglages[section], [cle]: valeur } };
+  etat.reglages = poser(etat.reglages, section, cle, valeur);
   grand.regler(etat.reglages);
+  apercuChange();
   const k = section + "." + cle;
-  clearTimeout(envois.get(k));
-  envois.set(k, setTimeout(() => { envois.delete(k); envoyer({ cmd: "regler", section, cle, valeur }); }, 60));
+  const a = attente.get(k);
+  if (a) clearTimeout(a.minuterie);
+  const v = { section, cle, valeur, envoyee: 0 };
+  v.minuterie = setTimeout(() => { v.envoyee = performance.now(); envoyer({ cmd: "regler", section, cle, valeur }); }, 60);
+  attente.set(k, v);
 }
+
+// État reçu : les valeurs en attente par-dessus. Une valeur envoyée est oubliée dès que l'état la
+// reprend (à la tolérance près : l'appli borne les valeurs), ou une seconde après l'envoi.
+function reglagesRecus(recus) {
+  let r = recus;
+  for (const [k, a] of attente) {
+    const vu = recus[a.section] && recus[a.section][a.cle];
+    if (a.envoyee && (memeValeur(vu, a.valeur) || performance.now() - a.envoyee > 1000)) { attente.delete(k); continue; }
+    r = poser(r, a.section, a.cle, a.valeur);
+  }
+  return r;
+}
+const enCours = () => [...attente.values()].some((a) => !a.envoyee);
 
 // Impact sur la puissance, de 1 à 10. Mesuré par le banc `mesure_impact_reglages` (coût d'une
 // image avec le réglage au minimum puis au maximum, carte graphique, 144 images/s) : score =
@@ -513,29 +625,40 @@ const IMPACT = {
   "eclat.taille": [1], "couleur.teinte": [1], "couleur.vitesse_teinte": [1], "couleur.ecart_teinte": [1],
   "audio.sensibilite_kick": [2, "estime"], "audio.delai_kick": [1, "estime"], "fissures.taille": [1, "estime"], "fissures.duree": [1, "estime"],
   "bordure.intensite": [1, "estime"], "bordure.repos": [1, "estime"],
-  "rendu.cadence": [7, "estime"], "rendu.cadence_repos": [2, "estime"], "rendu.carte_graphique": [10],
+  "rendu.cadence": [7, "estime"], "rendu.cadence_repos": [2, "estime"], "rendu.carte_graphique": [10], "rendu.veille_apres": [1, "estime"],
   "scintillement.actif": [1, "estime"], "scintillement.quantite": [1, "estime"], "clic.taille": [1, "estime"], "sillage.densite": [1, "estime"],
 };
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
   "rendu.cadence": "Multiplie le coût de tout le reste : 240 images/s coûtent huit fois plus que 30.",
-  "rendu.carte_graphique": "Mesuré : 0,24 ms par image avec la carte graphique, 1,18 ms avec le processeur.",
+  "rendu.carte_graphique": "Mesuré : 0,35 ms par image avec la carte graphique, 1,09 ms avec le processeur.",
 };
 
+// Jauge d'impact : dix cases, et son texte (score, précision) dans un élément lu par les lecteurs
+// d'écran ; le contrôle qu'elle décrit s'y relie par `decrire` (aria-describedby).
+let jauges = 0;
 function jaugeImpact(cle) {
   const [score, estime] = IMPACT[cle] || [1, "estime"];
+  const texte = `Impact sur la puissance : ${score} sur 10 (${estime ? "estimé" : "mesuré"}).` + (PRECISIONS[cle] ? " " + PRECISIONS[cle] : "");
   const j = el("span", "impact" + (score >= 7 ? " fort" : ""));
+  j.id = "impact-" + ++jauges;
   for (let i = 1; i <= 10; i++) j.append(el("i", i <= score ? "plein" : ""));
-  j.title = `Impact sur la puissance : ${score}/10 (${estime ? "estimé" : "mesuré"}).` + (PRECISIONS[cle] ? " " + PRECISIONS[cle] : "");
-  j.setAttribute("role", "img");
-  j.setAttribute("aria-label", `Impact sur la puissance : ${score} sur 10`);
+  j.append(el("span", "sr", texte));
+  j.title = texte;
   return j;
 }
+const decrire = (controle, ...ids) => controle.setAttribute("aria-describedby", ids.join(" "));
 
 // Chaque réglage : bornes de la glissière, affichage (aff) et lecture d'une valeur tapée (vers,
 // dans l'unité affichée ; par défaut le nombre lui-même).
 const tpm = { aff: (v) => String(Math.round((v * 60) / (2 * Math.PI))), vers: (x) => (x * 2 * Math.PI) / 60 };
 const pourcent = { aff: (v) => Math.round(v * 100) + " %", vers: (x) => x / 100 };
+// Délai de veille en secondes : « jamais » (0), « 45 s », « 5 min », « 1,5 min » ; une valeur
+// tapée en minutes (« 5 min ») est convertie.
+const dureeVeille = {
+  aff: (v) => (+v === 0 ? "jamais" : v < 60 ? Math.round(v) + " s" : (Number.isInteger(v / 60) ? v / 60 : virgule(v / 60, 1)) + " min"),
+  lire: (texte, x) => (/jamais/i.test(texte) ? 0 : /min/i.test(texte) ? x * 60 : x),
+};
 // Conditions d'affichage : un réglage dont l'effet est coupé est masqué.
 const SI = {
   cometes: (r) => r.orbite.cometes,
@@ -558,13 +681,13 @@ const NORMAUX = [
   { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
   { titre: "Mouvement et couleur" },
   { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
-  { libelle: "Rotation du trajet", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+  { libelle: "Rotation du trajet (tr/min)", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
   { special: "couleur" },
   { titre: "Réaction au son" },
   { special: "effets-plus" },
   { libelle: "Satellites", section: "essaim", cle: "maximum", si: SI.son, min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
-  { libelle: "Kick", section: "audio", cle: "sensibilite_kick", si: SI.son, min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
-  { libelle: "Éclat", section: "eclat", cle: "taille", si: SI.son, min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
+  { libelle: "Sensibilité au kick", section: "audio", cle: "sensibilite_kick", si: SI.son, min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
+  { libelle: "Taille de l'éclat du kick", section: "eclat", cle: "taille", si: SI.son, min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
 ];
 const EFFETS = [["Comètes", "orbite", "cometes"], ["Fissures", "fissures", "actives"], ["Bordure", "bordure", "active"], ["Réagir au son", "audio", "actif"]];
 const TEINTES = [0, 25, 50, 95, 150, 190, 215, 260, 295, 330];
@@ -597,9 +720,11 @@ const AVANCES = [
   { groupe: "Cet ordinateur (hors presets)" },
   { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
   { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
+  // masqué tant que l'appli ne fournit pas ce réglage
+  { libelle: "Mise en veille après", section: "rendu", cle: "veille_apres", si: (r) => typeof r.rendu.veille_apres === "number", min: 0, max: 3600, pas: 10, ...dureeVeille },
   {
     bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique",
-    note: "Mesuré sur Essaim : 0,24 ms de calcul par image avec la carte graphique, 1,18 ms avec le processeur (cinq fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
+    note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
   },
   {
     bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
@@ -620,11 +745,13 @@ function hslCss(h) {
   return `rgb(${Math.round((r + m) * 255)},${Math.round((g + m) * 255)},${Math.round((b + m) * 255)})`;
 }
 
-// Valeur tapée : nombre dans l'unité affichée (« 0,3 s », « 45 % », « écran » = 0).
+// Valeur tapée : nombre dans l'unité affichée (« 0,3 s », « 45 % », « écran » = 0) ; `lire`
+// interprète le texte entier quand l'unité peut changer.
 function lireSaisie(def, texte) {
   const m = texte.replace(",", ".").match(/-?\d+(\.\d+)?/);
   const x = m ? parseFloat(m[0]) : 0;
-  return borne(def.vers ? def.vers(x) : x, def.min, def.max);
+  const v = def.lire ? def.lire(texte, x) : def.vers ? def.vers(x) : x;
+  return borne(v, def.min, def.max);
 }
 
 function reglageNumerique(def, id, conteneur, avance) {
@@ -671,12 +798,20 @@ function construireReglages() {
   const libelleAvecImpact = (texte, cle, pour) => {
     const l = el(pour ? "label" : "div", "libelle-reglage");
     if (pour) l.htmlFor = pour;
-    l.append(el("span", "t-label", texte), jaugeImpact(cle));
+    const nom = el("span", "t-label", texte);
+    l.append(nom, jaugeImpact(cle));
     return l;
   };
+  // rangée de boutons : un groupe nommé par son libellé et décrit par sa jauge
   const ligneLarge = (libelle, cle, contenu) => {
-    grille.append(libelleAvecImpact(libelle, cle));
+    const l = libelleAvecImpact(libelle, cle);
+    const nom = l.firstChild, jauge = l.lastChild;
+    nom.id = "libelle-" + jauge.id;
+    grille.append(l);
     const d = el("div", "large");
+    d.setAttribute("role", "group");
+    d.setAttribute("aria-labelledby", nom.id);
+    decrire(d, jauge.id);
     d.append(...contenu);
     grille.append(d);
   };
@@ -710,6 +845,7 @@ function construireReglages() {
     const sortie = el("div", "valeur");
     sortie.append(saisie);
     const libelle = libelleAvecImpact(def.libelle, def.section + "." + def.cle, input.id);
+    decrire(input, libelle.lastChild.id);
     grille.append(libelle, zone, sortie);
     return [libelle, zone, sortie];
   }, false);
@@ -745,12 +881,16 @@ function construireReglages() {
         });
         return { h, b };
       });
+      // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet
+      const synchro = bascule("Synchro Prisme", "couleur", "synchro_prisme");
+      synchro.title = "Prend la teinte de l'éclairage RGB de Prisme quand il tourne";
       ligneLarge("Couleur", "couleur.teinte", [
         ...teintes.map((t) => t.b),
         bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
         bascule("Couleur de l'application", "couleur", "application"),
         bascule("Couleur du site (navigateur)", "couleur", "site"),
         bascule("Suit la musique", "couleur", "musique"),
+        synchro,
       ]);
     } else {
       numerique(def);
@@ -760,30 +900,32 @@ function construireReglages() {
   const avance = $("avance");
   for (const def of AVANCES) {
     if (def.groupe) {
-      const g = el("div", "t-label", def.groupe);
-      g.style.gridColumn = "1 / -1";
-      g.style.padding = "18px 0 6px";
-      avance.append(g);
+      avance.append(el("div", "t-label groupe-avance", def.groupe));
     } else if (def.bascule || def.demarrage || def.accueil) {
-      const l = el("div");
-      l.style.cssText = "grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--filet)";
+      const l = el("div", "ligne-avance");
       if (def.bascule) {
-        const tete = el("div");
-        tete.style.cssText = "display: flex; align-items: center; gap: 12px";
+        const tete = el("div", "tete");
         const cle = def.section + "." + def.cle;
-        tete.append(bascule(def.bascule, def.section, def.cle));
+        const b = bascule(def.bascule, def.section, def.cle);
+        tete.append(b);
+        const decrits = [];
         // sans effet sur la puissance (mises à jour) : pas de jauge
-        if (IMPACT[cle]) tete.append(jaugeImpact(cle));
+        if (IMPACT[cle]) { const j = jaugeImpact(cle); tete.append(j); decrits.push(j.id); }
         l.append(tete);
-        if (def.note) l.append(el("p", "note", def.note));
+        if (def.note) {
+          const note = el("p", "note", def.note);
+          note.id = "note-" + def.section + "-" + def.cle;
+          l.append(note);
+          decrits.push(note.id);
+        }
+        if (decrits.length) decrire(b, ...decrits);
       } else if (def.demarrage) {
-        const b = el("button", "puce", "Démarrer Essaim avec Windows");
+        const b = el("button", "puce debut", "Démarrer Essaim avec Windows");
         b.id = "demarrage";
         b.addEventListener("click", () => envoyer({ cmd: "demarrage", actif: !etat.demarrage }));
         l.append(b);
       } else {
-        const b = el("button", "puce", "Revoir l'accueil");
-        b.style.alignSelf = "flex-start";
+        const b = el("button", "puce debut", "Revoir l'accueil");
         b.addEventListener("click", () => ouvrirAccueil());
         l.append(b);
       }
@@ -792,10 +934,9 @@ function construireReglages() {
       reglageNumerique(def, "a-" + def.section + "-" + def.cle, (input, saisie) => {
         const l = el("label");
         const tete = el("span", "entete-reglage");
-        const nom = el("span");
-        nom.style.cssText = "display: flex; align-items: center; gap: 8px";
+        const nom = el("span", "nom-reglage");
         const jauge = jaugeImpact(def.section + "." + def.cle);
-        jauge.style.marginTop = "0";
+        decrire(input, jauge.id);
         nom.append(el("span", "", def.libelle), jauge);
         tete.append(nom, saisie);
         l.append(tete, input);
@@ -817,8 +958,8 @@ function majAvance() {
 
 function majNomActif() {
   const p = etat.presets.find((x) => x.nom === etat.actif);
-  if (p && !envois.size) $("nom-actif").textContent = `Preset « ${p.nom} »`;
-  else if (etat.proche && !envois.size) $("nom-actif").textContent = `« ${etat.proche.nom} » modifié (${etat.proche.ecarts} réglage${etat.proche.ecarts > 1 ? "s" : ""})`;
+  if (p && !enCours()) $("nom-actif").textContent = `Preset « ${p.nom} »`;
+  else if (etat.proche && !enCours()) $("nom-actif").textContent = `« ${etat.proche.nom} » modifié (${etat.proche.ecarts} réglage${etat.proche.ecarts > 1 ? "s" : ""})`;
   else $("nom-actif").textContent = "Réglages personnalisés";
 }
 
@@ -828,6 +969,7 @@ function majReglages() {
     const cache = !!def.si && !def.si(etat.reglages);
     for (const e of els) e.hidden = cache;
     const v = val(def.section, def.cle);
+    if (v === undefined) continue; // réglage que l'appli ne fournit pas (encore)
     if (document.activeElement !== input) input.value = v;
     if (document.activeElement !== saisie) saisie.value = def.aff(v);
   }
@@ -872,18 +1014,39 @@ function surprise() {
   envoyer({ cmd: "appliquer_reglages", nom: "Surprise", reglages: c });
 }
 
+// En-tête : écoute du son (active, coupée, en erreur) et veille, sous le bouton Pause (la pause,
+// elle, se lit sur le bouton). Rien n'est montré tant que l'appli n'envoie pas ces champs.
+function majEtatEssaim() {
+  const e = $("etat-essaim");
+  // une ligne par état, courte : l'en-tête n'a pas de place en largeur
+  const parts = [];
+  if (etat.capture) parts.push({ active: "Son capté", coupee: "Son coupé", erreur: "Son : erreur" }[etat.capture]);
+  if (etat.veille) parts.push("En veille");
+  e.hidden = !parts.length;
+  if (e.dataset.texte !== parts.join("|")) {
+    e.dataset.texte = parts.join("|");
+    e.replaceChildren(...parts.map((t) => el("span", "", t)));
+  }
+  e.dataset.etat = etat.capture || "";
+  e.title = { active: "Essaim entend le son de Windows.", coupee: "Écoute coupée : « Réagir au son » est désactivé.", erreur: "La capture du son de Windows a échoué (voir le journal)." }[etat.capture] || "";
+}
+
 // Puissance : temps de calcul par image × images par seconde = part d'un cœur du processeur.
 function recevoirCharge(m) {
   etat.pause = !!m.pause;
+  // champs ajoutés plus tard par l'appli : ignorés s'ils manquent
+  etat.capture = ["active", "coupee", "erreur"].includes(m.capture) ? m.capture : null;
+  etat.veille = m.veille === true;
   $("pause").setAttribute("aria-pressed", etat.pause);
   $("pause").textContent = etat.pause ? "En pause" : "Pause";
+  majEtatEssaim();
   const part = (m.ms * m.ips) / 1000;
   const niveau = m.ips < 1 ? "repos" : part < 0.03 ? "faible" : part < 0.1 ? "moyenne" : "eleve";
   $("puissance").dataset.niveau = niveau;
   $("puissance-niveau").textContent = { repos: "à l'arrêt", faible: "faible", moyenne: "moyenne", eleve: "élevée" }[niveau];
   $("puissance-barre").style.width = Math.round(borne(part / 0.15, 0, 1) * 100) + "%";
   $("puissance-detail").textContent = m.ips < 1
-    ? (etat.pause ? "Essaim est en pause." : "Rien à dessiner en ce moment (plein écran ou curseur masqué).")
+    ? (etat.pause ? "Essaim est en pause." : etat.veille ? "Essaim est en veille : rien n'est dessiné." : "Rien à dessiner en ce moment (plein écran ou curseur masqué).")
     : `${virgule(m.ms, 2)} ms de calcul par image × ${Math.round(m.ips)} images/s : ${virgule(part * 100, 1)} % d'un cœur du processeur, mesuré en direct.` +
       (niveau === "eleve" ? " Les cases à côté de chaque réglage montrent ce qui pèse le plus." : "");
 }
@@ -903,6 +1066,11 @@ function creerAnim(image, taille) {
   d.style.backgroundSize = `${image.images * taille}px ${taille}px`;
   if (image.images > 1) animes.add({ d, image, taille });
   return d;
+}
+
+// Les animations dont l'élément a quitté la page (cartes reconstruites) sont oubliées.
+function purgerAnimes() {
+  for (const a of animes) if (!a.d.isConnected) animes.delete(a);
 }
 
 function animer(maintenant) {
@@ -957,12 +1125,23 @@ function dessinerCurseurs() {
   } else if (!actuel) {
     etat.detailDemande = null;
     $("roles").replaceChildren(el("p", "note", "Le jeu en place n'a pas de nom (curseurs par défaut ou choisis un par un) : choisis-en un à droite."));
+    purgerAnimes();
   }
   if (!etat.jeux.length) {
     zone.replaceChildren(el("span", "t-petit", "Aucun jeu de curseurs trouvé dans Windows."));
+    delete zone.dataset.liste;
+    purgerAnimes();
     return;
   }
-  zone.replaceChildren(...etat.jeux.map((j) => {
+  // les cartes ne sont refaites que si la liste des jeux change (chaque message « etat » passe
+  // par ici) : sinon seul le jeu en place change de cadre
+  const liste = JSON.stringify(etat.jeux.map((j) => [j.cle, j.nom, j.systeme]));
+  if (zone.dataset.liste === liste) {
+    for (const b of zone.querySelectorAll(".jeu")) b.setAttribute("aria-pressed", b.dataset.cle === etat.curseurs);
+    return;
+  }
+  zone.dataset.liste = liste;
+  remplacer(zone, etat.jeux.map((j) => {
     const b = el("button", "jeu");
     b.dataset.cle = j.cle;
     b.setAttribute("aria-pressed", j.cle === etat.curseurs);
@@ -972,6 +1151,7 @@ function dessinerCurseurs() {
     if (!b.querySelector(".apercu-jeu").dataset.pret) observateurJeux.observe(b);
     return b;
   }));
+  purgerAnimes();
 }
 
 function recevoirApercuJeu(m) {
@@ -989,6 +1169,7 @@ function dessinerDetail(m) {
     if (c.image && c.image.images > 1) d.title = `Animé : ${c.image.images} images`;
     return d;
   }));
+  purgerAnimes();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1070,9 +1251,10 @@ function montrerLoupe(t) {
     loupe.p = t.p;
     loupe.apercu = new window.Apercu($("toile-loupe"));
     loupe.apercu.regler(t.p.reglages);
+    loupe.apercu.teinteImposee = teinteImposee(t.p.reglages);
+    loupe.apercu.curseur = flecheJeu((t.p.reglages.souris && t.p.reglages.souris.jeu) || etat.curseurs);
     d.hidden = false;
-    loupe.apercu.dimensionner();
-    for (let i = 0; i < 40; i++) loupe.apercu.avancer(1 / 30, sonPourApercus(performance.now()));
+    figer(loupe.apercu, sonPourApercus(performance.now()));
   }, 650);
 }
 function cacherLoupe() {
@@ -1085,8 +1267,7 @@ $("defile-grille").addEventListener("scroll", cacherLoupe, { passive: true });
 // ---------------------------------------------------------------------------------------------
 // Comparaison de deux presets
 
-const comparaison = { apercus: [] };
-const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris"];
+const comparaison = { apercus: [], fige: false };
 
 function libelleReglage(section, cle) {
   const def = NORMAUX.concat(AVANCES).find((d) => d.section === section && d.cle === cle);
@@ -1114,7 +1295,7 @@ function ecartsEntre(a, b) {
   for (const s of SECTIONS_PRESET) {
     const x = a[s] || {}, y = b[s] || {};
     for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
-      if (k === "avec_preset" || k === "trace" || JSON.stringify(x[k]) === JSON.stringify(y[k])) continue;
+      if (k === "avec_preset" || k === "trace" || memeValeur(x[k], y[k])) continue;
       const [libelle, aff] = libelleReglage(s, k);
       lignes.push([libelle, valeurLisible(x[k], aff), valeurLisible(y[k], aff)]);
     }
@@ -1139,37 +1320,42 @@ function ouvrirComparaison(a, b) {
   cacherLoupe();
   const zone = $("comparaison");
   comparaison.apercus = [];
+  comparaison.fige = false;
   const cotes = [a, b].map((p) => {
     const d = el("div", "cote");
     const canvas = el("canvas", "scene");
     const ap = new window.Apercu(canvas);
     ap.regler(p.reglages);
+    ap.teinteImposee = teinteImposee(p.reglages);
+    suivreSouris(canvas, ap);
     comparaison.apercus.push(ap);
-    const choisirCe = el("button", "puce", "Appliquer");
-    choisirCe.style.alignSelf = "flex-start";
+    const choisirCe = el("button", "puce debut", "Appliquer");
     choisirCe.addEventListener("click", () => { choisir(p); fermerComparaison(); });
     d.append(canvas, el("span", "t-nom", p.nom), choisirCe);
     return d;
   });
   const ecarts = ecartsEntre(a.reglages, b.reglages);
-  const table = el("div", "regles");
-  table.style.gridColumn = "1 / -1";
+  const table = el("div", "regles pleine");
   if (!ecarts.length) table.append(el("div", "regle", "").appendChild(el("span", "vide-regle t-petit", "Mêmes réglages.")).parentNode);
   for (const [libelle, x, y] of ecarts) {
-    const l = el("div", "regle");
+    const l = el("div", "regle ecart");
     l.append(el("span", "t-petit", libelle), el("span", "t-petit", x), el("span", "fleche", "≠"), el("span", "t-petit", y));
-    l.style.gridTemplateColumns = "minmax(0, 1.3fr) minmax(0, 1fr) 24px minmax(0, 1fr)";
     table.append(l);
   }
-  const titre = el("span", "t-label", ecarts.length ? `${ecarts.length} réglage${ecarts.length > 1 ? "s" : ""} différent${ecarts.length > 1 ? "s" : ""}` : "");
-  titre.style.gridColumn = "1 / -1";
+  const titre = el("span", "t-label pleine", ecarts.length ? `${ecarts.length} réglage${ecarts.length > 1 ? "s" : ""} différent${ecarts.length > 1 ? "s" : ""}` : "");
   zone.replaceChildren(...cotes, titre, table);
-  $("voile-comparaison").hidden = false;
+  ouvrirBoite("voile-comparaison", $("fermer-comparaison"));
   requestAnimationFrame(() => comparaison.apercus.forEach((ap) => ap.dimensionner()));
 }
 
+// Souris sur un aperçu : le sillage la suit.
+function suivreSouris(canvas, ap) {
+  canvas.addEventListener("pointermove", (e) => ap.survoler(e.clientX, e.clientY));
+  canvas.addEventListener("pointerleave", () => ap.survoler(null));
+}
+
 function fermerComparaison() {
-  $("voile-comparaison").hidden = true;
+  fermerBoite("voile-comparaison");
   comparaison.apercus = [];
 }
 $("fermer-comparaison").addEventListener("click", fermerComparaison);
@@ -1181,21 +1367,22 @@ $("voile-comparaison").addEventListener("click", (e) => { if (e.target === $("vo
 const dessin = { points: [], trace: false, cible: null };
 const RAYON_GUIDE = 140;
 
+// Couleur d'un jeton de style.css, pour dessiner dans un canevas.
 function couleurJeton(nom) {
-  return getComputedStyle(document.documentElement).getPropertyValue(nom).trim() || "#ff3b1f";
+  return getComputedStyle(document.documentElement).getPropertyValue(nom).trim();
 }
 
 function redessinerToile() {
   const c = $("toile-dessin"), g = c.getContext("2d"), m = c.width / 2;
   g.clearRect(0, 0, c.width, c.height);
-  g.strokeStyle = "rgba(255,255,255,0.18)";
+  g.strokeStyle = couleurJeton("--scene-guide");
   g.setLineDash([4, 6]);
   g.lineWidth = 1;
   g.beginPath();
   g.arc(m, m, RAYON_GUIDE, 0, Math.PI * 2);
   g.stroke();
   g.setLineDash([]);
-  g.fillStyle = "#fff";
+  g.fillStyle = couleurJeton("--scene-point");
   g.beginPath();
   g.arc(m, m, 3, 0, Math.PI * 2);
   g.fill();
@@ -1216,12 +1403,12 @@ function ouvrirDessin(section, cle) {
   const m = $("toile-dessin").width / 2;
   dessin.points = t.map(([x, y]) => [m + x * RAYON_GUIDE, m + y * RAYON_GUIDE]);
   dessin.trace = false;
-  $("voile-dessin").hidden = false;
+  ouvrirBoite("voile-dessin", $("valider-dessin"));
   redessinerToile();
 }
 
 function fermerDessin() {
-  $("voile-dessin").hidden = true;
+  fermerBoite("voile-dessin");
 }
 
 const toile = $("toile-dessin");
@@ -1410,8 +1597,7 @@ let etapeAccueil = 0;
 function ouvrirAccueil() {
   etapeAccueil = 0;
   majAccueil();
-  $("voile-accueil").hidden = false;
-  $("suivant-accueil").focus();
+  ouvrirBoite("voile-accueil", $("suivant-accueil"));
 }
 
 function majAccueil() {
@@ -1419,12 +1605,11 @@ function majAccueil() {
   $("etape-accueil").textContent = `${etapeAccueil + 1} / ${ETAPES_ACCUEIL.length}`;
   $("titre-accueil").textContent = e.titre;
   $("corps-accueil").replaceChildren(...e.corps());
-  $("corps-accueil").style.cssText = "display: flex; flex-direction: column; gap: 16px";
   $("suivant-accueil").textContent = etapeAccueil === ETAPES_ACCUEIL.length - 1 ? "Commencer" : "Suivant →";
 }
 
 function fermerAccueil() {
-  $("voile-accueil").hidden = true;
+  fermerBoite("voile-accueil");
   memoire.ecrire("accueil", true);
 }
 $("suivant-accueil").addEventListener("click", () => {
@@ -1437,20 +1622,63 @@ $("passer-accueil").addEventListener("click", fermerAccueil);
 // ---------------------------------------------------------------------------------------------
 // Vues, panneau, bandeau
 
+// Boîtes modales : la fenêtre derrière devient inerte, le focus va dans la boîte et revient à
+// l'élément d'origine à la fermeture ; Échap ferme la dernière ouverte (voir le clavier).
+const ouvertes = []; // { id, retour }
+const FERMETURES = {};
+function majInerte() {
+  document.querySelector(".fenetre").inert = ouvertes.length > 0;
+  // une boîte ouverte par-dessus une autre rend celle de dessous inerte aussi
+  ouvertes.forEach((o, i) => { $(o.id).inert = i < ouvertes.length - 1; });
+}
+function ouvrirBoite(id, cible) {
+  const voile = $(id);
+  if (voile.hidden) ouvertes.push({ id, retour: document.activeElement });
+  voile.hidden = false;
+  majInerte();
+  const premier = cible || voile.querySelector("button, input, select, [tabindex]");
+  if (premier) premier.focus();
+}
+function fermerBoite(id) {
+  const voile = $(id);
+  if (voile.hidden) return;
+  voile.hidden = true;
+  voile.inert = false;
+  const i = ouvertes.findIndex((o) => o.id === id);
+  const o = i >= 0 ? ouvertes.splice(i, 1)[0] : null;
+  majInerte();
+  if (o && o.retour && o.retour.isConnected && o.retour !== document.body) o.retour.focus({ preventScroll: true });
+}
+
+// Onglets : un seul dans l'ordre de tabulation (celui de la vue), flèches gauche / droite, Début
+// et Fin pour passer de l'un à l'autre (la vue suit le focus).
 const VUES = ["presets", "reglages", "curseurs", "auto"];
-function montrerVue(v) {
+function montrerVue(v, focus) {
   etat.vue = v;
   for (const id of VUES) {
     $("vue-" + id).hidden = v !== id;
-    $("onglet-" + id).setAttribute("aria-selected", v === id);
+    const onglet = $("onglet-" + id);
+    onglet.setAttribute("aria-selected", v === id);
+    onglet.tabIndex = v === id ? 0 : -1;
   }
+  if (focus) $("onglet-" + v).focus();
   if (v === "reglages") requestAnimationFrame(() => grand.dimensionner());
   if (v === "curseurs" && !etat.jeux) envoyer({ cmd: "jeux" });
   if (v === "auto") { envoyer({ cmd: "applis" }); dessinerAuto(); }
   cacherLoupe();
 }
 
-let minuterieBandeau = 0;
+// Bandeau : disparaît seul après quelques secondes, sauf tant que la souris ou le focus clavier
+// est dessus (le délai repart en entier ensuite).
+const minuterie = { id: 0, delai: 6000, suspendu: false };
+function armerBandeau() {
+  clearTimeout(minuterie.id);
+  if (!minuterie.suspendu) minuterie.id = setTimeout(() => { $("bandeau").hidden = true; }, minuterie.delai);
+}
+function suspendreBandeau(oui) {
+  minuterie.suspendu = oui;
+  if (oui) clearTimeout(minuterie.id); else armerBandeau();
+}
 function bandeau(texte, action) {
   $("bandeau-texte").textContent = texte;
   const b = $("bandeau-action");
@@ -1460,8 +1688,15 @@ function bandeau(texte, action) {
     b.onclick = () => { action.faire(); $("bandeau").hidden = true; };
   }
   $("bandeau").hidden = false;
-  clearTimeout(minuterieBandeau);
-  minuterieBandeau = setTimeout(() => { $("bandeau").hidden = true; }, action ? 9000 : 6000);
+  minuterie.delai = action ? 9000 : 6000;
+  armerBandeau();
+}
+{
+  const d = $("bandeau");
+  d.addEventListener("mouseenter", () => suspendreBandeau(true));
+  d.addEventListener("mouseleave", () => suspendreBandeau(d.contains(document.activeElement)));
+  d.addEventListener("focusin", () => suspendreBandeau(true));
+  d.addEventListener("focusout", (e) => { if (!d.contains(e.relatedTarget)) suspendreBandeau(d.matches(":hover")); });
 }
 
 function ouvrirPanneau() {
@@ -1469,12 +1704,11 @@ function ouvrirPanneau() {
   $("nom-preset").value = p ? p.nom : "";
   $("publier").checked = false;
   $("erreur-panneau").hidden = true;
-  $("voile").hidden = false;
-  $("nom-preset").focus();
+  ouvrirBoite("voile", $("nom-preset"));
 }
 
 function fermerPanneau() {
-  $("voile").hidden = true;
+  fermerBoite("voile");
 }
 
 const annuler = () => envoyer({ cmd: "annuler" });
@@ -1487,9 +1721,10 @@ window.essaim = {
     switch (m.type) {
       case "etat": {
         const premier = !etat.reglages;
-        etat.reglages = m.reglages;
+        etat.reglages = reglagesRecus(m.reglages);
         etat.defauts = m.defauts;
         etat.presets = m.presets;
+        suivreRenommages();
         etat.actif = m.actif;
         etat.proche = m.proche;
         etat.depot = m.depot;
@@ -1501,6 +1736,7 @@ window.essaim = {
           if (!memoire.lire("accueil", false)) ouvrirAccueil();
         }
         grand.regler(etat.reglages);
+        apercuChange();
         majReglages();
         dessinerPresets();
         dessinerCurseurs();
@@ -1528,7 +1764,7 @@ window.essaim = {
         recevoirApercuJeu(m);
         break;
       case "applique":
-        bandeau(`« ${m.nom} » appliqué.`, { libelle: "Annuler", faire: annuler });
+        bandeau(`« ${m.nom} » appliqué.`, { libelle: "Annuler (Ctrl+Z)", faire: annuler });
         break;
       case "enregistre":
         fermerPanneau();
@@ -1553,32 +1789,95 @@ window.essaim = {
 
 const grand = new window.Apercu($("grand-apercu"));
 let derniere = performance.now(), cumul = 0;
-const teinteImposee = (c) => (c && (c.couleur.application || c.couleur.site) ? etat.teinte : null);
+
+// Teinte imposée à un aperçu : celle que l'appli suit en ce moment (application ou site au
+// premier plan, sinon éclairage de Prisme), si le preset suit la même source.
+const sourceTeinte = (c) => (c.couleur.application || c.couleur.site ? "appli" : c.couleur.synchro_prisme ? "prisme" : null);
+function teinteImposee(c) {
+  if (!c || etat.teinte === null || !etat.reglages) return null;
+  const s = sourceTeinte(c);
+  return s && s === sourceTeinte(etat.reglages) ? etat.teinte : null;
+}
+
+// Une erreur dans un aperçu ne doit pas arrêter les autres : notée une fois dans la console.
+const erreursVues = new Set();
+function protege(nom, f) {
+  try {
+    f();
+    return true;
+  } catch (e) {
+    if (!erreursVues.has(nom)) { erreursVues.add(nom); console.error(`Aperçu « ${nom} » :`, e); }
+    return false;
+  }
+}
+
+// Grands aperçus (réglages, loupe, comparaison) : à l'arrêt si Windows demande moins
+// d'animations, avec un bouton Lecture ; à l'arrêt, ils sont redessinés figés quand un réglage
+// ou leur taille change.
+const mouvementReduit = matchMedia("(prefers-reduced-motion: reduce)");
+let lecture = !mouvementReduit.matches, grandAFiger = true;
+function apercuChange() { grandAFiger = true; }
+function figer(ap, son) {
+  ap.dimensionner();
+  for (let i = 0; i < 40; i++) ap.avancer(1 / 30, son);
+  ap.dessiner();
+}
+function majLecture() {
+  for (const b of document.querySelectorAll("[data-lecture]")) {
+    b.hidden = !mouvementReduit.matches;
+    b.setAttribute("aria-pressed", lecture);
+  }
+}
+mouvementReduit.addEventListener("change", () => {
+  lecture = !mouvementReduit.matches;
+  grandAFiger = true;
+  comparaison.fige = false;
+  majLecture();
+});
+for (const b of document.querySelectorAll("[data-lecture]")) b.addEventListener("click", () => { lecture = !lecture; majLecture(); });
 
 function boucle(maintenant) {
+  // en tête : une exception plus bas n'arrête pas l'animation
+  requestAnimationFrame(boucle);
   const dt = Math.min(0.05, (maintenant - derniere) / 1000);
   derniere = maintenant;
   const son = sonPourApercus(maintenant);
-  if (etat.vue === "curseurs") animer(maintenant);
+  const bouge = lecture || !!etat.gif;
+  if (etat.vue === "curseurs") protege("curseurs", () => animer(maintenant));
   if (etat.reglages && etat.vue === "reglages") {
-    grand.teinteImposee = teinteImposee(etat.reglages);
-    grand.curseur = flecheJeu(etat.curseurs);
-    grand.dimensionner();
-    grand.avancer(dt, son);
-    grand.dessiner();
-    imageGif(maintenant);
+    protege("réglages", () => {
+      grand.teinteImposee = teinteImposee(etat.reglages);
+      grand.curseur = flecheJeu(etat.curseurs);
+      const largeur = grand.canvas.width;
+      grand.dimensionner();
+      if (bouge) {
+        grand.avancer(dt, son);
+        grand.dessiner();
+        imageGif(maintenant);
+      } else if (grandAFiger || largeur !== grand.canvas.width) {
+        figer(grand, son);
+      }
+      grandAFiger = false;
+    });
   }
-  if (loupe.p && etat.vue === "presets") {
-    loupe.apercu.teinteImposee = teinteImposee(loupe.p.reglages);
-    loupe.apercu.curseur = flecheJeu((loupe.p.reglages.souris && loupe.p.reglages.souris.jeu) || etat.curseurs);
-    loupe.apercu.dimensionner();
-    loupe.apercu.avancer(dt, son);
-    loupe.apercu.dessiner();
+  if (loupe.p && etat.vue === "presets" && bouge) {
+    protege("loupe", () => {
+      loupe.apercu.dimensionner();
+      loupe.apercu.avancer(dt, son);
+      loupe.apercu.dessiner();
+    });
   }
-  for (const ap of comparaison.apercus) {
-    ap.dimensionner();
-    ap.avancer(dt, son);
-    ap.dessiner();
+  if (bouge || !comparaison.fige) {
+    comparaison.apercus.forEach((ap, i) => protege("comparaison " + i, () => {
+      if (bouge) {
+        ap.dimensionner();
+        ap.avancer(dt, son);
+        ap.dessiner();
+      } else {
+        figer(ap, son);
+      }
+    }));
+    comparaison.fige = !bouge && comparaison.apercus.length > 0;
   }
   cumul += dt;
   if (etat.vue === "presets" && cumul >= 1 / 30) {
@@ -1586,33 +1885,40 @@ function boucle(maintenant) {
     cumul = 0;
     for (const id of visibles) {
       const t = tuiles.get(id);
-      if (!t || !t.p.reglages) continue;
-      t.apercu.teinteImposee = teinteImposee(t.p.reglages);
-      // le curseur du preset (ou celui en place, que le preset ne changera pas)
-      t.apercu.curseur = flecheJeu((t.p.reglages.souris && t.p.reglages.souris.jeu) || etat.curseurs);
-      if (!t.pret) {
-        // première image : un peu d'histoire pour que les traînées existent déjà
-        t.apercu.dimensionner();
-        for (let i = 0; i < 40; i++) t.apercu.avancer(1 / 30, son);
-        t.apercu.dessiner();
-        t.pret = true;
-      }
-      const bouge = etat.mode === "direct" || (etat.mode === "survol" && etat.survol === id);
-      if (bouge) {
-        t.apercu.dimensionner();
-        t.apercu.avancer(pas, son);
-        t.apercu.dessiner();
-      }
+      if (!t || t.erreur || !t.p.reglages) continue;
+      // une vignette en erreur est laissée de côté jusqu'à ce que ses réglages changent
+      t.erreur = !protege(t.p.nom, () => {
+        t.apercu.teinteImposee = teinteImposee(t.p.reglages);
+        // le curseur du preset (ou celui en place, que le preset ne changera pas)
+        t.apercu.curseur = flecheJeu((t.p.reglages.souris && t.p.reglages.souris.jeu) || etat.curseurs);
+        if (!t.pret) {
+          // première image : un peu d'histoire pour que les traînées existent déjà
+          figer(t.apercu, son);
+          t.pret = true;
+        }
+        if (etat.mode === "direct" || (etat.mode === "survol" && etat.survol === id)) {
+          t.apercu.dimensionner();
+          t.apercu.avancer(pas, son);
+          t.apercu.dessiner();
+        }
+      });
     }
   }
-  requestAnimationFrame(boucle);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Démarrage
 
 for (const v of VUES) $("onglet-" + v).addEventListener("click", () => montrerVue(v));
+document.querySelector(".onglets").addEventListener("keydown", (e) => {
+  const i = VUES.indexOf(etat.vue), n = VUES.length;
+  const j = { ArrowLeft: (i + n - 1) % n, ArrowRight: (i + 1) % n, Home: 0, End: n - 1 }[e.key];
+  if (j === undefined) return;
+  e.preventDefault();
+  montrerVue(VUES[j], true);
+});
 $("recherche").addEventListener("input", (e) => { etat.recherche = e.target.value; dessinerPresets(); });
+Object.assign(FERMETURES, { voile: fermerPanneau, "voile-dessin": fermerDessin, "voile-comparaison": fermerComparaison, "voile-accueil": fermerAccueil });
 $("ouvrir-panneau").addEventListener("click", ouvrirPanneau);
 $("ouvrir-panneau-2").addEventListener("click", ouvrirPanneau);
 $("annuler-panneau").addEventListener("click", fermerPanneau);
@@ -1626,6 +1932,7 @@ $("importer").addEventListener("click", () => envoyer({ cmd: "importer" }));
 $("surprise").addEventListener("click", surprise);
 $("exporter-gif").addEventListener("click", lancerGif);
 $("grand-apercu").addEventListener("pointerdown", () => grand.clic());
+suivreSouris($("grand-apercu"), grand);
 $("pause").addEventListener("click", () => envoyer({ cmd: "pause" }));
 $("bandeau-fermer").addEventListener("click", () => { $("bandeau").hidden = true; });
 
@@ -1633,8 +1940,8 @@ $("bandeau-fermer").addEventListener("click", () => { $("bandeau").hidden = true
 // Ctrl+P pause, flèches dans la grille, Échap ferme la boîte ouverte.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    const ouverte = [["voile", fermerPanneau], ["voile-dessin", fermerDessin], ["voile-comparaison", fermerComparaison], ["voile-accueil", fermerAccueil]].find(([id]) => !$(id).hidden);
-    if (ouverte) { ouverte[1](); return; }
+    const ouverte = ouvertes[ouvertes.length - 1];
+    if (ouverte) { FERMETURES[ouverte.id](); return; }
     if (etat.comparer) { etat.comparer = null; dessinerPresets(); return; }
   }
   if (e.ctrlKey && ["1", "2", "3", "4"].includes(e.key)) { e.preventDefault(); montrerVue(VUES[+e.key - 1]); return; }
@@ -1648,6 +1955,7 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => { for (const t of tuiles.values()) t.pret = false; });
 
 dessinerModes();
+majLecture();
 montrerVue("presets");
 envoyer({ cmd: "etat" });
 requestAnimationFrame(boucle);
