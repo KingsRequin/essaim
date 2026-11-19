@@ -21,11 +21,14 @@ if (-not $Version) {
 $tag = "v$Version"
 
 # le tag publié est-il le commit d'ici ?
-$local = git -C $racine rev-parse "$tag^{commit}"
-if ($LASTEXITCODE) { throw "le tag $tag n'existe pas dans ce dépôt" }
-# tag annoté : la ligne `^{}` donne le commit ; tag léger : la ligne du tag
-$distant = (git -C $racine ls-remote origin "refs/tags/$tag^{}") -split '\s+' | Select-Object -First 1
-if (-not $distant) { $distant = (git -C $racine ls-remote origin "refs/tags/$tag") -split '\s+' | Select-Object -First 1 }
+# (pas de `^{commit}` : PowerShell retire les accolades en passant l'argument à git)
+$local = git -C $racine rev-list -n 1 "refs/tags/$tag"
+if ($LASTEXITCODE -or -not $local) { throw "le tag $tag n'existe pas dans ce dépôt" }
+# tag annoté : la ligne `^{}` donne le commit ; tag léger : la seule ligne du tag
+$lignes = @(git -C $racine ls-remote --tags origin | ForEach-Object { , ($_ -split '\s+') } |
+    Where-Object { $_[1] -in "refs/tags/$tag", "refs/tags/$tag^{}" })
+$ligne = ($lignes | Where-Object { $_[1] -eq "refs/tags/$tag^{}" } | Select-Object -First 1) ?? ($lignes | Select-Object -First 1)
+$distant = $ligne ? $ligne[0] : $null
 if ($distant -ne $local) { throw "le tag $tag de GitHub ($distant) n'est pas le commit d'ici ($local) : rien n'est signé" }
 
 $brouillon = gh release view $tag --repo $depot --json isDraft --jq .isDraft
