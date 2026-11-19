@@ -48,6 +48,7 @@
   --colonne: 280px;
   --colonne-moyenne: 330px;
   --colonne-large: 380px;
+  --colonne-onglets: 210px;
 
   --font-affiche: "Archivo", "Arial Narrow", Arial, sans-serif;
   --battement: 0.45s;
@@ -125,11 +126,13 @@ button, input { font-family: inherit; color: inherit; }
 .sonde .temoin.coup { animation: coup var(--battement) ease-out; }
 .sonde .tempo { color: var(--encre-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 @keyframes coup { 0% { background: var(--signal); border-color: var(--signal); } 100% { background: transparent; } }
-.sonde .mesure { display: grid; grid-template-columns: auto var(--largeur-jauge); column-gap: var(--esp-2); align-items: center; }
+.sonde .temoins { display: flex; flex-direction: column; gap: 5px; }
+.sonde .mesures { display: grid; grid-template-columns: auto var(--largeur-jauge) auto; gap: 5px var(--esp-2); align-items: center; }
+.sonde .mesure { display: contents; }
 .sonde .jauge { position: relative; height: 6px; background: var(--survol); }
 .sonde .jauge > span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--encre); }
 .sonde .jauge.note > span { width: 4px; background: var(--signal); }
-.sonde .detail { grid-column: 2; font-size: var(--texte-mini); font-weight: 600; color: var(--encre-2); white-space: nowrap; }
+.sonde .detail { font-size: var(--texte-mini); font-weight: 600; color: var(--encre-2); white-space: nowrap; }
 .sonde.silence .jauge > span { visibility: hidden; }
 
 .vue { flex-grow: 1; min-height: 0; display: flex; gap: var(--esp-6); padding: var(--esp-5) var(--esp-6) var(--esp-4); }
@@ -249,6 +252,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .puissance .barre { height: 8px; background: var(--survol); position: relative; }
 .puissance .barre > span { position: absolute; inset: 0 auto 0 0; background: var(--encre); }
 .puissance[data-niveau="eleve"] .barre > span { background: var(--signal); }
+.legende-impact { display: grid; grid-template-columns: auto 1fr; gap: 4px var(--esp-2); align-items: center; }
+.legende-impact .impact { margin-top: 0; }
 .puissance .niveau { font-size: 13px; font-weight: 900; text-transform: uppercase; }
 .puissance[data-niveau="eleve"] .niveau { color: var(--signal-texte); }
 
@@ -345,17 +350,18 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   :root { --largeur-jauge: 52px; }
   /* le détail (« aperçus en démo ») ne tient plus sous sa jauge : il déborderait sur les onglets */
   .sonde .detail { display: none; }
+  .sonde .mesures { grid-template-columns: auto var(--largeur-jauge); }
 }
 @media (max-width: 1300px) {
   .t-affiche { font-size: 54px; }
   .t-nav { font-size: 17px; }
   .onglets { gap: var(--esp-3); }
   .entete-droite, .sonde { gap: var(--esp-3); }
-  :root { --largeur-jauge: 44px; }
+  :root { --largeur-jauge: 44px; --colonne-onglets: 170px; --colonne-large: 320px; }
 }
 /* Quatre onglets : sous 1 200 px, la sonde ne garde que ses témoins (kick, aigus). */
 @media (max-width: 1200px) {
-  .sonde .mesure { display: none; }
+  .sonde .mesures { display: none; }
   .entete-droite { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--esp-2); }
 }
 @media (max-width: 1000px) {
@@ -434,6 +440,63 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .avance .ligne-avance .tete { display: flex; align-items: center; gap: var(--esp-3); }
 .avance .nom-reglage { display: flex; align-items: center; gap: var(--esp-2); }
 .avance .impact { margin-top: 0; }
+
+/* ---------- Onglet Réglages : un panneau par effet ---------- */
+.vue-panneaux { flex-direction: row; gap: var(--esp-5); }
+/* Sous-onglets : liste à gauche, l'onglet choisi a le trait rouge ; voyant de l'effet
+   (plein quand il est actif) ou nombre de modulations. */
+.sous-onglets {
+  width: var(--colonne-onglets); flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto;
+  border-top: var(--trait-epais) solid var(--encre);
+}
+.sous-onglet {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--esp-2); width: 100%;
+  background: none; border: 0; border-bottom: var(--trait-fin) solid var(--filet); cursor: pointer; text-align: left;
+  padding: 11px var(--esp-2) 10px var(--esp-3); box-shadow: inset 0 0 0 0 var(--signal);
+  font-size: 15px; font-weight: 800; font-stretch: 105%; text-transform: uppercase; letter-spacing: 0.03em; color: var(--encre-2);
+}
+.sous-onglet:hover { background: var(--survol); color: var(--encre); }
+.sous-onglet[aria-selected="true"] { color: var(--encre); box-shadow: inset var(--trait-souligne) 0 0 0 var(--signal); }
+.sous-onglet .voyant { width: 8px; height: 8px; flex-shrink: 0; border: 1.5px solid currentColor; }
+.sous-onglet .voyant.allume { background: var(--signal); border-color: var(--signal); }
+.sous-onglet .compte { font-size: var(--texte-mini); font-weight: 900; color: var(--signal-texte); font-variant-numeric: tabular-nums; }
+#panneaux { padding-right: var(--esp-3); }
+.tete-panneau {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--esp-4);
+  border-top: var(--trait-epais) solid var(--encre); padding-top: var(--esp-3);
+}
+.tete-panneau .t-titre { margin: 0; font-size: 30px; }
+.note.intro { max-width: 760px; margin: var(--esp-2) 0 var(--esp-4); font-size: 13px; }
+.panneau-reglages .reglages { border-top: var(--trait-fin) solid var(--filet); }
+.panneau-reglages .avance { margin-top: var(--esp-2); }
+.reglages > .large .note.pleine { flex-basis: 100%; margin-top: 2px; }
+/* effet coupé, ou réglage sans effet : estompé, toujours réglable */
+.corps-panneau { transition: opacity 0.15s; }
+.corps-panneau.eteint, .estompe { opacity: 0.42; }
+.corps-panneau.eteint:hover, .corps-panneau.eteint:focus-within { opacity: 0.7; }
+
+/* Modulations : source → paramètre, sur qui, quantité, jauge de la source en direct. */
+.modulations { display: flex; flex-direction: column; gap: var(--esp-4); }
+.liste-modulations { border-top: var(--trait-fin) solid var(--filet); }
+.modulation {
+  display: grid; align-items: center; gap: var(--esp-3); padding: 10px 0; border-bottom: var(--trait-fin) solid var(--filet);
+  grid-template-columns: minmax(120px, 1.1fr) 14px minmax(120px, 1.1fr) auto minmax(96px, 0.8fr) minmax(110px, 1.4fr) 84px 56px auto;
+}
+.modulation .choix { min-width: 0; width: 100%; }
+.modulation .fleche { color: var(--signal-texte); font-weight: 900; }
+.valeur-mod { font-size: 13px; font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.jauge-mod { position: relative; height: 6px; background: var(--survol); }
+.jauge-mod > span { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--signal); }
+.vide-mod { padding: var(--esp-3) 0; }
+.modulations .groupe-puces > .t-label { flex-basis: 100%; }
+/* fenêtre étroite : sur deux lignes (source → paramètre, sur, retirer ; quantité, valeur, jauge) */
+@media (max-width: 1500px) {
+  .modulation { grid-template-columns: minmax(110px, 1fr) 14px minmax(110px, 1fr) auto minmax(90px, 0.8fr) auto; row-gap: var(--esp-2); }
+  .modulation > .puce { grid-row: 1; grid-column: 6; }
+  .modulation input[type="range"] { grid-row: 2; grid-column: 1 / 4; }
+  .modulation .valeur-mod { grid-row: 2; grid-column: 4; }
+  .modulation .jauge-mod { grid-row: 2; grid-column: 5 / 7; }
+}
 
 /* Comparaison : liste des écarts sur toute la largeur. */
 .comparaison .pleine { grid-column: 1 / -1; }

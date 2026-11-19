@@ -66,7 +66,7 @@ automatiques refusent un `essaim.exe` sans `essaim.exe.sig` valide (`docs/techni
 - Réglages : la page (`ui/`) ne touche à aucun fichier ; elle envoie des demandes JSON à
   `reglages.rs`, qui écrit `config.toml` (`config::set_value`) puis `config::request_reload`.
   Un nouveau réglage s'ajoute à `Config`, au fichier par défaut, à `limits` et, pour la fenêtre,
-  aux listes `NORMAUX` ou `AVANCES` de `ui/app.js`.
+  au panneau de son effet dans `PANNEAUX` de `ui/app.js` (`base` ou `avance`).
 - Interface : toute couleur, taille ou police vient des jetons de `ui/style.css` (charte
   « Essaim » : un seul accent `--signal`, tout carré, Archivo). Les aperçus (`ui/apercu.js`)
   reproduisent le calcul de `render.rs` : le modifier là oblige à le reporter ici.

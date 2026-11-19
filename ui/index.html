@@ -17,11 +17,15 @@
         <span class="t-label" id="etat-essaim" role="status" hidden></span>
       </div>
       <div class="sonde silence" id="sonde" title="Ce que l'essaim entend du son de Windows">
-        <span class="kick t-label"><span class="temoin" id="temoin"></span>Kick</span>
-        <span class="kick t-label"><span class="temoin" id="temoin-aigus"></span>Aigus</span>
+        <span class="temoins">
+          <span class="kick t-label"><span class="temoin" id="temoin"></span>Kick</span>
+          <span class="kick t-label"><span class="temoin" id="temoin-aigus"></span>Aigus</span>
+        </span>
         <span class="t-label tempo" id="bpm" title="Tempo des kicks, affiché quand il est régulier" hidden></span>
-        <span class="mesure"><span class="t-label">Basse</span><span class="jauge"><span id="jauge-niveau"></span></span><span class="detail" id="detail-niveau">—</span></span>
-        <span class="mesure"><span class="t-label">Note</span><span class="jauge note"><span id="jauge-note"></span></span><span class="detail" id="detail-note">—</span></span>
+        <span class="mesures">
+          <span class="mesure"><span class="t-label">Basse</span><span class="jauge"><span id="jauge-niveau"></span></span><span class="detail" id="detail-niveau">—</span></span>
+          <span class="mesure"><span class="t-label">Note</span><span class="jauge note"><span id="jauge-note"></span></span><span class="detail" id="detail-note">—</span></span>
+        </span>
       </div>
       <nav class="onglets" role="tablist" aria-label="Vues">
         <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num">01</span>Presets</button>
@@ -88,7 +92,12 @@
         <div class="ligne-haut"><span class="t-label">Puissance utilisée</span><span class="niveau" id="puissance-niveau">—</span></div>
         <div class="barre"><span id="puissance-barre"></span></div>
         <p class="note" id="puissance-detail">Mesure en cours…</p>
-        <p class="note">Les dix cases à côté de chaque réglage notent, de 1 à 10, son impact sur cette puissance (1 : presque rien, 10 : très lourd).</p>
+        <p class="note">Les dix cases à côté de chaque réglage notent son impact sur cette puissance :</p>
+        <div class="legende-impact">
+          <span class="impact" aria-hidden="true"><i class="plein"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="note">presque rien</span>
+          <span class="impact" aria-hidden="true"><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i></i><i></i><i></i><i></i><i></i></span><span class="note">moyen</span>
+          <span class="impact fort" aria-hidden="true"><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i><i class="plein"></i></span><span class="note">très lourd</span>
+        </div>
       </div>
       <div class="ressort"></div>
       <div class="groupe-puces aere">
@@ -98,10 +107,9 @@
         <button class="puce" id="ouvrir-config">Ouvrir config.toml</button>
       </div>
     </div>
-    <div class="defile">
-      <div class="reglages" id="reglages"></div>
-      <button class="bascule-avance" id="bascule-avance" aria-expanded="false"><span class="signe" id="signe-avance">+</span> Avancé</button>
-      <div class="avance" id="avance" hidden></div>
+    <div class="principal vue-panneaux">
+      <nav class="sous-onglets" id="sous-onglets" role="tablist" aria-label="Effets" aria-orientation="vertical"></nav>
+      <div class="defile" id="panneaux"></div>
     </div>
   </section>
 

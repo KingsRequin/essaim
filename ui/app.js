@@ -169,12 +169,17 @@ const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure", "souris", "musique",
+  "modulations",
 ];
 // Réglages de ces sections propres à la machine, hors presets (comme profils::in_profile).
 const HORS_PRESET = new Set(["avec_preset", "sortie"]);
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
+// Modulation d'un preset distant : textes et quantité finie (une source ou une cible inconnue,
+// d'une version plus récente, est acceptée : Essaim l'ignore).
+const modulationValide = (m) => estObjet(m) && ["source", "cible", "sur"].every((k) => m[k] === undefined || typeof m[k] === "string")
+  && (m.quantite === undefined || Number.isFinite(m.quantite));
 
 // Valeur distante acceptable à la place de `defaut` : même type (nombre fini, booléen, texte,
 // liste) ; une forme inconnue ou un trajet mal formé est refusé.
@@ -182,7 +187,9 @@ function valeurValide(cle, v, defaut) {
   if (typeof defaut === "number") return Number.isFinite(v);
   if (typeof defaut === "boolean") return typeof v === "boolean";
   if (typeof defaut === "string") return typeof v === "string" && (cle !== "forme" || FORMES_CONNUES.has(v));
-  if (Array.isArray(defaut)) return Array.isArray(v) && (cle !== "trace" || v.every(pointValide));
+  if (Array.isArray(defaut)) {
+    return Array.isArray(v) && (cle !== "trace" || v.every(pointValide)) && (cle !== "liste" || (v.length <= 16 && v.every(modulationValide)));
+  }
   return false;
 }
 
@@ -192,6 +199,12 @@ function valeurValide(cle, v, defaut) {
 // mal formé, ignoré).
 function fusion(base, partiel) {
   if (!estObjet(partiel)) return null;
+  // preset d'avant les modulations : ses réactions à la basse en deviennent (comme config::migrer)
+  const o = partiel.orbite;
+  if (estObjet(o) && ("vitesse_basse" in o || "eloignement_grave" in o) && partiel.modulations === undefined) {
+    const n = (v, d) => (Number.isFinite(v) ? v : d);
+    partiel = { ...partiel, modulations: { liste: reactionsDeBase(n(o.vitesse_basse, 11), n(o.eloignement_grave, 1.3)) } };
+  }
   const r = {};
   for (const [s, sec] of Object.entries(base)) {
     const distant = partiel[s];
@@ -675,8 +688,8 @@ const enCours = () => [...attente.values()].some((a) => !a.envoyee);
 // image avec le réglage au minimum puis au maximum, carte graphique, 144 images/s) : score =
 // 1 + écart en % d'un cœur / 1,5. « estime » : réglage hors du banc, score déduit de ce qu'il fait.
 const IMPACT = {
-  "orbite.nombre": [1], "orbite.anneaux": [1], "orbite.rayon": [4], "orbite.vitesse_base": [2], "orbite.vitesse_basse": [2],
-  "orbite.eloignement_grave": [2], "orbite.trainee": [1], "orbite.cometes": [1], "orbite.forme": [1], "orbite.rotation": [1, "estime"],
+  "orbite.nombre": [1], "orbite.anneaux": [1], "orbite.rayon": [4], "orbite.vitesse_base": [2],
+  "orbite.trainee": [1], "orbite.cometes": [1], "orbite.forme": [1], "orbite.rotation": [1, "estime"],
   "essaim.maximum": [2], "essaim.fixes": [2], "essaim.par_kick_min": [2], "essaim.par_kick_max": [2], "essaim.duree": [1], "essaim.forme": [1, "estime"],
   "eclat.taille": [1], "couleur.teinte": [1], "couleur.vitesse_teinte": [1], "couleur.ecart_teinte": [1],
   "audio.sensibilite_kick": [2, "estime"], "audio.delai_kick": [1, "estime"], "fissures.taille": [1, "estime"], "fissures.duree": [1, "estime"],
@@ -688,6 +701,7 @@ const IMPACT = {
   "spectre.actif": [2], "spectre.bandes": [2], "spectre.rayon": [1, "estime"], "spectre.hauteur": [1, "estime"],
   "musique.montee": [1, "estime"], "musique.stereo": [1, "estime"], "orbite.inertie": [1, "estime"],
   "essaim.constellation": [2, "estime"], "couleur.palette": [1, "estime"], "couleur.ecart_palette": [1, "estime"],
+  "orbite.rotation_sur": [1, "estime"], "orbite.inverse_au_kick": [1, "estime"], "musique.rafale_piste": [1, "estime"],
 };
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
@@ -725,131 +739,282 @@ const dureeVeille = {
   aff: (v) => (+v === 0 ? "jamais" : v < 60 ? Math.round(v) + " s" : (Number.isInteger(v / 60) ? v / 60 : virgule(v / 60, 1)) + " min"),
   lire: (texte, x) => (/jamais/i.test(texte) ? 0 : /min/i.test(texte) ? x * 60 : x),
 };
-// Conditions d'affichage : un réglage dont l'effet est coupé est masqué.
+const TEINTES = [0, 25, 50, 95, 150, 190, 215, 260, 295, 330];
+
+// Conditions : un réglage dont l'effet est coupé est estompé (il reste réglable).
 const SI = {
   cometes: (r) => r.orbite.cometes,
   son: (r) => r.audio.actif,
   fissures: (r) => r.fissures.actives,
   bordure: (r) => r.bordure.active,
   scintillement: (r) => r.audio.actif && r.scintillement.actif,
-  clic: (r) => r.clic.onde || r.clic.eclats,
+  clic: (r) => r.clic.onde || r.clic.eclats || r.clic.droit !== false,
   sillage: (r) => r.sillage.actif,
   projecteur: (r) => !!(r.projecteur && r.projecteur.actif),
   reticule: (r) => !!(r.reticule && r.reticule.actif),
   spectre: (r) => !!(r.spectre && r.spectre.actif) && r.audio.actif,
+  palette: (r) => (r.couleur.palette || 1) > 1,
+  // le trajet tourne : rotation réglée, ou modulée
+  rotation: (r) => r.orbite.rotation !== 0 || ((r.modulations || {}).liste || []).some((m) => m.cible === "rotation" && m.quantite),
 };
 
-// Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
-// rangée construite à part (effets, trajets, couleur).
-const NORMAUX = [
-  { titre: "Forme" },
-  { special: "effets" },
-  { special: "trajet-cometes" },
-  { special: "trajet-satellites" },
-  { libelle: "Comètes", section: "orbite", cle: "nombre", si: SI.cometes, min: 1, max: 8, pas: 1, aff: (v) => String(v) },
-  { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
-  { titre: "Mouvement et couleur" },
-  { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
-  { libelle: "Rotation du trajet (tr/min)", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
-  { special: "couleur" },
-  { titre: "Réaction au son" },
-  { special: "effets-plus" },
-  { libelle: "Satellites", section: "essaim", cle: "maximum", si: SI.son, min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
-  { libelle: "Sensibilité au kick", section: "audio", cle: "sensibilite_kick", si: SI.son, min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
-  { libelle: "Taille de l'éclat du kick", section: "eclat", cle: "taille", si: SI.son, min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
+// Modulations : sources, cibles et groupes (comme config::Source, Cible, Groupe) ; effet d'une
+// modulation à fond, dans l'unité de sa cible (comme modulation.rs).
+const SOURCES_MOD = [
+  ["basse", "Basse (niveau)"], ["grave", "Note grave"], ["aigu", "Note aiguë"], ["kick", "Kick"], ["caisse", "Caisse claire"],
+  ["charleston", "Charleston (aigus)"], ["montee", "Montée"], ["drop", "Drop"], ["stereo", "Stéréo (gauche, droite)"], ["tempo", "Battement du tempo"],
 ];
-const EFFETS = [["Comètes", "orbite", "cometes"], ["Fissures", "fissures", "actives"], ["Bordure", "bordure", "active"], ["Réagir au son", "audio", "actif"]];
-const TEINTES = [0, 25, 50, 95, 150, 190, 215, 260, 295, 330];
-const AVANCES = [
-  { groupe: "Orbite" },
-  { libelle: "Anneaux de comètes", section: "orbite", cle: "anneaux", si: SI.cometes, min: 1, max: 4, pas: 1, aff: (v) => String(v) },
-  { libelle: "Vitesse ajoutée par la basse", section: "orbite", cle: "vitesse_basse", si: SI.son, min: 0, max: 40, pas: 0.5, aff: (v) => virgule(+v, 1) },
-  { libelle: "Écart des notes graves", section: "orbite", cle: "eloignement_grave", si: SI.son, min: 0, max: 4, pas: 0.1, aff: (v) => "+" + Math.round(v * 100) + " %", vers: (x) => x / 100 },
-  { libelle: "Traînée des comètes", section: "orbite", cle: "trainee", si: SI.cometes, min: 0.05, max: 2, pas: 0.05, aff: (v) => virgule(+v, 2) + " s" },
-  { libelle: "Inertie (traîne derrière la souris)", section: "orbite", cle: "inertie", min: 0, max: 1, pas: 0.05, aff: (v) => (+v === 0 ? "aucune" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
-  { groupe: "Satellites" },
-  { libelle: "Satellites permanents", section: "essaim", cle: "fixes", min: 0, max: 32, pas: 1, aff: (v) => String(v) },
-  { libelle: "Ajoutés par kick, au moins", section: "essaim", cle: "par_kick_min", si: SI.son, min: 0, max: 10, pas: 1, aff: (v) => String(v) },
-  { libelle: "Ajoutés par kick, au plus", section: "essaim", cle: "par_kick_max", si: SI.son, min: 0, max: 10, pas: 1, aff: (v) => String(v) },
-  { libelle: "Durée de vie", section: "essaim", cle: "duree", si: SI.son, min: 0.5, max: 10, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
-  { groupe: "Couleur" },
-  { libelle: "Teinte de départ", section: "couleur", cle: "teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
-  { libelle: "Défilement de la teinte", section: "couleur", cle: "vitesse_teinte", min: 0, max: 360, pas: 1, aff: (v) => (+v === 0 ? "fixe" : Math.round(v) + "°/s") },
-  { libelle: "Écart tête-queue", section: "couleur", cle: "ecart_teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
-  { libelle: "Teintes de la palette", section: "couleur", cle: "palette", min: 1, max: 3, pas: 1, aff: (v) => (+v === 1 ? "une" : String(v)) },
-  { libelle: "Écart entre les teintes", section: "couleur", cle: "ecart_palette", si: (r) => (r.couleur.palette || 1) > 1, min: 0, max: 180, pas: 1, aff: (v) => Math.round(v) + "°" },
-  { groupe: "Fissures et bordure" },
-  { libelle: "Taille des fissures", section: "fissures", cle: "taille", si: SI.fissures, min: 0.2, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
-  { libelle: "Durée des fissures", section: "fissures", cle: "duree", si: SI.fissures, min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
-  { libelle: "Éclat de la bordure sur le kick", section: "bordure", cle: "intensite", si: SI.bordure, min: 0, max: 1, pas: 0.05, ...pourcent },
-  { libelle: "Luminosité de la bordure au repos", section: "bordure", cle: "repos", si: SI.bordure, min: 0, max: 1, pas: 0.05, ...pourcent },
-  { groupe: "Effets en plus" },
-  { libelle: "Étincelles par attaque des aigus", section: "scintillement", cle: "quantite", si: SI.scintillement, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
-  { libelle: "Taille de l'onde et des éclats", section: "clic", cle: "taille", si: SI.clic, min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
-  { libelle: "Densité du sillage", section: "sillage", cle: "densite", si: SI.sillage, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
-  { libelle: "Durée du projecteur", section: "projecteur", cle: "duree", si: SI.projecteur, min: 0.3, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
-  { libelle: "Taille du réticule", section: "reticule", cle: "taille", si: SI.reticule, min: 10, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
-  { libelle: "Opacité du réticule", section: "reticule", cle: "opacite", si: SI.reticule, min: 0.05, max: 1, pas: 0.05, ...pourcent },
-  { libelle: "Bandes du spectre", section: "spectre", cle: "bandes", si: SI.spectre, min: 8, max: 32, pas: 1, aff: (v) => String(Math.round(v)) },
-  { libelle: "Rayon du spectre", section: "spectre", cle: "rayon", si: SI.spectre, min: 10, max: 150, pas: 1, aff: (v) => String(Math.round(v)) },
-  { libelle: "Hauteur des barres du spectre", section: "spectre", cle: "hauteur", si: SI.spectre, min: 4, max: 100, pas: 1, aff: (v) => String(Math.round(v)) },
-  { groupe: "Son" },
-  { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
-  { libelle: "Penche vers le côté qui joue (stéréo)", section: "musique", cle: "stereo", si: SI.son, min: 0, max: 1, pas: 0.05, aff: (v) => (+v === 0 ? "jamais" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
-  {
-    bascule: "Pulser au tempo pendant les breaks", section: "audio", cle: "pulsation_tempo",
-    note: "Quand la musique continue sans grosse caisse depuis 2 s (break, couplet) alors que son tempo était régulier, l'éclat de l'essaim continue de pulser doucement à ce tempo.",
-  },
-  { sorties: true },
-  { groupe: "Cet ordinateur (hors presets)" },
-  { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
-  { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
-  // masqué tant que l'appli ne fournit pas ce réglage
-  { libelle: "Mise en veille après", section: "rendu", cle: "veille_apres", si: (r) => typeof r.rendu.veille_apres === "number", min: 0, max: 3600, pas: 10, ...dureeVeille },
-  {
-    bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique",
-    note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
-  },
-  {
-    bascule: "Qualité adaptative", section: "rendu", cle: "adaptatif",
-    note: "Si une image demande plus de 4 ms de calcul (ordinateur chargé), Essaim baisse sa cadence par paliers (120, 60, puis 30 images/s au plus) et la remonte quand ça redevient léger.",
-  },
-  {
-    bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
-    note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
-  },
-  {
-    choix: "Sur batterie", section: "pause", cle: "batterie",
-    valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
-    note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",
-  },
-  {
-    choix: "Sans flashs (photosensibilité)", section: "rendu", cle: "sans_flashs",
-    valeurs: [["auto", "Comme Windows"], ["oui", "Toujours"], ["non", "Jamais"]],
-    note: "Éclats du kick adoucis et trois par seconde au plus, ni halo blanc ni bordure qui clignote. « Comme Windows » : quand les effets d'animation sont coupés (Accessibilité › Effets visuels).",
-  },
-  {
-    bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
-    note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
-  },
-  {
-    bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
-    note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
-  },
-  {
-    choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",
-    valeurs: [["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
-    note: "La fenêtre pour le stream montre l'essaim au centre, sur ce fond uni : dans OBS, ajoute-la comme « Capture de fenêtre » et retire le fond avec un filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
-  },
-  { stream: true },
-  { demarrage: true },
-  { accueil: true },
+const CIBLES_MOD = [["rotation", "Rotation"], ["vitesse", "Vitesse"], ["rayon", "Rayon"], ["taille", "Taille"], ["teinte", "Teinte"]];
+const GROUPES = [["tout", "Tout"], ["cometes", "Comètes"], ["satellites", "Satellites"]];
+const UNITES_MOD = { rotation: [90, " tr/min"], vitesse: [(40 * 60) / (2 * Math.PI), " tr/min"], rayon: [400, " %"], taille: [150, " %"], teinte: [180, "°"] };
+// Réactions de base (comme config::reactions_de_base) : la basse accélère (`vitesse` radians/s
+// à fond), une note grave éloigne l'orbite (`eloignement` : part du rayon) ; nulle : omise.
+function reactionsDeBase(vitesse, eloignement) {
+  const q = (x) => Math.round(Math.max(-1, Math.min(1, x)) * 1e4) / 1e4;
+  const l = [];
+  if (vitesse) l.push({ source: "basse", cible: "vitesse", sur: "tout", quantite: q(vitesse / 40) });
+  if (eloignement) l.push({ source: "grave", cible: "rayon", sur: "tout", quantite: q(eloignement / 4) });
+  return l;
+}
+const MODULATIONS_MAX = 16;
+const SUGGESTIONS_MOD = [
+  ["La basse accélère (de base)", reactionsDeBase(11, 0)[0]],
+  ["Les graves éloignent l'orbite (de base)", reactionsDeBase(0, 1.3)[0]],
+  ["Satellites qui s'emballent au drop", { source: "drop", cible: "rotation", sur: "satellites", quantite: 0.8 }],
+  ["Comètes qui grossissent au kick", { source: "kick", cible: "taille", sur: "cometes", quantite: 0.6 }],
+  ["Teinte qui saute sur la caisse claire", { source: "caisse", cible: "teinte", sur: "tout", quantite: 0.4 }],
+  ["Accélère pendant la montée", { source: "montee", cible: "vitesse", sur: "tout", quantite: 0.25 }],
+  ["Trajet qui suit la stéréo", { source: "stereo", cible: "rotation", sur: "tout", quantite: 0.5 }],
 ];
+const affQuantite = (cible, q) => {
+  const [fond, unite] = UNITES_MOD[cible] || [100, " %"];
+  const v = Math.round(q * fond);
+  return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v) + unite;
+};
 
-const glissieres = []; // { def, input, saisie }
+// Panneaux de l'onglet Réglages, un par effet. `actif` : bascule de l'effet (section, clé) ;
+// `base` : réglages courants ; `avance` : les autres, sous « + Avancé » ; `compact` : la base
+// en lignes (réglages de la machine). Éléments : réglage numérique ({ libelle, section, cle, min,
+// max, pas, aff }), rangée de bascules ({ rangee, puces: [[libellé, section, clé, info], …] }),
+// trajet ({ trajet, section, cle, liste }), choix ({ choix, section, cle, valeurs }), bascule
+// avec note ({ bascule, … }), titre ({ titre }), et rangées construites à part (couleur, sorties,
+// modulations, boutons).
+const PANNEAUX = [
+  {
+    id: "orbite", titre: "Orbite",
+    note: "Le trajet autour du pointeur, que suivent les comètes et les satellites : sa taille, sa vitesse, sa rotation. Ce que la basse y change (vitesse, éloignement sur les graves) est dans Modulations.",
+    base: [
+      { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
+      { libelle: "Rotation du trajet (tr/min)", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+      { choix: "Ce qui tourne avec le trajet", section: "orbite", cle: "rotation_sur", si: SI.rotation, valeurs: [["tout", "Comètes et satellites"], ["cometes", "Comètes"], ["satellites", "Satellites"]] },
+    ],
+    avance: [
+      {
+        bascule: "Inverser le sens à chaque kick", section: "orbite", cle: "inverse_au_kick",
+        note: "Chaque kick fait repartir les comètes et les satellites dans l'autre sens. Coupé : ils tournent toujours dans le même sens, le kick ajoute seulement ses satellites et son éclat.",
+      },
+      { libelle: "Inertie (traîne derrière la souris)", section: "orbite", cle: "inertie", min: 0, max: 1, pas: 0.05, aff: (v) => (+v === 0 ? "aucune" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
+      { libelle: "Penche vers le côté qui joue (stéréo)", section: "musique", cle: "stereo", si: SI.son, min: 0, max: 1, pas: 0.05, aff: (v) => (+v === 0 ? "jamais" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
+    ],
+  },
+  {
+    id: "cometes", titre: "Comètes", actif: ["orbite", "cometes"],
+    note: "Les têtes lumineuses et leur traînée, réparties sur le trajet.",
+    base: [
+      { trajet: "Trajet des comètes", section: "orbite", cle: "forme", liste: FORMES_REGLAGE },
+      { libelle: "Comètes", section: "orbite", cle: "nombre", min: 1, max: 8, pas: 1, aff: (v) => String(v) },
+      { libelle: "Traînée", section: "orbite", cle: "trainee", min: 0.05, max: 2, pas: 0.05, aff: (v) => virgule(+v, 2) + " s" },
+    ],
+    avance: [
+      { libelle: "Anneaux de comètes", section: "orbite", cle: "anneaux", min: 1, max: 4, pas: 1, aff: (v) => String(v) },
+    ],
+  },
+  {
+    id: "satellites", titre: "Satellites",
+    note: "Les petites traînées ajoutées à chaque kick, qui vivent quelques secondes, et les satellites permanents, là même sans musique.",
+    base: [
+      { trajet: "Trajet des satellites", section: "essaim", cle: "forme", liste: FORMES_SATELLITES },
+      { libelle: "Satellites au plus", section: "essaim", cle: "maximum", si: SI.son, min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
+      { libelle: "Permanents", section: "essaim", cle: "fixes", min: 0, max: 32, pas: 1, aff: (v) => String(v) },
+      { rangee: "Liens", puces: [["Constellation", "essaim", "constellation", "De fines lignes relient les satellites et les comètes proches"]] },
+    ],
+    avance: [
+      { libelle: "Ajoutés par kick, au moins", section: "essaim", cle: "par_kick_min", si: SI.son, min: 0, max: 10, pas: 1, aff: (v) => String(v) },
+      { libelle: "Ajoutés par kick, au plus", section: "essaim", cle: "par_kick_max", si: SI.son, min: 0, max: 10, pas: 1, aff: (v) => String(v) },
+      { libelle: "Durée de vie", section: "essaim", cle: "duree", si: SI.son, min: 0.5, max: 10, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+    ],
+  },
+  {
+    id: "couleur", titre: "Couleur",
+    note: "Une teinte fixe ou qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau, l'éclairage de Prisme.",
+    base: [{ special: "couleur" }],
+    avance: [
+      { libelle: "Teinte de départ", section: "couleur", cle: "teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
+      { libelle: "Défilement de la teinte", section: "couleur", cle: "vitesse_teinte", min: 0, max: 360, pas: 1, aff: (v) => (+v === 0 ? "fixe" : Math.round(v) + "°/s") },
+      { libelle: "Écart tête-queue", section: "couleur", cle: "ecart_teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
+      { libelle: "Teintes de la palette", section: "couleur", cle: "palette", min: 1, max: 3, pas: 1, aff: (v) => (+v === 1 ? "une" : String(v)) },
+      { libelle: "Écart entre les teintes", section: "couleur", cle: "ecart_palette", si: SI.palette, min: 0, max: 180, pas: 1, aff: (v) => Math.round(v) + "°" },
+    ],
+  },
+  {
+    id: "son", titre: "Kick et son", actif: ["audio", "actif"],
+    note: "L'écoute du son de Windows. Chaque kick fait un éclat sous le pointeur, ajoute des satellites et, au choix, inverse le sens (onglet Orbite).",
+    base: [
+      { libelle: "Sensibilité au kick", section: "audio", cle: "sensibilite_kick", min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
+      { libelle: "Éclat du kick", section: "eclat", cle: "taille", min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
+    ],
+    avance: [
+      { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
+      {
+        bascule: "Pulser au tempo pendant les breaks", section: "audio", cle: "pulsation_tempo",
+        note: "Quand la musique continue sans grosse caisse depuis 2 s (break, couplet) alors que son tempo était régulier, l'éclat de l'essaim continue de pulser doucement à ce tempo.",
+      },
+      { sorties: true },
+    ],
+  },
+  {
+    id: "musique", titre: "Musique",
+    note: "Ce qui se passe dans le morceau, au-delà du kick : montée et drop, caisse claire, contretemps, aigus, changement de piste.",
+    base: [
+      {
+        rangee: "Réactions", si: SI.son, puces: [
+          ["Montée et drop", "musique", "montee", "Pendant une montée (roulement de caisse claire, son qui s'éclaircit), l'essaim se resserre et accélère, puis explose au drop"],
+          ["Carré sur la caisse claire", "musique", "caisse_claire", "Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire ou clap"],
+          ["Pulsation des contretemps", "musique", "contretemps", "Quand le tempo est connu, les têtes pulsent au milieu de chaque temps"],
+        ],
+      },
+      // le titre du morceau, pas le son : marche même sans l'écoute
+      { rangee: "Morceau", puces: [["Rafale au changement de piste", "musique", "rafale_piste", "Quand le titre change pendant la lecture : éclat, satellites en double et grande onde"]] },
+      {
+        rangee: "Étincelles", si: SI.son, puces: [
+          ["Étincelles sur les aigus", "scintillement", "actif", "Chaque attaque du charleston ou des cymbales fait jaillir des étincelles des têtes"],
+          ["Rebonds sur la fenêtre", "scintillement", "rebonds", "Étincelles, éclats et poussière rebondissent sur les bords de la fenêtre au premier plan"],
+        ],
+      },
+      { libelle: "Étincelles par attaque", section: "scintillement", cle: "quantite", si: SI.scintillement, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
+    ],
+  },
+  {
+    id: "souris", titre: "Souris",
+    note: "Ce que font les clics et les mouvements de la souris.",
+    base: [
+      {
+        rangee: "Clics", puces: [
+          ["Onde au clic", "clic", "onde", "Une onde de choc s'élargit sous le pointeur"],
+          ["Éclats au clic", "clic", "eclats", "Des étincelles jaillissent du clic"],
+          ["Onde au clic droit", "clic", "droit", "Clic droit : une onde qui se referme et des étincelles aspirées vers le pointeur"],
+        ],
+      },
+      { libelle: "Taille des clics", section: "clic", cle: "taille", si: SI.clic, min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
+      { rangee: "Sillage", puces: [["Sillage de la souris", "sillage", "actif", "Quand la souris file vite, une poussière reste derrière elle"]] },
+      { libelle: "Densité du sillage", section: "sillage", cle: "densite", si: SI.sillage, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
+      {
+        rangee: "Retrouver le pointeur", puces: [
+          ["Projecteur (secouer la souris)", "projecteur", "actif", "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver"],
+          ["Réticule", "reticule", "actif", "Deux fines lignes croisées centrées sur le pointeur, qui s'illuminent sur le kick"],
+        ],
+      },
+    ],
+    avance: [
+      { libelle: "Durée du projecteur", section: "projecteur", cle: "duree", si: SI.projecteur, min: 0.3, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+      { libelle: "Taille du réticule", section: "reticule", cle: "taille", si: SI.reticule, min: 10, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Opacité du réticule", section: "reticule", cle: "opacite", si: SI.reticule, min: 0.05, max: 1, pas: 0.05, ...pourcent },
+    ],
+  },
+  {
+    id: "fissures", titre: "Fissures", actif: ["fissures", "actives"],
+    note: "Une fissure s'ouvre sous le pointeur à chaque clic, puis s'efface.",
+    base: [
+      { libelle: "Taille", section: "fissures", cle: "taille", min: 0.2, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+      { libelle: "Durée", section: "fissures", cle: "duree", min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+    ],
+  },
+  {
+    id: "bordure", titre: "Bordure", actif: ["bordure", "active"],
+    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim et s'illumine sur chaque kick (Windows 11).",
+    base: [
+      { libelle: "Éclat sur le kick", section: "bordure", cle: "intensite", min: 0, max: 1, pas: 0.05, ...pourcent },
+      { libelle: "Luminosité au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
+    ],
+  },
+  {
+    id: "spectre", titre: "Spectre", actif: ["spectre", "actif"],
+    note: "Un anneau de barres autour du pointeur, une par bande de fréquences, plus longues quand la bande est forte.",
+    base: [
+      { libelle: "Bandes", section: "spectre", cle: "bandes", min: 8, max: 32, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Rayon", section: "spectre", cle: "rayon", min: 10, max: 150, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Hauteur des barres", section: "spectre", cle: "hauteur", min: 4, max: 100, pas: 1, aff: (v) => String(Math.round(v)) },
+    ],
+  },
+  {
+    id: "modulations", titre: "Modulations", si: SI.son,
+    note: "Fais agir un élément du son sur un paramètre de l'essaim, pour les comètes, les satellites ou les deux : la rotation qui s'emballe au drop, l'orbite qui s'ouvre sur les graves… Les deux premières, de base, font accélérer l'essaim avec la basse et l'éloignent sur les notes graves : change-les ou retire-les comme les autres. Elles sont gardées dans le preset et demandent « Kick et son » actif.",
+    base: [{ modulations: true }],
+  },
+  {
+    id: "machine", titre: "Cet ordinateur", compact: true,
+    note: "Réglages propres à ce PC : ils ne font pas partie des presets.",
+    base: [
+      { groupe: "Dessin" },
+      { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
+      { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
+      // masqué tant que l'appli ne fournit pas ce réglage
+      { libelle: "Mise en veille après", section: "rendu", cle: "veille_apres", cache: (r) => typeof r.rendu.veille_apres !== "number", min: 0, max: 3600, pas: 10, ...dureeVeille },
+      {
+        bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique",
+        note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
+      },
+      {
+        bascule: "Qualité adaptative", section: "rendu", cle: "adaptatif",
+        note: "Si une image demande plus de 4 ms de calcul (ordinateur chargé), Essaim baisse sa cadence par paliers (120, 60, puis 30 images/s au plus) et la remonte quand ça redevient léger.",
+      },
+      {
+        choix: "Sans flashs (photosensibilité)", section: "rendu", cle: "sans_flashs",
+        valeurs: [["auto", "Comme Windows"], ["oui", "Toujours"], ["non", "Jamais"]],
+        note: "Éclats du kick adoucis et trois par seconde au plus, ni halo blanc ni bordure qui clignote. « Comme Windows » : quand les effets d'animation sont coupés (Accessibilité › Effets visuels).",
+      },
+      { groupe: "Pauses" },
+      {
+        bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
+        note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
+      },
+      {
+        choix: "Sur batterie", section: "pause", cle: "batterie",
+        valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
+        note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",
+      },
+      { groupe: "Captures et stream" },
+      {
+        bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
+        note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
+      },
+      {
+        choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",
+        valeurs: [["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
+        note: "La fenêtre pour le stream montre l'essaim au centre, sur ce fond uni : dans OBS, ajoute-la comme « Capture de fenêtre » et retire le fond avec un filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
+      },
+      { stream: true },
+      { groupe: "Essaim" },
+      {
+        bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
+        note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
+      },
+      { demarrage: true },
+      { accueil: true },
+    ],
+  },
+];
+// Tous les éléments, pour retrouver le libellé d'un réglage (comparaison de presets).
+const ELEMENTS = PANNEAUX.flatMap((p) => p.base.concat(p.avance || []));
+
+const glissieres = []; // { def, input, saisie, els }
 const bascules = []; // { section, cle, bouton }
 const choix = []; // { section, cle, valeur, bouton } : réglages à quelques valeurs nommées
 const formes = []; // { section, cle, id, b }
+const conditionnels = []; // { si, cache, els } : estompés (si) ou masqués (cache) selon les réglages
+const panneaux = []; // { def, onglet, section, corps, voyant }
+const avances = []; // { bouton, signe, zone }
 let teintes = [];
 
 function hslCss(h) {
@@ -904,42 +1069,26 @@ function reglageNumerique(def, id, conteneur, avance) {
   const g = { def, input, saisie, els: [] };
   glissieres.push(g);
   g.els = conteneur(input, saisie) || [];
+  if (def.si || def.cache) conditionnels.push({ si: def.si, cache: def.cache, els: g.els });
 }
 
-function construireReglages() {
-  const grille = $("reglages");
-  const libelleAvecImpact = (texte, cle, pour) => {
-    const l = el(pour ? "label" : "div", "libelle-reglage");
-    if (pour) l.htmlFor = pour;
-    const nom = el("span", "t-label", texte);
-    l.append(nom, jaugeImpact(cle));
-    return l;
-  };
-  // rangée de boutons : un groupe nommé par son libellé et décrit par sa jauge
-  const ligneLarge = (libelle, cle, contenu) => {
-    const l = libelleAvecImpact(libelle, cle);
-    const nom = l.firstChild, jauge = l.lastChild;
-    nom.id = "libelle-" + jauge.id;
-    grille.append(l);
-    const d = el("div", "large");
-    d.setAttribute("role", "group");
-    d.setAttribute("aria-labelledby", nom.id);
-    decrire(d, jauge.id);
-    d.append(...contenu);
-    grille.append(d);
-  };
-  const bascule = (libelle, section, cle, oui) => {
-    const b = el("button", "puce", libelle);
-    b.setAttribute("aria-pressed", "false");
-    b.addEventListener("click", () => {
-      const v = val(section, cle);
-      regler(section, cle, oui ? oui(v) : !v);
-      majReglages();
-    });
-    bascules.push({ section, cle, bouton: b });
-    return b;
-  };
-  const choixForme = (section, cle, liste) => liste.map(([id, libelle]) => {
+// Bascule d'un réglage (booléen, ou nombre : allumée au-dessus de 0 ; `oui` donne la valeur
+// suivante), avec son explication au survol.
+function bascule(libelle, section, cle, oui, info) {
+  const b = el("button", "puce", libelle);
+  b.setAttribute("aria-pressed", "false");
+  if (info) b.title = info;
+  b.addEventListener("click", () => {
+    const v = val(section, cle);
+    regler(section, cle, oui ? oui(v) : !v);
+    majReglages();
+  });
+  bascules.push({ section, cle, bouton: b });
+  return b;
+}
+
+function choixForme(section, cle, liste) {
+  return liste.map(([id, libelle]) => {
     const b = el("button", "puce forme");
     if (id !== "cometes") b.append(picto(id));
     b.append(document.createTextNode(libelle));
@@ -952,166 +1101,384 @@ function construireReglages() {
     formes.push({ section, cle, id, b });
     return b;
   });
-  const numerique = (def) => reglageNumerique(def, "r-" + def.section + "-" + def.cle, (input, saisie) => {
-    const zone = el("div", "glissiere");
-    zone.append(input);
-    const sortie = el("div", "valeur");
-    sortie.append(saisie);
-    const libelle = libelleAvecImpact(def.libelle, def.section + "." + def.cle, input.id);
-    decrire(input, libelle.lastChild.id);
-    grille.append(libelle, zone, sortie);
-    return [libelle, zone, sortie];
-  }, false);
+}
 
-  for (const def of NORMAUX) {
-    if (def.titre) {
-      grille.append(el("div", "titre-groupe", def.titre));
-    } else if (def.special === "effets") {
-      ligneLarge("Effets", "orbite.cometes", EFFETS.map(([l, s, c]) => bascule(l, s, c)));
-    } else if (def.special === "trajet-cometes") {
-      ligneLarge("Trajet des comètes", "orbite.forme", choixForme("orbite", "forme", FORMES_REGLAGE));
-    } else if (def.special === "trajet-satellites") {
-      ligneLarge("Trajet des satellites", "essaim.forme", choixForme("essaim", "forme", FORMES_SATELLITES));
-    } else if (def.special === "effets-plus") {
-      const projecteur = bascule("Projecteur (secouer la souris)", "projecteur", "actif");
-      projecteur.title = "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver";
-      ligneLarge("Effets en plus", "scintillement.actif", [
-        bascule("Étincelles sur les aigus", "scintillement", "actif"),
-        bascule("Onde au clic", "clic", "onde"),
-        bascule("Éclats au clic", "clic", "eclats"),
-        bascule("Sillage de la souris", "sillage", "actif"),
-        bascule("Rafale au changement de piste", "musique", "rafale_piste"),
-        projecteur,
-        bascule("Réticule", "reticule", "actif"),
-        bascule("Anneau de spectre", "spectre", "actif"),
-      ]);
-      const montee = bascule("Montée et drop", "musique", "montee");
-      montee.title = "Pendant une montée (roulement de caisse claire, son qui s'éclaircit), l'essaim se resserre et accélère, puis explose au drop";
-      const caisse = bascule("Carré sur la caisse claire", "musique", "caisse_claire");
-      caisse.title = "Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire ou clap";
-      const contre = bascule("Pulsation des contretemps", "musique", "contretemps");
-      contre.title = "Quand le tempo est connu, les têtes pulsent au milieu de chaque temps";
-      const constellation = bascule("Constellation", "essaim", "constellation");
-      constellation.title = "De fines lignes relient les satellites et les comètes proches";
-      const droit = bascule("Onde au clic droit", "clic", "droit");
-      droit.title = "Clic droit : une onde qui se referme et des étincelles aspirées vers le pointeur";
-      const rebonds = bascule("Rebonds sur la fenêtre", "scintillement", "rebonds");
-      rebonds.title = "Étincelles, éclats et poussière rebondissent sur les bords de la fenêtre au premier plan";
-      ligneLarge("Réactions à la musique", "musique.montee", [montee, caisse, contre, constellation, droit, rebonds]);
-    } else if (def.special === "couleur") {
-      teintes = TEINTES.map((h) => {
-        const b = el("button", "teinte");
-        b.style.background = hslCss(h);
-        b.setAttribute("aria-label", "Teinte " + h + "°");
-        b.addEventListener("click", () => {
-          regler("couleur", "teinte", h);
-          regler("couleur", "vitesse_teinte", 0);
-          regler("couleur", "application", false);
-          regler("couleur", "site", false);
-          regler("couleur", "pochette", false);
-          regler("couleur", "synchro_prisme", false);
-          majReglages();
-        });
-        return { h, b };
-      });
-      // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet
-      const synchro = bascule("Synchro Prisme", "couleur", "synchro_prisme");
-      synchro.title = "Prend la teinte de l'éclairage RGB de Prisme quand il tourne";
-      const pochette = bascule("Couleur de la pochette", "couleur", "pochette");
-      pochette.title = "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application, le site et Prisme";
-      ligneLarge("Couleur", "couleur.teinte", [
-        ...teintes.map((t) => t.b),
-        bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
-        bascule("Couleur de l'application", "couleur", "application"),
-        bascule("Couleur du site (navigateur)", "couleur", "site"),
-        pochette,
-        bascule("Suit la musique", "couleur", "musique"),
-        synchro,
-      ]);
-    } else {
-      numerique(def);
+function pucesChoix(def) {
+  return def.valeurs.map(([valeur, libelle]) => {
+    const b = el("button", "puce", libelle);
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => { regler(def.section, def.cle, valeur); majReglages(); });
+    choix.push({ section: def.section, cle: def.cle, valeur, bouton: b });
+    return b;
+  });
+}
+
+// Rangée de la couleur : nuancier et sources de la teinte.
+function rangeeCouleur() {
+  teintes = TEINTES.map((h) => {
+    const b = el("button", "teinte");
+    b.style.background = hslCss(h);
+    b.setAttribute("aria-label", "Teinte " + h + "°");
+    b.addEventListener("click", () => {
+      regler("couleur", "teinte", h);
+      regler("couleur", "vitesse_teinte", 0);
+      regler("couleur", "application", false);
+      regler("couleur", "site", false);
+      regler("couleur", "pochette", false);
+      regler("couleur", "synchro_prisme", false);
+      majReglages();
+    });
+    return { h, b };
+  });
+  // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet
+  return {
+    teintes: teintes.map((t) => t.b),
+    sources: [
+      bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
+      bascule("Couleur de l'application", "couleur", "application"),
+      bascule("Couleur du site (navigateur)", "couleur", "site"),
+      bascule("Couleur de la pochette", "couleur", "pochette", null, "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application, le site et Prisme"),
+      bascule("Suit la musique", "couleur", "musique", null, "La teinte glisse avec la basse et la brillance du son"),
+      bascule("Synchro Prisme", "couleur", "synchro_prisme", null, "Prend la teinte de l'éclairage RGB de Prisme quand il tourne"),
+    ],
+  };
+}
+
+// Réglages courants d'un panneau : grille libellé, glissière, valeur en grands chiffres ; les
+// rangées de boutons prennent la glissière et la valeur.
+function construireBase(def, grille, corps) {
+  const libelleAvecImpact = (texte, cle, pour) => {
+    const l = el(pour ? "label" : "div", "libelle-reglage");
+    if (pour) l.htmlFor = pour;
+    l.append(el("span", "t-label", texte), jaugeImpact(cle));
+    return l;
+  };
+  // rangée de boutons : un groupe nommé par son libellé et décrit par sa jauge
+  const ligneLarge = (libelle, cle, contenu, note) => {
+    const l = libelleAvecImpact(libelle, cle);
+    const nom = l.firstChild, jauge = l.lastChild;
+    nom.id = "libelle-" + jauge.id;
+    const d = el("div", "large");
+    d.setAttribute("role", "group");
+    d.setAttribute("aria-labelledby", nom.id);
+    decrire(d, jauge.id);
+    d.append(...contenu);
+    if (note) {
+      const n = el("p", "note pleine", note);
+      n.id = "note-" + jauge.id;
+      d.append(n);
+      decrire(d, jauge.id, n.id);
     }
+    grille.append(l, d);
+    return [l, d];
+  };
+  let els = null;
+  if (def.titre) {
+    grille.append(el("div", "titre-groupe", def.titre));
+  } else if (def.trajet) {
+    els = ligneLarge(def.trajet, def.section + "." + def.cle, choixForme(def.section, def.cle, def.liste));
+  } else if (def.rangee) {
+    const [, s, c] = def.puces[0];
+    els = ligneLarge(def.rangee, s + "." + c, def.puces.map(([l, sec, cle, info]) => bascule(l, sec, cle, null, info)));
+  } else if (def.choix) {
+    els = ligneLarge(def.choix, def.section + "." + def.cle, pucesChoix(def), def.note);
+  } else if (def.special === "couleur") {
+    const { teintes: nuancier, sources } = rangeeCouleur();
+    ligneLarge("Teinte", "couleur.teinte", nuancier);
+    ligneLarge("Prendre la couleur de", "couleur.application", sources);
+  } else if (def.modulations) {
+    construireModulations(corps);
+  } else {
+    reglageNumerique(def, "r-" + def.section + "-" + def.cle, (input, saisie) => {
+      const zone = el("div", "glissiere");
+      zone.append(input);
+      const sortie = el("div", "valeur");
+      sortie.append(saisie);
+      const libelle = libelleAvecImpact(def.libelle, def.section + "." + def.cle, input.id);
+      decrire(input, libelle.lastChild.id);
+      grille.append(libelle, zone, sortie);
+      return [libelle, zone, sortie];
+    }, false);
   }
+  if (els && (def.si || def.cache)) conditionnels.push({ si: def.si, cache: def.cache, els });
+}
 
-  const avance = $("avance");
-  for (const def of AVANCES) {
-    if (def.groupe) {
-      avance.append(el("div", "t-label groupe-avance", def.groupe));
-    } else if (def.choix) {
-      const l = el("div", "ligne-avance");
-      const groupe = el("div", "groupe-puces");
-      groupe.setAttribute("role", "group");
-      const nom = el("span", "t-label", def.choix);
-      nom.id = "choix-" + def.section + "-" + def.cle;
-      groupe.setAttribute("aria-labelledby", nom.id);
-      groupe.append(nom, ...def.valeurs.map(([valeur, libelle]) => {
-        const b = el("button", "puce", libelle);
-        b.setAttribute("aria-pressed", "false");
-        b.addEventListener("click", () => { regler(def.section, def.cle, valeur); majReglages(); });
-        choix.push({ section: def.section, cle: def.cle, valeur, bouton: b });
-        return b;
-      }));
-      l.append(groupe);
+// Réglages en lignes, sur deux colonnes (avancés, machine) : nom, jauge et valeur au-dessus de la
+// glissière ; bascules et choix sur toute la largeur, avec leur note.
+function construireAvance(def, zone) {
+  let els = null;
+  if (def.groupe) {
+    zone.append(el("div", "t-label groupe-avance", def.groupe));
+  } else if (def.choix || def.rangee) {
+    const l = el("div", "ligne-avance");
+    const groupe = el("div", "groupe-puces");
+    groupe.setAttribute("role", "group");
+    const nom = el("span", "t-label", def.choix || def.rangee);
+    nom.id = "choix-" + (def.section || def.puces[0][1]) + "-" + (def.cle || def.puces[0][2]);
+    groupe.setAttribute("aria-labelledby", nom.id);
+    groupe.append(nom, ...(def.choix ? pucesChoix(def) : def.puces.map(([lb, s, c, info]) => bascule(lb, s, c, null, info))));
+    l.append(groupe);
+    if (def.note) {
+      const note = el("p", "note", def.note);
+      note.id = "note-" + nom.id;
+      l.append(note);
+      decrire(groupe, note.id);
+    }
+    zone.append(l);
+    els = [l];
+  } else if (def.sorties) {
+    zone.append(rangeeSorties());
+  } else if (def.bascule || def.demarrage || def.accueil || def.stream) {
+    const l = el("div", "ligne-avance");
+    if (def.bascule) {
+      const tete = el("div", "tete");
+      const cle = def.section + "." + def.cle;
+      const b = bascule(def.bascule, def.section, def.cle);
+      tete.append(b);
+      const decrits = [];
+      // sans effet sur la puissance (mises à jour) : pas de jauge
+      if (IMPACT[cle]) { const j = jaugeImpact(cle); tete.append(j); decrits.push(j.id); }
+      l.append(tete);
       if (def.note) {
         const note = el("p", "note", def.note);
         note.id = "note-" + def.section + "-" + def.cle;
         l.append(note);
-        decrire(groupe, note.id);
+        decrits.push(note.id);
       }
-      avance.append(l);
-    } else if (def.sorties) {
-      avance.append(rangeeSorties());
-    } else if (def.bascule || def.demarrage || def.accueil || def.stream) {
-      const l = el("div", "ligne-avance");
-      if (def.bascule) {
-        const tete = el("div", "tete");
-        const cle = def.section + "." + def.cle;
-        const b = bascule(def.bascule, def.section, def.cle);
-        tete.append(b);
-        const decrits = [];
-        // sans effet sur la puissance (mises à jour) : pas de jauge
-        if (IMPACT[cle]) { const j = jaugeImpact(cle); tete.append(j); decrits.push(j.id); }
-        l.append(tete);
-        if (def.note) {
-          const note = el("p", "note", def.note);
-          note.id = "note-" + def.section + "-" + def.cle;
-          l.append(note);
-          decrits.push(note.id);
-        }
-        if (decrits.length) decrire(b, ...decrits);
-      } else if (def.stream) {
-        const b = el("button", "puce debut", "Ouvrir la fenêtre pour le stream");
-        b.addEventListener("click", () => envoyer({ cmd: "stream" }));
-        l.append(b);
-      } else if (def.demarrage) {
-        const b = el("button", "puce debut", "Démarrer Essaim avec Windows");
-        b.id = "demarrage";
-        b.addEventListener("click", () => envoyer({ cmd: "demarrage", actif: !etat.demarrage }));
-        l.append(b);
-      } else {
-        const b = el("button", "puce debut", "Revoir l'accueil");
-        b.addEventListener("click", () => ouvrirAccueil());
-        l.append(b);
-      }
-      avance.append(l);
+      if (decrits.length) decrire(b, ...decrits);
+    } else if (def.stream) {
+      const b = el("button", "puce debut", "Ouvrir la fenêtre pour le stream");
+      b.addEventListener("click", () => envoyer({ cmd: "stream" }));
+      l.append(b);
+    } else if (def.demarrage) {
+      const b = el("button", "puce debut", "Démarrer Essaim avec Windows");
+      b.id = "demarrage";
+      b.addEventListener("click", () => envoyer({ cmd: "demarrage", actif: !etat.demarrage }));
+      l.append(b);
     } else {
-      reglageNumerique(def, "a-" + def.section + "-" + def.cle, (input, saisie) => {
-        const l = el("label");
-        const tete = el("span", "entete-reglage");
-        const nom = el("span", "nom-reglage");
-        const jauge = jaugeImpact(def.section + "." + def.cle);
-        decrire(input, jauge.id);
-        nom.append(el("span", "", def.libelle), jauge);
-        tete.append(nom, saisie);
-        l.append(tete, input);
-        avance.append(l);
-        return [l];
-      }, true);
+      const b = el("button", "puce debut", "Revoir l'accueil");
+      b.addEventListener("click", () => ouvrirAccueil());
+      l.append(b);
+    }
+    zone.append(l);
+    els = [l];
+  } else {
+    reglageNumerique(def, "a-" + def.section + "-" + def.cle, (input, saisie) => {
+      const l = el("label");
+      const tete = el("span", "entete-reglage");
+      const nom = el("span", "nom-reglage");
+      const jauge = jaugeImpact(def.section + "." + def.cle);
+      decrire(input, jauge.id);
+      nom.append(el("span", "", def.libelle), jauge);
+      tete.append(nom, saisie);
+      l.append(tete, input);
+      zone.append(l);
+      return [l];
+    }, true);
+  }
+  if (els && (def.si || def.cache)) conditionnels.push({ si: def.si, cache: def.cache, els });
+}
+
+function construireReglages() {
+  const nav = $("sous-onglets"), zone = $("panneaux");
+  for (const p of PANNEAUX) {
+    // onglet : nom, et voyant de l'effet (allumé s'il est actif) ou nombre de modulations
+    const o = el("button", "sous-onglet");
+    Object.assign(o, { id: "sous-onglet-" + p.id, tabIndex: -1 });
+    o.setAttribute("role", "tab");
+    o.setAttribute("aria-controls", "panneau-" + p.id);
+    o.setAttribute("aria-selected", "false");
+    o.append(el("span", "nom", p.titre));
+    const voyant = p.actif ? el("span", "voyant") : p.id === "modulations" ? el("span", "compte") : null;
+    if (voyant) { voyant.setAttribute("aria-hidden", "true"); o.append(voyant); }
+    o.addEventListener("click", () => montrerPanneau(p.id));
+    nav.append(o);
+
+    const sec = el("section", "panneau-reglages");
+    sec.id = "panneau-" + p.id;
+    sec.setAttribute("role", "tabpanel");
+    sec.setAttribute("aria-labelledby", o.id);
+    sec.hidden = true;
+    const tete = el("div", "tete-panneau");
+    tete.append(el("h2", "t-titre", p.titre));
+    if (p.actif) {
+      const b = bascule("Actif", p.actif[0], p.actif[1]);
+      b.setAttribute("aria-label", p.titre + " : actif");
+      tete.append(b);
+    }
+    sec.append(tete, el("p", "note intro", p.note));
+    const corps = el("div", "corps-panneau");
+    if (p.compact) {
+      const lignes = el("div", "avance");
+      for (const def of p.base) construireAvance(def, lignes);
+      corps.append(lignes);
+    } else {
+      const grille = el("div", "reglages");
+      corps.append(grille);
+      for (const def of p.base) construireBase(def, grille, corps);
+      if (!grille.childElementCount) grille.remove();
+    }
+    if (p.avance && p.avance.length) {
+      const b = el("button", "bascule-avance");
+      const signe = el("span", "signe", "+");
+      b.append(signe, document.createTextNode(" Avancé"));
+      const av = el("div", "avance");
+      av.id = "avance-" + p.id;
+      b.setAttribute("aria-controls", av.id);
+      for (const def of p.avance) construireAvance(def, av);
+      b.addEventListener("click", () => { etat.avance = !etat.avance; memoire.ecrire("avance", etat.avance); majAvance(); });
+      corps.append(b, av);
+      avances.push({ bouton: b, signe, zone: av });
+    }
+    sec.append(corps);
+    zone.append(sec);
+    panneaux.push({ def: p, onglet: o, section: sec, corps, voyant });
+  }
+  // flèches haut et bas, Début, Fin : d'un onglet à l'autre (le panneau suit le focus)
+  nav.addEventListener("keydown", (e) => {
+    const i = panneaux.findIndex((p) => p.def.id === etat.panneau);
+    const j = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: panneaux.length - 1 }[e.key];
+    if (j === undefined) return;
+    e.preventDefault();
+    montrerPanneau(panneaux[(j + panneaux.length) % panneaux.length].def.id, true);
+  });
+  $("avec-preset").addEventListener("click", () => { regler("souris", "avec_preset", !val("souris", "avec_preset")); majReglages(); });
+  montrerPanneau(memoire.lire("panneau", "orbite"));
+  majAvance();
+}
+
+function montrerPanneau(id, focus) {
+  if (!panneaux.some((p) => p.def.id === id)) id = panneaux[0].def.id;
+  etat.panneau = id;
+  memoire.ecrire("panneau", id);
+  for (const p of panneaux) {
+    const oui = p.def.id === id;
+    p.section.hidden = !oui;
+    p.onglet.setAttribute("aria-selected", oui);
+    p.onglet.tabIndex = oui ? 0 : -1;
+    if (oui && focus) p.onglet.focus();
+  }
+  $("panneaux").scrollTop = 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Modulations : une ligne par modulation (source → cible, sur qui, quantité, jauge de la source
+// en direct, retirer), un bouton pour en ajouter, des idées toutes prêtes.
+
+const listeMods = () => (etat.reglages && etat.reglages.modulations && Array.isArray(etat.reglages.modulations.liste) ? etat.reglages.modulations.liste : []);
+const modUI = { cle: null, lignes: [] }; // lignes : { source, plage, valeur, jauge }
+
+function ecrireModulations(liste) {
+  regler("modulations", "liste", liste);
+  majReglages();
+}
+
+function ajouterModulation(m) {
+  const l = listeMods();
+  if (l.length >= MODULATIONS_MAX) { bandeau(`${MODULATIONS_MAX} modulations au plus : retires-en une pour en ajouter.`); return; }
+  ecrireModulations(l.concat([{ ...m }]));
+  requestAnimationFrame(() => { const d = modUI.lignes[modUI.lignes.length - 1]; if (d) d.premier.focus(); });
+}
+
+function construireModulations(corps) {
+  const bloc = el("div", "modulations");
+  const liste = el("div", "liste-modulations");
+  liste.id = "liste-modulations";
+  const plus = el("button", "puce debut", "+ Ajouter une modulation");
+  plus.id = "ajouter-modulation";
+  plus.addEventListener("click", () => ajouterModulation({ source: "basse", cible: "rotation", sur: "tout", quantite: 0.5 }));
+  const idees = el("div", "groupe-puces");
+  idees.setAttribute("role", "group");
+  const nom = el("span", "t-label", "Idées");
+  nom.id = "idees-modulations";
+  idees.setAttribute("aria-labelledby", nom.id);
+  idees.append(nom, ...SUGGESTIONS_MOD.map(([libelle, m]) => {
+    const b = el("button", "puce", libelle);
+    b.addEventListener("click", () => ajouterModulation(m));
+    return b;
+  }));
+  bloc.append(liste, plus, idees);
+  corps.append(bloc);
+}
+
+function choixMod(options, valeur, libelle, change) {
+  const s = el("select", "choix");
+  s.setAttribute("aria-label", libelle);
+  s.replaceChildren(...options.map(([id, nom]) => { const o = el("option", "", nom); o.value = id; return o; }));
+  // valeur d'une version plus récente : gardée, affichée telle quelle
+  if (!options.some(([id]) => id === valeur)) { const o = el("option", "", String(valeur)); o.value = valeur; s.append(o); }
+  s.value = valeur;
+  s.addEventListener("change", () => change(s.value));
+  return s;
+}
+
+function ligneModulation(m, i) {
+  const ligne = el("div", "modulation");
+  const changer = (champ) => (v) => ecrireModulations(listeMods().map((x, j) => (j === i ? { ...x, [champ]: v } : x)));
+  const n = i + 1;
+  const source = choixMod(SOURCES_MOD, m.source, `Modulation ${n} : source`, changer("source"));
+  const cible = choixMod(CIBLES_MOD, m.cible, `Modulation ${n} : paramètre`, changer("cible"));
+  const sur = choixMod(GROUPES, m.sur || "tout", `Modulation ${n} : sur`, changer("sur"));
+  const plage = el("input");
+  Object.assign(plage, { type: "range", min: -100, max: 100, step: 1, value: Math.round((m.quantite || 0) * 100) });
+  plage.setAttribute("aria-label", `Modulation ${n} : quantité`);
+  plage.title = "Double-clic : remise à zéro. À gauche de zéro : dans l'autre sens";
+  const valeur = el("span", "valeur-mod", affQuantite(m.cible, m.quantite || 0));
+  const quantite = (q) => {
+    valeur.textContent = affQuantite(listeMods()[i] ? listeMods()[i].cible : m.cible, q);
+    regler("modulations", "liste", listeMods().map((x, j) => (j === i ? { ...x, quantite: q } : x)));
+    majNomActif();
+  };
+  plage.addEventListener("input", () => quantite(+plage.value / 100));
+  plage.addEventListener("dblclick", () => { plage.value = 0; quantite(0); });
+  const jauge = el("span", "jauge-mod");
+  jauge.append(el("span"));
+  jauge.title = "La source en ce moment, dans l'aperçu";
+  jauge.setAttribute("aria-hidden", "true");
+  const retirer = el("button", "puce petite", "Retirer");
+  retirer.setAttribute("aria-label", `Retirer la modulation ${n}`);
+  retirer.addEventListener("click", () => ecrireModulations(listeMods().filter((_, j) => j !== i)));
+  ligne.append(source, el("span", "fleche", "→"), cible, el("span", "t-label", "sur"), sur, plage, valeur, jauge, retirer);
+  return { ligne, premier: source, plage, valeur, jauge: jauge.firstChild, source: m.source, cible: m.cible };
+}
+
+function majModulations() {
+  const zone = $("liste-modulations");
+  if (!zone || !etat.reglages) return;
+  const l = listeMods();
+  const cle = JSON.stringify(l.map((m) => [m.source, m.cible, m.sur]));
+  if (cle !== modUI.cle) {
+    modUI.cle = cle;
+    modUI.lignes = l.map(ligneModulation);
+    remplacer(zone, modUI.lignes.length ? modUI.lignes.map((d) => d.ligne) : [el("p", "note vide-mod", "Aucune modulation pour l'instant : ajoute-en une, ou pars d'une idée ci-dessous.")]);
+  } else {
+    l.forEach((m, i) => {
+      const d = modUI.lignes[i];
+      if (d && document.activeElement !== d.plage) {
+        d.plage.value = Math.round((m.quantite || 0) * 100);
+        d.valeur.textContent = affQuantite(m.cible, m.quantite || 0);
+      }
+    });
+  }
+  $("ajouter-modulation").disabled = l.length >= MODULATIONS_MAX;
+  const p = panneaux.find((x) => x.def.id === "modulations");
+  if (p && p.voyant) p.voyant.textContent = l.length ? String(l.length) : "";
+}
+
+// Jauges des sources, à chaque image du grand aperçu (qui suit le vrai son, ou la démo).
+function majJaugesModulations() {
+  if (etat.panneau !== "modulations") return;
+  for (const d of modUI.lignes) {
+    const v = grand.valeurSource(d.source);
+    // stéréo : de -1 à 1, depuis le milieu
+    if (d.source === "stereo") {
+      d.jauge.style.left = 50 + Math.min(0, v) * 50 + "%";
+      d.jauge.style.width = Math.abs(v) * 50 + "%";
+    } else {
+      d.jauge.style.left = "0";
+      d.jauge.style.width = Math.max(0, Math.min(1, v)) * 100 + "%";
     }
   }
-  $("bascule-avance").addEventListener("click", () => { etat.avance = !etat.avance; memoire.ecrire("avance", etat.avance); majAvance(); });
-  $("avec-preset").addEventListener("click", () => { regler("souris", "avec_preset", !val("souris", "avec_preset")); majReglages(); });
-  majAvance();
 }
 
 // Sortie son écoutée (`[audio] sortie`, propre à cet ordinateur) : liste demandée à l'appli à la
@@ -1148,9 +1515,11 @@ function majSorties(choix = $("sortie-son")) {
 }
 
 function majAvance() {
-  $("avance").hidden = !etat.avance;
-  $("signe-avance").textContent = etat.avance ? "−" : "+";
-  $("bascule-avance").setAttribute("aria-expanded", etat.avance);
+  for (const a of avances) {
+    a.zone.hidden = !etat.avance;
+    a.signe.textContent = etat.avance ? "−" : "+";
+    a.bouton.setAttribute("aria-expanded", etat.avance);
+  }
 }
 
 function majNomActif() {
@@ -1162,14 +1531,25 @@ function majNomActif() {
 
 function majReglages() {
   if (!etat.reglages) return;
-  for (const { def, input, saisie, els } of glissieres) {
-    const cache = !!def.si && !def.si(etat.reglages);
-    for (const e of els) e.hidden = cache;
+  for (const { def, input, saisie } of glissieres) {
     const v = val(def.section, def.cle);
     if (v === undefined) continue; // réglage que l'appli ne fournit pas (encore)
     if (document.activeElement !== input) input.value = v;
     if (document.activeElement !== saisie) saisie.value = def.aff(v);
   }
+  for (const c of conditionnels) {
+    const cache = !!c.cache && c.cache(etat.reglages), estompe = !!c.si && !c.si(etat.reglages);
+    for (const e of c.els) { e.hidden = cache; e.classList.toggle("estompe", estompe); }
+  }
+  // panneau d'un effet coupé : estompé (il reste réglable), voyant de son onglet éteint
+  for (const p of panneaux) {
+    if (p.def.si) p.corps.classList.toggle("eteint", !p.def.si(etat.reglages));
+    if (!p.def.actif) continue;
+    const actif = !!val(p.def.actif[0], p.def.actif[1]);
+    p.corps.classList.toggle("eteint", !actif);
+    p.voyant.classList.toggle("allume", actif);
+  }
+  majModulations();
   for (const b of bascules) {
     const v = val(b.section, b.cle);
     b.bouton.setAttribute("aria-pressed", typeof v === "boolean" ? v : v > 0);
@@ -1214,6 +1594,10 @@ function surprise() {
     palette: Math.random() < 0.6 ? 1 : ri(2, 3), ecart_palette: parmi([60, 90, 120, 180]),
   });
   c.eclat.taille = +r(1.5, 6).toFixed(1);
+  c.orbite.rotation_sur = parmi(["tout", "tout", "cometes", "satellites"]);
+  // réactions de base à la basse, plus ou moins fortes, et une fois sur trois une idée en plus
+  const idees = SUGGESTIONS_MOD.slice(2);
+  c.modulations = { liste: reactionsDeBase(+r(4, 20).toFixed(1), +r(0.4, 2).toFixed(1)).concat(Math.random() < 0.35 ? [{ ...parmi(idees)[1] }] : []) };
   envoyer({ cmd: "appliquer_reglages", nom: "Surprise", reglages: c });
 }
 
@@ -1571,22 +1955,23 @@ $("defile-grille").addEventListener("scroll", cacherLoupe, { passive: true });
 const comparaison = { apercus: [], fige: false };
 
 function libelleReglage(section, cle) {
-  const def = NORMAUX.concat(AVANCES).find((d) => d.section === section && d.cle === cle);
-  if (def) return [def.libelle || def.bascule, def.aff];
-  const bascule = EFFETS.find(([, s, c]) => s === section && c === cle);
-  if (bascule) return [bascule[0]];
+  const def = ELEMENTS.find((d) => d.section === section && d.cle === cle);
+  if (def) return [def.libelle || def.bascule || def.choix || def.trajet, def.aff];
+  for (const d of ELEMENTS) {
+    const puce = (d.puces || []).find(([, s, c]) => s === section && c === cle);
+    if (puce) return [puce[0]];
+  }
+  const effet = PANNEAUX.find((p) => p.actif && p.actif[0] === section && p.actif[1] === cle);
+  if (effet) return [effet.titre];
   const noms = {
-    "orbite.forme": "Trajet des comètes", "essaim.forme": "Trajet des satellites", "couleur.application": "Couleur de l'application",
-    "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique", "scintillement.actif": "Étincelles sur les aigus",
-    "clic.onde": "Onde au clic", "clic.eclats": "Éclats au clic", "sillage.actif": "Sillage de la souris", "souris.jeu": "Curseurs",
-    "projecteur.actif": "Projecteur (secouer la souris)", "reticule.actif": "Réticule", "spectre.actif": "Anneau de spectre",
-    "couleur.synchro_prisme": "Synchro Prisme", "couleur.pochette": "Couleur de la pochette",
-    "musique.rafale_piste": "Rafale au changement de piste",
+    "couleur.application": "Couleur de l'application", "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique",
+    "couleur.synchro_prisme": "Synchro Prisme", "couleur.pochette": "Couleur de la pochette", "souris.jeu": "Curseurs", "modulations.liste": "Modulations",
   };
   return [noms[section + "." + cle] || section + "." + cle];
 }
 
 function valeurLisible(v, aff) {
+  if (Array.isArray(v)) return v.length ? v.length + " modulation" + (v.length > 1 ? "s" : "") : "aucune";
   if (typeof v === "boolean") return v ? "oui" : "non";
   if (aff && typeof v === "number") return aff(v);
   if (typeof v === "string") return NOMS_FORMES[v] || v || "—";
@@ -2164,6 +2549,7 @@ function boucle(maintenant) {
         grand.avancer(dt, son);
         grand.dessiner();
         imageGif(maintenant);
+        majJaugesModulations();
       } else if (grandAFiger || largeur !== grand.canvas.width) {
         figer(grand, son);
       }
