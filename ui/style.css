@@ -201,7 +201,6 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .avance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 30px; }
 .avance label { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: var(--trait-fin) solid var(--filet); }
 .avance .entete-reglage { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; }
-.avance .entete-reglage b { font-weight: 900; font-variant-numeric: tabular-nums; }
 .bascule-avance {
   align-self: flex-start; margin-top: var(--esp-3); background: none; border: 0; padding: 6px 0; cursor: pointer;
   font-size: 20px; font-weight: 900; font-stretch: 115%; text-transform: uppercase;
