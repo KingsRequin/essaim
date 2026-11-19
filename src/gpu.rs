@@ -79,7 +79,18 @@ impl Gpu {
             };
             match make() {
                 Ok((target, visual, surface)) => {
-                    Ok(GpuLayer { mon, rect, hwnd, _target: target, _visual: visual, surface, prev: None, empty_since: None })
+                    Ok(GpuLayer {
+                        mon,
+                        rect,
+                        hwnd,
+                        _target: target,
+                        _visual: visual,
+                        surface,
+                        prev: None,
+                        empty_since: None,
+                        sprites: SpriteCanvas::default(),
+                        batch: None,
+                    })
                 }
                 Err(e) => {
                     crate::win::destroy_window(hwnd);
@@ -104,6 +115,10 @@ pub struct GpuLayer {
     surface: IDCompositionVirtualSurface,
     prev: Option<IRect>,
     pub empty_since: Option<Instant>,
+    /// Pastilles de l'image, tampons gardés d'une image à l'autre.
+    sprites: SpriteCanvas,
+    /// Lot de sprites, créé une fois (ressource du périphérique Direct2D) puis vidé à chaque image.
+    batch: Option<ID2D1SpriteBatch>,
 }
 
 impl GpuLayer {
@@ -141,11 +156,23 @@ impl GpuLayer {
             dc.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
             // le contenu de la zone rendue n'est pas conservé : tout est effacé puis redessiné
             dc.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
-            let mut sprites = SpriteCanvas::default();
-            draw(&mut sprites);
+            let sprites = &mut self.sprites;
+            sprites.rects.clear();
+            sprites.colors.clear();
+            draw(sprites);
             if !sprites.rects.is_empty() {
                 let dc3: ID2D1DeviceContext3 = dc.cast()?;
-                let batch = dc3.CreateSpriteBatch()?;
+                let batch = match &self.batch {
+                    Some(b) => {
+                        b.Clear();
+                        b.clone()
+                    }
+                    None => {
+                        let b = dc3.CreateSpriteBatch()?;
+                        self.batch = Some(b.clone());
+                        b
+                    }
+                };
                 batch.AddSprites(
                     sprites.rects.len() as u32,
                     sprites.rects.as_ptr(),
