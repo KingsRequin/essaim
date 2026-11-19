@@ -67,7 +67,7 @@ const etat = {
   mode: memoire.lire("mode", animationsReduites() ? "survol" : "direct"),
   avance: memoire.lire("avance", false),
   commu: { etat: "rien", liste: [], message: "" },
-  son: { kicks: 0, basse: 0, hauteur: 0, aigus: 0, brillance: 0 },
+  son: { kicks: 0, basse: 0, hauteur: 0, aigus: 0, brillance: 0, bpm: null, phase: 0, relais: false, recu: 0 },
   teinte: null,
   dernierSon: -1e9,
   demo: { kicks: 0, prochain: 0 },
@@ -80,6 +80,7 @@ const etat = {
   gif: null, // enregistrement d'un GIF en cours
   renommages: [], // { ancien, nouveau } demandés, suivis à l'état suivant (favoris)
   capture: null, // écoute du son : "active", "coupee", "erreur" (absent : inconnu)
+  sorties: null, // sorties son de Windows [{ id, nom }] (null : pas encore reçues)
   veille: false,
   morceau: null, // morceau en cours { titre, artiste } (API média de Windows), ou null
   lecture: null, // le morceau joue (vrai), est en pause (faux) ; null : aucune session
@@ -96,7 +97,12 @@ function musique() {
 }
 
 function sonPourApercus(maintenant) {
-  if (musique()) return etat.son;
+  if (musique()) {
+    const s = etat.son;
+    // relais du tempo (break sans kick) : la phase avance d'elle-même entre deux messages
+    if (s.relais && s.bpm) return { ...s, phase: (s.phase + ((maintenant - s.recu) / 1000) * (s.bpm / 60)) % 1 };
+    return s;
+  }
   if (maintenant >= etat.demo.prochain) {
     etat.demo.kicks++;
     etat.demo.prochain = maintenant + 500;
@@ -111,10 +117,19 @@ function recevoirSon(m) {
   const kick = m.kicks !== etat.son.kicks;
   const aigus = (m.aigus || 0) !== etat.son.aigus;
   if (kick || m.basse > 0.03) etat.dernierSon = performance.now();
-  etat.son = { kicks: m.kicks, basse: m.basse, hauteur: m.hauteur, aigus: m.aigus || 0, brillance: m.brillance || 0 };
+  // tempo : champs absents d'une appli plus ancienne
+  const bpm = typeof m.bpm === "number" && m.bpm > 0 ? m.bpm : null;
+  etat.son = {
+    kicks: m.kicks, basse: m.basse, hauteur: m.hauteur, aigus: m.aigus || 0, brillance: m.brillance || 0,
+    bpm, phase: typeof m.phase === "number" ? m.phase : 0, relais: m.relais === true, recu: performance.now(),
+  };
   etat.teinte = typeof m.teinte === "number" ? m.teinte : null;
   const actif = musique();
   $("sonde").classList.toggle("silence", !actif);
+  // tempo des kicks, seulement quand il est stable
+  const tempo = $("bpm");
+  tempo.hidden = !(actif && bpm);
+  if (actif && bpm) tempo.textContent = Math.round(bpm) + " BPM";
   if (actif) {
     $("jauge-niveau").style.width = Math.round(borne(m.basse, 0, 1) * 100) + "%";
     $("detail-niveau").textContent = m.basse < 0.25 ? "faible" : m.basse < 0.6 ? "moyenne" : "forte";
@@ -150,6 +165,8 @@ const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE]
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris", "musique"];
+// Réglages de ces sections propres à la machine, hors presets (comme profils::in_profile).
+const HORS_PRESET = new Set(["avec_preset", "sortie"]);
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
@@ -177,7 +194,7 @@ function fusion(base, partiel) {
     if (!estObjet(distant)) return null;
     r[s] = { ...sec };
     for (const [k, defaut] of Object.entries(sec)) {
-      if (k !== "avec_preset" && k in distant && valeurValide(k, distant[k], defaut)) r[s][k] = distant[k];
+      if (!HORS_PRESET.has(k) && k in distant && valeurValide(k, distant[k], defaut)) r[s][k] = distant[k];
     }
   }
   return r;
@@ -742,6 +759,11 @@ const AVANCES = [
   { libelle: "Densité du sillage", section: "sillage", cle: "densite", si: SI.sillage, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
   { groupe: "Son" },
   { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
+  {
+    bascule: "Pulser au tempo pendant les breaks", section: "audio", cle: "pulsation_tempo",
+    note: "Quand la musique continue sans grosse caisse depuis 2 s (break, couplet) alors que son tempo était régulier, l'éclat de l'essaim continue de pulser doucement à ce tempo.",
+  },
+  { sorties: true },
   { groupe: "Cet ordinateur (hors presets)" },
   { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
   { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
@@ -971,6 +993,8 @@ function construireReglages() {
         decrire(groupe, note.id);
       }
       avance.append(l);
+    } else if (def.sorties) {
+      avance.append(rangeeSorties());
     } else if (def.bascule || def.demarrage || def.accueil) {
       const l = el("div", "ligne-avance");
       if (def.bascule) {
@@ -1020,6 +1044,39 @@ function construireReglages() {
   majAvance();
 }
 
+// Sortie son écoutée (`[audio] sortie`, propre à cet ordinateur) : liste demandée à l'appli à la
+// construction et à chaque ouverture de la liste (un casque a pu être branché entre-temps).
+function rangeeSorties() {
+  const l = el("label", "ligne-avance");
+  const tete = el("span", "tete");
+  tete.append(el("span", "t-label", "Sortie son écoutée"));
+  const choix = el("select", "choix");
+  choix.id = "sortie-son";
+  const note = el("span", "note", "Propre à cet ordinateur (hors presets). Si la sortie choisie est débranchée, Essaim écoute la sortie par défaut en attendant son retour.");
+  note.id = "note-sortie-son";
+  decrire(choix, note.id);
+  choix.addEventListener("focus", () => envoyer({ cmd: "sorties" }));
+  choix.addEventListener("change", () => regler("audio", "sortie", choix.value));
+  l.append(tete, choix, note);
+  envoyer({ cmd: "sorties" });
+  majSorties(choix);
+  return l;
+}
+
+function majSorties(choix = $("sortie-son")) {
+  if (!choix || !etat.reglages) return;
+  const voulue = val("audio", "sortie") || "";
+  const options = [["", "Sortie par défaut de Windows"], ...(etat.sorties || []).map((s) => [s.id, s.nom])];
+  // sortie choisie absente (débranchée) : gardée dans la liste, signalée
+  if (voulue && !options.some(([id]) => id === voulue)) options.push([voulue, "Sortie choisie, absente (sortie par défaut en attendant)"]);
+  const cle = JSON.stringify(options);
+  if (choix.dataset.options !== cle) {
+    choix.dataset.options = cle;
+    choix.replaceChildren(...options.map(([id, nom]) => { const o = el("option", "", nom); o.value = id; return o; }));
+  }
+  if (choix.value !== voulue) choix.value = voulue;
+}
+
 function majAvance() {
   $("avance").hidden = !etat.avance;
   $("signe-avance").textContent = etat.avance ? "−" : "+";
@@ -1063,6 +1120,7 @@ function majReglages() {
   $("avec-preset").setAttribute("aria-pressed", !!val("souris", "avec_preset"));
   const d = $("demarrage");
   if (d) d.setAttribute("aria-pressed", etat.demarrage);
+  majSorties();
   majNomActif();
 }
 
@@ -1422,7 +1480,7 @@ function ecartsEntre(a, b) {
   for (const s of SECTIONS_PRESET) {
     const x = a[s] || {}, y = b[s] || {};
     for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
-      if (k === "avec_preset" || k === "trace" || memeValeur(x[k], y[k])) continue;
+      if (HORS_PRESET.has(k) || k === "trace" || memeValeur(x[k], y[k])) continue;
       const [libelle, aff] = libelleReglage(s, k);
       lignes.push([libelle, valeurLisible(x[k], aff), valeurLisible(y[k], aff)]);
     }
@@ -1877,6 +1935,10 @@ window.essaim = {
         break;
       case "son":
         recevoirSon(m);
+        break;
+      case "sorties":
+        etat.sorties = Array.isArray(m.liste) ? m.liste.filter((s) => s && typeof s.id === "string" && typeof s.nom === "string") : [];
+        majSorties();
         break;
       case "charge":
         recevoirCharge(m);

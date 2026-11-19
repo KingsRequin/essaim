@@ -6,6 +6,8 @@
 
 const TAU = Math.PI * 2;
 const SAT_R_MAX = 1.9;
+// Éclat de la pulsation au tempo pendant un break sans kick (FORCE_PULSATION de render.rs).
+const FORCE_PULSATION = 0.35;
 const SAT_TRAINEE = 0.25;
 const PAS_TRAINEE = 1 / 90;
 // Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points),
@@ -234,6 +236,11 @@ class Apercu {
       }
     }
     this.env *= Math.exp(-dt * 9);
+    // relais du tempo (break sans kick) : l'éclat pulse doucement sur chaque temps (comme
+    // pulsation_tempo de render.rs)
+    if (son.relais && c.audio && c.audio.pulsation_tempo !== false) {
+      this.env = Math.max(this.env, FORCE_PULSATION * Math.pow(1 - Math.min(1, Math.max(0, son.phase || 0)), 4));
+    }
     // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
     if (this.aigusVus === null) this.aigusVus = son.aigus || 0;
     const aigus = Math.min(4, ((son.aigus || 0) - this.aigusVus) >>> 0);

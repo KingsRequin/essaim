@@ -1,10 +1,13 @@
 //! Son de Windows → atomiques lus par la boucle d'affichage. Capture (WASAPI loopback) et
 //! détection du kick viennent de la bibliothèque partagée `audio-commun` ; les attaques des
-//! aigus (charleston, cymbales) sont repérées ici (`Aigus`). Les résultats sont publiés après
-//! chaque paquet reçu (~10 ms), sans attendre l'image suivante.
+//! aigus (charleston, cymbales) sont repérées ici (`Aigus`). Le tempo est tiré des instants des
+//! kicks (`audio_commun::pulsation`, sans FFT), avec la phase du temps et le relais (musique sans
+//! kick depuis 2 s alors qu'un tempo stable était connu). Les résultats sont publiés après chaque paquet reçu
+//! (~10 ms), sans attendre l'image suivante.
 
-use audio_commun::capture::{self, Capture, Sink};
+use audio_commun::capture::{self, Capture, Sink, Sortie};
 use audio_commun::kick::Analyzer;
+use audio_commun::pulsation::Pulsation;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,6 +21,11 @@ pub struct AudioShared {
     min_gap: AtomicU32,
     aigus: AtomicU32,
     brillance: AtomicU32,
+    /// Tempo stable des kicks (f32, 0 = inconnu) et position dans le temps (0 à 1).
+    bpm: AtomicU32,
+    phase: AtomicU32,
+    /// La musique joue sans kick depuis 2 s alors qu'un tempo stable était connu.
+    relais: AtomicBool,
     /// Flux perdu (erreur, sortie changée) et pas encore rouvert.
     perdu: AtomicBool,
 }
@@ -31,6 +39,13 @@ pub struct AudioView {
     pub aigus: u32,
     /// Part d'aigus du moment, rapportée à son pic récent (0 à 1).
     pub brillance: f32,
+    /// Tempo des kicks, quand il est stable.
+    pub bpm: Option<f32>,
+    /// Position dans le temps en cours : 0 sur le temps, → 1 juste avant le suivant.
+    pub phase: f32,
+    /// Relais du tempo : la musique joue sans kick depuis 2 s (break, couplet sans grosse
+    /// caisse) alors qu'un tempo stable était connu.
+    pub relais: bool,
 }
 
 impl AudioShared {
@@ -43,6 +58,9 @@ impl AudioShared {
             pitch: f(&self.pitch),
             aigus: self.aigus.load(Ordering::Relaxed),
             brillance: f(&self.brillance),
+            bpm: Some(f(&self.bpm)).filter(|&b| b > 0.0),
+            phase: f(&self.phase),
+            relais: self.relais.load(Ordering::Relaxed),
         }
     }
     pub fn set_sensitivity(&self, s: f32) {
@@ -54,9 +72,10 @@ impl AudioShared {
     /// Capture arrêtée : niveaux à zéro (sinon basse, hauteur et brillance resteraient figées et
     /// la musique semblerait jouer). Les compteurs gardent leur valeur : ils ne reculent jamais.
     pub fn reset(&self) {
-        for a in [&self.bass, &self.pitch, &self.brillance] {
+        for a in [&self.bass, &self.pitch, &self.brillance, &self.bpm, &self.phase] {
             a.store(0f32.to_bits(), Ordering::Relaxed);
         }
+        self.relais.store(false, Ordering::Relaxed);
         self.perdu.store(false, Ordering::Relaxed);
     }
     /// Le flux est perdu et la capture réessaie (pas de sortie son, erreur de Windows).
@@ -76,14 +95,19 @@ fn fini(v: f32) -> f32 {
 /// Capture en cours ; l'arrêter = la `drop`.
 pub type AudioThread = Capture;
 
-pub fn start(shared: Arc<AudioShared>) -> std::io::Result<AudioThread> {
-    capture::start("essaim-audio", Kick { shared, an: None, aigus: None, base: (0, 0), propre: Vec::new() })
+/// Lance la capture de la sortie `sortie` (identifiant Windows ; vide = sortie par défaut).
+pub fn start(shared: Arc<AudioShared>, sortie: &str) -> std::io::Result<AudioThread> {
+    capture::start_sur("essaim-audio", Sortie::depuis_id(sortie), Kick::new(shared))
 }
+
+/// Sous ce niveau crête (−50 dBFS), un paquet compte comme silencieux pour le tempo.
+const AUDIBLE: f32 = 0.003;
 
 struct Kick {
     shared: Arc<AudioShared>,
     an: Option<Analyzer>,
     aigus: Option<Aigus>,
+    tempo: Pulsation,
     /// Compteurs (kicks, aigus) déjà publiés à l'ouverture du flux : l'analyse rouverte repart
     /// de 0, les compteurs publiés continuent (sinon l'affichage verrait un saut, donc de faux
     /// kicks).
@@ -93,6 +117,21 @@ struct Kick {
 }
 
 impl Kick {
+    fn new(shared: Arc<AudioShared>) -> Self {
+        Self { shared, an: None, aigus: None, tempo: Pulsation::new(), base: (0, 0), propre: Vec::new() }
+    }
+
+    /// Tempo : avancé et publié à chaque paquet (tempo, phase, relais).
+    fn suivre_tempo(&mut self, audible: bool) {
+        let Some(an) = &self.an else { return };
+        let t = an.t;
+        self.tempo.avancer(t, audible);
+        let sh = &self.shared;
+        sh.bpm.store(self.tempo.bpm().unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+        sh.phase.store(self.tempo.phase(t).unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+        sh.relais.store(self.tempo.relais(t), Ordering::Relaxed);
+    }
+
     fn publier(&self) {
         let sh = &self.shared;
         if let Some(an) = &self.an {
@@ -207,6 +246,8 @@ impl Sink for Kick {
         self.base = (self.shared.kicks.load(Ordering::Relaxed), self.shared.aigus.load(Ordering::Relaxed));
         self.an = Some(Analyzer::new(sample_rate));
         self.aigus = Some(Aigus::new(sample_rate));
+        // nouvelle horloge (l'analyse repart de 0) : tempo à retrouver
+        self.tempo = Pulsation::new();
         self.shared.perdu.store(false, Ordering::Relaxed);
     }
 
@@ -219,11 +260,17 @@ impl Sink for Kick {
             if gap > 0.0 {
                 an.min_gap_s = f64::from(gap);
             }
+            let avant = an.kicks;
             an.push(mono);
+            if an.kicks != avant {
+                self.tempo.kick(an.t);
+            }
         }
+        let audible = mono.iter().any(|x| x.abs() > AUDIBLE);
         if let Some(a) = &mut self.aigus {
             a.push(mono);
         }
+        self.suivre_tempo(audible);
         self.publier_aigus();
     }
 
@@ -234,6 +281,7 @@ impl Sink for Kick {
         if let Some(a) = &mut self.aigus {
             a.push_silence(frames);
         }
+        self.suivre_tempo(false);
         self.publier_aigus();
     }
 
@@ -246,6 +294,8 @@ impl Sink for Kick {
         let sh = &self.shared;
         sh.bass.store(0f32.to_bits(), Ordering::Relaxed);
         sh.brillance.store(0f32.to_bits(), Ordering::Relaxed);
+        sh.bpm.store(0f32.to_bits(), Ordering::Relaxed);
+        sh.relais.store(false, Ordering::Relaxed);
         sh.perdu.store(true, Ordering::Relaxed);
     }
 }
@@ -277,7 +327,7 @@ mod tests {
         assert_eq!(assainir(&abime, &mut propre), &[0.5, 0.0, 0.0, -0.5]);
         // passés dans la vraie analyse, les niveaux restent finis
         let shared = Arc::new(AudioShared::default());
-        let mut k = Kick { shared: shared.clone(), an: None, aigus: None, base: (0, 0), propre: Vec::new() };
+        let mut k = Kick::new(shared.clone());
         k.open(FS);
         let son: Vec<f32> = (0..4800).map(|i| if i % 7 == 0 { f32::NAN } else { (i as f32 * 0.05).sin() }).collect();
         k.samples(&son);
@@ -289,7 +339,7 @@ mod tests {
     #[test]
     fn les_compteurs_ne_reculent_pas_a_la_reouverture() {
         let shared = Arc::new(AudioShared::default());
-        let mut k = Kick { shared: shared.clone(), an: None, aigus: None, base: (0, 0), propre: Vec::new() };
+        let mut k = Kick::new(shared.clone());
         k.open(FS);
         // l'analyse avait compté 7 kicks et 3 attaques d'aigus avant la perte du flux
         k.an.as_mut().unwrap().kicks = 7;
@@ -311,6 +361,99 @@ mod tests {
     }
 
     const FS: u32 = 48000;
+
+    /// Morceau synthétique : charleston en croches (au tempo `bpm`) sur un léger bruit, et un
+    /// kick (sinus qui descend de 110 à 50 Hz) à chaque instant de `kicks` (secondes).
+    fn morceau(secs: f64, bpm: f64, kicks: &[f64]) -> Vec<f32> {
+        let mut g = 0x2545_f491_4f6c_dd1du64;
+        let n = (secs * f64::from(FS)) as usize;
+        let croche = 30.0 / bpm;
+        let mut son: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f64 / f64::from(FS);
+                let th = t % croche;
+                let mut v = 0.01 * bruit(&mut g);
+                if th < 0.05 {
+                    v += 0.12 * bruit(&mut g) * (-th * 80.0).exp() as f32;
+                }
+                v
+            })
+            .collect();
+        for &k in kicks {
+            let debut = (k * f64::from(FS)) as usize;
+            for (j, v) in son.iter_mut().skip(debut).take(FS as usize / 4).enumerate() {
+                let b = j as f64 / f64::from(FS);
+                let phase = 50.0 * b + 60.0 * (1.0 - (-b * 30.0).exp()) / 30.0;
+                *v += ((std::f64::consts::TAU * phase).sin() * 0.9 * (-b * 12.0).exp()) as f32;
+            }
+        }
+        son
+    }
+
+    /// Passe `son` dans la vraie chaîne (paquets de 10 ms, comme WASAPI) et rend la vue finale.
+    fn ecouter(k: &mut Kick, shared: &AudioShared, son: &[f32]) -> super::AudioView {
+        for paquet in son.chunks(FS as usize / 100) {
+            k.samples(paquet);
+            k.tick(std::time::Instant::now());
+        }
+        shared.view()
+    }
+
+    #[test]
+    fn tempo_trouve_sur_des_kicks_reguliers() {
+        for bpm in [120.0, 128.0, 90.0] {
+            let shared = Arc::new(AudioShared::default());
+            let mut k = Kick::new(shared.clone());
+            k.open(FS);
+            let kicks: Vec<f64> = (0..).map(|i| 0.3 + i as f64 * 60.0 / bpm).take_while(|&t| t < 11.5).collect();
+            let v = ecouter(&mut k, &shared, &morceau(12.0, bpm, &kicks));
+            let trouve = v.bpm.unwrap_or_else(|| panic!("{bpm} BPM : aucun tempo ({} kicks)", v.kicks));
+            assert!((f64::from(trouve) - bpm).abs() <= 1.0, "{bpm} BPM → {trouve}");
+            assert!(!v.relais, "kicks en cours : pas de relais");
+            // break : la musique continue sans kick → relais au même tempo
+            let v = ecouter(&mut k, &shared, &morceau(4.0, bpm, &[]));
+            assert!(v.relais && v.bpm == Some(trouve), "{bpm} BPM : relais {} tempo {:?}", v.relais, v.bpm);
+            // silence (paquets de 10 ms) : plus de relais après 0,3 s, tempo oublié après 3 s
+            for _ in 0..50 {
+                k.silence(FS as usize / 100);
+            }
+            assert!(!shared.view().relais);
+            for _ in 0..300 {
+                k.silence(FS as usize / 100);
+            }
+            assert_eq!(shared.view().bpm, None);
+        }
+    }
+
+    #[test]
+    fn aucun_tempo_sur_des_kicks_irreguliers_ni_en_silence() {
+        let shared = Arc::new(AudioShared::default());
+        let mut k = Kick::new(shared.clone());
+        k.open(FS);
+        let mut g = 0x9e37_79b9_7f4a_7c15u64;
+        let mut kicks = Vec::new();
+        let mut t = 0.3;
+        while t < 15.0 {
+            kicks.push(t);
+            t += 0.3 + 0.35 * (f64::from(bruit(&mut g)) + 1.0);
+        }
+        for paquet in morceau(15.5, 120.0, &kicks).chunks(FS as usize / 100) {
+            k.samples(paquet);
+            k.tick(std::time::Instant::now());
+            assert_eq!(shared.view().bpm, None, "faux tempo sur des kicks irréguliers");
+        }
+        assert!(shared.view().kicks >= 10, "{} kicks", shared.view().kicks);
+        // silence seul
+        let shared = Arc::new(AudioShared::default());
+        let mut k = Kick::new(shared.clone());
+        k.open(FS);
+        for _ in 0..200 {
+            k.samples(&[0.0; 480]);
+            k.silence(480);
+        }
+        let v = shared.view();
+        assert_eq!((v.bpm, v.relais), (None, false));
+    }
 
     fn bruit(graine: &mut u64) -> f32 {
         *graine ^= *graine << 13;

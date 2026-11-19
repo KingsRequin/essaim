@@ -281,6 +281,13 @@ pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
     }
 }
 
+/// Éclat de la pulsation au tempo pendant un relais (break sans kick) : `FORCE_PULSATION` sur
+/// le temps, retombée rapide ensuite (comme un petit kick). Reproduit dans `ui/apercu.js`.
+const FORCE_PULSATION: f32 = 0.35;
+fn pulsation_tempo(phase: f32) -> f32 {
+    FORCE_PULSATION * (1.0 - phase.clamp(0.0, 1.0)).powi(4)
+}
+
 /// Nouveaux événements depuis le compteur `vu` (kicks, aigus), au plus 4 par image. Un compteur
 /// qui recule (analyse rouverte) n'en compte aucun, au lieu d'un saut énorme.
 fn nouveaux(vu: Option<u32>, compteur: u32) -> u32 {
@@ -441,6 +448,10 @@ impl Swarm {
             }
         }
         self.env *= (-dt * 9.0).exp();
+        // relais du tempo (break sans kick) : l'éclat pulse doucement sur chaque temps
+        if cfg.audio.pulsation_tempo && au.relais {
+            self.env = self.env.max(pulsation_tempo(au.phase));
+        }
 
         // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
         let nouveaux = nouveaux(self.aigus_vus, au.aigus);
@@ -871,6 +882,27 @@ mod tests {
         // les satellites disparaissent après leur durée de vie
         s.update(10.0, 0.016, (100.0, 100.0), au, &cfg, 1.0);
         assert!(s.sats.is_empty());
+    }
+
+    #[test]
+    fn relais_du_tempo_pulse_doucement_sans_toucher_au_sens() {
+        let mut cfg = Config::default();
+        let mut s = Swarm::new();
+        let au = AudioView { relais: true, phase: 0.0, bpm: Some(128.0), ..Default::default() };
+        s.update(0.0, 0.016, (100.0, 100.0), AudioView::default(), &cfg, 1.0);
+        let dir = s.dir;
+        s.update(0.016, 0.016, (100.0, 100.0), au, &cfg, 1.0);
+        assert!((s.env - FORCE_PULSATION).abs() < 1e-4, "sur le temps : {}", s.env);
+        assert_eq!((s.dir, s.sats.len()), (dir, 0), "un temps relais n'est pas un kick");
+        // milieu du temps : presque retombé
+        s.env = 0.0;
+        s.update(0.032, 0.016, (100.0, 100.0), AudioView { phase: 0.5, ..au }, &cfg, 1.0);
+        assert!(s.env < 0.03, "{}", s.env);
+        // réglage coupé : rien
+        cfg.audio.pulsation_tempo = false;
+        s.env = 0.0;
+        s.update(0.048, 0.016, (100.0, 100.0), au, &cfg, 1.0);
+        assert_eq!(s.env, 0.0);
     }
 
     #[test]

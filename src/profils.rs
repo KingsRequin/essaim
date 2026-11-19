@@ -3,7 +3,8 @@
 //! Préréglages intégrés (non modifiables, chacun refaisable à la main dans les réglages) et
 //! profils de l'utilisateur, un fichier `%APPDATA%\Essaim\profils\<nom>.toml` chacun.
 //! Appliquer un profil réécrit ses réglages dans `config.toml` (commentaires gardés). Les choix
-//! propres à la machine n'en font pas partie : `[rendu]` et `[souris] avec_preset`.
+//! propres à la machine n'en font pas partie : `[rendu]`, `[souris] avec_preset` et
+//! `[audio] sortie`.
 
 use crate::config::{self, Config, Forme};
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ const SECTIONS: [&str; 12] =
 
 /// Le réglage `[section] key` fait-il partie des profils ?
 pub fn in_profile(section: &str, key: &str) -> bool {
-    SECTIONS.contains(&section) && (section, key) != ("souris", "avec_preset")
+    SECTIONS.contains(&section) && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie"))
 }
 
 pub struct Profile {
@@ -471,7 +472,21 @@ mod tests {
         b.orbite.rayon = 40.0;
         b.essaim.maximum = 3;
         b.rendu.cadence = 60; // hors profil
+        b.audio.sortie = "{casque}".into(); // propre à la machine : hors profil
         assert_eq!(ecarts(&a, &b), 2);
+        b.audio.pulsation_tempo = false; // dans les profils
+        assert_eq!(ecarts(&a, &b), 3);
+    }
+
+    #[test]
+    fn la_sortie_son_reste_hors_des_presets() {
+        assert!(!in_profile("audio", "sortie"));
+        assert!(in_profile("audio", "pulsation_tempo"));
+        let mut cfg = Config::default();
+        cfg.audio.sortie = "{casque}".into();
+        let texte = config::text_with_keys("", &cfg, in_profile).unwrap();
+        assert!(!texte.contains("sortie"), "{texte}");
+        assert!(texte.contains("pulsation_tempo"), "{texte}");
     }
 
     #[test]
