@@ -14,6 +14,8 @@ const FINESSE_COMETES = [0.045, 4];
 const FINESSE_SATELLITES = [0.1, 8];
 const TRAIL_CHUNK = 4;
 const MAX_PARTICULES = 400;
+// Onde d'un changement de piste : taille (px à 100 %) et durée (s), comme ONDE_PISTE.
+const ONDE_PISTE = [90, 0.8];
 
 function hsl(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
@@ -336,6 +338,20 @@ class Apercu {
         this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.45, 0.8), taille: entre(1.2, 2.4) * S, genre: "etincelle" });
       }
     }
+  }
+
+  // Rafale d'un changement de piste au centre, comme Swarm::rafale : l'éclat d'un kick, deux fois
+  // les satellites d'un kick fort (dans la limite du maximum) et une grande onde.
+  rafale() {
+    if (!this.reglages) return;
+    const e = this.reglages.essaim, S = this.echelle || 1, t = this.t;
+    const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+    this.env = 1;
+    const n = 2 * Math.max(2, e.par_kick_min, e.par_kick_max);
+    for (let j = 0; j < n && this.sats.length < e.maximum; j++) {
+      this.sats.push({ a: entre(0, TAU), r: entre(0.75, SAT_R_MAX), mul: entre(0.7, 1.3), ne: t, trainee: [] });
+    }
+    this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: ONDE_PISTE[1], taille: ONDE_PISTE[0] * S, genre: "onde" });
   }
 
   // Dessin, dans l'ordre de Swarm::draw ; le pointeur (absent du vrai essaim : c'est celui de

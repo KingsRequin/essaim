@@ -25,6 +25,21 @@ pub struct Config {
     pub raccourcis: Raccourcis,
     pub bibliotheque: Bibliotheque,
     pub mise_a_jour: MiseAJour,
+    pub musique: Musique,
+}
+
+/// Réactions au morceau en cours (API média de Windows, `media.rs`).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Musique {
+    /// Rafale (satellites, éclat et grande onde) quand la piste change pendant la lecture.
+    pub rafale_piste: bool,
+}
+
+impl Default for Musique {
+    fn default() -> Self {
+        Self { rafale_piste: true }
+    }
 }
 
 /// Étincelles sur les attaques des aigus (charleston, cymbales).
@@ -320,6 +335,9 @@ pub struct Couleur {
     pub site: bool,
     /// La teinte glisse avec la musique : plus elle est forte et brillante, plus elle s'écarte.
     pub musique: bool,
+    /// Prend la teinte dominante de la pochette du morceau qui joue (prioritaire sur
+    /// `application`, `site` et Prisme).
+    pub pochette: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -356,7 +374,7 @@ impl Default for Essaim {
 }
 impl Default for Couleur {
     fn default() -> Self {
-        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false, site: false, musique: false }
+        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false, site: false, musique: false, pochette: false }
     }
 }
 impl Default for Fissures {
@@ -406,6 +424,7 @@ synchro_prisme = true   # prend la teinte de l'éclairage de Prisme quand il tou
 application = false     # prend la teinte de l'icône de l'application au premier plan
 site = false            # dans un navigateur, prend la couleur du haut de la page affichée
 musique = false         # la teinte glisse avec l'intensité et la brillance de la musique
+pochette = false        # prend la teinte de la pochette du morceau qui joue (avant appli, site et Prisme)
 
 [fissures]
 actives = true
@@ -424,6 +443,9 @@ taille = 1.0
 [sillage]
 actif = false           # poussière derrière la souris quand elle file vite
 densite = 5             # 1 à 10
+
+[musique]
+rafale_piste = true     # rafale de satellites et grande onde quand la piste change pendant la lecture
 
 [audio]
 actif = true

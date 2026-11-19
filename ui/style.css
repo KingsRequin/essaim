@@ -440,3 +440,5 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .etat-essaim { align-items: flex-start; }
 #etat-essaim { display: flex; flex-direction: column; white-space: nowrap; }
 #etat-essaim[data-etat="erreur"] { color: var(--signal-texte); }
+/* Morceau en cours (API média de Windows) : discret, tronqué. */
+#etat-essaim .morceau { max-width: calc(var(--largeur-jauge) * 2); overflow: hidden; text-overflow: ellipsis; color: var(--encre-2); font-weight: 400; letter-spacing: 0; text-transform: none; }
