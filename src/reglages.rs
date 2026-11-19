@@ -136,6 +136,8 @@ enum Demande {
     EnregistrerGif { nom: String, donnees: String },
     /// Sorties son de Windows, pour le choix de la sortie écoutée (`[audio] sortie`).
     Sorties,
+    /// Ouvre la fenêtre pour le stream (`stream.rs`).
+    Stream,
 }
 
 struct Fenetre {
@@ -407,6 +409,11 @@ impl Fenetre {
             Demande::Pause => unsafe {
                 if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
                     let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_PAUSE), LPARAM(0));
+                }
+            },
+            Demande::Stream => unsafe {
+                if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
+                    let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_STREAM), LPARAM(0));
                 }
             },
             Demande::Demarrage { actif } => {

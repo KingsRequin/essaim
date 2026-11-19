@@ -5,8 +5,9 @@
 //! l'appli ne dessine que ce qui l'entoure.
 //!
 //! Options : `--reglages` ouvre la fenêtre des réglages (de l'instance en cours s'il y en a
-//! une) ; `--quitter` ferme l'instance en cours ; `--restaurer-bordure` rend sa couleur à la
-//! fenêtre restée colorée (fermeture, plantage, pause et plein écran le font tout seuls).
+//! une) ; `--stream` ouvre la fenêtre pour le stream ; `--quitter` ferme l'instance en cours ;
+//! `--restaurer-bordure` rend sa couleur à la fenêtre restée colorée (fermeture, plantage, pause
+//! et plein écran le font tout seuls).
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
@@ -31,6 +32,7 @@ mod profils;
 mod reglages;
 mod render;
 mod souris;
+mod stream;
 mod win;
 
 use render::{Crack, Rng, Swarm};
@@ -132,11 +134,16 @@ fn main() {
         return;
     }
     let open_settings = args.iter().any(|a| a == "--reglages");
-    if open_settings {
+    let open_stream = args.iter().any(|a| a == "--stream");
+    if open_settings || open_stream {
         // instance en cours : c'est elle qui ouvre sa fenêtre
         if let Some(h) = fenetre_instance() {
             unsafe {
-                let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(win::CMD_CONFIG), LPARAM(0));
+                for (voulu, cmd) in [(open_settings, win::CMD_CONFIG), (open_stream, win::CMD_STREAM)] {
+                    if voulu {
+                        let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(cmd), LPARAM(0));
+                    }
+                }
             }
             return;
         }
@@ -176,7 +183,7 @@ fn main() {
         default_hook(info);
     }));
     log::info!("démarrage d'Essaim {}", env!("CARGO_PKG_VERSION"));
-    let relancer = run(open_settings).unwrap_or_else(|e| {
+    let relancer = run(open_settings, open_stream).unwrap_or_else(|e| {
         log::error!("arrêt sur erreur : {e:#}");
         false
     });
@@ -207,14 +214,6 @@ fn bouton(secondaire: bool) -> bool {
     }
 }
 
-/// Mode sans flashs voulu : selon le réglage, ou selon Windows (animations réduites).
-fn sans_flashs(mode: config::SansFlashs) -> bool {
-    match mode {
-        config::SansFlashs::Oui => true,
-        config::SansFlashs::Non => false,
-        config::SansFlashs::Auto => !win::animations_windows(),
-    }
-}
 
 /// Fenêtre des réglages ouverte (elle montre le son en direct : la capture doit continuer).
 fn reglages_ouverts() -> bool {
@@ -278,7 +277,7 @@ impl Son {
 }
 
 /// Boucle de l'appli. Renvoie vrai s'il faut relancer Essaim (mise à jour prête).
-fn run(open_settings: bool) -> anyhow::Result<bool> {
+fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     // premier lancement (aucun réglage encore) : la fenêtre des réglages et son accueil
     let premier = !config::path().exists();
     let mut conf = config::Watched::load();
@@ -297,6 +296,9 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut automatique = auto::Auto::default();
     if open_settings || premier {
         reglages::open(shared.clone());
+    }
+    if open_stream {
+        stream::ouvrir(shared.clone());
     }
     // interface locale pour Horizon, et synchro de teinte avec Prisme
     let ipc_state = Arc::new(ipc::Shared::default());
@@ -336,7 +338,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut droit_avant = false;
     // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) et cadre de la fenêtre
     // au premier plan (rebonds des particules, relu toutes les 250 ms)
-    let mut doux = sans_flashs(conf.cfg.rendu.sans_flashs);
+    let mut doux = win::sans_flashs(conf.cfg.rendu.sans_flashs);
     let mut murs: Option<(f32, f32, f32, f32)> = None;
     let mut last_state = "";
     let mut cleared = false;
@@ -371,6 +373,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
                 log::info!("{}", if user_paused { "pause" } else { "reprise" });
             }
             win::CMD_CONFIG => reglages::open(shared.clone()),
+            win::CMD_STREAM => stream::ouvrir(shared.clone()),
             win::CMD_PROJECTEUR => effets.demander_projecteur(),
             c @ (win::CMD_SUIVANT | win::CMD_PRECEDENT) => {
                 let pas = if c == win::CMD_SUIVANT { 1 } else { -1 };
@@ -437,7 +440,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         let timed = now >= next_conf;
         if timed {
             next_conf = now + Duration::from_secs(1);
-            let d = sans_flashs(conf.cfg.rendu.sans_flashs);
+            let d = win::sans_flashs(conf.cfg.rendu.sans_flashs);
             if d != doux {
                 doux = d;
                 log::info!("{}", if d { "mode sans flashs" } else { "fin du mode sans flashs" });
@@ -464,8 +467,9 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             charge::publier_raison(&raison);
             raison_publiee = raison;
         }
-        // son : coupé en pause et en plein écran (sauf fenêtre des réglages ouverte, qui le montre)
-        let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts());
+        // son : coupé en pause et en plein écran (sauf fenêtre des réglages ou du stream ouverte,
+        // qui le montrent)
+        let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts() || stream::ouverte());
         son.regler(son_voulu, &conf.cfg.audio.sortie, &shared, now);
         automatique.tick(&conf.cfg, now, shared.view().bpm);
         let cfg = &conf.cfg;

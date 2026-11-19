@@ -259,7 +259,8 @@ impl Surface {
 }
 
 /// RGBA → BGRA, pixel par pixel sur des mots de 32 bits (le compilateur le vectorise).
-fn rgba_vers_bgra(dst: &mut [u8], src: &[u8]) {
+/// Pixels RGBA (tiny-skia) → BGRA (GDI).
+pub fn rgba_vers_bgra(dst: &mut [u8], src: &[u8]) {
     for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
         let p = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
         let q = (p & 0xFF00_FF00) | (p >> 16 & 0xFF) | (p & 0xFF) << 16;
@@ -389,6 +390,15 @@ pub fn cadre_premier_plan() -> Option<(f32, f32, f32, f32)> {
     }
 }
 
+/// Mode sans flashs voulu : selon le réglage, ou selon Windows (animations réduites).
+pub fn sans_flashs(mode: crate::config::SansFlashs) -> bool {
+    match mode {
+        crate::config::SansFlashs::Oui => true,
+        crate::config::SansFlashs::Non => false,
+        crate::config::SansFlashs::Auto => !animations_windows(),
+    }
+}
+
 /// Windows affiche-t-il les animations (Accessibilité › Effets visuels › Effets d'animation) ?
 /// Non : l'utilisateur a demandé de les réduire.
 pub fn animations_windows() -> bool {
@@ -470,6 +480,8 @@ pub const CMD_PRECEDENT: usize = 5;
 pub const CMD_REDEMARRER: usize = 6;
 /// Projecteur « retrouver la souris » (Ctrl+Alt+F).
 pub const CMD_PROJECTEUR: usize = 7;
+/// Fenêtre pour le stream (`stream.rs`).
+pub const CMD_STREAM: usize = 8;
 /// Presets du menu : `CMD_PRESET + rang` dans `profils::list()`.
 pub const CMD_PRESET: usize = 100;
 const WM_TRAY: u32 = WM_APP + 1;
@@ -634,6 +646,7 @@ unsafe fn menu(hwnd: HWND) {
     unsafe {
         let _ = AppendMenuW(menu, MF_STRING, CMD_PAUSE, PCWSTR(pause.as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG, w!("Réglages…"));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_STREAM, w!("Fenêtre pour le stream"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         // presets : celui en place coché
         if let Ok(sous) = CreatePopupMenu() {

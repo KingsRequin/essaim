@@ -836,6 +836,12 @@ const AVANCES = [
     bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
     note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
   },
+  {
+    choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",
+    valeurs: [["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
+    note: "La fenêtre pour le stream montre l'essaim au centre, sur ce fond uni : dans OBS, ajoute-la comme « Capture de fenêtre » et retire le fond avec un filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
+  },
+  { stream: true },
   { demarrage: true },
   { accueil: true },
 ];
@@ -1055,7 +1061,7 @@ function construireReglages() {
       avance.append(l);
     } else if (def.sorties) {
       avance.append(rangeeSorties());
-    } else if (def.bascule || def.demarrage || def.accueil) {
+    } else if (def.bascule || def.demarrage || def.accueil || def.stream) {
       const l = el("div", "ligne-avance");
       if (def.bascule) {
         const tete = el("div", "tete");
@@ -1073,6 +1079,10 @@ function construireReglages() {
           decrits.push(note.id);
         }
         if (decrits.length) decrire(b, ...decrits);
+      } else if (def.stream) {
+        const b = el("button", "puce debut", "Ouvrir la fenêtre pour le stream");
+        b.addEventListener("click", () => envoyer({ cmd: "stream" }));
+        l.append(b);
       } else if (def.demarrage) {
         const b = el("button", "puce debut", "Démarrer Essaim avec Windows");
         b.id = "demarrage";

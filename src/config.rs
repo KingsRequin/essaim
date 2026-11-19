@@ -30,6 +30,26 @@ pub struct Config {
     pub mise_a_jour: MiseAJour,
     pub musique: Musique,
     pub pause: Pause,
+    pub stream: Stream,
+}
+
+/// Fenêtre pour le stream (`stream.rs`), propre à la machine : hors presets.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Stream {
+    /// Fond uni de la fenêtre, à retirer dans OBS (incrustation chroma).
+    pub fond: Fond,
+}
+
+/// Fond de la fenêtre pour le stream.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Fond {
+    #[default]
+    Vert,
+    Bleu,
+    Magenta,
+    Noir,
 }
 
 /// Réactions à la musique au-delà du kick : morceau en cours (API média de Windows,
@@ -705,6 +725,9 @@ auto = true             # cherche les nouvelles versions sur GitHub, les téléc
 ne_pas_deranger = true  # pause quand Windows ne veut pas être dérangé (plein écran, présentation)
 batterie = "reduire"    # sur batterie : "rien", "reduire" (30 images/s au plus) ou "pause"
 applis = []             # pause quand l'une d'elles est au premier plan : ["obs64.exe", "zoom.exe"]
+
+[stream]
+fond = "vert"           # fond de la fenêtre pour le stream : "vert", "bleu", "magenta" ou "noir" ; hors presets
 
 [bordure]
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim
