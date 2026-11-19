@@ -5,7 +5,10 @@
 //! seule fenêtre colorée à la fois ; l'ancienne retrouve la couleur du système dès qu'elle perd
 //! le premier plan. `DwmSetWindowAttribute` n'est appelé que si la couleur (quantifiée) change,
 //! 60 fois par seconde au plus. La fenêtre colorée est notée dans `bordure.hwnd` : si Essaim est
-//! tué, le lancement suivant (ou `--restaurer-bordure`) lui rend sa couleur.
+//! tué, le lancement suivant (ou `--restaurer-bordure`) lui rend sa couleur. Le témoin n'est
+//! réécrit que pour une nouvelle fenêtre colorée, et effacé seulement à la pause, au plein écran
+//! et à la fermeture : entre deux fenêtres, il peut désigner une fenêtre déjà rendue (la lui
+//! rendre encore est sans effet).
 
 use crate::config::Bordure;
 use std::collections::HashSet;
@@ -123,6 +126,8 @@ pub struct Border {
     kick_at: Option<Instant>,
     /// Fenêtres qui refusent la couleur (administrateur) : notées une fois au journal.
     refused: HashSet<isize>,
+    /// Fenêtre notée dans le témoin `bordure.hwnd`.
+    marque: Option<isize>,
 }
 
 impl Border {
@@ -158,7 +163,7 @@ impl Border {
             }
         };
         if self.colored.is_some_and(|(h, _)| h != id || !ok) {
-            self.reset();
+            self.release();
         }
         if !ok {
             return;
@@ -173,7 +178,10 @@ impl Border {
             Ok(()) => {
                 if self.colored.is_none() {
                     COLORED.store(id, Ordering::Relaxed);
-                    let _ = std::fs::write(marker(), id.to_string());
+                    if self.marque != Some(id) {
+                        let _ = std::fs::write(marker(), id.to_string());
+                        self.marque = Some(id);
+                    }
                 }
                 self.colored = Some((id, c));
             }
@@ -189,12 +197,20 @@ impl Border {
         }
     }
 
-    /// Rend sa couleur système à la fenêtre colorée.
+    /// Rend sa couleur système à la fenêtre colorée et efface le témoin (pause, plein écran,
+    /// fermeture).
     pub fn reset(&mut self) {
+        self.release();
+        if self.marque.take().is_some() {
+            let _ = std::fs::remove_file(marker());
+        }
+    }
+
+    /// Rend sa couleur système à la fenêtre colorée (elle perd le premier plan) ; le témoin reste.
+    fn release(&mut self) {
         if let Some((h, _)) = self.colored.take() {
             let _ = set_color(HWND(h as *mut c_void), COLOR_DEFAULT);
             COLORED.store(0, Ordering::Relaxed);
-            let _ = std::fs::remove_file(marker());
         }
     }
 }
@@ -314,9 +330,11 @@ mod tests {
             b.tick_for(true, &cfg, (40, 200, (i % 2 * 100) as u8), 1, tk + Duration::from_secs(5), || pad);
         }
         println!("changement de couleur : {:.1} µs", tc.elapsed().as_secs_f64() * 1e6 / n as f64);
-        // la fenêtre perd le premier plan : couleur du système rendue
+        // la fenêtre perd le premier plan : couleur du système rendue (le témoin reste)
         b.tick_for(true, &cfg, rgb, 1, tk + Duration::from_secs(6), HWND::default);
-        assert!(b.colored.is_none() && !marker().exists());
+        assert!(b.colored.is_none());
+        b.reset();
+        assert!(!marker().exists());
         wait();
         let after = edge_pixel(pad);
         println!("avant {before:06X}, repos {rest:06X} (envoyé {:06X}), après {after:06X}", colorref(rgb, 0.5));
