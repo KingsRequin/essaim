@@ -3,9 +3,10 @@
 #   - essaim.exe : l'appli, prête à lancer (c'est ce fichier que les mises à jour automatiques
 #     téléchargent : son nom ne doit pas changer) ;
 #   - curseur-Dotter.zip : le jeu de curseurs conseillé.
-# Le brouillon n'est proposé à personne : l'auteur le signe puis le publie depuis son PC
-# (`scripts/signer-version.ps1`, clé jamais présente sur GitHub). Les mises à jour automatiques
-# refusent un exécutable sans signature valide.
+# Le brouillon n'est proposé à personne : depuis son PC, l'auteur recompile le même commit, signe
+# cet exe-là (clé jamais présente sur GitHub), le dépose à la place de celui-ci et publie
+# (`scripts/signer-version.ps1`). Les mises à jour automatiques refusent un exécutable sans
+# signature valide.
 #
 # Sécurité : la compilation (code de toutes les dépendances : build.rs, macros) tourne sans
 # aucun droit d'écriture ni jeton conservé ; seule l'étape de publication, qui ne compile rien,

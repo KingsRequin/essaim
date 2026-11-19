@@ -184,7 +184,9 @@ Publier une version :
    la version **en brouillon** avec `essaim.exe` (nom attendu par les mises à jour) et
    `curseur-Dotter.zip` ;
 3. sur le PC de l'auteur, `pwsh scripts\signer-version.ps1` vérifie que le tag de GitHub est
-   le commit local, signe l'exe du brouillon, y dépose `essaim.exe.sig` et publie la version.
+   le commit local, recompile ce commit dans une copie propre (sans le `[patch]` local), signe
+   cet exe et le dépose à la place de celui du brouillon avec `essaim.exe.sig`, puis publie.
+   L'exe compilé par GitHub ne sert qu'à valider la version : il n'est jamais signé.
 
 Clés (`scripts\creer-cles-signature.ps1`, une seule fois) : la principale est dans
 `%USERPROFILE%\.essaim-signature\principale.cle`, chiffrée par DPAPI pour la session Windows de
