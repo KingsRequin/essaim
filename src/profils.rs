@@ -94,7 +94,39 @@ fn builtins() -> Vec<Profile> {
             c.essaim.maximum = 0;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.synchro_prisme) = (215.0, 60.0, false);
         }),
+        // un preset de base pour chacune des autres formes du trajet
+        forme("Ellipse", Forme::Ellipse, 2, 2.2, 160.0),
+        forme("Carré", Forme::Carre, 4, 1.8, 205.0),
+        forme("Pentagone", Forme::Pentagone, 5, 1.6, 95.0),
+        forme("Étoile", Forme::Etoile, 2, 1.4, 50.0),
+        forme("Fleur", Forme::Fleur, 5, 1.5, 300.0),
+        forme("Trèfle", Forme::Trefle, 3, 1.7, 130.0),
+        forme("Cœur", Forme::Coeur, 2, 1.5, 350.0),
+        forme("Lissajous", Forme::Lissajous, 3, 1.3, 240.0),
+        forme("Astroïde", Forme::Astroide, 4, 1.6, 275.0),
+        // les réactions à la musique et les couleurs en plus
+        make("Constellation", |c| {
+            (c.orbite.nombre, c.orbite.vitesse_base) = (3, 2.0);
+            (c.essaim.fixes, c.essaim.maximum, c.essaim.constellation) = (12, 12, true);
+            (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.palette, c.couleur.ecart_palette, c.couleur.synchro_prisme) = (200.0, 15.0, 2, 150.0, false);
+        }),
+        make("Festival", |c| {
+            (c.orbite.nombre, c.orbite.rayon, c.orbite.inertie) = (3, 26.0, 0.4);
+            (c.essaim.maximum, c.essaim.par_kick_max) = (30, 4);
+            (c.musique.contretemps, c.musique.stereo) = (true, 0.6);
+            (c.clic.eclats, c.couleur.palette, c.couleur.ecart_palette, c.couleur.vitesse_teinte) = (true, 3, 120.0, 40.0);
+        }),
     ]
+}
+
+/// Preset de base d'une forme du trajet : `nombre` comètes, vitesse de rotation (radians/s),
+/// teinte fixe (la synchro Prisme la remplacerait), sans satellites.
+fn forme(nom: &str, forme: Forme, nombre: u32, vitesse: f32, teinte: f32) -> Profile {
+    let mut c = Config::default();
+    (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (forme, nombre, vitesse);
+    c.essaim.maximum = 0;
+    (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (teinte, 0.0, 40.0, false);
+    Profile { name: nom.to_owned(), builtin: true, cfg: c, date: None }
 }
 
 /// Préréglages puis profils de l'utilisateur (ordre alphabétique).
