@@ -12,7 +12,10 @@
   <header class="entete">
     <h1 class="t-affiche">ESSAIM</h1>
     <div class="entete-droite">
-      <button class="puce petite" id="pause" aria-pressed="false" title="Met l'essaim en pause (Ctrl+P)">Pause</button>
+      <div class="pile serree etat-essaim">
+        <button class="puce petite" id="pause" aria-pressed="false" title="Met l'essaim en pause (Ctrl+P)">Pause</button>
+        <span class="t-label" id="etat-essaim" role="status" hidden></span>
+      </div>
       <div class="sonde silence" id="sonde" title="Ce que l'essaim entend du son de Windows">
         <span class="kick t-label"><span class="temoin" id="temoin"></span>Kick</span>
         <span class="kick t-label"><span class="temoin" id="temoin-aigus"></span>Aigus</span>
@@ -30,29 +33,29 @@
 
   <section class="vue" id="vue-presets" role="tabpanel" aria-labelledby="onglet-presets">
     <aside class="colonne">
-      <label style="display: contents"><span class="t-label">Recherche</span>
+      <label class="contenu"><span class="t-label">Recherche</span>
         <input class="champ" id="recherche" type="search" placeholder="Nom, @auteur…" autocomplete="off" spellcheck="false">
       </label>
       <div>
         <div class="t-label">Source</div>
-        <div id="sources" style="margin-top: 6px"></div>
+        <div id="sources" class="haut-2"></div>
       </div>
       <div>
         <div class="t-label">Aperçus animés</div>
-        <div class="groupe-puces" id="modes" style="margin-top: 8px"></div>
-        <p class="t-petit" id="mode-aide" style="margin: 8px 0 0"></p>
+        <div class="groupe-puces haut-2" id="modes"></div>
+        <p class="t-petit haut-2" id="mode-aide"></p>
       </div>
       <div>
         <div class="t-label">Forme</div>
-        <div class="groupe-puces" id="filtre-formes" style="margin-top: 8px"></div>
+        <div class="groupe-puces haut-2" id="filtre-formes"></div>
       </div>
       <div>
         <div class="t-label">Ordre</div>
-        <div class="groupe-puces" id="ordres" style="margin-top: 8px"></div>
+        <div class="groupe-puces haut-2" id="ordres"></div>
       </div>
-      <div style="display: flex; flex-direction: column; gap: 8px">
-        <button class="puce" id="importer" style="align-self: flex-start">Importer un preset…</button>
-        <p class="t-petit" style="margin: 0">ou glisse un fichier .toml sur la fenêtre. Clavier : / pour chercher, flèches pour parcourir, Entrée pour appliquer, Ctrl+Z pour annuler.</p>
+      <div class="pile">
+        <button class="puce debut" id="importer">Importer un preset…</button>
+        <p class="t-petit sans-marge">ou glisse un fichier .toml sur la fenêtre. Clavier : / pour chercher, flèches pour parcourir, Entrée pour appliquer, Ctrl+Z pour annuler.</p>
       </div>
     </aside>
     <div class="principal">
@@ -73,11 +76,12 @@
   </section>
 
   <section class="vue" id="vue-reglages" role="tabpanel" aria-labelledby="onglet-reglages" hidden>
-    <div class="colonne" style="width: 380px">
-      <canvas class="scene" id="grand-apercu" style="aspect-ratio: 1; flex-shrink: 0"></canvas>
-      <div style="display: flex; flex-direction: column; gap: 6px">
+    <div class="colonne large">
+      <canvas class="scene carree" id="grand-apercu"></canvas>
+      <div class="pile">
         <span class="t-titre" id="nom-actif"></span>
-        <span class="t-petit">Aperçu en direct, calculé comme l'essaim autour de ton pointeur.</span>
+        <span class="t-petit">Aperçu en direct, calculé comme l'essaim autour de ton pointeur (un clic : l'effet du clic ; la souris qui file : le sillage).</span>
+        <button class="puce debut" data-lecture aria-pressed="false" title="Windows demande moins d'animations : les grands aperçus sont à l'arrêt" hidden>Lecture</button>
       </div>
       <div class="puissance" id="puissance" data-niveau="faible">
         <div class="ligne-haut"><span class="t-label">Puissance utilisée</span><span class="niveau" id="puissance-niveau">—</span></div>
@@ -85,8 +89,8 @@
         <p class="note" id="puissance-detail">Mesure en cours…</p>
         <p class="note">Les dix cases à côté de chaque réglage notent, de 1 à 10, son impact sur cette puissance (1 : presque rien, 10 : très lourd).</p>
       </div>
-      <div style="flex-grow: 1"></div>
-      <div class="groupe-puces" style="align-items: center; gap: 12px">
+      <div class="ressort"></div>
+      <div class="groupe-puces aere">
         <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
         <button class="puce" id="surprise" title="Des réglages tirés au hasard (Ctrl+Z pour revenir)">Surprends-moi</button>
         <button class="puce" id="exporter-gif" title="Trois secondes de l'aperçu, en GIF, dans Images\Essaim">Exporter en GIF</button>
@@ -101,12 +105,12 @@
   </section>
 
   <section class="vue" id="vue-auto" role="tabpanel" aria-labelledby="onglet-auto" hidden>
-    <aside class="colonne" style="width: 330px">
+    <aside class="colonne moyenne">
       <span class="t-titre">Preset automatique</span>
       <p class="note">Essaim change tout seul de preset selon l'application au premier plan, ou selon l'heure. Quand plus aucune règle ne s'applique, tes réglages d'avant reviennent.</p>
-      <button class="puce" id="auto-actif" aria-pressed="false" style="align-self: flex-start">Choisir le preset automatiquement</button>
-      <span class="t-titre" style="margin-top: 8px">Raccourcis clavier</span>
-      <button class="puce" id="raccourcis-actif" aria-pressed="true" style="align-self: flex-start">Raccourcis globaux</button>
+      <button class="puce debut" id="auto-actif" aria-pressed="false">Choisir le preset automatiquement</button>
+      <span class="t-titre haut-2">Raccourcis clavier</span>
+      <button class="puce debut" id="raccourcis-actif" aria-pressed="true">Raccourcis globaux</button>
       <div class="raccourcis">
         <span class="touche">Ctrl + Alt + →</span><span>preset suivant</span>
         <span class="touche">Ctrl + Alt + ←</span><span>preset précédent</span>
@@ -123,7 +127,7 @@
         <label><span class="t-label">Preset</span><select class="choix" id="appli-preset"></select></label>
         <button class="puce" type="submit">Ajouter</button>
       </form>
-      <div class="barre-titre" style="margin-top: 28px"><span class="t-titre">Selon l'heure</span></div>
+      <div class="barre-titre haut-5"><span class="t-titre">Selon l'heure</span></div>
       <div class="regles" id="regles-horaires"></div>
       <form class="ajout-regle" id="ajout-horaire">
         <label><span class="t-label">De</span><input class="champ petit" id="horaire-debut" type="time" value="22:00"></label>
@@ -135,8 +139,8 @@
   </section>
 
   <section class="vue" id="vue-curseurs" role="tabpanel" aria-labelledby="onglet-curseurs" hidden>
-    <aside class="colonne" style="width: 380px">
-      <div style="display: flex; flex-direction: column; gap: 6px">
+    <aside class="colonne large">
+      <div class="pile">
         <span class="t-label">Jeu en place</span>
         <span class="t-titre" id="jeu-actuel">—</span>
       </div>
@@ -148,7 +152,7 @@
         <span class="t-titre">Jeux installés sur ce PC</span>
         <span class="t-label" id="compte-jeux"></span>
       </div>
-      <div class="groupe-puces" style="align-items: center; gap: 12px">
+      <div class="groupe-puces aere">
         <button class="puce" id="avec-preset" aria-pressed="true">Installer les curseurs du preset choisi</button>
         <span class="note">Un preset enregistré garde le jeu en place à ce moment-là ; cette option le remet quand tu choisis le preset.</span>
       </div>
@@ -167,7 +171,7 @@
     <span class="t-titre" id="titre-dessin">Dessiner un trajet</span>
     <p class="note">Trace une boucle d'un seul geste autour du pointeur (le point au centre). Les comètes la parcourront à vitesse constante.</p>
     <canvas class="scene" id="toile-dessin" width="420" height="420"></canvas>
-    <div class="groupe-puces" style="gap: 12px">
+    <div class="groupe-puces aere">
       <button class="signal" id="valider-dessin">Utiliser ce trajet →</button>
       <button class="puce" id="effacer-dessin">Effacer</button>
       <button class="puce" id="fermer-dessin">Annuler</button>
@@ -177,7 +181,8 @@
 
 <div class="voile centre" id="voile-comparaison" hidden>
   <div class="boite large" role="dialog" aria-modal="true" aria-labelledby="titre-comparaison">
-    <div class="barre-titre"><span class="t-titre" id="titre-comparaison">Comparer</span><button class="puce" id="fermer-comparaison">Fermer</button></div>
+    <div class="barre-titre"><span class="t-titre" id="titre-comparaison">Comparer</span>
+      <span class="groupe-puces aere"><button class="puce" data-lecture aria-pressed="false" hidden>Lecture</button><button class="puce" id="fermer-comparaison">Fermer</button></span></div>
     <div class="comparaison" id="comparaison"></div>
   </div>
 </div>
@@ -191,8 +196,8 @@
   <div class="boite large accueil" role="dialog" aria-modal="true" aria-labelledby="titre-accueil">
     <span class="t-label" id="etape-accueil">1 / 3</span>
     <span class="t-affiche petite" id="titre-accueil">Bienvenue</span>
-    <div id="corps-accueil"></div>
-    <div class="groupe-puces" style="gap: 12px; margin-top: auto">
+    <div class="pile aeree" id="corps-accueil"></div>
+    <div class="groupe-puces aere pousse-bas">
       <button class="signal" id="suivant-accueil">Suivant →</button>
       <button class="puce" id="passer-accueil">Passer</button>
     </div>
@@ -202,13 +207,13 @@
 <div class="voile" id="voile" hidden>
   <form class="panneau" id="panneau" role="dialog" aria-modal="true" aria-labelledby="titre-panneau">
     <span class="titre" id="titre-panneau">Nouveau<br>preset</span>
-    <label style="display: flex; flex-direction: column; gap: 6px"><span class="t-label">Nom</span>
+    <label class="pile"><span class="t-label">Nom</span>
       <input class="champ" id="nom-preset" maxlength="40" placeholder="ex. Nuit blanche" autocomplete="off" spellcheck="false">
     </label>
     <label class="case"><input type="checkbox" id="publier"><span>Publier aussi dans la bibliothèque (GitHub). GitHub s'ouvre avec le preset prêt à proposer ; il apparaît pour tous après relecture.</span></label>
     <p class="t-texte erreur" id="erreur-panneau" role="alert" hidden></p>
-    <div style="flex-grow: 1"></div>
-    <div class="groupe-puces" style="gap: 12px">
+    <div class="ressort"></div>
+    <div class="groupe-puces aere">
       <button class="signal" type="submit">Enregistrer →</button>
       <button class="puce" type="button" id="annuler-panneau">Annuler</button>
     </div>
