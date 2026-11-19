@@ -92,8 +92,11 @@ const etat = {
 // ---------------------------------------------------------------------------------------------
 // Son : le vrai son de Windows, ou une démonstration (un kick par demi-seconde) en silence.
 
+// Le vrai son, tant qu'un morceau joue (panneau multimédia de Windows) ou que du son arrive
+// depuis moins de 2,5 s : un passage calme ne fait pas repartir la démo, on veut voir comment
+// l'essaim réagit à la vraie musique.
 function musique() {
-  return performance.now() - etat.dernierSon < 2500;
+  return etat.lecture === true || performance.now() - etat.dernierSon < 2500;
 }
 
 function sonPourApercus(maintenant) {
@@ -116,7 +119,8 @@ function sonPourApercus(maintenant) {
 function recevoirSon(m) {
   const kick = m.kicks !== etat.son.kicks;
   const aigus = (m.aigus || 0) !== etat.son.aigus;
-  if (kick || m.basse > 0.03) etat.dernierSon = performance.now();
+  // du son : un kick, de la basse, une attaque d'aigus, une caisse claire, ou un son brillant
+  if (kick || aigus || m.basse > 0.03 || (m.caisses || 0) !== etat.son.caisses || (m.brillance || 0) > 0.05) etat.dernierSon = performance.now();
   // tempo : champs absents d'une appli plus ancienne
   const bpm = typeof m.bpm === "number" && m.bpm > 0 ? m.bpm : null;
   const nombre = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
