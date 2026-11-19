@@ -123,6 +123,7 @@ button, input { font-family: inherit; color: inherit; }
 .sonde .kick { display: flex; align-items: center; gap: var(--esp-2); }
 .sonde .temoin { width: 14px; height: 14px; border: var(--trait-controle) solid var(--encre-2); }
 .sonde .temoin.coup { animation: coup var(--battement) ease-out; }
+.sonde .tempo { color: var(--encre-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 @keyframes coup { 0% { background: var(--signal); border-color: var(--signal); } 100% { background: transparent; } }
 .sonde .mesure { display: grid; grid-template-columns: auto var(--largeur-jauge); column-gap: var(--esp-2); align-items: center; }
 .sonde .jauge { position: relative; height: 6px; background: var(--survol); }
