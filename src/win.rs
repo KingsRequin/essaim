@@ -1,19 +1,22 @@
 //! Tout ce qui touche à Windows : fenêtres superposées transparentes, pointeur, écrans,
 //! icône de notification.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetMonitorInfoW, MonitorFromPoint,
     MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
     EnumDisplayMonitors, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, AC_SRC_ALPHA, AC_SRC_OVER,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::{
     ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
@@ -41,6 +44,9 @@ pub struct Surface {
     w: i32,
     h: i32,
     shown: bool,
+    /// Le dernier envoi a échoué : le suivant renvoie toute l'image (la zone perdue serait
+    /// restée périmée à l'écran).
+    resend: bool,
 }
 
 /// Fenêtre superposée transparente aux clics, toujours devant, hors barre des tâches, au
@@ -102,7 +108,17 @@ impl Surface {
         unsafe {
             let hwnd = overlay_window((0, 0, 1, 1), false)?;
             let dc = CreateCompatibleDC(None);
-            Ok(Self { hwnd, dc, bmp: HBITMAP::default(), old: HGDIOBJ::default(), bits: std::ptr::null_mut(), w: 0, h: 0, shown: false })
+            Ok(Self {
+                hwnd,
+                dc,
+                bmp: HBITMAP::default(),
+                old: HGDIOBJ::default(),
+                bits: std::ptr::null_mut(),
+                w: 0,
+                h: 0,
+                shown: false,
+                resend: false,
+            })
         }
     }
 
@@ -116,6 +132,8 @@ impl Surface {
                 SelectObject(self.dc, self.old);
                 let _ = DeleteObject(self.bmp.into());
             }
+            // ancienne image libérée : rien ne doit plus y renvoyer, même si la suivante échoue
+            (self.bmp, self.bits, self.w, self.h) = (HBITMAP::default(), std::ptr::null_mut(), 0, 0);
             let bi = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -145,7 +163,7 @@ impl Surface {
     /// applications (l'Explorateur répond alors « flèche »).
     pub fn update(&mut self, pm: &Pixmap, x: i32, y: i32, region: Option<(i32, i32, i32, i32)>) -> windows::core::Result<()> {
         let resized = self.ensure_size(pm.width() as i32, pm.height() as i32)?;
-        let full = resized || !self.shown || region.is_none();
+        let full = resized || !self.shown || self.resend || region.is_none();
         let (l, t, r, b) = if full {
             (0, 0, self.w, self.h)
         } else {
@@ -160,12 +178,7 @@ impl Surface {
         let src = pm.data();
         for row in t as usize..b as usize {
             let (a, z) = (row * stride + l as usize * 4, row * stride + r as usize * 4);
-            for (d, s) in dst[a..z].chunks_exact_mut(4).zip(src[a..z].chunks_exact(4)) {
-                d[0] = s[2];
-                d[1] = s[1];
-                d[2] = s[0];
-                d[3] = s[3];
-            }
+            rgba_vers_bgra(&mut dst[a..z], &src[a..z]);
         }
         let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
@@ -187,7 +200,11 @@ impl Surface {
             ..Default::default()
         };
         unsafe {
-            let _ = UpdateLayeredWindowIndirect(self.hwnd, &info);
+            if let Err(e) = UpdateLayeredWindowIndirect(self.hwnd, &info).ok() {
+                self.resend = true;
+                return Err(e);
+            }
+            self.resend = false;
             if !self.shown {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 self.shown = true;
@@ -203,6 +220,15 @@ impl Surface {
             }
             self.shown = false;
         }
+    }
+}
+
+/// RGBA → BGRA, pixel par pixel sur des mots de 32 bits (le compilateur le vectorise).
+fn rgba_vers_bgra(dst: &mut [u8], src: &[u8]) {
+    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        let p = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+        let q = (p & 0xFF00_FF00) | (p >> 16 & 0xFF) | (p & 0xFF) << 16;
+        d.copy_from_slice(&q.to_le_bytes());
     }
 }
 
@@ -254,17 +280,32 @@ pub fn monitors() -> Vec<(isize, (i32, i32, i32, i32))> {
     list
 }
 
+/// Échelles déjà lues, par écran, et date de la lecture. Oubliées au changement de configuration
+/// des écrans et, par prudence (un changement d'échelle n'arrive pas toujours à une fenêtre
+/// cachée), toutes les 2 s.
+type Echelles = (Vec<(isize, f32)>, Option<Instant>);
+thread_local! {
+    static ECHELLES: RefCell<Echelles> = const { RefCell::new((Vec::new(), None)) };
+}
+const ECHELLES_VALIDES: Duration = Duration::from_secs(2);
+
 /// Échelle de l'écran sous le point (1.0 = 100 %).
 pub fn scale_at(x: i32, y: i32) -> f32 {
-    unsafe {
-        let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
-        let (mut dx, mut dy) = (96u32, 96u32);
-        if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() {
-            dx as f32 / 96.0
-        } else {
-            1.0
+    let mon = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+    ECHELLES.with(|e| {
+        let mut e = e.borrow_mut();
+        let now = Instant::now();
+        if e.1.is_none_or(|t| now - t >= ECHELLES_VALIDES) {
+            *e = (Vec::new(), Some(now));
         }
-    }
+        if let Some(&(_, s)) = e.0.iter().find(|(m, _)| *m == mon.0 as isize) {
+            return s;
+        }
+        let (mut dx, mut dy) = (96u32, 96u32);
+        let s = if unsafe { GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) }.is_ok() { dx as f32 / 96.0 } else { 1.0 };
+        e.0.push((mon.0 as isize, s));
+        s
+    })
 }
 
 /// Une fenêtre en plein écran occupe l'écran où se trouve le point (jeu, vidéo…).
@@ -287,16 +328,64 @@ pub fn fullscreen_under(x: i32, y: i32) -> bool {
     }
 }
 
-/// La fenêtre couvre tout son écran (plein écran : jeu, vidéo…).
+/// La fenêtre est en plein écran sur son écran (jeu, vidéo F11, présentation…). Une fenêtre
+/// simplement agrandie n'en est pas une, même quand la barre des tâches masquée la laisse couvrir
+/// tout l'écran.
 pub fn covers_monitor(hwnd: HWND) -> bool {
     unsafe {
         let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-        let mut r = RECT::default();
-        if !GetMonitorInfoW(mon, &mut mi).as_bool() || GetWindowRect(hwnd, &mut r).is_err() {
+        if !GetMonitorInfoW(mon, &mut mi).as_bool() {
             return false;
         }
-        r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom
+        // cadre réellement affiché (sans la marge invisible de redimensionnement)
+        let mut r = RECT::default();
+        let cadre = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut c_void, std::mem::size_of::<RECT>() as u32);
+        if cadre.is_err() && GetWindowRect(hwnd, &mut r).is_err() {
+            return false;
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        plein_ecran(style, IsZoomed(hwnd).as_bool(), r, mi.rcMonitor)
+    }
+}
+
+/// Décision du plein écran : ni agrandie, ni barre de titre, ni bord de redimensionnement (les
+/// jeux, la vidéo F11 des navigateurs et les diaporamas les retirent), et le cadre couvre l'écran.
+pub fn plein_ecran(style: u32, agrandie: bool, cadre: RECT, ecran: RECT) -> bool {
+    if agrandie || style & WS_CAPTION.0 == WS_CAPTION.0 || style & WS_THICKFRAME.0 != 0 {
+        return false;
+    }
+    cadre.left <= ecran.left && cadre.top <= ecran.top && cadre.right >= ecran.right && cadre.bottom >= ecran.bottom
+}
+
+thread_local! {
+    /// Minuterie haute résolution du fil (0 : pas encore créée ; -1 : indisponible).
+    static MINUTERIE: Cell<isize> = const { Cell::new(0) };
+}
+
+/// Attend `d` au plus, en se réveillant dès qu'un message arrive pour le fil (menu, raccourci,
+/// fermeture) : minuterie haute résolution (précise à la milliseconde, sans réveil inutile) et
+/// `MsgWaitForMultipleObjectsEx`. Le message n'est pas traité ici (`pump` s'en charge).
+pub fn attendre(d: Duration) {
+    unsafe {
+        let mut h = MINUTERIE.with(Cell::get);
+        if h == 0 {
+            h = CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
+                .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
+                .map_or(-1, |t| t.0 as isize);
+            MINUTERIE.with(|m| m.set(h));
+        }
+        let ms = d.as_millis().min(10_000) as u32;
+        let due = -((d.as_nanos() / 100).min(100_000_000) as i64).max(1);
+        if h != -1 {
+            let t = HANDLE(h as *mut c_void);
+            if SetWaitableTimer(t, &due, 0, None, None, false).is_ok() {
+                // délai de secours un peu plus long que la minuterie
+                MsgWaitForMultipleObjectsEx(Some(&[t]), ms + 5, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                return;
+            }
+        }
+        MsgWaitForMultipleObjectsEx(None, ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 }
 
@@ -320,8 +409,15 @@ thread_local! {
     static PAUSED: Cell<bool> = const { Cell::new(false) };
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ICON: Cell<HICON> = const { Cell::new(HICON(std::ptr::null_mut())) };
+    /// Variante grisée de l'icône, montrée en pause.
+    static ICON_PAUSE: Cell<HICON> = const { Cell::new(HICON(std::ptr::null_mut())) };
+    /// Infobulle de l'icône.
+    static TIP: RefCell<String> = const { RefCell::new(String::new()) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Raccourcis clavier enregistrés (le menu les affiche alors à côté des entrées).
+static RACCOURCIS: AtomicBool = AtomicBool::new(false);
 
 /// Fenêtre de l'icône : partagée, pour que le fil des mises à jour puisse afficher sa bulle.
 static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -338,6 +434,7 @@ pub fn raccourcis(actif: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_LEFT, VK_RIGHT};
     let hwnd = tray_hwnd();
     let touches = [(1, VK_RIGHT.0 as u32), (2, VK_LEFT.0 as u32), (3, b'P' as u32)];
+    RACCOURCIS.store(actif, Ordering::Relaxed);
     unsafe {
         for (id, vk) in touches {
             let _ = UnregisterHotKey(Some(hwnd), id);
@@ -383,7 +480,11 @@ fn afficher_bulle(texte: &str) {
 /// Vrai une fois après un changement de la configuration des écrans (résolution, échelle,
 /// écran branché ou débranché).
 pub fn take_display_changed() -> bool {
-    DISPLAY_CHANGED.with(|d| d.replace(false))
+    let changed = DISPLAY_CHANGED.with(|d| d.replace(false));
+    if changed {
+        ECHELLES.with(|e| *e.borrow_mut() = (Vec::new(), None));
+    }
+    changed
 }
 
 /// Commande choisie dans le menu depuis le dernier appel (0 = aucune).
@@ -391,24 +492,97 @@ pub fn take_command() -> usize {
     COMMAND.with(|c| c.replace(0))
 }
 
-pub fn set_paused_label(paused: bool) {
+/// Infobulle de l'icône : « Essaim — preset « X » · en pause / en veille ».
+pub fn infobulle(preset: Option<&str>, pause: bool, veille: bool) -> String {
+    let mut t = String::from("Essaim");
+    if let Some(p) = preset {
+        t += &format!(" — preset « {p} »");
+    }
+    if pause {
+        t += " · en pause";
+    } else if veille {
+        t += " · en veille";
+    }
+    t
+}
+
+/// État montré par l'icône (fil principal) : grisée en pause, entrée du menu « Reprendre »,
+/// infobulle `tip`.
+pub fn etat_icone(paused: bool, tip: &str) {
     PAUSED.with(|p| p.set(paused));
+    TIP.with(|t| *t.borrow_mut() = tip.to_owned());
+    let hwnd = tray_hwnd();
+    if !hwnd.0.is_null() {
+        unsafe {
+            let _ = Shell_NotifyIconW(windows::Win32::UI::Shell::NIM_MODIFY, &nid(hwnd));
+        }
+    }
 }
 
 fn nid(hwnd: HWND) -> NOTIFYICONDATAW {
+    let paused = PAUSED.with(Cell::get);
+    let icon = if paused { ICON_PAUSE.with(Cell::get) } else { HICON::default() };
     let mut n = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,
         uID: 1,
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
         uCallbackMessage: WM_TRAY,
-        hIcon: ICON.with(|i| i.get()),
+        hIcon: if icon.is_invalid() { ICON.with(Cell::get) } else { icon },
         ..Default::default()
     };
-    for (d, s) in n.szTip.iter_mut().zip("Essaim".encode_utf16()) {
+    let tip = TIP.with(|t| t.borrow().clone());
+    let tip = if tip.is_empty() { "Essaim".to_owned() } else { tip };
+    // 127 caractères au plus, plus le zéro final
+    for (d, s) in n.szTip.iter_mut().zip(tip.encode_utf16().take(127)) {
         *d = s;
     }
     n
+}
+
+/// Texte d'une entrée de menu, avec son raccourci si les raccourcis sont actifs.
+fn entree(texte: &str, raccourci: &str) -> Vec<u16> {
+    let t = if RACCOURCIS.load(Ordering::Relaxed) { format!("{texte}\t{raccourci}") } else { texte.to_owned() };
+    t.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Menu de l'icône (clic droit).
+unsafe fn menu(hwnd: HWND) {
+    let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return };
+    let paused = PAUSED.with(Cell::get);
+    let pause = entree(if paused { "Reprendre" } else { "Mettre en pause" }, "Ctrl+Alt+P");
+    let suivant = entree("Preset suivant", "Ctrl+Alt+→");
+    let precedent = entree("Preset précédent", "Ctrl+Alt+←");
+    unsafe {
+        let _ = AppendMenuW(menu, MF_STRING, CMD_PAUSE, PCWSTR(pause.as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG, w!("Réglages…"));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        // presets : celui en place coché
+        if let Ok(sous) = CreatePopupMenu() {
+            let cfg = crate::config::Config::read(&crate::config::path()).unwrap_or_default();
+            for (i, p) in crate::profils::list().iter().enumerate().take(80) {
+                let nom: Vec<u16> = p.name.encode_utf16().chain(Some(0)).collect();
+                let coche = if crate::profils::same(&p.cfg, &cfg) { MF_CHECKED } else { MF_UNCHECKED };
+                let _ = AppendMenuW(sous, MF_STRING | coche, CMD_PRESET + i, PCWSTR(nom.as_ptr()));
+            }
+            let _ = AppendMenuW(menu, MF_POPUP, sous.0 as usize, w!("Presets"));
+        }
+        let _ = AppendMenuW(menu, MF_STRING, CMD_SUIVANT, PCWSTR(suivant.as_ptr()));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_PRECEDENT, PCWSTR(precedent.as_ptr()));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        if let Some(version) = crate::maj::prete() {
+            let texte: Vec<u16> = format!("Redémarrer avec la version {version}").encode_utf16().chain(Some(0)).collect();
+            let _ = AppendMenuW(menu, MF_STRING, CMD_REDEMARRER, PCWSTR(texte.as_ptr()));
+        }
+        let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quitter"));
+        let mut pt = POINT::default();
+        let _ = GetCursorPos(&mut pt);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, None, hwnd, None);
+        // le menu se ferme bien au clic ailleurs (recommandation de Windows)
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = DestroyMenu(menu);
+    }
 }
 
 extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -419,33 +593,11 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 COMMAND.with(|c| c.set(CMD_REDEMARRER));
                 return LRESULT(0);
             }
-            if ev == WM_RBUTTONUP || ev == WM_LBUTTONUP {
-                if let Ok(menu) = CreatePopupMenu() {
-                    let paused = PAUSED.with(|p| p.get());
-                    let _ = AppendMenuW(menu, MF_STRING, CMD_PAUSE, if paused { w!("Reprendre") } else { w!("Mettre en pause") });
-                    let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG, w!("Réglages…"));
-                    // presets : celui en place coché
-                    if let Ok(sous) = CreatePopupMenu() {
-                        let cfg = crate::config::Config::read(&crate::config::path()).unwrap_or_default();
-                        for (i, p) in crate::profils::list().iter().enumerate().take(80) {
-                            let nom: Vec<u16> = p.name.encode_utf16().chain(Some(0)).collect();
-                            let coche = if crate::profils::same(&p.cfg, &cfg) { MF_CHECKED } else { MF_UNCHECKED };
-                            let _ = AppendMenuW(sous, MF_STRING | coche, CMD_PRESET + i, PCWSTR(nom.as_ptr()));
-                        }
-                        let _ = AppendMenuW(menu, MF_POPUP, sous.0 as usize, w!("Presets"));
-                    }
-                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-                    if let Some(version) = crate::maj::prete() {
-                        let texte: Vec<u16> = format!("Redémarrer avec la version {version}").encode_utf16().chain(Some(0)).collect();
-                        let _ = AppendMenuW(menu, MF_STRING, CMD_REDEMARRER, PCWSTR(texte.as_ptr()));
-                    }
-                    let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quitter"));
-                    let mut pt = POINT::default();
-                    let _ = GetCursorPos(&mut pt);
-                    let _ = SetForegroundWindow(hwnd);
-                    let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, None, hwnd, None);
-                    let _ = DestroyMenu(menu);
-                }
+            // clic gauche (ou double-clic) : réglages ; clic droit : menu
+            if ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK {
+                COMMAND.with(|c| c.set(CMD_CONFIG));
+            } else if ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU {
+                menu(hwnd);
             }
             return LRESULT(0);
         }
@@ -465,7 +617,16 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED || (msg == WM_SETTINGCHANGE && wp.0 == SPI_SETWORKAREA.0 as usize) {
             DISPLAY_CHANGED.with(|d| d.set(true));
         }
-        if msg == WM_CLOSE || msg == WM_ENDSESSION {
+        if msg == WM_ENDSESSION {
+            // la session se ferme vraiment (wParam ≠ 0) : le processus peut être arrêté à tout
+            // moment après ce message, la bordure est rendue tout de suite
+            if wp.0 != 0 {
+                crate::bordure::restore();
+                COMMAND.with(|c| c.set(CMD_QUIT));
+            }
+            return LRESULT(0);
+        }
+        if msg == WM_CLOSE {
             COMMAND.with(|c| c.set(CMD_QUIT));
             return LRESULT(0);
         }
@@ -496,7 +657,8 @@ impl Tray {
             let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), TRAY_CLASS, w!("Essaim"), WS_POPUP, 0, 0, 0, 0, None, None, Some(hinst.into()), None)?;
             TASKBAR_CREATED.with(|t| t.set(RegisterWindowMessageW(w!("TaskbarCreated"))));
             TRAY_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
-            ICON.with(|i| i.set(make_icon().unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default())));
+            ICON.with(|i| i.set(make_icon(false).unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default())));
+            ICON_PAUSE.with(|i| i.set(make_icon(true).unwrap_or_default()));
             if !Shell_NotifyIconW(NIM_ADD, &nid(hwnd)).as_bool() {
                 log::warn!("icône de notification : ajout impossible");
             }
@@ -517,14 +679,20 @@ impl Drop for Tray {
 
 /// Icône de l'appli (pour une fenêtre), dessinée à la volée.
 pub fn app_icon() -> Option<HICON> {
-    make_icon()
+    make_icon(false)
 }
 
-/// Icône 32×32 dessinée à la volée : le point et deux comètes.
-fn make_icon() -> Option<HICON> {
+/// Icône 32×32 dessinée à la volée : le point et deux comètes ; `gris` : variante éteinte (pause).
+fn make_icon(gris: bool) -> Option<HICON> {
     use tiny_skia::{Color, FillRule, Paint, PathBuilder, Transform};
     let mut pm = Pixmap::new(32, 32)?;
     let mut fill = |x: f32, y: f32, r: f32, c: (u8, u8, u8)| {
+        let c = if gris {
+            let l = (0.3 * c.0 as f32 + 0.59 * c.1 as f32 + 0.11 * c.2 as f32) * 0.6;
+            (l as u8, l as u8, l as u8)
+        } else {
+            c
+        };
         let mut p = Paint::default();
         p.set_color(Color::from_rgba8(c.0, c.1, c.2, 255));
         p.anti_alias = true;
@@ -608,4 +776,55 @@ pub fn pump() -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba_vers_bgra_inverse_rouge_et_bleu() {
+        let src = [1u8, 2, 3, 4, 250, 0, 7, 255];
+        let mut dst = [0u8; 8];
+        rgba_vers_bgra(&mut dst, &src);
+        assert_eq!(dst, [3, 2, 1, 4, 7, 0, 250, 255]);
+    }
+
+    #[test]
+    fn plein_ecran_et_fenetre_agrandie() {
+        let ecran = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let tout = ecran;
+        // jeu, vidéo F11, diaporama : ni titre ni bord, couvre l'écran
+        assert!(plein_ecran(WS_POPUP.0, false, tout, ecran));
+        assert!(plein_ecran(WS_POPUP.0, false, RECT { left: -8, top: -8, right: 1928, bottom: 1088 }, ecran));
+        // fenêtre agrandie (barre des tâches masquée) : pas du plein écran
+        assert!(!plein_ecran(WS_OVERLAPPEDWINDOW.0, true, tout, ecran));
+        assert!(!plein_ecran(WS_POPUP.0, true, tout, ecran));
+        assert!(!plein_ecran(WS_POPUP.0 | WS_THICKFRAME.0, false, tout, ecran));
+        assert!(!plein_ecran(WS_CAPTION.0, false, tout, ecran));
+        // ne couvre pas l'écran
+        assert!(!plein_ecran(WS_POPUP.0, false, RECT { left: 0, top: 0, right: 1920, bottom: 1040 }, ecran));
+    }
+
+    /// Précision de l'attente minutée : `cargo test --release mesure_attente -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn mesure_attente() {
+        for ms in [1u64, 5, 16, 30] {
+            let n = 40;
+            let t0 = Instant::now();
+            for _ in 0..n {
+                attendre(Duration::from_millis(ms));
+            }
+            eprintln!("attente de {ms} ms : {:.2} ms en moyenne", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        }
+    }
+
+    #[test]
+    fn texte_de_l_infobulle() {
+        assert_eq!(infobulle(None, false, false), "Essaim");
+        assert_eq!(infobulle(Some("Néon"), false, false), "Essaim — preset « Néon »");
+        assert_eq!(infobulle(Some("Néon"), true, true), "Essaim — preset « Néon » · en pause");
+        assert_eq!(infobulle(None, false, true), "Essaim · en veille");
+    }
 }

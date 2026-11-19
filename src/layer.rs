@@ -35,13 +35,18 @@ pub struct Layer {
     prev: Option<IRect>,
     /// Depuis quand le calque n'a plus rien à afficher.
     pub empty_since: Option<Instant>,
+    /// Envois refusés par Windows depuis la dernière ligne du journal, et date de cette ligne.
+    echecs: (u32, Option<Instant>),
 }
+
+/// Envois refusés : une ligne de journal par minute au plus.
+const NOTE_ECHECS: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Layer {
     pub fn new(mon: isize, rect: IRect) -> anyhow::Result<Self> {
         let pm = Pixmap::new((rect.2 - rect.0).max(1) as u32, (rect.3 - rect.1).max(1) as u32)
             .ok_or_else(|| anyhow::anyhow!("écran de taille invalide : {rect:?}"))?;
-        Ok(Self { mon, rect, surface: Surface::new()?, pm, prev: None, empty_since: None })
+        Ok(Self { mon, rect, surface: Surface::new()?, pm, prev: None, empty_since: None, echecs: (0, None) })
     }
 
     /// Image suivante : `dirty` = zone écran de ce qui sera dessiné. La zone de l'image
@@ -69,7 +74,12 @@ impl Layer {
         draw(&mut PixCanvas { pm: &mut self.pm, origin: (ox as f32, oy as f32) });
         let sent = Instant::now();
         if let Err(e) = self.surface.update(&self.pm, ox, oy, Some(local)) {
-            log::warn!("calque : envoi impossible : {e}");
+            self.echecs.0 += 1;
+            let now = Instant::now();
+            if self.echecs.1.is_none_or(|t| now - t >= NOTE_ECHECS) {
+                log::warn!("calque : envoi impossible ({} fois depuis la dernière note) : {e}", self.echecs.0);
+                self.echecs = (0, Some(now));
+            }
         }
         sent.elapsed()
     }
