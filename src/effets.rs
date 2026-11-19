@@ -1,6 +1,9 @@
 //! Effets autour du pointeur, en plus de l'essaim : projecteur « retrouver la souris »
-//! (`[projecteur]`). Simulation et dessin ; `main.rs` ajoute l'écran assombri aux zones à
-//! redessiner, et seulement pendant l'effet.
+//! (`[projecteur]`) et réticule (`[reticule]`). Simulation et dessin ; `main.rs` ajoute leurs
+//! zones au rectangle modifié : le réticule à celui de l'essaim, le projecteur (qui assombrit tout
+//! l'écran du pointeur) aux zones à part, et seulement pendant l'effet.
+//!
+//! `ui/apercu.js` reproduit le réticule (mêmes formules) : le modifier ici oblige à le reporter là.
 
 use crate::canvas::Canvas;
 use crate::config::Config;
@@ -122,6 +125,14 @@ pub fn projecteur_forme(p: f32, env: f32, scale: f32) -> (f32, f32) {
     (r, a.max(0.0))
 }
 
+// --- Réticule -----------------------------------------------------------------------------------
+
+/// Vide au centre du réticule (px à 100 %) : le pointeur n'est jamais couvert.
+const RETICULE_VIDE: f32 = 12.0;
+/// Épaisseur des lignes du réticule et de leur lueur au kick (px à 100 %).
+const RETICULE_LARGEUR: f32 = 1.2;
+const RETICULE_LUEUR: f32 = 4.0;
+
 pub struct Effets {
     secousse: Secousse,
     /// Raccourci Ctrl+Alt+F reçu, pris en compte à l'image suivante.
@@ -130,11 +141,13 @@ pub struct Effets {
     projecteur: Option<f64>,
     /// Projecteur de cette image : écran assombri, centre, rayon du disque clair, opacité.
     voile: Option<(IRect, (f32, f32), f32, f32)>,
+    /// Éclat du kick (celui de l'essaim), 1 → 0.
+    env: f32,
 }
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, env: 0.0 }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -144,6 +157,7 @@ impl Effets {
 
     /// Avance d'une image : secousse et projecteur. `env` = éclat du kick de l'essaim.
     pub fn avance(&mut self, t: f64, cursor: (f32, f32), scale: f32, env: f32, cfg: &Config, monitors: &[(isize, IRect)]) {
+        self.env = env;
         // projecteur
         let p = &cfg.projecteur;
         let demande = std::mem::take(&mut self.demande);
@@ -178,6 +192,18 @@ impl Effets {
         self.voile.map(|v| v.0)
     }
 
+    /// Zone du réticule autour du pointeur, à ajouter à celle de l'essaim.
+    pub fn rect_pointeur(&self, cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
+        let mut e = 0.0f32;
+        if cfg.reticule.actif {
+            e = e.max((RETICULE_VIDE + cfg.reticule.taille) * scale + RETICULE_LUEUR * scale);
+        }
+        (e > 0.0).then(|| {
+            let e = e + 2.0;
+            ((cursor.0 - e).floor() as i32, (cursor.1 - e).floor() as i32, (cursor.0 + e).ceil() as i32, (cursor.1 + e).ceil() as i32)
+        })
+    }
+
     /// Voile du projecteur, sous tout le reste (fissures et essaim restent visibles par-dessus).
     pub fn dessiner_voile(&self, cv: &mut dyn Canvas, cfg: &Config, t: f64, scale: f32) {
         let Some((ecran, (x, y), r, a)) = self.voile else { return };
@@ -185,6 +211,24 @@ impl Effets {
         cv.voile(zone, x, y, r, r * PROJ_FLOU, PROJ_VOILE, a);
         // liseré à la teinte de l'essaim sur le bord du disque clair
         cv.ring(x, y, r, 2.0 * scale, prisme(cfg, t, 1.0), 0.5 * a / PROJ_OPACITE);
+    }
+
+    /// Réticule autour de `cursor`, sous l'essaim.
+    pub fn dessiner(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
+        let (cx, cy) = cursor;
+        let re = &cfg.reticule;
+        if re.actif {
+            let rgb = prisme(cfg, t, 1.0);
+            let (vide, long) = (RETICULE_VIDE * scale, (RETICULE_VIDE + re.taille) * scale);
+            let env = self.env.clamp(0.0, 1.0);
+            for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                let (a, b) = ((cx + dx * vide, cy + dy * vide), (cx + dx * long, cy + dy * long));
+                if env > 0.02 {
+                    cv.line(a, b, RETICULE_LUEUR * scale, rgb, 0.3 * env * re.opacite, true);
+                }
+                cv.line(a, b, RETICULE_LARGEUR * scale, rgb, re.opacite * (0.6 + 0.4 * env), true);
+            }
+        }
     }
 }
 
@@ -300,6 +344,37 @@ mod tests {
     }
 
     #[test]
+    fn reticule_tient_dans_sa_zone() {
+        // dessin dans une grande image : aucun pixel peint hors de `rect_pointeur`
+        let mut cfg = Config::default();
+        (cfg.reticule.actif, cfg.reticule.taille) = (true, 200.0);
+        let mut e = Effets::new();
+        e.env = 1.0;
+        let cursor = (600.0, 600.0);
+        for scale in [1.0f32, 1.5] {
+            let (x0, y0, x1, y1) = e.rect_pointeur(cursor, scale, &cfg).unwrap();
+            let mut pm = tiny_skia::Pixmap::new(1200, 1200).unwrap();
+            e.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 0.0, &cfg, scale, cursor);
+            let mut peints = 0;
+            for y in 0..1200 {
+                for x in 0..1200 {
+                    if pm.pixel(x, y).is_some_and(|p| p.alpha() > 0) {
+                        peints += 1;
+                        let (x, y) = (x as i32, y as i32);
+                        assert!(x >= x0 && x < x1 && y >= y0 && y < y1, "pixel ({x}, {y}) hors de {x0},{y0} → {x1},{y1}");
+                    }
+                }
+            }
+            assert!(peints > 300, "{peints} pixels");
+            // le centre reste vide : le pointeur n'est jamais couvert
+            let c = pm.pixel(600, 600).unwrap();
+            assert_eq!(c.alpha(), 0);
+        }
+        // effets coupés : aucune zone
+        assert_eq!(Effets::new().rect_pointeur(cursor, 1.0, &Config::default()), None);
+    }
+
+    #[test]
     fn voile_assombrit_autour_du_disque_clair() {
         let mut pm = tiny_skia::Pixmap::new(400, 300).unwrap();
         let mut cv = crate::canvas::PixCanvas { pm: &mut pm, origin: (100.0, 50.0) };
@@ -344,9 +419,11 @@ mod tests {
                 e.avance(t, cursor, 1.0, s.env, cfg, &mons);
                 let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
+                let rect = crate::layer::union(Some(rect), e.rect_pointeur(cursor, 1.0, cfg)).unwrap();
                 let items: Vec<IRect> = e.rect_ecran().into_iter().collect();
                 b.frame(&mons, rect, &items, &|cv, _| {
                     e.dessiner_voile(cv, cfg, t, 1.0);
+                    e.dessiner(cv, t, cfg, 1.0, cursor);
                     s.draw(cv, t, cfg, 1.0, cursor);
                 });
                 if i >= chauffe {
@@ -357,10 +434,13 @@ mod tests {
             durees[durees.len() / 2]
         }
         let base = Config::default();
+        let mut reticule = base.clone();
+        reticule.reticule.actif = true;
         for gpu in [true, false] {
             let moteur = if gpu { "carte graphique" } else { "processeur" };
             let b = cout(&base, gpu, false);
             eprintln!("{moteur} : sans effet {b:.3} ms");
+            eprintln!("{moteur} : réticule {:+.3} ms", cout(&reticule, gpu, false) - b);
             eprintln!("{moteur} : projecteur (pendant l'effet, 1920 × 1080) {:+.3} ms", cout(&base, gpu, true) - b);
         }
     }

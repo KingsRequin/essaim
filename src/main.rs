@@ -575,7 +575,9 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         // dessin : sur chaque écran que l'essaim ou une fissure touche
         let (x0, y0, x1, y1) = swarm.bounds(cursor, scale, cfg.eclat.taille);
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
-        // projecteur : tout l'écran du pointeur, le temps de l'effet seulement
+        // réticule autour du pointeur : dans la zone de l'essaim ; projecteur : tout
+        // l'écran du pointeur, le temps de l'effet seulement
+        let swarm_rect = layer::union(Some(swarm_rect), effets.rect_pointeur(cursor, scale, cfg)).unwrap_or(swarm_rect);
         let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         crack_rects.extend(effets.rect_ecran());
         let rgb = render::prisme(cfg, t, 1.0);
@@ -590,6 +592,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
                 c.draw(cv, glow, rgb, (life - age).clamp(0.0, 1.0) as f32);
             }
             if here {
+                effets.dessiner(cv, t, cfg, scale, cursor);
                 swarm.draw(cv, t, cfg, scale, cursor);
             }
         };

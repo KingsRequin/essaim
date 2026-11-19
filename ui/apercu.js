@@ -14,6 +14,10 @@ const FINESSE_COMETES = [0.045, 4];
 const FINESSE_SATELLITES = [0.1, 8];
 const TRAIL_CHUNK = 4;
 const MAX_PARTICULES = 400;
+// Réticule : comme src/effets.rs.
+const RETICULE_VIDE = 12;
+const RETICULE_LARGEUR = 1.2;
+const RETICULE_LUEUR = 4;
 
 function hsl(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
@@ -380,6 +384,24 @@ class Apercu {
     };
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
     const lueur = 0.4 + 0.6 * this.env, tete = couleur(1), duree = Math.max(0.1, c.essaim.duree);
+    // réticule, sous l'essaim (comme Effets::dessiner)
+    const trait = (a, b, largeur, rgb, al) => {
+      g.strokeStyle = rgba(rgb, al);
+      g.lineWidth = largeur;
+      g.beginPath();
+      g.moveTo(a[0], a[1]);
+      g.lineTo(b[0], b[1]);
+      g.stroke();
+    };
+    const re = c.reticule;
+    if (re && re.actif) {
+      const vide = RETICULE_VIDE * S, long = (RETICULE_VIDE + re.taille) * S, env = Math.min(1, Math.max(0, this.env));
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const a = [cx + dx * vide, cy + dy * vide], b = [cx + dx * long, cy + dy * long];
+        if (env > 0.02) trait(a, b, RETICULE_LUEUR * S, tete, 0.3 * env * re.opacite);
+        trait(a, b, RETICULE_LARGEUR * S, tete, re.opacite * (0.6 + 0.4 * env));
+      }
+    }
     const tetes = [];
     // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {

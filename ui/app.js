@@ -145,7 +145,7 @@ const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE]
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
-  "orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "projecteur", "audio", "bordure", "souris",
+  "orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "projecteur", "reticule", "audio", "bordure", "souris",
 ];
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
@@ -630,7 +630,7 @@ const IMPACT = {
   "rendu.cadence": [7, "estime"], "rendu.cadence_repos": [2, "estime"], "rendu.carte_graphique": [10], "rendu.veille_apres": [1, "estime"],
   "scintillement.actif": [1, "estime"], "scintillement.quantite": [1, "estime"], "clic.taille": [1, "estime"], "sillage.densite": [1, "estime"],
   // banc `mesure_effets` (carte graphique, 144 images/s)
-  "projecteur.actif": [1], "projecteur.duree": [1, "estime"],
+  "projecteur.actif": [1], "projecteur.duree": [1, "estime"], "reticule.actif": [1], "reticule.taille": [1, "estime"], "reticule.opacite": [1, "estime"],
 };
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
@@ -674,6 +674,7 @@ const SI = {
   clic: (r) => r.clic.onde || r.clic.eclats,
   sillage: (r) => r.sillage.actif,
   projecteur: (r) => !!(r.projecteur && r.projecteur.actif),
+  reticule: (r) => !!(r.reticule && r.reticule.actif),
 };
 
 // Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
@@ -722,6 +723,8 @@ const AVANCES = [
   { libelle: "Taille de l'onde et des éclats", section: "clic", cle: "taille", si: SI.clic, min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
   { libelle: "Densité du sillage", section: "sillage", cle: "densite", si: SI.sillage, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
   { libelle: "Durée du projecteur", section: "projecteur", cle: "duree", si: SI.projecteur, min: 0.3, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+  { libelle: "Taille du réticule", section: "reticule", cle: "taille", si: SI.reticule, min: 10, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
+  { libelle: "Opacité du réticule", section: "reticule", cle: "opacite", si: SI.reticule, min: 0.05, max: 1, pas: 0.05, ...pourcent },
   { groupe: "Son" },
   { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Cet ordinateur (hors presets)" },
@@ -875,6 +878,7 @@ function construireReglages() {
         bascule("Éclats au clic", "clic", "eclats"),
         bascule("Sillage de la souris", "sillage", "actif"),
         projecteur,
+        bascule("Réticule", "reticule", "actif"),
       ]);
     } else if (def.special === "couleur") {
       teintes = TEINTES.map((h) => {
@@ -1288,7 +1292,7 @@ function libelleReglage(section, cle) {
     "orbite.forme": "Trajet des comètes", "essaim.forme": "Trajet des satellites", "couleur.application": "Couleur de l'application",
     "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique", "scintillement.actif": "Étincelles sur les aigus",
     "clic.onde": "Onde au clic", "clic.eclats": "Éclats au clic", "sillage.actif": "Sillage de la souris", "souris.jeu": "Curseurs",
-    "projecteur.actif": "Projecteur (secouer la souris)",
+    "projecteur.actif": "Projecteur (secouer la souris)", "reticule.actif": "Réticule",
     "couleur.synchro_prisme": "Synchro Prisme",
   };
   return [noms[section + "." + cle] || section + "." + cle];

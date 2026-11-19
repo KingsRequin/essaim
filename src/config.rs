@@ -18,6 +18,7 @@ pub struct Config {
     pub clic: Clic,
     pub sillage: Sillage,
     pub projecteur: Projecteur,
+    pub reticule: Reticule,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -88,6 +89,23 @@ pub struct Projecteur {
 impl Default for Projecteur {
     fn default() -> Self {
         Self { actif: true, duree: 1.2 }
+    }
+}
+
+/// Réticule : deux fines lignes croisées centrées sur le pointeur (vide au centre).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Reticule {
+    pub actif: bool,
+    /// Longueur de chaque branche (px).
+    pub taille: f32,
+    /// Opacité des lignes (0,05 à 1).
+    pub opacite: f32,
+}
+
+impl Default for Reticule {
+    fn default() -> Self {
+        Self { actif: false, taille: 40.0, opacite: 0.6 }
     }
 }
 
@@ -446,6 +464,11 @@ densite = 5             # 1 à 10
 actif = true            # secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur
 duree = 1.2             # durée de l'effet (s)
 
+[reticule]
+actif = false           # deux fines lignes croisées centrées sur le pointeur
+taille = 40             # longueur de chaque branche
+opacite = 0.6           # 0.05 à 1
+
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
@@ -512,6 +535,8 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("clic", "taille") => (0.3, 3.0),
         ("sillage", "densite") => (1.0, 10.0),
         ("projecteur", "duree") => (0.3, 5.0),
+        ("reticule", "taille") => (10.0, 200.0),
+        ("reticule", "opacite") => (0.05, 1.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -883,22 +908,22 @@ mod tests {
     }
 
     #[test]
-    fn projecteur_lu_et_borne() {
+    fn effets_projecteur_reticule_lus_et_bornes() {
         // fichier par défaut : mêmes valeurs que les réglages par défaut
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
         let d = super::Config::default();
-        assert!(c.projecteur.actif);
-        assert_eq!(c.projecteur.duree, d.projecteur.duree);
+        assert_eq!((c.projecteur.actif, c.reticule.actif), (true, false));
+        assert_eq!((c.projecteur.duree, c.reticule.taille, c.reticule.opacite), (d.projecteur.duree, d.reticule.taille, d.reticule.opacite));
         // valeurs absurdes ramenées dans leurs bornes
-        let texte = "[projecteur]\nduree = 99";
+        let texte = "[projecteur]\nduree = 99\n[reticule]\ntaille = 1\nopacite = 7";
         let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
-        assert_eq!(c.projecteur.duree, 5.0);
+        assert_eq!((c.projecteur.duree, c.reticule.taille, c.reticule.opacite), (5.0, 10.0, 1.0));
         let c = toml::from_str::<super::Config>("[projecteur]\nduree = 0").unwrap().clamped();
         assert_eq!(c.projecteur.duree, 0.3);
         // écriture depuis la fenêtre : refusée hors bornes, acceptée dedans
         let p = std::env::temp_dir().join(format!("essaim-test-effets-{}.toml", std::process::id()));
         std::fs::write(&p, super::DEFAULT_FILE).unwrap();
-        assert!(super::set_value_in(&p, "projecteur", "duree", &serde_json::json!(0.1)).is_err());
+        assert!(super::set_value_in(&p, "reticule", "opacite", &serde_json::json!(0.0)).is_err());
         super::set_value_in(&p, "projecteur", "actif", &serde_json::json!(false)).unwrap();
         let c = super::Config::read(&p).unwrap();
         assert!(!c.projecteur.actif);
