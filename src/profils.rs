@@ -32,7 +32,7 @@ pub fn dir() -> PathBuf {
     config::dir().join("profils")
 }
 
-fn builtins() -> Vec<Profile> {
+pub(crate) fn builtins() -> Vec<Profile> {
     let make = |name: &str, change: fn(&mut Config)| {
         let mut cfg = Config::default();
         change(&mut cfg);

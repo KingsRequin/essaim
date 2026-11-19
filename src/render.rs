@@ -40,6 +40,11 @@ fn sous_pas(da: f32, r: f32, (angle, ecart): (f32, f32)) -> usize {
 /// Petit générateur pseudo-aléatoire (xorshift), suffisant pour des effets visuels.
 pub struct Rng(u64);
 impl Rng {
+    /// Suite fixée (essais : même suite à chaque fois).
+    #[cfg(test)]
+    pub fn graine(g: u64) -> Self {
+        Self(g | 1)
+    }
     pub fn seeded() -> Self {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
         Self(t | 1)
@@ -1133,6 +1138,79 @@ mod tests {
     use tiny_skia::Pixmap;
 
     const C: (f32, f32) = (300.0, 300.0);
+
+    /// Son d'essai, 8 s : kicks sur chaque temps (120 BPM), caisse claire un temps sur deux,
+    /// charleston aux contretemps, basse qui retombe, note qui ondule, stéréo qui balance ;
+    /// montée de 3 à 5 s (pas de kick, roulement, tension), drop à 5 s ; break de 6,5 à 7,5 s.
+    pub(super) fn son_essai(t: f64) -> AudioView {
+        let temps = 0.5;
+        let k = (t / temps).floor();
+        let phase = ((t - k * temps) / temps) as f32;
+        let montee = (3.0..5.0).contains(&t);
+        let pause = (6.5..7.5).contains(&t);
+        let kicks = if t < 3.0 { k } else if t < 5.0 { 6.0 } else if t < 6.5 { 6.0 + (k - 9.0) } else if t < 7.5 { 9.0 } else { 9.0 + (k - 14.0) } as f64;
+        let roulement = if montee { (4.0 * (t - 3.0) + 3.0 * (t - 3.0).powi(2)).floor() } else if t >= 5.0 { 20.0 } else { 0.0 };
+        AudioView {
+            kicks: kicks.max(0.0) as u32,
+            bass: if montee || pause { 0.2 } else { 0.35 + 0.5 * (-phase * 6.0).exp() },
+            pitch: 42.0 + 6.0 * (t as f32 * 0.7).sin(),
+            aigus: ((t + 0.25) / temps).floor() as u32,
+            brillance: if montee { 0.35 + 0.2 * (t - 3.0) as f32 } else { 0.35 },
+            bpm: Some(120.0),
+            phase,
+            relais: pause,
+            caisses: (k / 2.0).floor() as u32 + roulement as u32,
+            drops: if t >= 5.0 { 1 } else { 0 },
+            tension: if montee { ((t - 3.0) / 2.0 * 1.2).min(1.0) as f32 } else { 0.0 },
+            balance: (t as f32 * 0.8).sin() * 0.8,
+        }
+    }
+
+    /// Mesures d'un preset sur le son d'essai (graine fixée), une toutes les 10 images : sens de
+    /// rotation, satellites, particules, distance moyenne des têtes des comètes et des satellites
+    /// au centre, éclat. Clic à 1 s, clic droit à 2 s, changement de piste à 2,5 s.
+    pub(super) fn mesures(cfg: &Config, mut evenement: impl FnMut(&mut Swarm, usize, f64)) -> Vec<[f32; 6]> {
+        let mut s = Swarm::new();
+        s.rng = Rng::graine(7);
+        let mut out = Vec::new();
+        for i in 0..480 {
+            let t = i as f64 / 60.0;
+            evenement(&mut s, i, t);
+            s.avance(t, 1.0 / 60.0, C, son_essai(t), cfg, 1.0);
+            if i % 10 == 9 {
+                let c = s.center.unwrap();
+                let moyenne = |tr: &mut dyn Iterator<Item = &Trail>| {
+                    let d: Vec<f32> = tr.filter_map(|tr| tr.back()).map(|p| ((p.1 - c.0).powi(2) + (p.2 - c.1).powi(2)).sqrt()).collect();
+                    d.iter().sum::<f32>() / d.len().max(1) as f32
+                };
+                let (dc, ds) = (moyenne(&mut s.trails.iter()), moyenne(&mut s.sats.iter().chain(&s.fixes).map(|q| &q.trail)));
+                out.push([s.dir, s.sats.len() as f32, s.particules.len() as f32, dc, ds, s.env]);
+            }
+        }
+        out
+    }
+
+    /// Écrit les mesures de chaque preset fourni (moteur d'avant les déclencheurs) dans
+    /// `ESSAIM_INSTANTANE` : `cargo test --release instantane_des_presets -- --ignored`.
+    #[test]
+    #[ignore]
+    fn instantane_des_presets() {
+        let sortie = std::env::var("ESSAIM_INSTANTANE").expect("ESSAIM_INSTANTANE : fichier de sortie");
+        let mut tout = serde_json::Map::new();
+        for p in crate::profils::builtins() {
+            let m = mesures(&p.cfg, |s, i, t| {
+                let cfg = &p.cfg;
+                match i {
+                    60 if cfg.clic.onde || cfg.clic.eclats => s.clic(C.0, C.1, t, cfg, 1.0),
+                    120 if cfg.clic.droit => s.clic_droit(C.0, C.1, t, cfg, 1.0),
+                    150 if cfg.musique.rafale_piste => s.rafale(C.0, C.1, t, cfg, 1.0),
+                    _ => {}
+                }
+            });
+            tout.insert(p.name, serde_json::to_value(m).unwrap());
+        }
+        std::fs::write(sortie, serde_json::to_string(&tout).unwrap()).unwrap();
+    }
 
     /// Distance moyenne des têtes des comètes au centre de l'orbite.
     fn ecart_moyen(s: &Swarm) -> f32 {
