@@ -97,8 +97,10 @@ lancement, commentaires gardés. Les presets fournis gardent leur allure (essai
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
   moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
   losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
-  ou un trajet dessiné à la main (`forme = "trace"`, points dans `trace`, parcourus à vitesse
-  constante), qui peut tourner sur lui-même (`rotation`, tours/min ; `rotation_sur` : `"tout"`,
+  ou les contours d'une image (`forme = "trace"`, points dans `contours`, un contour par anneau,
+  4 au plus, parcourus à vitesse constante ; un ancien trajet dessiné à la main, dans `trace`,
+  marche toujours), ou ceux de l'icône de l'application au premier plan (`forme = "icone"`, qui
+  change avec elle ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; `rotation_sur` : `"tout"`,
   `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet) ; les satellites suivent le
   même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des satellites permanents,
   même sans musique. Entre deux images, les traînées suivent le vrai trajet (points
@@ -248,8 +250,12 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *+* : seuil, lissage, à l'envers) ; des idées à ajouter d'un clic. Sous l'aperçu, *Simuler* :
     une montée suivie du drop (4 s), un kick, une caisse claire, un temps, un changement de piste,
     pour voir les réactions sans attendre la musique ; tant qu'un morceau joue, l'aperçu suit le
-    vrai son, même entre deux coups. *Dessiné…*
-    ouvre une toile où tracer le trajet d'un geste. Un clic sur l'aperçu y montre l'effet du
+    vrai son, même entre deux coups. *Image…* ouvre
+    *Trajet d'une image* : une image (choisie, ou glissée sur la fenêtre : PNG, JPEG, GIF, WebP,
+    BMP, SVG, ICO, 20 Mo au plus), ou un texte, un emoji ; ses contours s'affichent sur l'image et
+    l'essaim les parcourt dans un aperçu. *Seuil* (calculé : *Auto*), *Inverser* (la forme est de
+    l'autre côté du seuil), *Le plus grand* ou *Tous, un par anneau* (4 au plus : chaque anneau
+    suit le sien, à sa place). Une image à fond transparent donne le plus net. Un clic sur l'aperçu y montre l'effet du
     clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
     `Images\Essaim` et le montre dans l'Explorateur.
   - *04 Auto* : les règles du preset automatique (*Si … alors …*, avec le bouton *Artiste en
@@ -336,7 +342,7 @@ Les presets partagés vivent dans un dépôt GitHub public, `[bibliotheque] depo
 les valeurs du preset *Défaut*. *Installer* copie le preset dans Mes presets. *Publier* (case du
 panneau d'enregistrement) ouvre GitHub sur la création de `presets/<nom>.toml` dans le dépôt :
 GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index. Un
-preset trop long pour l'adresse (plus de 6 000 caractères, par exemple un long trajet dessiné)
+preset trop long pour l'adresse (plus de 6 000 caractères, par exemple le trajet d'une image)
 est copié dans le presse-papiers : il suffit de le coller dans la page qui s'ouvre. Une entrée de
 l'index mal formée (section qui n'est pas une table) est ignorée. Champ facultatif `apercu` :
 chemin relatif d'une image PNG ou GIF du dépôt (`"apercus/Pollen.gif"`), montrée dans la vignette

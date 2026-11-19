@@ -83,16 +83,23 @@ try:
         bandeau.append(im)
     gif("hero.gif", bandeau)
 
-    # le kick (Intense), un trajet dessiné (trèfle à trois lobes), les effets du clic
+    # le kick (Intense), le trajet d'une image (visage souriant : quatre contours, un par anneau,
+    # tirés par `contours.rs`), les effets du clic
     gif("kick.gif", images(presets["Intense"], 320))
+    subprocess.run(["cargo", "test", "--release", "exporter_contours", "--", "--ignored", "--quiet"],
+                   cwd=DEPOT, check=True, env={**os.environ, "ESSAIM_CONTOURS": str(tmp / "contours.json")})
     dessin = copy.deepcopy(presets["Défaut"])
-    lobes = [(0.65 + 0.35 * math.cos(3 * a), a) for a in (k / 120 * 2 * math.pi for k in range(120))]
     dessin["orbite"]["forme"] = "trace"
-    dessin["orbite"]["trace"] = [[round(r * math.cos(a), 3), round(r * math.sin(a), 3)] for r, a in lobes]
+    dessin["orbite"]["contours"] = json.loads((tmp / "contours.json").read_text(encoding="utf-8"))
+    dessin["orbite"]["anneaux"], dessin["orbite"]["rayon"] = 4, 34
     dessin["couleur"]["teinte"], dessin["couleur"]["vitesse_teinte"] = 290, 25
     gif("trace.gif", images(dessin, 320))
     clic = copy.deepcopy(presets["Spirale"])
-    clic["clic"]["onde"], clic["clic"]["eclats"] = True, True
+    # au clic, l'onde et les éclats (déclencheurs)
+    liste = clic["declencheurs"]["liste"]
+    for faire in ("onde", "eclats"):
+        if not any(d["quand"] == "clic" and d["faire"] == faire for d in liste):
+            liste.append({**liste[0], "quand": "clic", "faire": faire, "force": 1.0, "delai": 0.0, "probabilite": 1.0})
     gif("clic.gif", images(clic, 320, clics=(4, 34)))
     # montée puis drop (Festival : palette de trois teintes, contretemps)
     gif("drop.gif", images(presets["Festival"], 320, scenario="montee", n=90))

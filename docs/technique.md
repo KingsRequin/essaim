@@ -53,6 +53,19 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   toutes les 250 ms avec le plein écran ; ni bureau, ni barre des tâches, ni fenêtre réduite, en
   plein écran ou d'Essaim). Une étincelle ou un grain de poussière qui traverse un bord entre deux
   pas est réfléchi (vitesse × 0,7).
+- **Trajet d'une image** (`contours.rs`) : masque de la forme (la transparence si l'image en a,
+  sinon la luminosité coupée au seuil d'Otsu, du côté qui n'est pas le fond que montrent les bords
+  de l'image), filtre majoritaire 3 × 3 deux fois, régions d'un seul tenant (8 voisins, les plus
+  petites que 0,2 % de l'image écartées), bord extérieur de chacune suivi pixel à pixel (voisinage
+  de Moore, arrêt de Jacob), simplifié (Ramer-Douglas-Peucker sur contour fermé) puis adouci
+  (Chaikin ×2), 512 points au plus. La page envoie les pixels (`cmd: "contours"`, image ramenée à
+  256 px ; un texte ou un emoji est dessiné dans un canevas) ; une image glissée sur la fenêtre est
+  lue par `reglages.rs` et renvoyée à la page. Le moteur (`render::set_traces`) rééchantillonne
+  chaque contour à 256 pas égaux et les met tous à la même échelle autour de leur milieu : avec
+  plusieurs contours, l'anneau k suit le contour k mod n (sans le rétrécissement des anneaux), le
+  satellite le contour de sa couleur. `forme = "icone"` : `appli::IconeAppli` lit l'icône
+  (`PrivateExtractIconsW`, 128 px) de la dernière application au premier plan qui n'est pas Essaim,
+  une fois par exécutable.
 - **Inertie** (`[orbite] inertie`) : le centre de l'orbite est un ressort amorti vers le pointeur
   (pulsation 14 → 4,9 rad/s, amortissement 0,45, Euler semi-implicite, stable aux pas de 0,05 s),
   retard borné à 30 px × (1 + 5 × inertie) ; à 0, l'ancien suivi (lissage à 14/s).

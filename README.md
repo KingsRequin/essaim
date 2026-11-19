@@ -35,7 +35,8 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
   dessine seulement autour, dans un calque transparent aux clics.
 - **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
-- **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; 22 presets fournis, animés en
+- **À ta façon.** 14 formes de trajet, les contours d'une image, d'un texte, d'un emoji ou de
+  l'icône de l'appli au premier plan ; 22 presets fournis, animés en
   direct ; des déclencheurs (« au drop, une fissure », « sur la caisse claire, des étincelles ») et
   des modulations (« la rotation s'emballe au drop », « l'orbite s'ouvre sur les graves ») pour
   faire ton propre essaim ; des règles « si l'artiste est… alors tel preset » ; chaque réglage
@@ -59,13 +60,14 @@ drop, il explose en une grande onde et une gerbe d'étincelles.</td>
 au clic droit, une onde qui se referme.</td>
 </tr>
 <tr>
-<td valign="top"><img src="docs/images/trace.gif" alt="Comètes sur un trajet en trèfle dessiné à la main"></td>
+<td valign="top"><img src="docs/images/trace.gif" alt="Comètes sur les quatre contours d'un visage souriant : le visage, deux yeux, la bouche"></td>
 <td valign="top"><img src="docs/images/constellation.gif" alt="Preset Constellation : satellites reliés par de fines lignes, palette de deux teintes"></td>
 <td valign="top"><img src="docs/images/stream.png" alt="Fenêtre pour le stream : l'essaim au moment d'un drop, sur fond vert"></td>
 </tr>
 <tr>
-<td valign="top"><b>Ton propre trajet</b> : trace une boucle à la souris, les comètes la
-parcourent à vitesse constante. Ou choisis parmi 14 formes, qui peuvent tourner sur elles-mêmes.</td>
+<td valign="top"><b>Le trajet d'une image</b> : un logo, un texte, un emoji (ou glisse une image
+sur la fenêtre) ; chaque anneau de comètes suit un de ses contours. Ou 14 formes, qui peuvent
+tourner sur elles-mêmes.</td>
 <td valign="top"><b>Constellation et palette</b> : de fines lignes relient les satellites proches ;
 comètes et satellites se partagent jusqu'à trois teintes.</td>
 <td valign="top"><b>Fenêtre pour le stream</b> : l'essaim au centre, sur un fond uni à retirer

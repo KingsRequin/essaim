@@ -37,7 +37,8 @@ throw sparks, and on the drop, everything bursts.
   around it, in a click-through layer.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
-- **Your way.** 14 path shapes, or your own drawn by hand; 22 bundled presets, animated live;
+- **Your way.** 14 path shapes, the outlines of an image, a text, an emoji or the icon of the
+  app in front; 22 bundled presets, animated live;
   triggers ("on the drop, a crack", "on the snare, sparks") and modulations ("the rotation spins
   up on the drop", "the orbit opens on low notes") to build your own swarm; "if the artist is…
   then this preset" rules; every setting applied instantly, with its cost shown.
@@ -59,13 +60,14 @@ on the drop it bursts into a big wave and a spray of sparks.</td>
 right-click, a wave that closes in.</td>
 </tr>
 <tr>
-<td valign="top"><img src="docs/images/trace.gif" alt="Comets on a hand-drawn clover path"></td>
+<td valign="top"><img src="docs/images/trace.gif" alt="Comets on the four outlines of a smiling face: the face, two eyes, the mouth"></td>
 <td valign="top"><img src="docs/images/constellation.gif" alt="Constellation preset: satellites linked by thin lines, two-hue palette"></td>
 <td valign="top"><img src="docs/images/stream.png" alt="Stream window: the swarm during a drop, on a green background"></td>
 </tr>
 <tr>
-<td valign="top"><b>Your own path</b>: draw a loop with the mouse and the comets travel it at
-constant speed. Or pick one of 14 shapes, which can spin on themselves.</td>
+<td valign="top"><b>The path of an image</b>: a logo, a text, an emoji (or drop an image on the
+window); each ring of comets follows one of its outlines. Or 14 shapes, which can spin on
+themselves.</td>
 <td valign="top"><b>Constellation and palette</b>: thin lines link nearby satellites; comets and
 satellites share up to three hues.</td>
 <td valign="top"><b>Stream window</b>: the swarm in the middle, on a solid background to key out
