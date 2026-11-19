@@ -27,16 +27,37 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
   mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
   précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
-  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`). Avec `[couleur] musique`, la teinte glisse en plus avec la basse et la brillance du son.
+  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`). Avec `[couleur] pochette`, la
+  teinte dominante de la pochette du morceau qui joue (Spotify, navigateur… : tout ce que montre
+  le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
+  sans morceau, on retombe sur eux, dans cet ordre. Avec `[couleur] musique`, la teinte glisse en
+  plus avec la basse et la brillance du son.
+- **Changement de piste** (`[musique] rafale_piste`, actif par défaut) : quand le titre change
+  pendant la lecture, une rafale (éclat, satellites en double, grande onde) ; rien au lancement
+  ni sur une pause.
+- **Tempo** : le tempo des kicks est suivi (affiché dans l'en-tête des réglages, « 128 BPM »,
+  quand il est régulier). Quand la musique continue sans grosse caisse depuis 2 s (break,
+  couplet) alors que ce tempo était connu, l'éclat de l'essaim continue de pulser doucement à
+  chaque temps (`[audio] pulsation_tempo`, bascule *Pulser au tempo pendant les breaks*).
 - **Clics** : une onde de choc (`[clic] onde`) et, au choix, des éclats (`eclats`), en plus des
   fissures. C'est le bouton principal qui compte, même quand les boutons sont inversés (gauchers).
 - **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`) ; on
   le voit aussi dans le grand aperçu des réglages quand la souris y file.
+- **Projecteur** (`[projecteur]`, actif par défaut) : secouer la souris (quelques allers-retours
+  rapides de gauche à droite) ou Ctrl+Alt+F assombrit l'écran du pointeur autour d'un disque clair
+  qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les kicks.
+- **Réticule** (`[reticule]`) : deux fines lignes croisées centrées sur le pointeur (`taille`,
+  `opacite`), vides au centre, qui s'illuminent sur le kick.
+- **Anneau de spectre** (`[spectre]`) : des barres autour du pointeur, une par bande de
+  fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
+  (`rayon`, `hauteur`).
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11).
 
-Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut) : Spotify,
-navigateur, jeux… sans rien configurer.
+Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
+choisie dans *Avancé › Son › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
+presets ; si elle est débranchée, Essaim écoute la sortie par défaut en attendant son retour) :
+Spotify, navigateur, jeux… sans rien configurer.
 
 ## Curseurs
 
@@ -64,8 +85,21 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   0 = jamais) : l'essaim s'efface, puis plus rien n'est dessiné jusqu'au prochain mouvement, son
   ou clic. En pause et en plein écran, la capture du son s'arrête aussi (sauf si la fenêtre des
   réglages est ouverte).
+- **Pauses automatiques** (`[pause]`, propres à la machine, hors presets) :
+  - `ne_pas_deranger` (oui par défaut) : pause quand Windows ne veut pas être dérangé (appli ou
+    jeu en plein écran au premier plan, mode présentation), reprise ensuite ;
+  - `batterie` : sur batterie ou avec l'économiseur de batterie, `"rien"`, `"reduire"` (par
+    défaut : 30 images/s au plus) ou `"pause"` ;
+  - `applis` : pause tant que l'une de ces applications est au premier plan (onglet *04 Auto*,
+    avec la dernière application utilisée à ajouter d'un clic).
+  La raison s'affiche sous le bouton Pause.
+- **Qualité adaptative** (`[rendu] adaptatif`, oui par défaut) : si une image demande plus de
+  4 ms de calcul, la cadence baisse par paliers (120, 60, 30 images/s au plus) et remonte quand
+  le calcul redevient léger.
+- **Masquer des captures** (`[rendu] masquer_captures`) : l'essaim reste à l'écran mais
+  n'apparaît plus dans les captures, enregistrements et partages d'écran (Windows 10 2004 et plus).
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
-  (une bulle de l'icône le nomme), Ctrl+Alt+P pause. Ils passent par `RegisterHotKey` : Windows
+  (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier.
 - **Preset automatique** (`[automatique]`) : un preset par application au premier plan (nom de
   l'exécutable, prioritaire) ou par plage horaire (qui peut passer minuit). Quand plus aucune
@@ -91,7 +125,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
     *Aigus* s'allume sur les attaques des aigus. Sous *Pause*, l'état de l'écoute : *Son capté*,
-    *Son coupé* (pause, plein écran, son désactivé) ou *Son : erreur*, et *En veille*.
+    *Son coupé* (pause, plein écran, son désactivé) ou *Son : erreur*, *En veille*, et la raison
+    d'une pause automatique ; le titre du morceau en cours (titre et artiste au survol, aussi
+    dans l'infobulle de l'icône) et le tempo des kicks (BPM) quand il est régulier.
   - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
     (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
   - Une valeur de réglage se tape au clavier (clic dessus, Entrée) ; double-clic sur une
@@ -160,4 +196,6 @@ panneau d'enregistrement) ouvre GitHub sur la création de `presets/<nom>.toml` 
 GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index. Un
 preset trop long pour l'adresse (plus de 6 000 caractères, par exemple un long trajet dessiné)
 est copié dans le presse-papiers : il suffit de le coller dans la page qui s'ouvre. Une entrée de
-l'index mal formée (section qui n'est pas une table) est ignorée.
+l'index mal formée (section qui n'est pas une table) est ignorée. Champ facultatif `apercu` :
+chemin relatif d'une image PNG ou GIF du dépôt (`"apercus/Pollen.gif"`), montrée dans la vignette
+quand l'aperçu est figé ; sans lui, ou si l'image ne se charge pas, l'aperçu est calculé.

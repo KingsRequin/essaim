@@ -83,6 +83,10 @@ preset can carry its own.</td>
 | 🎨 **Color** | Fixed or cycling hue, color of the foreground app, of the website open in the browser, or drifting with the music |
 | 🪟 **Border** | The active window's border takes the swarm's color and lights up on every kick |
 | 🖱️ **Clicks** | Shockwave, shards, cracks |
+| 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
+| 🥁 **Tempo** | The kick tempo is tracked: the swarm keeps pulsing through breaks without a kick drum |
+| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer; optional crosshair and spectrum ring |
+| 🌙 **Stays out of the way** | Pauses for full-screen apps, presentations, on battery or in front of chosen apps; lowers its frame rate when the PC struggles; can be hidden from screenshots and streams |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | A Horizon widget pauses and tunes Essaim from the bar |
 
 **Also:** automatic preset by foreground app or time of day, global hotkeys
@@ -154,8 +158,8 @@ for the preset library and updates.
 <details>
 <summary><b>The swarm doesn't react to sound.</b></summary>
 
-Essaim listens to Windows' *default* audio output. If your music plays on another output, make it
-the default. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
+Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
+in *Réglages › Avancé › Son › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
 </details>
 
 <details>

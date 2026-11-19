@@ -81,6 +81,10 @@ Un preset peut emporter le sien.</td>
 | 🎨 **Couleur** | Teinte fixe ou qui défile, couleur de l'appli au premier plan, du site ouvert dans le navigateur, ou qui glisse avec la musique |
 | 🪟 **Bordure** | La bordure de la fenêtre active prend la couleur de l'essaim et s'illumine sur chaque kick |
 | 🖱️ **Clics** | Onde de choc, éclats, fissures |
+| 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
+| 🥁 **Tempo** | Le tempo des kicks est suivi : l'essaim continue de pulser pendant les breaks sans grosse caisse |
+| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur ; en option, réticule et anneau de spectre |
+| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un widget d'Horizon met Essaim en pause et le règle depuis la barre |
 
 **Et aussi :** preset automatique selon l'appli au premier plan ou l'heure, raccourcis globaux
@@ -157,7 +161,7 @@ se connecte qu'à GitHub, pour la bibliothèque de presets et les mises à jour.
 <summary><b>L'essaim ne réagit pas au son.</b></summary>
 
 Essaim écoute la sortie audio *par défaut* de Windows. Si ta musique passe par une autre sortie,
-mets-la par défaut. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
+choisis-la dans *Réglages › Avancé › Son › Sortie son écoutée*. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
 basse, note).
 </details>
 

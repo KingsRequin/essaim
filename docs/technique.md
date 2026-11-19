@@ -57,6 +57,28 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   dessin ; souris, son et clics restent lus toutes les 40 ms (réveil en 0,25 s au plus).
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
   tard, puis toutes les 30 s.
+- **Pauses automatiques** (`pauses.rs`) : `SHQueryUserNotificationState` chaque seconde (pause
+  sur `QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`, `QUNS_PRESENTATION_MODE` ; pas
+  `QUNS_QUIET_TIME`, première heure d'un nouveau compte), `GetSystemPowerStatus` toutes les 5 s
+  ou sur `WM_POWERBROADCAST`, exécutable au premier plan chaque seconde. Traitées comme le plein
+  écran (bordure rendue, son coupé), notées au journal ; raison publiée (`charge::publier_raison`).
+- **Qualité adaptative** (`adaptatif.rs`) : nourrie chaque seconde par le calcul moyen par
+  image ; > 4 ms deux secondes de suite → palier suivant (120, 60, 30 ; ceux qui ne réduiraient
+  rien sont sautés), < 1,5 ms dix secondes → palier précédent.
+- **Masquer des captures** : `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` sur chaque
+  calque (`win::masquer_captures`). Les essais par capture `BitBlt` ne voient alors plus l'essaim.
+- **Projecteur, réticule, spectre** (`effets.rs`) : le réticule et le spectre s'ajoutent à la
+  zone de l'essaim ; le projecteur ajoute l'écran entier du pointeur aux zones à redessiner, le
+  temps de l'effet seulement (voile : dégradé radial Direct2D, ou remplissage ligne par ligne sur
+  le processeur). Secousse : trois changements de sens horizontaux francs (allers ≥ 60 px,
+  < 0,35 s, plutôt horizontaux) en moins de 0,6 s, lus sur les positions de chaque image.
+- **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
+  fil « essaim-media » (MTA, appels asynchrones attendus par `join`), réveillé par
+  `CurrentSessionChanged`, `MediaPropertiesChanged` et `PlaybackInfoChanged`, et au moins
+  toutes les secondes. Miniature décodée en 48 × 48 (`BitmapDecoder`) puis
+  `appli::teinte_dominante`. Priorité des teintes : pochette (pendant la lecture) > application
+  ou site > Prisme. Sans l'API (Windows N), une ligne au journal et rien ne change. Message
+  `charge` : `morceau`, `lecture`, `pistes`.
 
 ## Interface locale (widget Horizon)
 
@@ -74,7 +96,9 @@ simulation comprise) : **0,35 ms par image** avec la carte graphique, 1,09 ms av
 processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le coût de tiny-skia
 est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
 (pas de gain, bugs connus). Banc `mesure_fissures` (2026-11-19) : 12 fissures sur processeur,
-2,7 → 1,1 ms par image depuis que leurs passes fixes sont précalculées.
+2,7 → 1,1 ms par image depuis que leurs passes fixes sont précalculées. Effets (banc
+`mesure_effets`) : réticule et spectre négligeables ; projecteur, pendant l'effet seulement,
++0,13 ms par image avec la carte graphique, +9 ms avec le processeur (envoi de l'écran entier).
 
 ## Analyse du son (audio-commun, `src/kick.rs`)
 
@@ -98,6 +122,21 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   compteurs de kicks et d'aigus monotones (une réouverture du flux ne crée pas de faux kicks) ;
   brillance qui retombe en silence ; si la capture ne démarre pas, Essaim continue sans son et
   réessaie toutes les 30 s.
+- **Tempo** (`audio-commun`, `src/pulsation.rs`, sans FFT) : d'après les seuls instants des
+  kicks des 8 dernières secondes. Chaque tempo de 70 à 180 BPM est noté par l'alignement des
+  kicks sur sa grille × la part des temps marqués (ce produit écarte le double et la moitié du
+  tempo), puis la grille est ajustée par moindres carrés. Tempo annoncé seulement si les kicks
+  sont réguliers (8 au moins, 80 % sur la grille, écart type sous 4 % de la période, 60 % des
+  temps marqués) et après 3 estimations concordantes ; gardé pendant un break tant que la
+  musique joue (30 s au plus), oublié après 3 s de silence. Relais : tempo connu, musique, aucun
+  kick depuis 2 s → `pulsation_tempo` (éclat 0,35 × (1 − phase)⁴).
+- **Sortie écoutée** : `capture::start_sur` d'`audio-commun` (sortie par défaut ou identifiant
+  Windows) ; si la sortie choisie disparaît, repli sur la sortie par défaut, et retour sur elle
+  dès qu'elle revient (vérification toutes les 2 s).
+- **Bandes du spectre** (`src/audio.rs`, `Bandes`) : seulement si `[spectre] actif` ; 8 à 32
+  passe-bande (deux biquads f32 en série chacun) répartis en échelle log de 40 Hz à 12 kHz,
+  enveloppes 5 ms / 120 ms, niveaux en dB sous le pic récent (plage 36 dB). 0,9 % d'un cœur à
+  32 bandes.
 - Limites connues : une note de basse tenue ou une voix grave qui démarre sèchement peut encore
   compter comme un kick (la distinguer demanderait d'écouter plus de 30 ms) ; sur la batterie
   acoustique très propre, l'ancien détecteur faisait un peu mieux (F1 0,93 contre 0,84).
@@ -106,7 +145,7 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
 - La fenêtre est une page web (`ui/`, intégrée à l'exécutable) affichée par WebView2 (fourni
   avec Windows 10 et 11) via la crate `wry`. Elle n'a accès qu'à ses fichiers et à
-  `raw.githubusercontent.com` ; elle ne parle à l'appli que par messages (`src/reglages.rs`).
+  `raw.githubusercontent.com` (index de la bibliothèque et images d'aperçu) ; elle ne parle à l'appli que par messages (`src/reglages.rs`).
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
@@ -137,7 +176,7 @@ mises à jour) et `curseur-Dotter.zip`.
 ## Développement
 
 `cargo build --release` suffit : l'analyse du son vient de la bibliothèque
-[audio-commun](https://github.com/KingsRequin/audio-commun) (tag `v0.1.0`), partagée avec Horizon.
+[audio-commun](https://github.com/KingsRequin/audio-commun) (tag `v0.2.0`), partagée avec Horizon.
 Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
 suivi par git) :
 

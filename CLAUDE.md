@@ -28,7 +28,8 @@ modification vérifiée, réinstaller avec ce script (il arrête l'instance inst
 
 - Fermer l'instance avant de recompiler : `essaim.exe --quitter` (sinon l'exe est verrouillé).
 - Vérifier le rendu par capture d'écran : `BitBlt` avec `CAPTUREBLT` (0x40CC0020), sinon les
-  fenêtres superposées n'apparaissent pas ; processus en `PER_MONITOR_AWARE_V2`.
+  fenêtres superposées n'apparaissent pas ; processus en `PER_MONITOR_AWARE_V2`. Avec
+  `[rendu] masquer_captures = true`, les captures ne montrent plus l'essaim.
 - Fenêtre des réglages : `essaim.exe --reglages` (classe `EssaimReglages`), capture par
   `PrintWindow` avec `PW_RENDERFULLCONTENT` (2), qui rend aussi WebView2. On la pilote par de
   vrais clics (`SetCursorPos` + `mouse_event`) et `SendKeys`.
