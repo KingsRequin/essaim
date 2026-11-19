@@ -809,10 +809,53 @@ impl Crack {
     }
 }
 
+/// Taille de l'onde d'un changement de piste (pixels à 100 %), et sa durée (s).
+const ONDE_PISTE: (f32, f32) = (90.0, 0.8);
+
+impl Swarm {
+    /// Rafale d'un changement de piste (`[musique] rafale_piste`), faite d'effets existants :
+    /// l'éclat d'un kick, deux fois les satellites d'un kick fort (dans la limite
+    /// `[essaim] maximum`) et une grande onde de choc en (x, y), sans changer de sens.
+    pub fn rafale(&mut self, x: f32, y: f32, t: f64, cfg: &Config, scale: f32) {
+        let e = &cfg.essaim;
+        self.env = 1.0;
+        for _ in 0..2 * e.par_kick_min.max(e.par_kick_max).max(2) {
+            if self.sats.len() >= e.maximum {
+                break;
+            }
+            let (a, r, mul) = (self.rng.range(0.0, TAU), self.rng.range(0.75, SAT_R_MAX), self.rng.range(0.7, 1.3));
+            self.sats.push(Sat { a, r, mul, born: t, trail: Trail::new() });
+        }
+        let (taille, vie) = ONDE_PISTE;
+        self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie, taille: taille * scale, genre: Genre::Onde });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tiny_skia::Pixmap;
+
+    #[test]
+    fn rafale_de_changement_de_piste() {
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, (100.0, 100.0), AudioView::default(), &cfg, 1.0);
+        let dir = s.dir;
+        s.rafale(100.0, 100.0, 0.016, &cfg, 1.0);
+        // pas de changement de sens ; 2 × 3 satellites, l'éclat et une onde
+        assert_eq!((s.dir, s.sats.len(), s.env), (dir, 6, 1.0));
+        assert_eq!(s.particules.iter().filter(|p| p.genre == Genre::Onde).count(), 1);
+        // dans la limite du maximum
+        let mut cfg = cfg;
+        cfg.essaim.maximum = 7;
+        s.rafale(100.0, 100.0, 0.02, &cfg, 1.0);
+        assert_eq!(s.sats.len(), 7);
+        // l'onde reste dans le rectangle redessiné
+        s.update(0.03, 0.01, (100.0, 100.0), AudioView::default(), &cfg, 1.0);
+        let (x0, y0, x1, y1) = s.bounds((100.0, 100.0), 1.0, cfg.eclat.taille);
+        assert!(x0 <= 100.0 - ONDE_PISTE.0 && x1 >= 100.0 + ONDE_PISTE.0 && y0 <= 100.0 - ONDE_PISTE.0 && y1 >= 100.0 + ONDE_PISTE.0);
+    }
 
     #[test]
     fn kick_inverse_le_sens_et_ajoute_des_satellites() {
