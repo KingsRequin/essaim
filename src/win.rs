@@ -3,6 +3,7 @@
 
 use std::cell::Cell;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Once;
 use tiny_skia::Pixmap;
 use windows::core::{w, PCWSTR};
@@ -307,6 +308,8 @@ pub const CMD_CONFIG: usize = 2;
 pub const CMD_QUIT: usize = 3;
 pub const CMD_SUIVANT: usize = 4;
 pub const CMD_PRECEDENT: usize = 5;
+/// Relance Essaim pour passer à la version téléchargée (`maj`).
+pub const CMD_REDEMARRER: usize = 6;
 /// Presets du menu : `CMD_PRESET + rang` dans `profils::list()`.
 pub const CMD_PRESET: usize = 100;
 const WM_TRAY: u32 = WM_APP + 1;
@@ -318,14 +321,22 @@ thread_local! {
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ICON: Cell<HICON> = const { Cell::new(HICON(std::ptr::null_mut())) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
-    static TRAY_HWND: Cell<isize> = const { Cell::new(0) };
+}
+
+/// Fenêtre de l'icône : partagée, pour que le fil des mises à jour puisse afficher sa bulle.
+static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
+/// La dernière bulle annonce une mise à jour prête : un clic dessus relance Essaim.
+static BULLE_MAJ: AtomicBool = AtomicBool::new(false);
+
+fn tray_hwnd() -> HWND {
+    HWND(TRAY_HWND.load(Ordering::Relaxed) as *mut _)
 }
 
 /// Raccourcis globaux (RegisterHotKey, sans hook) : Ctrl+Alt+→ / ← preset suivant / précédent,
 /// Ctrl+Alt+P pause. Les enregistre ou les retire.
 pub fn raccourcis(actif: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_LEFT, VK_RIGHT};
-    let hwnd = HWND(TRAY_HWND.with(|h| h.get()) as *mut _);
+    let hwnd = tray_hwnd();
     let touches = [(1, VK_RIGHT.0 as u32), (2, VK_LEFT.0 as u32), (3, b'P' as u32)];
     unsafe {
         for (id, vk) in touches {
@@ -337,9 +348,24 @@ pub fn raccourcis(actif: bool) {
     }
 }
 
-/// Petite notification de l'icône (changement de preset au clavier).
+/// Petite notification de l'icône (changement de preset au clavier, téléchargement).
+/// Utilisable depuis n'importe quel fil.
 pub fn bulle(texte: &str) {
-    let hwnd = HWND(TRAY_HWND.with(|h| h.get()) as *mut _);
+    BULLE_MAJ.store(false, Ordering::Relaxed);
+    afficher_bulle(texte);
+}
+
+/// Bulle d'une mise à jour prête : un clic dessus relance Essaim.
+pub fn bulle_maj(texte: &str) {
+    BULLE_MAJ.store(true, Ordering::Relaxed);
+    afficher_bulle(texte);
+}
+
+fn afficher_bulle(texte: &str) {
+    let hwnd = tray_hwnd();
+    if hwnd.0.is_null() {
+        return;
+    }
     let mut n = nid(hwnd);
     n.uFlags = windows::Win32::UI::Shell::NIF_INFO | windows::Win32::UI::Shell::NIF_REALTIME;
     for (d, s) in n.szInfo.iter_mut().zip(texte.encode_utf16().take(250)) {
@@ -389,6 +415,10 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
     unsafe {
         if msg == WM_TRAY {
             let ev = (lp.0 & 0xFFFF) as u32;
+            if ev == windows::Win32::UI::Shell::NIN_BALLOONUSERCLICK && BULLE_MAJ.load(Ordering::Relaxed) {
+                COMMAND.with(|c| c.set(CMD_REDEMARRER));
+                return LRESULT(0);
+            }
             if ev == WM_RBUTTONUP || ev == WM_LBUTTONUP {
                 if let Ok(menu) = CreatePopupMenu() {
                     let paused = PAUSED.with(|p| p.get());
@@ -405,6 +435,10 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                         let _ = AppendMenuW(menu, MF_POPUP, sous.0 as usize, w!("Presets"));
                     }
                     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+                    if let Some(version) = crate::maj::prete() {
+                        let texte: Vec<u16> = format!("Redémarrer avec la version {version}").encode_utf16().chain(Some(0)).collect();
+                        let _ = AppendMenuW(menu, MF_STRING, CMD_REDEMARRER, PCWSTR(texte.as_ptr()));
+                    }
                     let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quitter"));
                     let mut pt = POINT::default();
                     let _ = GetCursorPos(&mut pt);
@@ -461,7 +495,7 @@ impl Tray {
             RegisterClassExW(&wc);
             let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), TRAY_CLASS, w!("Essaim"), WS_POPUP, 0, 0, 0, 0, None, None, Some(hinst.into()), None)?;
             TASKBAR_CREATED.with(|t| t.set(RegisterWindowMessageW(w!("TaskbarCreated"))));
-            TRAY_HWND.with(|h| h.set(hwnd.0 as isize));
+            TRAY_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
             ICON.with(|i| i.set(make_icon().unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default())));
             if !Shell_NotifyIconW(NIM_ADD, &nid(hwnd)).as_bool() {
                 log::warn!("icône de notification : ajout impossible");
@@ -474,6 +508,7 @@ impl Tray {
 impl Drop for Tray {
     fn drop(&mut self) {
         unsafe {
+            TRAY_HWND.store(0, Ordering::Relaxed);
             let _ = Shell_NotifyIconW(NIM_DELETE, &nid(self.hwnd));
             let _ = DestroyWindow(self.hwnd);
         }

@@ -601,6 +601,10 @@ const AVANCES = [
     bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique",
     note: "Mesuré sur Essaim : 0,24 ms de calcul par image avec la carte graphique, 1,18 ms avec le processeur (cinq fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
   },
+  {
+    bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
+    note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
+  },
   { demarrage: true },
   { accueil: true },
 ];
@@ -766,7 +770,10 @@ function construireReglages() {
       if (def.bascule) {
         const tete = el("div");
         tete.style.cssText = "display: flex; align-items: center; gap: 12px";
-        tete.append(bascule(def.bascule, def.section, def.cle), jaugeImpact(def.section + "." + def.cle));
+        const cle = def.section + "." + def.cle;
+        tete.append(bascule(def.bascule, def.section, def.cle));
+        // sans effet sur la puissance (mises à jour) : pas de jauge
+        if (IMPACT[cle]) tete.append(jaugeImpact(cle));
         l.append(tete);
         if (def.note) l.append(el("p", "note", def.note));
       } else if (def.demarrage) {

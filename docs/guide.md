@@ -108,6 +108,23 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
   lancement suivant aussi).
 
+## Mises à jour
+
+Trente secondes après le lancement, puis toutes les six heures, Essaim regarde la dernière
+version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus récente :
+
+1. une notification annonce le téléchargement de `essaim.exe` ;
+2. son empreinte SHA-256 est comparée à celle publiée par GitHub (fichier refusé sinon) ;
+3. le nouveau fichier prend la place de l'exécutable en cours, et l'ancien devient
+   `essaim.exe.ancien` (effacé au lancement suivant) ;
+4. une seconde notification propose de redémarrer. Clic dessus, ou *Redémarrer avec la version…*
+   dans le menu de l'icône. Sans clic, la nouvelle version démarre avec la session suivante.
+
+Le dossier de l'exécutable doit être modifiable (c'est le cas de
+`%LOCALAPPDATA%\Programs\Essaim`, pas de `Program Files`). Couper : *Mises à jour automatiques*
+dans les réglages avancés, ou `[mise_a_jour] auto = false`. Les échecs (pas de réseau, fichier
+refusé) sont notés dans le journal, et Essaim réessaie six heures plus tard.
+
 ## Bibliothèque de presets (GitHub)
 
 Les presets partagés vivent dans un dépôt GitHub public, `[bibliotheque] depot` dans

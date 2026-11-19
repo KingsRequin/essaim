@@ -22,6 +22,7 @@ pub struct Config {
     pub automatique: Automatique,
     pub raccourcis: Raccourcis,
     pub bibliotheque: Bibliotheque,
+    pub mise_a_jour: MiseAJour,
 }
 
 /// Étincelles sur les attaques des aigus (charleston, cymbales).
@@ -120,6 +121,20 @@ pub struct Bibliotheque {
 impl Default for Bibliotheque {
     fn default() -> Self {
         Self { depot: "KingsRequin/essaim-presets".into() }
+    }
+}
+
+/// Mises à jour depuis les versions publiées sur GitHub (`maj.rs`).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct MiseAJour {
+    /// Cherche une nouvelle version, la télécharge et prévient ; elle s'applique au redémarrage.
+    pub auto: bool,
+}
+
+impl Default for MiseAJour {
+    fn default() -> Self {
+        Self { auto: true }
     }
 }
 
@@ -429,6 +444,9 @@ actif = true            # Ctrl+Alt+→ / ← : preset suivant / précédent ; Ct
 
 [bibliotheque]
 depot = "KingsRequin/essaim-presets" # dépôt GitHub des presets partagés (index.json à la racine)
+
+[mise_a_jour]
+auto = true             # cherche les nouvelles versions sur GitHub, les télécharge et prévient
 
 [bordure]
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim

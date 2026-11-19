@@ -21,6 +21,7 @@ mod config;
 mod gpu;
 mod ipc;
 mod layer;
+mod maj;
 mod prisme;
 mod profils;
 mod reglages;
@@ -33,7 +34,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::core::w;
-use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
@@ -101,15 +102,16 @@ fn main() {
         return;
     }
     init_log();
-    unsafe {
-        let _mutex = CreateMutexW(None, true, w!("Local\\Essaim-curseur"));
+    // verrou d'instance unique, gardé jusqu'à la fin (ou rendu avant de relancer)
+    let verrou = unsafe {
+        let verrou = CreateMutexW(None, true, w!("Local\\Essaim-curseur"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
             log::info!("déjà lancé, sortie");
             return;
         }
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        std::mem::forget(_mutex); // garde le verrou jusqu'à la fin du processus
-    }
+        verrou
+    };
     // Quoi qu'il arrive, la bordure des fenêtres doit revenir (y compris celle laissée colorée
     // par une instance tuée).
     bordure::restore();
@@ -120,14 +122,30 @@ fn main() {
         default_hook(info);
     }));
     log::info!("démarrage d'Essaim {}", env!("CARGO_PKG_VERSION"));
-    if let Err(e) = run(open_settings) {
+    let relancer = run(open_settings).unwrap_or_else(|e| {
         log::error!("arrêt sur erreur : {e:#}");
-    }
+        false
+    });
     bordure::restore();
+    // nouvelle version en place : le verrou est rendu avant de lancer la suivante
+    if let (true, Some(exe)) = (relancer, maj::exe()) {
+        if let Ok(v) = verrou {
+            unsafe {
+                let _ = CloseHandle(v);
+            }
+        }
+        match std::process::Command::new(exe).spawn() {
+            Ok(_) => log::info!("relance pour la mise à jour"),
+            Err(e) => log::error!("relance impossible : {e}"),
+        }
+    }
     log::info!("arrêt");
 }
 
-fn run(open_settings: bool) -> anyhow::Result<()> {
+/// Boucle de l'appli. Renvoie vrai s'il faut relancer Essaim (mise à jour prête).
+fn run(open_settings: bool) -> anyhow::Result<bool> {
+    // premier lancement (aucun réglage encore) : la fenêtre des réglages et son accueil
+    let premier = !config::path().exists();
     let mut conf = config::Watched::load();
     render::set_trace(&conf.cfg.orbite.trace);
     let shared = Arc::new(audio::AudioShared::default());
@@ -136,10 +154,11 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut audio_thread = if conf.cfg.audio.actif { Some(audio::start(shared.clone())?) } else { None };
 
     let _tray = win::Tray::new()?;
+    maj::start(conf.cfg.mise_a_jour.auto);
     win::raccourcis(conf.cfg.raccourcis.actif);
     let mut raccourcis = conf.cfg.raccourcis.actif;
     let mut automatique = auto::Auto::default();
-    if open_settings {
+    if open_settings || premier {
         reglages::open(shared.clone());
     }
     // interface locale pour Horizon, et synchro de teinte avec Prisme
@@ -171,6 +190,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
     let mut backend_gen = 0u32;
     let (mut next_conf, mut next_fs) = (start, start);
     let mut stat_send = Duration::ZERO;
+    let mut relancer = false;
     // charge publiée chaque seconde pour la fenêtre des réglages
     let (mut charge_busy, mut charge_frames, mut charge_depuis) = (Duration::ZERO, 0u32, start);
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
@@ -182,6 +202,10 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         }
         match win::take_command() {
             win::CMD_QUIT => break,
+            win::CMD_REDEMARRER if maj::prete().is_some() => {
+                relancer = true;
+                break;
+            }
             win::CMD_PAUSE => {
                 user_paused = !user_paused;
                 charge::publier_pause(user_paused);
@@ -256,6 +280,7 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
             }
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
+            maj::regler(conf.cfg.mise_a_jour.auto);
             match (conf.cfg.audio.actif, audio_thread.is_some()) {
                 (true, false) => audio_thread = audio::start(shared.clone()).ok(),
                 (false, true) => audio_thread = None,
@@ -421,5 +446,5 @@ fn run(open_settings: bool) -> anyhow::Result<()> {
         }
     }
     drop(audio_thread);
-    Ok(())
+    Ok(relancer)
 }
