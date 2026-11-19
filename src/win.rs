@@ -793,8 +793,10 @@ pub fn open_file(path: &std::path::Path) {
     unsafe {
         let r = ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_SHOWNORMAL);
         if r.0 as isize <= 32 {
-            // pas d'appli associée aux .toml : Bloc-notes
-            let _ = ShellExecuteW(None, w!("open"), w!("notepad.exe"), PCWSTR(wide.as_ptr()), None, SW_SHOWNORMAL);
+            // pas d'appli associée aux .toml : Bloc-notes (chemin entre guillemets : il peut
+            // contenir des espaces)
+            let param: Vec<u16> = format!("\"{}\"", path.display()).encode_utf16().chain(Some(0)).collect();
+            let _ = ShellExecuteW(None, w!("open"), w!("notepad.exe"), PCWSTR(param.as_ptr()), None, SW_SHOWNORMAL);
         }
     }
 }

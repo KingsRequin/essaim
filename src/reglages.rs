@@ -355,7 +355,10 @@ impl Fenetre {
                 Err(e) => self.erreur(&format!("{}.", majuscule(&e))),
             },
             Demande::Exporter { nom } => {
-                let f = profils::fichier(&nom);
+                let f = match profils::fichier_verifie(&nom) {
+                    Ok(f) => f,
+                    Err(e) => return self.erreur(&format!("{}.", majuscule(&e))),
+                };
                 if f.exists() {
                     montrer_dans_l_explorateur(&f);
                 } else {
@@ -368,8 +371,14 @@ impl Fenetre {
                 }
             }
             Demande::ImporterFichiers { chemins } => {
-                let chemins: Vec<std::path::PathBuf> = chemins.into_iter().map(Into::into).collect();
-                self.importer(&chemins);
+                // fichiers glissés dans la fenêtre : disques de ce PC seulement (un chemin réseau
+                // `\\serveur\…` ferait envoyer l'identité Windows à ce serveur)
+                let (locaux, distants): (Vec<std::path::PathBuf>, Vec<_>) =
+                    chemins.into_iter().map(std::path::PathBuf::from).partition(|c| profils::chemin_local(c));
+                if !distants.is_empty() {
+                    self.erreur("Fichiers sur le réseau ignorés : copie-les d'abord sur ton PC.");
+                }
+                self.importer(&locaux);
             }
             Demande::Annuler => match self.avant.take() {
                 Some(avant) => {

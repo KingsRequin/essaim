@@ -261,6 +261,9 @@ function imageCommu(chemin) {
   return `https://raw.githubusercontent.com/${etat.depot}/main/${parts.map(encodeURIComponent).join("/")}`;
 }
 
+const INDEX_MAX = 1 << 20;
+const PRESETS_COMMU_MAX = 500;
+
 async function chargerCommu(forcer) {
   if (!etat.depot || (!forcer && etat.commu.etat !== "rien")) return;
   etat.commu = { etat: "charge", liste: [], message: "" };
@@ -271,9 +274,13 @@ async function chargerCommu(forcer) {
     const r = await fetch(`https://raw.githubusercontent.com/${etat.depot}/main/index.json`, { signal: arret.signal, cache: "no-store" });
     if (r.status === 404) throw new Error("absent");
     if (!r.ok) throw new Error("http " + r.status);
-    const index = await r.json();
+    // index d'un dépôt tiers : taille et nombre de presets bornés
+    const texte = await r.text();
+    if (texte.length > INDEX_MAX) throw new Error("trop grand");
+    const index = JSON.parse(texte);
     const base = reglagesDeBase();
     const liste = (estObjet(index) && Array.isArray(index.presets) ? index.presets : [])
+      .slice(0, PRESETS_COMMU_MAX)
       .filter((p) => estObjet(p) && typeof p.nom === "string" && p.nom.trim() && p.nom.length <= 40)
       .map((p) => ({
         nom: p.nom.trim(),
@@ -289,7 +296,9 @@ async function chargerCommu(forcer) {
       etat: "erreur", liste: [],
       message: e.message === "absent"
         ? `La bibliothèque n'est pas encore en ligne : le dépôt ${etat.depot} n'a pas d'index.json.`
-        : "Bibliothèque injoignable. Vérifie ta connexion, puis réessaie.",
+        : e.message === "trop grand"
+          ? `L'index du dépôt ${etat.depot} est trop grand (1 Mo au plus) : il n'est pas chargé.`
+          : "Bibliothèque injoignable. Vérifie ta connexion, puis réessaie.",
     };
   } finally {
     clearTimeout(delai);

@@ -216,6 +216,18 @@ pub fn fichier(name: &str) -> PathBuf {
     dir().join(format!("{}.toml", name.trim()))
 }
 
+/// Fichier du preset `name`, après vérification du nom (nom venu de la page des réglages).
+pub fn fichier_verifie(name: &str) -> Result<PathBuf, String> {
+    check_name(name).map(fichier)
+}
+
+/// Chemin absolu sur un disque de ce PC (pas `\\serveur\partage`, ni `\\.\périphérique`).
+pub fn chemin_local(chemin: &std::path::Path) -> bool {
+    use std::path::{Component, Prefix};
+    chemin.is_absolute()
+        && matches!(chemin.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+}
+
 /// Renomme un profil de l'utilisateur, et les règles automatiques qui le citent ; renvoie le
 /// nouveau nom.
 pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
@@ -493,6 +505,12 @@ mod tests {
 
     #[test]
     fn noms_refuses() {
+        assert!(fichier_verifie("../../x").is_err());
+        assert!(chemin_local(std::path::Path::new(r"C:\presets\a.toml")));
+        assert!(chemin_local(std::path::Path::new(r"\\?\C:\presets\a.toml")));
+        for c in [r"\\serveur\partage\a.toml", r"\\?\UNC\serveur\p\a.toml", r"\\.\pipe\x", r"presets\a.toml", r"\a.toml"] {
+            assert!(!chemin_local(std::path::Path::new(c)), "{c}");
+        }
         assert!(check_name("  ").is_err());
         assert!(check_name("a/b").is_err());
         assert!(check_name("fin.").is_err());

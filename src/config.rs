@@ -197,6 +197,21 @@ impl Default for Bibliotheque {
     }
 }
 
+/// `propriétaire/nom` tel que GitHub les accepte (vide : pas de bibliothèque). Le dépôt entre
+/// dans des adresses : rien d'autre ne doit pouvoir s'y glisser (`..`, `?`, `@`, espaces…).
+pub fn depot_valide(depot: &str) -> bool {
+    if depot.is_empty() {
+        return true;
+    }
+    let Some((proprio, nom)) = depot.split_once('/') else { return false };
+    let proprio_ok = (1..=39).contains(&proprio.len()) && proprio.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-');
+    let nom_ok = (1..=100).contains(&nom.len())
+        && nom.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        && nom != "."
+        && nom != "..";
+    proprio_ok && nom_ok
+}
+
 /// Mises à jour depuis les versions publiées sur GitHub (`maj.rs`).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
@@ -671,6 +686,10 @@ impl Config {
         // JSON, où un point non fini empêcherait toute la relecture)
         self.orbite.trace.retain(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e6));
         self.orbite.trace.truncate(2000);
+        if !depot_valide(&self.bibliotheque.depot) {
+            log::warn!("config : [bibliotheque] depot « {} » invalide, dépôt par défaut utilisé", self.bibliotheque.depot);
+            self.bibliotheque = Bibliotheque::default();
+        }
         let Ok(mut v) = serde_json::to_value(&self) else { return self };
         let defaut = serde_json::to_value(Config::default()).unwrap_or_default();
         if let Some(sections) = v.as_object_mut() {
@@ -997,6 +1016,19 @@ impl Watched {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn depot_de_la_bibliotheque() {
+        for bon in ["", "KingsRequin/essaim-presets", "a/b", "x-y/z.y_w"] {
+            assert!(super::depot_valide(bon), "{bon} refusé");
+        }
+        for mauvais in ["sans-barre", "a/b/c", "../x", "a/..", "a/b?x=1", "a b/c", "a@evil.com/x", "/x", "a/", "a_b/c"] {
+            assert!(!super::depot_valide(mauvais), "{mauvais} accepté");
+        }
+        let mut c = super::Config::default();
+        c.bibliotheque.depot = "x/../../y".into();
+        assert_eq!(c.clamped().bibliotheque.depot, super::Bibliotheque::default().depot);
+    }
+
     #[test]
     fn le_fichier_par_defaut_se_lit() {
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
