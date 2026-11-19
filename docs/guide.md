@@ -118,7 +118,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   réglages est ouverte).
 - **Pauses automatiques** (`[pause]`, propres à la machine, hors presets) :
   - `ne_pas_deranger` (oui par défaut) : pause quand Windows ne veut pas être dérangé (appli ou
-    jeu en plein écran au premier plan, mode présentation), reprise ensuite ;
+    jeu en plein écran au premier plan, mode présentation), reprise ensuite ; le calque
+    transparent d'une autre surcouche, même de la taille d'un écran, ne compte pas ;
   - `batterie` : sur batterie ou avec l'économiseur de batterie, `"rien"`, `"reduire"` (par
     défaut : 30 images/s au plus) ou `"pause"` ;
   - `applis` : pause tant que l'une de ces applications est au premier plan (onglet *04 Auto*,

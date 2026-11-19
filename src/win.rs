@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetMonitorInfoW, MonitorFromPoint,
     MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
@@ -426,6 +426,55 @@ pub fn covers_monitor(hwnd: HWND) -> bool {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         plein_ecran(style, IsZoomed(hwnd).as_bool(), r, mi.rcMonitor)
     }
+}
+
+/// Calque d'affichage (comme ceux d'Essaim) : superposé et traversé par la souris. Il couvre
+/// souvent tout un écran sans être une appli en plein écran.
+pub fn calque(style_etendu: u32) -> bool {
+    let calque = (WS_EX_LAYERED | WS_EX_TRANSPARENT).0;
+    style_etendu & calque == calque
+}
+
+/// Une vraie fenêtre (visible, ni masquée par DWM, ni calque, ni bureau, ni d'Essaim) est-elle en
+/// plein écran sur l'un des écrans ? Confirme le « occupé » (`QUNS_BUSY`) de Windows, qui prend
+/// aussi les calques transparents de la taille d'un écran (une autre surcouche) pour une appli
+/// en plein écran.
+pub fn plein_ecran_quelque_part() -> bool {
+    unsafe extern "system" fn chaque(hwnd: HWND, trouve: LPARAM) -> windows::core::BOOL {
+        let trouve = unsafe { &mut *(trouve.0 as *mut bool) };
+        if unsafe { fenetre_plein_ecran(hwnd) } {
+            *trouve = true;
+            return false.into();
+        }
+        true.into()
+    }
+    unsafe fn fenetre_plein_ecran(hwnd: HWND) -> bool {
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || calque(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32) {
+                return false;
+            }
+            let mut masquee = 0u32;
+            let lu = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut masquee as *mut u32 as *mut c_void, 4);
+            if lu.is_ok() && masquee != 0 {
+                return false;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == windows::Win32::System::Threading::GetCurrentProcessId() {
+                return false;
+            }
+            let mut class = [0u16; 64];
+            let n = GetClassNameW(hwnd, &mut class) as usize;
+            if matches!(String::from_utf16_lossy(&class[..n]).as_str(), "Progman" | "WorkerW") {
+                return false;
+            }
+            covers_monitor(hwnd)
+        }
+    }
+    let mut trouve = false;
+    // `EnumWindows` renvoie une erreur quand le rappel l'arrête : seul `trouve` compte
+    let _ = unsafe { EnumWindows(Some(chaque), LPARAM(&mut trouve as *mut bool as isize)) };
+    trouve
 }
 
 /// Décision du plein écran : ni agrandie, ni barre de titre, ni bord de redimensionnement (les
@@ -885,6 +934,14 @@ mod tests {
         let mut dst = [0u8; 8];
         rgba_vers_bgra(&mut dst, &src);
         assert_eq!(dst, [3, 2, 1, 4, 7, 0, 250, 255]);
+    }
+
+    #[test]
+    fn calque_d_affichage() {
+        // calque d'Essaim ou d'une autre surcouche (SharkApp : 0x82800a8)
+        assert!(calque(0x0828_00a8) && calque((WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST).0));
+        // fenêtre superposée qui prend les clics (fondu, jeu), fenêtre ordinaire
+        assert!(!calque(WS_EX_LAYERED.0) && !calque(WS_EX_TRANSPARENT.0) && !calque(0x0020_0000));
     }
 
     #[test]

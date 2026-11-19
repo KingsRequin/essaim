@@ -71,7 +71,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   tard, puis toutes les 30 s.
 - **Pauses automatiques** (`pauses.rs`) : `SHQueryUserNotificationState` chaque seconde (pause
   sur `QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`, `QUNS_PRESENTATION_MODE` ; pas
-  `QUNS_QUIET_TIME`, première heure d'un nouveau compte), `GetSystemPowerStatus` toutes les 5 s
+  `QUNS_QUIET_TIME`, première heure d'un nouveau compte ; `QUNS_BUSY` seulement si une vraie
+  fenêtre couvre un écran, `win::plein_ecran_quelque_part` : Windows le renvoie aussi pour le
+  calque transparent d'une autre surcouche), `GetSystemPowerStatus` toutes les 5 s
   ou sur `WM_POWERBROADCAST`, exécutable au premier plan chaque seconde. Traitées comme le plein
   écran (bordure rendue, son coupé), notées au journal ; raison publiée (`charge::publier_raison`).
 - **Qualité adaptative** (`adaptatif.rs`) : nourrie chaque seconde par le calcul moyen par

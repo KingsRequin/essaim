@@ -16,13 +16,18 @@ pub const CADENCE_BATTERIE: u32 = 30;
 const INTERVALLE: Duration = Duration::from_secs(1);
 const INTERVALLE_BATTERIE: Duration = Duration::from_secs(5);
 
-/// Windows demande-t-il de ne pas déranger ? Oui pour une appli en plein écran (`QUNS_BUSY`),
-/// un jeu Direct3D en plein écran exclusif et le mode présentation. Pas pour `QUNS_QUIET_TIME` :
+/// Windows demande-t-il de ne pas déranger ? Oui pour une appli en plein écran (`QUNS_BUSY`,
+/// confirmé par `plein_ecran` : Windows le dit aussi pour un calque transparent de la taille d'un
+/// écran, celui d'une autre surcouche), un jeu Direct3D en plein écran exclusif et le mode
+/// présentation. Pas pour `QUNS_QUIET_TIME` :
 /// documenté comme la première heure après la première ouverture de session d'un nouveau compte,
 /// il mettrait en pause un Essaim fraîchement installé sans raison visible ; et le « Ne pas
 /// déranger » manuel de Windows 11 n'est pas exposé par une API documentée.
-pub fn derange(etat: QUERY_USER_NOTIFICATION_STATE) -> bool {
-    [QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE].contains(&etat)
+pub fn derange(etat: QUERY_USER_NOTIFICATION_STATE, plein_ecran: impl FnOnce() -> bool) -> bool {
+    match etat {
+        QUNS_BUSY => plein_ecran(),
+        _ => [QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE].contains(&etat),
+    }
 }
 
 /// Effet de l'alimentation sur l'essaim.
@@ -115,7 +120,7 @@ impl Pauses {
     pub fn tick(&mut self, cfg: &Pause, now: Instant) -> Etat {
         if self.prochain.is_none_or(|p| now >= p) {
             self.prochain = Some(now + INTERVALLE);
-            self.derange = cfg.ne_pas_deranger && unsafe { SHQueryUserNotificationState() }.is_ok_and(derange);
+            self.derange = cfg.ne_pas_deranger && unsafe { SHQueryUserNotificationState() }.is_ok_and(|e| derange(e, crate::win::plein_ecran_quelque_part));
             // fenêtre d'Essaim ou exécutable illisible : l'état précédent est gardé
             if let Some(exe) = crate::appli::nom_premier_plan() {
                 if let Ok(mut r) = RECENTE.lock() {
@@ -208,8 +213,12 @@ mod tests {
 
     #[test]
     fn etats_qui_derangent() {
-        assert!(derange(QUNS_BUSY) && derange(QUNS_RUNNING_D3D_FULL_SCREEN) && derange(QUNS_PRESENTATION_MODE));
-        assert!(!derange(QUNS_ACCEPTS_NOTIFICATIONS) && !derange(QUNS_QUIET_TIME) && !derange(QUNS_NOT_PRESENT));
+        let oui = || true;
+        assert!(derange(QUNS_BUSY, oui) && derange(QUNS_RUNNING_D3D_FULL_SCREEN, oui) && derange(QUNS_PRESENTATION_MODE, oui));
+        assert!(!derange(QUNS_ACCEPTS_NOTIFICATIONS, oui) && !derange(QUNS_QUIET_TIME, oui) && !derange(QUNS_NOT_PRESENT, oui));
+        // « occupé » sans vraie fenêtre en plein écran (calque d'une autre surcouche) : pas de pause
+        let non = || false;
+        assert!(!derange(QUNS_BUSY, non) && derange(QUNS_RUNNING_D3D_FULL_SCREEN, non));
     }
 
     #[test]
