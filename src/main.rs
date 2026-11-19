@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod adaptatif;
 mod appli;
 mod audio;
 mod auto;
@@ -297,6 +298,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     // pauses automatiques (ne pas déranger, batterie, applications) et raison publiée
     let mut pauses = pauses::Pauses::default();
     let mut raison_publiee = String::new();
+    let mut adaptatif = adaptatif::Adaptatif::default();
 
     let start = Instant::now();
     let mut last = start;
@@ -375,7 +377,16 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         let t = (now - start).as_secs_f64();
         if now - charge_depuis >= Duration::from_secs(1) {
             let ms = charge_busy.as_secs_f32() * 1000.0 / charge_frames.max(1) as f32;
-            charge::publier(ms, charge_frames as f32 / (now - charge_depuis).as_secs_f32());
+            let ips = charge_frames as f32 / (now - charge_depuis).as_secs_f32();
+            charge::publier(ms, ips);
+            // qualité adaptative : cadence plafonnée par paliers quand une image coûte cher
+            let change = if conf.cfg.rendu.adaptatif { adaptatif.mesure(ms, ips) } else { adaptatif.lever() };
+            if change {
+                match adaptatif.plafond() {
+                    0 => log::info!("qualité adaptative : plus de plafond de cadence"),
+                    p => log::info!("qualité adaptative : cadence plafonnée à {p} images/s (calcul moyen {ms:.2} ms par image)"),
+                }
+            }
             (charge_busy, charge_frames, charge_depuis) = (Duration::ZERO, 0, now);
         }
 
@@ -408,7 +419,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         // pause automatique : traitée comme le plein écran (rien dessiné, son coupé, bordure rendue)
         let retenue = pauses.tick(&conf.cfg.pause, now);
         let retrait = fs_paused || retenue.pause.is_some();
-        let raison = pauses::raison(user_paused, fs_paused, retenue.pause.as_deref(), retenue.plafond, 0);
+        let raison = pauses::raison(user_paused, fs_paused, retenue.pause.as_deref(), retenue.plafond, adaptatif.plafond());
         if raison != raison_publiee {
             charge::publier_raison(&raison);
             raison_publiee = raison;
@@ -532,7 +543,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             (true, c) => c.min(cfg.rendu.cadence_repos),
             (false, c) => c,
         };
-        let cadence = pauses::plafonner(cadence, retenue.plafond);
+        let cadence = pauses::plafonner(pauses::plafonner(cadence, retenue.plafond), adaptatif.plafond());
         // cadence choisie : attente jusqu'à l'image suivante, par tranches courtes pour que les
         // clics restent lus (un clic de 60 ms doit être vu)
         if cadence > 0 {

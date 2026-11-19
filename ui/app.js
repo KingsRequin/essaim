@@ -729,6 +729,10 @@ const AVANCES = [
     note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
   },
   {
+    bascule: "Qualité adaptative", section: "rendu", cle: "adaptatif",
+    note: "Si une image demande plus de 4 ms de calcul (ordinateur chargé), Essaim baisse sa cadence par paliers (120, 60, puis 30 images/s au plus) et la remonte quand ça redevient léger.",
+  },
+  {
     bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
     note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
   },

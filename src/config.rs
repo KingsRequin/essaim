@@ -200,11 +200,13 @@ pub struct Rendu {
     pub veille_apres: u32,
     /// Calques exclus des captures d'écran et des streams (`WDA_EXCLUDEFROMCAPTURE`).
     pub masquer_captures: bool,
+    /// Cadence réduite par paliers quand une image coûte cher à calculer (`adaptatif.rs`).
+    pub adaptatif: bool,
 }
 
 impl Default for Rendu {
     fn default() -> Self {
-        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60, masquer_captures: false }
+        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60, masquer_captures: false, adaptatif: true }
     }
 }
 
@@ -467,6 +469,7 @@ carte_graphique = true  # dessin par la carte graphique ; false = par le process
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
 veille_apres = 60       # plus rien n'est dessiné après ces secondes sans souris, son ni clic ; 0 = jamais
 masquer_captures = false # invisible des captures d'écran et des streams (OBS, Discord, Teams…)
+adaptatif = true        # cadence réduite par paliers (120, 60, 30) quand une image coûte cher à calculer
 
 [souris]
 jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
@@ -903,11 +906,12 @@ mod tests {
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
         let d = super::Config::default();
         assert!(!c.rendu.masquer_captures && !d.rendu.masquer_captures);
+        assert!(c.rendu.adaptatif && d.rendu.adaptatif);
         assert!(c.pause.ne_pas_deranger && d.pause.ne_pas_deranger);
         assert_eq!((c.pause.batterie, d.pause.batterie), (super::ModeBatterie::Reduire, super::ModeBatterie::Reduire));
         assert!(c.pause.applis.is_empty() && d.pause.applis.is_empty());
         // hors presets
-        for (s, k) in [("rendu", "masquer_captures"), ("pause", "ne_pas_deranger"), ("pause", "batterie"), ("pause", "applis")] {
+        for (s, k) in [("rendu", "masquer_captures"), ("rendu", "adaptatif"), ("pause", "ne_pas_deranger"), ("pause", "batterie"), ("pause", "applis")] {
             assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
         }
         // écriture : valeur connue, inconnue refusée, liste d'applications
