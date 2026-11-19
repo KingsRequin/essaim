@@ -12,6 +12,11 @@ pub trait Canvas {
     fn polyline(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool);
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32);
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32);
+    /// Voile de couleur `rgb` et d'opacité `alpha` sur le rectangle `zone` (gauche, haut, droite,
+    /// bas, écran), percé d'un disque clair de rayon `r` centré en (x, y) dont le bord s'adoucit
+    /// sur `flou` px vers l'extérieur (projecteur « retrouver la souris »).
+    #[allow(clippy::too_many_arguments)]
+    fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32);
     /// Le moteur recopie vite une image toute prête (`image`) : le processeur oui ; la carte
     /// graphique non (ses traits, en lot de sprites, coûtent moins qu'une image à téléverser).
     fn images(&self) -> bool {
@@ -44,6 +49,19 @@ pub(crate) fn segment(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32,
     if let Some(path) = pb.finish() {
         let s = Stroke { width, line_cap: LineCap::Round, ..Stroke::default() };
         pm.stroke_path(&path, p, &s, Transform::identity(), None);
+    }
+}
+
+/// Pose le pixel prémultiplié `s` par-dessus `d` (source par-dessus).
+#[inline]
+fn sur(d: &mut [u8], s: [u8; 4]) {
+    if d[3] == 0 {
+        d.copy_from_slice(&s);
+    } else if s[3] != 0 {
+        let k = 255 - s[3] as u32;
+        for (dc, sc) in d.iter_mut().zip(s) {
+            *dc = sc.saturating_add(((*dc as u32 * k + 127) / 255) as u8);
+        }
     }
 }
 
@@ -99,6 +117,79 @@ impl Canvas for PixCanvas<'_> {
         }
     }
 
+    fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32) {
+        let a = alpha.clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return;
+        }
+        // Rempli ligne par ligne, sans passer par tiny-skia : un dégradé radial tiny-skia sur un
+        // écran entier coûtait ~14 ms par image. Sur chaque ligne : le disque clair est sauté,
+        // l'anneau adouci prend son opacité dans une table, le reste est un aplat.
+        let (w, h) = (self.pm.width() as i32, self.pm.height() as i32);
+        let (l, t) = self.at((zone.0, zone.1));
+        let (rr, b) = self.at((zone.2, zone.3));
+        let (x0, y0) = ((l.round() as i32).clamp(0, w), (t.round() as i32).clamp(0, h));
+        let (x1, y1) = ((rr.round() as i32).clamp(x0, w), (b.round() as i32).clamp(y0, h));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let (cx, cy) = self.at((x, y));
+        let r = r.max(0.0);
+        let ext = r + flou.max(1.0);
+        // couleur prémultipliée à l'opacité `k` (0 à 255)
+        let px = |k: u32| {
+            let al = (a * k as f32).round() as u32;
+            let m = |c: u8| ((c as u32 * al + 127) / 255) as u8;
+            [m(rgb.0), m(rgb.1), m(rgb.2), al as u8]
+        };
+        // opacité dans l'anneau : 0 au bord du disque, 40 % à mi-largeur, pleine au-delà
+        const PAS: usize = 64;
+        let table: [[u8; 4]; PAS + 1] = std::array::from_fn(|i| {
+            let u = i as f32 / PAS as f32;
+            let k = if u < 0.5 { 0.8 * u } else { 0.4 + 1.2 * (u - 0.5) };
+            px((k * 255.0).round() as u32)
+        });
+        let plein = px(255);
+        let largeur = (ext - r).max(1e-3);
+        let donnees = self.pm.data_mut();
+        for py in y0..y1 {
+            let dy = py as f32 + 0.5 - cy;
+            // étendues (en x) du disque clair et du disque adouci sur cette ligne
+            let corde = |rayon: f32| {
+                let d2 = rayon * rayon - dy * dy;
+                (d2 > 0.0).then(|| {
+                    let c = d2.sqrt();
+                    (((cx - c - 0.5).ceil() as i32).clamp(x0, x1), ((cx + c - 0.5).floor() as i32 + 1).clamp(x0, x1))
+                })
+            };
+            let (dedans, adouci) = (corde(r), corde(ext));
+            let ligne = &mut donnees[(py * w) as usize * 4..(py * w + w) as usize * 4];
+            let mut px_x = x0;
+            while px_x < x1 {
+                // fin du morceau de même nature à partir de px_x
+                let (fin, nature) = match (dedans, adouci) {
+                    (Some((a0, a1)), _) if px_x >= a0 && px_x < a1 => (a1, 0u8),
+                    (_, Some((g0, g1))) if px_x >= g0 && px_x < g1 => (dedans.map_or(g1, |(a0, _)| if px_x < a0 { a0 } else { g1 }), 1),
+                    (_, Some((g0, _))) if px_x < g0 => (g0, 2),
+                    _ => (x1, 2),
+                };
+                let fin = fin.clamp(px_x + 1, x1);
+                let morceau = ligne[px_x as usize * 4..fin as usize * 4].chunks_exact_mut(4);
+                if nature == 2 {
+                    morceau.for_each(|d| sur(d, plein));
+                } else if nature == 1 {
+                    let dx0 = px_x as f32 + 0.5 - cx;
+                    for (j, d) in morceau.enumerate() {
+                        let dx = dx0 + j as f32;
+                        let u = (((dx * dx + dy * dy).sqrt() - r) / largeur).clamp(0.0, 1.0);
+                        sur(d, table[(u * PAS as f32) as usize]);
+                    }
+                }
+                px_x = fin;
+            }
+        }
+    }
+
     fn images(&self) -> bool {
         true
     }
@@ -131,6 +222,10 @@ impl Canvas for Fondu<'_> {
 
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32) {
         self.cv.ring(x, y, r, width, rgb, alpha * self.k);
+    }
+
+    fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32) {
+        self.cv.voile(zone, x, y, r, flou, rgb, alpha * self.k);
     }
 
     fn images(&self) -> bool {

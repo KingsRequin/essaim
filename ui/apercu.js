@@ -18,6 +18,14 @@ const TRAIL_CHUNK = 4;
 const MAX_PARTICULES = 400;
 // Onde d'un changement de piste : taille (px à 100 %) et durée (s), comme ONDE_PISTE.
 const ONDE_PISTE = [90, 0.8];
+// Réticule et anneau de spectre : comme src/effets.rs.
+const RETICULE_VIDE = 12;
+const RETICULE_LARGEUR = 1.2;
+const RETICULE_LUEUR = 4;
+const SPECTRE_BARRE_MIN = 1.5;
+const SPECTRE_MONTEE = 30;
+const SPECTRE_DESCENTE = 8;
+const BANDES_MAX = 32;
 
 function hsl(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
@@ -102,6 +110,23 @@ function chemin(forme, a, trace) {
   }
 }
 
+// Épaisseur des barres du spectre (comme effets::spectre_largeur).
+const spectreLargeur = (n, rayon, S) => Math.min(6 * S, Math.max(1.5 * S, ((TAU * rayon) / Math.max(1, n)) * 0.5));
+
+// Bandes simulées pour l'aperçu (l'aperçu n'a pas l'analyse en bandes du vrai son) : le kick et
+// la basse dans le grave, un médium qui ondule, la brillance et les attaques d'aigus dans
+// l'aigu. Bande i sur n, centres de 40 Hz à 12 kHz en échelle logarithmique (comme audio::Bandes).
+function bandesSimulees(n, t, son, env, eclatAigus) {
+  const cloche = (x, c, l) => Math.exp(-(((x - c) / l) ** 2));
+  return Array.from({ length: n }, (_, i) => {
+    const x = i / Math.max(1, n - 1);
+    const v = 0.8 * env * cloche(x, 0.08, 0.12) + 0.6 * Math.min(1, son.basse || 0) * cloche(x, 0.15, 0.18)
+      + 0.4 * (0.6 + 0.4 * Math.sin(t * 2.3 + i * 1.7)) * cloche(x, 0.5, 0.22)
+      + (0.35 * Math.min(1, son.brillance || 0) + 0.5 * eclatAigus) * cloche(x, 0.85, 0.15);
+    return Math.max(0, Math.min(1, v));
+  });
+}
+
 // Rayon et vitesse relatifs de l'anneau k (comme render::anneau).
 const anneau = (k) => [1 + 0.55 * k, 1 / (1 + 0.45 * k)];
 
@@ -153,6 +178,10 @@ class Apercu {
     this.pointeur = null;
     this.pointeurAvant = null;
     this.t = 0;
+    // anneau de spectre : bandes affichées (lissées) et éclat des attaques d'aigus
+    this.bandes = new Array(BANDES_MAX).fill(0);
+    this.eclatAigus = 0;
+    this.aigusSpectre = null;
   }
 
   regler(reglages) {
@@ -193,6 +222,20 @@ class Apercu {
     this.sillage(dt);
     const n = Math.max(1, Math.ceil(dt / PAS_TRAINEE));
     for (let i = 0; i < n; i++) this.pas(dt / n, i === 0 ? son : { ...son, kicks: this.kicksVus ?? son.kicks });
+    this.spectre(dt, son);
+  }
+
+  // Bandes de l'anneau de spectre : simulées, puis lissées comme effets::lisser_bandes.
+  spectre(dt, son) {
+    const s = this.reglages.spectre;
+    if (!s || !s.actif) return;
+    if (this.aigusSpectre !== null && (son.aigus || 0) !== this.aigusSpectre) this.eclatAigus = 1;
+    this.aigusSpectre = son.aigus || 0;
+    this.eclatAigus *= Math.exp(-dt * 12);
+    const n = Math.min(BANDES_MAX, Math.max(8, Math.round(s.bandes)));
+    const lues = bandesSimulees(n, this.t, son, this.env, this.eclatAigus);
+    const km = Math.min(1, dt * SPECTRE_MONTEE), kd = Math.min(1, dt * SPECTRE_DESCENTE);
+    for (let i = 0; i < n; i++) this.bandes[i] += (lues[i] - this.bandes[i]) * (lues[i] > this.bandes[i] ? km : kd);
   }
 
   // Sillage : poussière le long du trajet de la souris quand elle file vite (comme
@@ -403,6 +446,33 @@ class Apercu {
     };
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
     const lueur = 0.4 + 0.6 * this.env, tete = couleur(1), duree = Math.max(0.1, c.essaim.duree);
+    // anneau de spectre puis réticule, sous l'essaim (comme Effets::dessiner)
+    const trait = (a, b, largeur, rgb, al) => {
+      g.strokeStyle = rgba(rgb, al);
+      g.lineWidth = largeur;
+      g.beginPath();
+      g.moveTo(a[0], a[1]);
+      g.lineTo(b[0], b[1]);
+      g.stroke();
+    };
+    const sp = c.spectre;
+    if (sp && sp.actif) {
+      const n = Math.min(BANDES_MAX, Math.max(8, Math.round(sp.bandes))), r = sp.rayon * S, l = spectreLargeur(n, r, S);
+      for (let i = 0; i < n; i++) {
+        const v = this.bandes[i], a = -Math.PI / 2 + (i / n) * TAU, cos = Math.cos(a), sin = Math.sin(a);
+        const long = (SPECTRE_BARRE_MIN + sp.hauteur * v) * S;
+        trait([cx + cos * r, cy + sin * r], [cx + cos * (r + long), cy + sin * (r + long)], l, couleur(v), 0.35 + 0.6 * v);
+      }
+    }
+    const re = c.reticule;
+    if (re && re.actif) {
+      const vide = RETICULE_VIDE * S, long = (RETICULE_VIDE + re.taille) * S, env = Math.min(1, Math.max(0, this.env));
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const a = [cx + dx * vide, cy + dy * vide], b = [cx + dx * long, cy + dy * long];
+        if (env > 0.02) trait(a, b, RETICULE_LUEUR * S, tete, 0.3 * env * re.opacite);
+        trait(a, b, RETICULE_LARGEUR * S, tete, re.opacite * (0.6 + 0.4 * env));
+      }
+    }
     const tetes = [];
     // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {
