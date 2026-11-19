@@ -32,17 +32,33 @@ pub struct Config {
     pub pause: Pause,
 }
 
-/// Réactions au morceau en cours (API média de Windows, `media.rs`).
+/// Réactions à la musique au-delà du kick : morceau en cours (API média de Windows,
+/// `media.rs`), montée et drop, caisse claire, contretemps, stéréo (`audio.rs`).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Musique {
     /// Rafale (satellites, éclat et grande onde) quand la piste change pendant la lecture.
     pub rafale_piste: bool,
+    /// L'essaim se resserre et accélère pendant une montée, puis explose au drop.
+    pub montee: bool,
+    /// Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire (ou clap).
+    pub caisse_claire: bool,
+    /// Petite pulsation des têtes sur chaque contretemps, quand le tempo est connu.
+    pub contretemps: bool,
+    /// Décalage de l'essaim vers le côté qui joue le plus fort (0 = aucun, 1 = fort).
+    pub stereo: f32,
 }
 
 impl Default for Musique {
     fn default() -> Self {
-        Self { rafale_piste: true }
+        Self { rafale_piste: true, montee: true, caisse_claire: true, contretemps: false, stereo: 0.0 }
+    }
+}
+
+impl Musique {
+    /// Un effet demande-t-il l'analyse musicale (caisse claire, montée, drop) ?
+    pub fn analyse_voulue(&self) -> bool {
+        self.montee || self.caisse_claire
     }
 }
 
@@ -53,11 +69,13 @@ pub struct Scintillement {
     pub actif: bool,
     /// Étincelles par attaque (1 à 10).
     pub quantite: f32,
+    /// Étincelles, éclats et poussière rebondissent sur les bords de la fenêtre au premier plan.
+    pub rebonds: bool,
 }
 
 impl Default for Scintillement {
     fn default() -> Self {
-        Self { actif: true, quantite: 4.0 }
+        Self { actif: true, quantite: 4.0, rebonds: true }
     }
 }
 
@@ -70,11 +88,13 @@ pub struct Clic {
     /// Éclats projetés autour du clic.
     pub eclats: bool,
     pub taille: f32,
+    /// Clic droit : une onde qui se referme et des étincelles aspirées vers le pointeur.
+    pub droit: bool,
 }
 
 impl Default for Clic {
     fn default() -> Self {
-        Self { onde: true, eclats: false, taille: 1.0 }
+        Self { onde: true, eclats: false, taille: 1.0, droit: true }
     }
 }
 
@@ -287,12 +307,33 @@ pub struct Rendu {
     pub masquer_captures: bool,
     /// Cadence réduite par paliers quand une image coûte cher à calculer (`adaptatif.rs`).
     pub adaptatif: bool,
+    /// Sans flashs (photosensibilité) : éclats adoucis, au plus trois par seconde, bordure qui
+    /// ne clignote plus. `auto` : quand Windows demande de réduire les animations.
+    pub sans_flashs: SansFlashs,
 }
 
 impl Default for Rendu {
     fn default() -> Self {
-        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60, masquer_captures: false, adaptatif: true }
+        Self {
+            cadence: 0,
+            carte_graphique: true,
+            cadence_repos: 30,
+            veille_apres: 60,
+            masquer_captures: false,
+            adaptatif: true,
+            sans_flashs: SansFlashs::Auto,
+        }
     }
+}
+
+/// Mode sans flashs : selon le réglage de Windows (« Afficher les animations »), toujours, ou jamais.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SansFlashs {
+    #[default]
+    Auto,
+    Oui,
+    Non,
 }
 
 /// Éclat du kick, dessiné sous le pointeur (le pointeur lui-même est celui de Windows).
@@ -318,6 +359,9 @@ pub struct Orbite {
     pub rotation: f32,
     /// Trajet dessiné à la main (`forme = "trace"`) : points (x, y), rayon 1 environ.
     pub trace: Vec<[f32; 2]>,
+    /// Inertie du centre de l'orbite : 0 = suit le pointeur de près, 1 = ressort souple qui
+    /// traîne derrière la souris et la dépasse un peu à l'arrêt.
+    pub inertie: f32,
     pub vitesse_base: f32,
     pub vitesse_basse: f32,
     pub eloignement_grave: f32,
@@ -335,6 +379,8 @@ pub struct Essaim {
     pub fixes: u32,
     /// Trajet des satellites ; par défaut celui des comètes.
     pub forme: FormeSatellites,
+    /// Constellation : fines lignes entre les satellites et les comètes proches.
+    pub constellation: bool,
 }
 
 /// Trajet des satellites : celui des comètes, ou une forme à eux.
@@ -441,6 +487,10 @@ pub struct Couleur {
     /// Prend la teinte dominante de la pochette du morceau qui joue (prioritaire sur
     /// `application`, `site` et Prisme).
     pub pochette: bool,
+    /// Teintes de la palette (1 à 3) : les comètes et satellites se les partagent, chacune
+    /// décalée de `ecart_palette` degrés de la précédente.
+    pub palette: u32,
+    pub ecart_palette: f32,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -473,17 +523,41 @@ impl Default for Eclat {
 }
 impl Default for Orbite {
     fn default() -> Self {
-        Self { rayon: 22.0, cometes: true, forme: Forme::Cercle, nombre: 2, anneaux: 1, rotation: 0.0, trace: Vec::new(), vitesse_base: 3.5, vitesse_basse: 11.0, eloignement_grave: 1.3, trainee: 0.3 }
+        Self {
+            rayon: 22.0,
+            cometes: true,
+            forme: Forme::Cercle,
+            nombre: 2,
+            anneaux: 1,
+            rotation: 0.0,
+            trace: Vec::new(),
+            inertie: 0.0,
+            vitesse_base: 3.5,
+            vitesse_basse: 11.0,
+            eloignement_grave: 1.3,
+            trainee: 0.3,
+        }
     }
 }
 impl Default for Essaim {
     fn default() -> Self {
-        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8, fixes: 0, forme: FormeSatellites::Cometes }
+        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8, fixes: 0, forme: FormeSatellites::Cometes, constellation: false }
     }
 }
 impl Default for Couleur {
     fn default() -> Self {
-        Self { teinte: 0.0, vitesse_teinte: 60.0, ecart_teinte: 140.0, synchro_prisme: true, application: false, site: false, musique: false, pochette: false }
+        Self {
+            teinte: 0.0,
+            vitesse_teinte: 60.0,
+            ecart_teinte: 140.0,
+            synchro_prisme: true,
+            application: false,
+            site: false,
+            musique: false,
+            pochette: false,
+            palette: 1,
+            ecart_palette: 120.0,
+        }
     }
 }
 impl Default for Fissures {
@@ -512,6 +586,7 @@ nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
 trace = []              # trajet dessiné à la main (forme = "trace"), points [x, y]
+inertie = 0             # 0 = l'orbite suit le pointeur de près, 1 = ressort souple qui traîne derrière
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
 vitesse_basse = 11      # vitesse ajoutée quand la basse est au maximum
 eloignement_grave = 1.3 # écartement ajouté pour une note très grave (1.3 = +130 %)
@@ -524,6 +599,7 @@ maximum = 16            # satellites en même temps, au plus
 duree = 2.8             # durée de vie d'un satellite (s)
 fixes = 0               # satellites permanents, présents même sans musique
 forme = "cometes"       # trajet des satellites : "cometes" (le même), ou une forme du trajet des comètes
+constellation = false   # fines lignes entre les satellites et les comètes proches
 
 [couleur]
 teinte = 0              # teinte de départ (0 rouge, 120 vert, 240 bleu) ; fixe si vitesse_teinte = 0
@@ -534,6 +610,8 @@ application = false     # prend la teinte de l'icône de l'application au premie
 site = false            # dans un navigateur, prend la couleur du haut de la page affichée
 musique = false         # la teinte glisse avec l'intensité et la brillance de la musique
 pochette = false        # prend la teinte de la pochette du morceau qui joue (avant appli, site et Prisme)
+palette = 1             # teintes que se partagent comètes et satellites (1 à 3)
+ecart_palette = 120     # écart entre deux teintes de la palette (degrés)
 
 [fissures]
 actives = true
@@ -543,11 +621,13 @@ taille = 1.4
 [scintillement]
 actif = true            # étincelles sur les attaques des aigus (charleston, cymbales)
 quantite = 4            # étincelles par attaque (1 à 10)
+rebonds = true          # étincelles, éclats et poussière rebondissent sur les bords de la fenêtre active
 
 [clic]
 onde = true             # onde de choc à chaque clic
 eclats = false          # éclats projetés autour du clic
 taille = 1.0
+droit = true            # clic droit : une onde qui se referme, des étincelles aspirées
 
 [sillage]
 actif = false           # poussière derrière la souris quand elle file vite
@@ -555,6 +635,10 @@ densite = 5             # 1 à 10
 
 [musique]
 rafale_piste = true     # rafale de satellites et grande onde quand la piste change pendant la lecture
+montee = true           # l'essaim se resserre et accélère pendant une montée, puis explose au drop
+caisse_claire = true    # un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire (ou clap)
+contretemps = false     # petite pulsation sur chaque contretemps, quand le tempo est connu
+stereo = 0              # l'essaim penche vers le côté qui joue le plus fort (0 = jamais, 1 = beaucoup)
 
 [projecteur]
 actif = true            # secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur
@@ -585,6 +669,7 @@ cadence_repos = 30      # images par seconde quand la souris est immobile et san
 veille_apres = 60       # plus rien n'est dessiné après ces secondes sans souris, son ni clic ; 0 = jamais
 masquer_captures = false # invisible des captures d'écran et des streams (OBS, Discord, Teams…)
 adaptatif = true        # cadence réduite par paliers (120, 60, 30) quand une image coûte cher à calculer
+sans_flashs = "auto"    # photosensibilité : "auto" (si Windows réduit les animations), "oui" ou "non"
 
 [souris]
 jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
@@ -640,6 +725,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("orbite", "nombre") => (1.0, 8.0),
         ("orbite", "anneaux") => (1.0, 4.0),
         ("orbite", "rotation") => (-60.0, 60.0),
+        ("orbite", "inertie") => (0.0, 1.0),
         ("orbite", _) => (0.0, 100.0),
         ("essaim", "fixes") => (0.0, 32.0),
         ("scintillement", "quantite") => (1.0, 10.0),
@@ -655,6 +741,9 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
         ("couleur", "teinte") => (0.0, 360.0),
+        ("couleur", "palette") => (1.0, 3.0),
+        ("couleur", "ecart_palette") => (0.0, 180.0),
+        ("musique", "stereo") => (0.0, 1.0),
         ("couleur", _) => (0.0, 720.0),
         ("fissures", "duree") => (0.2, 30.0),
         ("fissures", "taille") => (0.2, 6.0),

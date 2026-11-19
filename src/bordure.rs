@@ -53,6 +53,16 @@ pub fn level(cfg: &Bordure, pulse: f32) -> f32 {
     (repos + (1.0 - repos) * cfg.intensite.clamp(0.0, 1.0) * pulse).clamp(0.0, 1.0)
 }
 
+/// Réglages de la bordure à appliquer : en mode sans flashs (photosensibilité), plus
+/// d'illumination sur les kicks, la bordure garde sa luminosité de repos.
+pub fn sans_flashs(cfg: &Bordure, doux: bool) -> Bordure {
+    if doux {
+        Bordure { intensite: 0.0, ..cfg.clone() }
+    } else {
+        cfg.clone()
+    }
+}
+
 /// COLORREF (0x00BBGGRR) de la couleur `rgb` à la luminosité `level`, quantifié.
 pub fn colorref(rgb: (u8, u8, u8), level: f32) -> u32 {
     let q = |v: u8| {

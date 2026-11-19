@@ -4,6 +4,11 @@
 //! satellites ; la quantité de basse règle la vitesse ; plus la note de basse est grave, plus
 //! les orbites s'éloignent. Les traînées sont gardées en coordonnées écran : quand la souris
 //! bouge, elles s'étirent derrière elle (la fenêtre s'agrandit le temps du mouvement).
+//!
+//! Au-delà du kick (`[musique]`) : pendant une montée l'essaim se resserre et accélère, puis
+//! explose au drop ; un carré s'ouvre sur chaque caisse claire ; les têtes pulsent sur les
+//! contretemps ; l'essaim penche vers le côté qui joue le plus fort. Tout est reproduit dans
+//! `ui/apercu.js`.
 
 use crate::audio::AudioView;
 use crate::config::{Config, Forme};
@@ -140,9 +145,21 @@ pub fn set_sync_hue(h: Option<f32>) {
 /// Teinte « Prisme » : `k` = 0 en queue de traînée, 1 en tête. Base : celle de l'éclairage si
 /// la synchro en fournit une, sinon `teinte` qui tourne avec le temps (fixe à vitesse nulle).
 pub fn prisme(cfg: &Config, t: f64, k: f32) -> (u8, u8, u8) {
+    prisme_decale(cfg, t, k, 0.0)
+}
+
+/// Teinte `j` de la palette (`[couleur] palette`, 1 à 3 teintes) : celle de `prisme`, décalée de
+/// `j` fois `ecart_palette` degrés (les comètes et satellites se partagent la palette).
+pub fn prisme_palette(cfg: &Config, t: f64, k: f32, j: usize) -> (u8, u8, u8) {
+    let n = cfg.couleur.palette.clamp(1, 3) as usize;
+    prisme_decale(cfg, t, k, (j % n) as f32 * cfg.couleur.ecart_palette)
+}
+
+fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u8, u8) {
     let synced = f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed));
     let base = if synced.is_finite() { synced } else { (cfg.couleur.teinte + t as f32 * cfg.couleur.vitesse_teinte).rem_euclid(360.0) };
     let base = if cfg.couleur.musique { base + decalage() } else { base };
+    let base = base + if decale.is_finite() { decale } else { 0.0 };
     let tail = base + cfg.couleur.ecart_teinte;
     let mut dh = base - tail;
     if dh > 180.0 {
@@ -198,6 +215,10 @@ enum Genre {
     Onde,
     /// Poussière du sillage de la souris.
     Poussiere,
+    /// Caisse claire : carré (posé sur la pointe) qui s'ouvre sous le pointeur.
+    Carre,
+    /// Clic droit : anneau qui se referme sur le point du clic.
+    Implosion,
 }
 
 #[derive(Clone, Copy)]
@@ -216,11 +237,60 @@ impl Particule {
     /// Demi-côté du carré qui contient ce qui est dessiné.
     fn portee(&self) -> f32 {
         match self.genre {
-            Genre::Onde => self.taille + 4.0,
+            Genre::Onde | Genre::Carre | Genre::Implosion => self.taille + 4.0,
             _ => self.taille * 2.5,
         }
     }
 }
+
+/// Une particule qui traverse un bord de la fenêtre au premier plan (`murs` : gauche, haut,
+/// droite, bas) entre (x0, y0) et sa position rebondit dessus, en perdant un peu de vitesse.
+fn rebondir(p: &mut Particule, x0: f32, y0: f32, (l, h, r, b): (f32, f32, f32, f32)) {
+    const REBOND: f32 = 0.7;
+    for bord in [l, r] {
+        if (x0 - bord) * (p.x - bord) < 0.0 && (h..=b).contains(&p.y) {
+            p.x = 2.0 * bord - p.x;
+            p.vx = -p.vx * REBOND;
+        }
+    }
+    for bord in [h, b] {
+        if (y0 - bord) * (p.y - bord) < 0.0 && (l..=r).contains(&p.x) {
+            p.y = 2.0 * bord - p.y;
+            p.vy = -p.vy * REBOND;
+        }
+    }
+}
+
+/// Liens de la constellation (`[essaim] constellation`) : paires de têtes `(x, y)` plus proches
+/// que `portee`, avec leur force (1 tout près, 0 à la portée) ; au plus `LIENS_MAX`.
+fn liens(tetes: &[(f32, f32)], portee: f32, sortie: &mut Vec<(usize, usize, f32)>) {
+    sortie.clear();
+    if !portee.is_finite() || portee <= 0.0 {
+        return;
+    }
+    for i in 0..tetes.len() {
+        for j in i + 1..tetes.len() {
+            let d = ((tetes[i].0 - tetes[j].0).powi(2) + (tetes[i].1 - tetes[j].1).powi(2)).sqrt();
+            if d < portee {
+                sortie.push((i, j, 1.0 - d / portee));
+                if sortie.len() >= LIENS_MAX {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Liens de la constellation dessinés au plus.
+const LIENS_MAX: usize = 160;
+/// Carré d'une caisse claire : demi-diagonale (px à 100 %) et durée (s).
+const CARRE_CAISSE: (f32, f32) = (30.0, 0.32);
+/// Drop : onde (px à 100 %, durée en s) et étincelles projetées.
+const ONDE_DROP: (f32, f32) = (130.0, 0.9);
+const ETINCELLES_DROP: usize = 28;
+/// Mode sans flashs : au plus un éclat tous les `ECART_FLASH` secondes (trois par seconde), à
+/// la moitié de sa force.
+const ECART_FLASH: f64 = 1.0 / 3.0;
 
 /// Particules vivantes au plus (au-delà, les plus vieilles s'en vont).
 const MAX_PARTICULES: usize = 400;
@@ -231,6 +301,8 @@ struct Sat {
     mul: f32,
     born: f64,
     trail: Trail,
+    /// Teinte de la palette (donnée à la naissance : elle ne change pas quand d'autres meurent).
+    couleur: usize,
 }
 
 /// Point du trajet des comètes à l'angle `a`, pour un rayon de 1 (y vers le bas).
@@ -327,6 +399,23 @@ pub struct Swarm {
     fixes: Vec<Sat>,
     kicks_seen: Option<u32>,
     aigus_vus: Option<u32>,
+    caisses_vues: Option<u32>,
+    drops_vus: Option<u32>,
+    /// Montée suivie (0 à 1), lissée.
+    tension: f32,
+    /// Pulsation du dernier contretemps (1 → 0), et phase du temps à l'image précédente.
+    contre: f32,
+    phase_avant: Option<f32>,
+    /// Vitesse du centre de l'orbite (px/s), pour l'inertie.
+    vitesse_centre: (f32, f32),
+    /// Teinte de la palette du prochain satellite.
+    prochaine_couleur: usize,
+    /// Bords de la fenêtre au premier plan (gauche, haut, droite, bas) : les particules y
+    /// rebondissent (`[scintillement] rebonds`).
+    pub murs: Option<(f32, f32, f32, f32)>,
+    /// Mode sans flashs (photosensibilité), et instant du dernier éclat.
+    pub doux: bool,
+    dernier_flash: f64,
     particules: Vec<Particule>,
     dernier_curseur: Option<(f32, f32)>,
     center: Option<(f32, f32)>,
@@ -346,12 +435,16 @@ struct Head {
     s: f32,
     al: f32,
     front: bool,
+    rgb: (u8, u8, u8),
 }
 
 #[derive(Default)]
 struct Tampons {
     heads: Vec<Head>,
     xy: Vec<(f32, f32)>,
+    /// Constellation : positions des têtes et liens.
+    points: Vec<(f32, f32)>,
+    liens: Vec<(usize, usize, f32)>,
 }
 
 impl Swarm {
@@ -367,6 +460,16 @@ impl Swarm {
             sats: Vec::new(),
             fixes: Vec::new(),
             aigus_vus: None,
+            caisses_vues: None,
+            drops_vus: None,
+            tension: 0.0,
+            contre: 0.0,
+            phase_avant: None,
+            vitesse_centre: (0.0, 0.0),
+            prochaine_couleur: 0,
+            murs: None,
+            doux: false,
+            dernier_flash: f64::NEG_INFINITY,
             particules: Vec::new(),
             dernier_curseur: None,
             kicks_seen: None,
@@ -415,18 +518,43 @@ impl Swarm {
     }
 
     pub fn update(&mut self, t: f64, dt: f32, cursor: (f32, f32), au: AudioView, cfg: &Config, scale: f32) {
-        // centre de l'orbite : suit le pointeur avec un léger retard, borné
-        let (mut cx, mut cy) = self.center.unwrap_or(cursor);
+        // centre de l'orbite : suit le pointeur, décalé vers le côté qui joue le plus fort
+        // (`[musique] stereo`), de près ou en ressort souple (`[orbite] inertie`), retard borné
+        let penche = au.balance.clamp(-1.0, 1.0) * cfg.musique.stereo.clamp(0.0, 1.0) * cfg.orbite.rayon * 1.6 * scale;
+        let cible = (cursor.0 + if penche.is_finite() { penche } else { 0.0 }, cursor.1);
+        let (mut cx, mut cy) = self.center.unwrap_or(cible);
         let (c0, far0) = ((cx, cy), self.far);
-        let k = 1.0 - (-dt * 14.0).exp();
-        cx += (cursor.0 - cx) * k;
-        cy += (cursor.1 - cy) * k;
-        let (ox, oy) = (cx - cursor.0, cy - cursor.1);
+        let inertie = cfg.orbite.inertie.clamp(0.0, 1.0);
+        if inertie > 0.0 {
+            // ressort amorti : pulsation de 14 à 4,9 rad/s, amortissement 0,45 (dépasse un peu)
+            let w = 14.0 * (1.0 - 0.65 * inertie);
+            let (vx, vy) = self.vitesse_centre;
+            let vx = vx + (w * w * (cible.0 - cx) - 0.9 * w * vx) * dt;
+            let vy = vy + (w * w * (cible.1 - cy) - 0.9 * w * vy) * dt;
+            self.vitesse_centre = if vx.is_finite() && vy.is_finite() { (vx, vy) } else { (0.0, 0.0) };
+            cx += self.vitesse_centre.0 * dt;
+            cy += self.vitesse_centre.1 * dt;
+        } else {
+            self.vitesse_centre = (0.0, 0.0);
+            let k = 1.0 - (-dt * 14.0).exp();
+            cx += (cible.0 - cx) * k;
+            cy += (cible.1 - cy) * k;
+        }
+        let (ox, oy) = (cx - cible.0, cy - cible.1);
         let d = (ox * ox + oy * oy).sqrt();
-        let lim = CENTER_LAG_MAX * scale;
+        let lim = CENTER_LAG_MAX * scale * (1.0 + 5.0 * inertie);
         if d > lim {
-            cx = cursor.0 + ox / d * lim;
-            cy = cursor.1 + oy / d * lim;
+            cx = cible.0 + ox / d * lim;
+            cy = cible.1 + oy / d * lim;
+            // en butée : la vitesse qui éloignait le centre est perdue
+            let (ux, uy) = (ox / d, oy / d);
+            let (vx, vy) = self.vitesse_centre;
+            let fuite = (vx * ux + vy * uy).max(0.0);
+            self.vitesse_centre = (vx - fuite * ux, vy - fuite * uy);
+        }
+        if !(cx.is_finite() && cy.is_finite()) {
+            (cx, cy) = cible;
+            self.vitesse_centre = (0.0, 0.0);
         }
         self.center = Some((cx, cy));
 
@@ -436,22 +564,40 @@ impl Swarm {
         let e = &cfg.essaim;
         for _ in 0..new {
             self.dir = -self.dir;
-            self.env = 1.0;
+            self.eclater(t);
             let (lo, hi) = (e.par_kick_min.min(e.par_kick_max), e.par_kick_max.max(e.par_kick_min));
             let n = self.rng.range(lo as f32, hi as f32 + 0.999) as u32;
-            for _ in 0..n {
-                if self.sats.len() >= e.maximum {
-                    break;
-                }
-                let (a, r, mul) = (self.rng.range(0.0, TAU), self.rng.range(0.75, SAT_R_MAX), self.rng.range(0.7, 1.3));
-                self.sats.push(Sat { a, r, mul, born: t, trail: Trail::new() });
-            }
+            self.ajouter_satellites(n as usize, t, e.maximum);
         }
         self.env *= (-dt * 9.0).exp();
         // relais du tempo (break sans kick) : l'éclat pulse doucement sur chaque temps
         if cfg.audio.pulsation_tempo && au.relais {
             self.env = self.env.max(pulsation_tempo(au.phase));
         }
+        // caisse claire : un carré s'ouvre sous le pointeur
+        let caisses = nouveaux(self.caisses_vues, au.caisses);
+        self.caisses_vues = Some(au.caisses);
+        if cfg.musique.caisse_claire && caisses > 0 {
+            let (taille, vie) = CARRE_CAISSE;
+            self.particules.push(Particule { x: cursor.0, y: cursor.1, vx: 0.0, vy: 0.0, ne: t, vie, taille: taille * scale, genre: Genre::Carre });
+        }
+        // montée : suivie en douceur ; drop : l'essaim explose
+        let drops = nouveaux(self.drops_vus, au.drops);
+        self.drops_vus = Some(au.drops);
+        let vise = if cfg.musique.montee { au.tension.clamp(0.0, 1.0) } else { 0.0 };
+        self.tension += (vise - self.tension) * (dt * 6.0).min(1.0);
+        if cfg.musique.montee && drops > 0 {
+            self.exploser(cursor.0, cursor.1, t, cfg, scale);
+        }
+        // contretemps (milieu du temps, tempo connu) : les têtes pulsent
+        self.contre *= (-dt * 10.0).exp();
+        let phase = au.bpm.map(|_| au.phase);
+        if let (true, Some(p), Some(avant)) = (cfg.musique.contretemps, phase, self.phase_avant) {
+            if avant < 0.5 && p >= 0.5 && p - avant < 0.4 {
+                self.contre = 1.0;
+            }
+        }
+        self.phase_avant = phase;
 
         // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
         let nouveaux = nouveaux(self.aigus_vus, au.aigus);
@@ -492,11 +638,17 @@ impl Swarm {
             }
         }
         self.dernier_curseur = Some(cursor);
-        // particules : avancent en ralentissant, puis s'éteignent
+        // particules : avancent en ralentissant (en rebondissant sur les bords de la fenêtre au
+        // premier plan), puis s'éteignent
         let frein = (-dt * 3.0).exp();
+        let murs = self.murs.filter(|_| cfg.scintillement.rebonds);
         for p in &mut self.particules {
+            let (x0, y0) = (p.x, p.y);
             p.x += p.vx * dt;
             p.y += p.vy * dt;
+            if let (Some(m), Genre::Etincelle | Genre::Poussiere) = (murs, p.genre) {
+                rebondir(p, x0, y0, m);
+            }
             p.vx *= frein;
             p.vy *= frein;
         }
@@ -512,9 +664,12 @@ impl Swarm {
         }
         let depth = ((80.0 - self.pitch) / 50.0).clamp(0.0, 1.0);
         let o = &cfg.orbite;
-        self.spd += ((o.vitesse_base + o.vitesse_basse * au.bass) - self.spd) * (dt * 10.0).min(1.0);
+        // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant
+        let tension = self.tension.clamp(0.0, 1.0);
+        self.spd += ((o.vitesse_base + o.vitesse_basse * au.bass) * (1.0 + 1.2 * tension) - self.spd) * (dt * 10.0).min(1.0);
         let presence = (au.bass * 2.5).clamp(0.0, 1.0);
-        self.far += ((1.0 + o.eloignement_grave * depth * presence) - self.far) * (dt * 16.0).min(1.0);
+        let vise = (1.0 + o.eloignement_grave * depth * presence) * (1.0 - 0.45 * tension) * (1.0 + 0.06 * self.contre);
+        self.far += (vise - self.far) * (dt * 16.0).min(1.0);
         // une valeur non finie (son abîmé) figerait l'essaim pour toujours : retour au repos
         if !self.spd.is_finite() {
             self.spd = o.vitesse_base;
@@ -566,7 +721,7 @@ impl Swarm {
             self.fixes = (0..e.fixes)
                 .map(|j| {
                     let u = (j as f32 * 0.618_034).fract();
-                    Sat { a: j as f32 * 2.399_963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1.0 - u), born: f64::INFINITY, trail: Trail::new() }
+                    Sat { a: j as f32 * 2.399_963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1.0 - u), born: f64::INFINITY, trail: Trail::new(), couleur: j as usize }
                 })
                 .collect();
         }
@@ -609,6 +764,60 @@ impl Swarm {
         }
     }
 
+    /// Clic droit en (x, y) (`[clic] droit`) : un anneau qui se referme et des étincelles
+    /// aspirées vers le point du clic (l'inverse de l'onde du clic principal).
+    pub fn clic_droit(&mut self, x: f32, y: f32, t: f64, cfg: &Config, scale: f32) {
+        let r = 52.0 * cfg.clic.taille.clamp(0.3, 3.0) * scale;
+        self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie: 0.45, taille: r, genre: Genre::Implosion });
+        for i in 0..12 {
+            let a = i as f32 * TAU / 12.0 + self.rng.range(-0.2, 0.2);
+            let (cos, sin) = (a.cos(), a.sin());
+            let v = self.rng.range(2.2, 3.0) * r;
+            let taille = self.rng.range(1.0, 1.8) * scale;
+            self.particules.push(Particule { x: x + cos * r, y: y + sin * r, vx: -cos * v, vy: -sin * v, ne: t, vie: 0.4, taille, genre: Genre::Etincelle });
+        }
+    }
+
+    /// Éclat du kick (et des rafales) : plein, ou en mode sans flashs, à moitié et au plus trois
+    /// fois par seconde.
+    fn eclater(&mut self, t: f64) {
+        if !self.doux {
+            self.env = 1.0;
+        } else if t - self.dernier_flash >= ECART_FLASH {
+            self.dernier_flash = t;
+            self.env = self.env.max(0.5);
+        }
+    }
+
+    /// Ajoute `n` satellites nés à `t`, dans la limite de `maximum`.
+    fn ajouter_satellites(&mut self, n: usize, t: f64, maximum: usize) {
+        for _ in 0..n {
+            if self.sats.len() >= maximum {
+                break;
+            }
+            let (a, r, mul) = (self.rng.range(0.0, TAU), self.rng.range(0.75, SAT_R_MAX), self.rng.range(0.7, 1.3));
+            self.sats.push(Sat { a, r, mul, born: t, trail: Trail::new(), couleur: self.prochaine_couleur });
+            self.prochaine_couleur = self.prochaine_couleur.wrapping_add(1);
+        }
+    }
+
+    /// Drop (`[musique] montee`) : l'éclat d'un kick, deux fois les satellites d'un kick fort,
+    /// une grande onde et des étincelles projetées depuis le centre de l'orbite.
+    fn exploser(&mut self, x: f32, y: f32, t: f64, cfg: &Config, scale: f32) {
+        let e = &cfg.essaim;
+        self.eclater(t);
+        self.ajouter_satellites(2 * e.par_kick_min.max(e.par_kick_max).max(2) as usize, t, e.maximum);
+        let (taille, vie) = ONDE_DROP;
+        self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie, taille: taille * scale, genre: Genre::Onde });
+        let (cx, cy) = self.center.unwrap_or((x, y));
+        for i in 0..ETINCELLES_DROP {
+            let a = i as f32 * TAU / ETINCELLES_DROP as f32 + self.rng.range(-0.1, 0.1);
+            let v = self.rng.range(220.0, 420.0) * scale;
+            let (vie, taille) = (self.rng.range(0.5, 0.9), self.rng.range(1.2, 2.2) * scale);
+            self.particules.push(Particule { x: cx, y: cy, vx: a.cos() * v, vy: a.sin() * v, ne: t, vie, taille, genre: Genre::Etincelle });
+        }
+    }
+
     /// Dessine (coordonnées écran). Le pointeur lui-même est celui de Windows, affiché
     /// par-dessus : seul son éclat au kick est dessiné ici, autour de `cursor`.
     pub fn draw(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
@@ -620,47 +829,66 @@ impl Swarm {
         let dur = cfg.essaim.duree.max(0.1) as f64;
 
         let mut tampons = self.tampons.borrow_mut();
-        let Tampons { heads, xy } = &mut *tampons;
+        let Tampons { heads, xy, points, liens: paires } = &mut *tampons;
         heads.clear();
+        // contretemps : les têtes grossissent un instant
+        let pulse = 1.0 + 0.5 * self.contre;
 
         // satellites (traînées sans halo, pour rester léger) ; les permanents restent à 0,8
         for s in self.sats.iter().chain(&self.fixes) {
             let k = if s.born.is_finite() { (1.0 - (t - s.born) / dur) as f32 } else { 0.8 };
             let al = (k * 1.5).min(1.0);
-            draw_trail(cv, xy, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
+            draw_trail(cv, xy, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg, s.couleur);
             if let Some(&(_, x, y)) = s.trail.back() {
-                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale, al, front: y > self.center.map_or(0.0, |c| c.1) });
+                let rgb = prisme_palette(cfg, t, 1.0, s.couleur);
+                heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale * pulse, al, front: y > self.center.map_or(0.0, |c| c.1), rgb });
             }
         }
-        // les comètes (devant : sous le centre de l'orbite, comme vues de biais)
+        // les comètes (devant : sous le centre de l'orbite, comme vues de biais) ; chacune prend
+        // une teinte de la palette
         if o.cometes {
             let cy = self.center.map_or(0.0, |c| c.1);
-            for tr in &self.trails {
-                draw_trail(cv, xy, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg);
+            for (i, tr) in self.trails.iter().enumerate() {
+                draw_trail(cv, xy, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg, i);
                 if let Some(&(_, x, y)) = tr.back() {
-                    heads.push(Head { x, y, s: 2.4 * scale, al: 1.0, front: y > cy });
+                    heads.push(Head { x, y, s: 2.4 * scale * pulse, al: 1.0, front: y > cy, rgb: prisme_palette(cfg, t, 1.0, i) });
                 }
             }
         }
         let head_rgb = prisme(cfg, t, 1.0);
+        // constellation : fines lignes entre les têtes proches, sous les têtes
+        if cfg.essaim.constellation {
+            points.clear();
+            points.extend(heads.iter().map(|h| (h.x, h.y)));
+            liens(points, o.rayon * scale * self.far.max(0.2), paires);
+            let rgb = prisme(cfg, t, 0.85);
+            for &(i, j, f) in paires.iter() {
+                let al = 0.4 * f * heads[i].al.min(heads[j].al);
+                cv.line((heads[i].x, heads[i].y), (heads[j].x, heads[j].y), 0.9 * scale, rgb, al, false);
+            }
+        }
         let draw_head = |cv: &mut dyn Canvas, h: &Head| {
             // lueur : deux disques translucides (un dégradé radial coûte bien plus cher sur processeur)
-            cv.circle(h.x, h.y, h.s * 2.6, head_rgb, 0.12 * h.al * glow);
-            cv.circle(h.x, h.y, h.s * 1.6, head_rgb, 0.3 * h.al * glow);
-            cv.circle(h.x, h.y, h.s, head_rgb, h.al);
+            cv.circle(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * glow);
+            cv.circle(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * glow);
+            cv.circle(h.x, h.y, h.s, h.rgb, h.al);
             cv.circle(h.x, h.y, h.s * 0.45, (255, 255, 255), h.al);
         };
         for h in heads.iter().filter(|h| !h.front) {
             draw_head(cv, h);
         }
+        // mode sans flashs : ni halo blanc, ni anneau ou carré trop vifs
+        let vif = if self.doux { 0.45 } else { 1.0 };
         if self.env > 0.02 && cfg.eclat.taille > 0.0 {
             // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
             let (px, py) = cursor;
             let r = cfg.eclat.taille * scale;
-            cv.circle(px, py, r * (2.0 + 2.5 * self.env), (255, 255, 255), 0.35 * self.env);
-            cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env);
+            if !self.doux {
+                cv.circle(px, py, r * (2.0 + 2.5 * self.env), (255, 255, 255), 0.35 * self.env);
+            }
+            cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env * vif);
         }
-        // particules : étincelles, ondes de choc, poussière
+        // particules : étincelles, ondes de choc, poussière, carrés des caisses claires, implosions
         for p in &self.particules {
             let k = ((t - p.ne) as f32 / p.vie).clamp(0.0, 1.0);
             match p.genre {
@@ -670,10 +898,21 @@ impl Swarm {
                 }
                 Genre::Onde => {
                     let r = p.taille * (1.0 - (1.0 - k).powi(3));
-                    cv.ring(p.x, p.y, r.max(1.0), (2.5 * (1.0 - k) + 0.6) * scale, head_rgb, 0.85 * (1.0 - k));
+                    cv.ring(p.x, p.y, r.max(1.0), (2.5 * (1.0 - k) + 0.6) * scale, head_rgb, 0.85 * (1.0 - k) * vif);
                 }
                 Genre::Poussiere => {
                     cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), prisme(cfg, t, 0.5), 0.7 * (1.0 - k));
+                }
+                Genre::Carre => {
+                    // carré posé sur la pointe, qui s'ouvre vite puis s'efface
+                    let r = p.taille * (0.35 + 0.65 * (1.0 - (1.0 - k).powi(2)));
+                    let sommets = [(p.x, p.y - r), (p.x + r, p.y), (p.x, p.y + r), (p.x - r, p.y), (p.x, p.y - r)];
+                    cv.polyline(&sommets, (2.2 * (1.0 - k) + 0.8) * scale, head_rgb, 0.8 * (1.0 - k) * vif, true);
+                }
+                Genre::Implosion => {
+                    // anneau qui se referme : grand au clic, nul à la fin
+                    let r = p.taille * (1.0 - k).powi(2);
+                    cv.ring(p.x, p.y, r.max(1.0), (0.8 + 1.8 * k) * scale, head_rgb, 0.8 * (1.0 - k * k) * vif);
                 }
             }
         }
@@ -689,8 +928,9 @@ impl Swarm {
 /// réservé aux comètes.
 const TRAIL_CHUNK: usize = 4;
 
+/// Dessine une traînée dans la teinte `j` de la palette.
 #[allow(clippy::too_many_arguments)]
-fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
+fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config, j: usize) {
     if tr.len() < 2 {
         return;
     }
@@ -699,7 +939,7 @@ fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
     xy.clear();
     xy.extend(tr.iter().map(|&(_, x, y)| (x, y)));
     if halo {
-        cv.polyline(xy, (0.8 + width * 0.7) * 2.6, prisme(cfg, t, 0.7), 0.12 * al, false);
+        cv.polyline(xy, (0.8 + width * 0.7) * 2.6, prisme_palette(cfg, t, 0.7, j), 0.12 * al, false);
     }
     // les comètes (avec halo) sont lissées ; les satellites non, en deux morceaux (tête vive,
     // queue pâle) : c'est le poste le plus coûteux sur processeur
@@ -709,7 +949,7 @@ fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
     while i + 1 < xy.len() {
         let end = (i + chunk).min(xy.len() - 1);
         let k = (q(i) + q(end)) * 0.5;
-        cv.polyline(&xy[i..=end], 0.8 + k * width, prisme(cfg, t, k), k * 0.9 * al, smooth);
+        cv.polyline(&xy[i..=end], 0.8 + k * width, prisme_palette(cfg, t, k, j), k * 0.9 * al, smooth);
         i = end;
     }
 }
@@ -829,14 +1069,8 @@ impl Swarm {
     /// `[essaim] maximum`) et une grande onde de choc en (x, y), sans changer de sens.
     pub fn rafale(&mut self, x: f32, y: f32, t: f64, cfg: &Config, scale: f32) {
         let e = &cfg.essaim;
-        self.env = 1.0;
-        for _ in 0..2 * e.par_kick_min.max(e.par_kick_max).max(2) {
-            if self.sats.len() >= e.maximum {
-                break;
-            }
-            let (a, r, mul) = (self.rng.range(0.0, TAU), self.rng.range(0.75, SAT_R_MAX), self.rng.range(0.7, 1.3));
-            self.sats.push(Sat { a, r, mul, born: t, trail: Trail::new() });
-        }
+        self.eclater(t);
+        self.ajouter_satellites(2 * e.par_kick_min.max(e.par_kick_max).max(2) as usize, t, e.maximum);
         let (taille, vie) = ONDE_PISTE;
         self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie, taille: taille * scale, genre: Genre::Onde });
     }
@@ -846,6 +1080,216 @@ impl Swarm {
 mod tests {
     use super::*;
     use tiny_skia::Pixmap;
+
+    const C: (f32, f32) = (300.0, 300.0);
+
+    /// Distance moyenne des têtes des comètes au centre de l'orbite.
+    fn ecart_moyen(s: &Swarm) -> f32 {
+        let c = s.center.unwrap();
+        let d: Vec<f32> = s.trails.iter().filter_map(|tr| tr.back()).map(|p| ((p.1 - c.0).powi(2) + (p.2 - c.1).powi(2)).sqrt()).collect();
+        d.iter().sum::<f32>() / d.len().max(1) as f32
+    }
+
+    #[test]
+    fn caisse_claire_ouvre_un_carre() {
+        let mut cfg = Config::default();
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, C, AudioView::default(), &cfg, 1.0);
+        s.update(0.016, 0.016, C, AudioView { caisses: 1, ..Default::default() }, &cfg, 1.0);
+        assert_eq!(s.particules.iter().filter(|p| p.genre == Genre::Carre).count(), 1);
+        assert_eq!(s.sats.len(), 0, "une caisse claire n'est pas un kick");
+        // le carré reste dans le rectangle redessiné
+        let (x0, _, x1, _) = s.bounds(C, 1.0, cfg.eclat.taille);
+        assert!(x0 <= C.0 - CARRE_CAISSE.0 && x1 >= C.0 + CARRE_CAISSE.0);
+        // effet coupé : rien
+        cfg.musique.caisse_claire = false;
+        s.update(0.032, 0.016, C, AudioView { caisses: 2, ..Default::default() }, &cfg, 1.0);
+        assert_eq!(s.particules.iter().filter(|p| p.genre == Genre::Carre).count(), 1);
+    }
+
+    #[test]
+    fn montee_resserre_puis_le_drop_explose() {
+        let mut cfg = Config::default();
+        let au = AudioView { bass: 0.4, pitch: 50.0, ..Default::default() };
+        let tourner = |s: &mut Swarm, au: AudioView, cfg: &Config, t0: f64| {
+            for i in 0..120 {
+                s.update(t0 + i as f64 / 60.0, 1.0 / 60.0, C, au, cfg, 1.0);
+            }
+        };
+        let (mut calme, mut tendu) = (Swarm::new(), Swarm::new());
+        tourner(&mut calme, au, &cfg, 0.0);
+        tourner(&mut tendu, AudioView { tension: 1.0, ..au }, &cfg, 0.0);
+        assert!(ecart_moyen(&tendu) < 0.7 * ecart_moyen(&calme), "{} contre {}", ecart_moyen(&tendu), ecart_moyen(&calme));
+        assert!(tendu.spd > 1.8 * calme.spd, "{} contre {}", tendu.spd, calme.spd);
+        // drop : éclat, satellites, grande onde et étincelles
+        tendu.update(2.0, 0.016, C, AudioView { tension: 1.0, drops: 1, ..au }, &cfg, 1.0);
+        assert_eq!(tendu.env, 1.0);
+        assert!(tendu.sats.len() >= 6, "{} satellites", tendu.sats.len());
+        assert!(tendu.particules.iter().any(|p| p.genre == Genre::Onde && p.taille >= ONDE_DROP.0));
+        assert!(tendu.particules.iter().filter(|p| p.genre == Genre::Etincelle).count() >= ETINCELLES_DROP);
+        // effet coupé : ni resserrement ni explosion
+        cfg.musique.montee = false;
+        let mut coupe = Swarm::new();
+        tourner(&mut coupe, AudioView { tension: 1.0, ..au }, &cfg, 0.0);
+        coupe.update(2.0, 0.016, C, AudioView { tension: 1.0, drops: 1, ..au }, &cfg, 1.0);
+        assert!((ecart_moyen(&coupe) - ecart_moyen(&calme)).abs() < 0.05 * ecart_moyen(&calme));
+        assert!(coupe.sats.is_empty());
+    }
+
+    #[test]
+    fn contretemps_pulse_au_milieu_du_temps() {
+        let mut cfg = Config::default();
+        cfg.musique.contretemps = true;
+        let mut s = Swarm::new();
+        let au = |phase: f32| AudioView { bpm: Some(120.0), phase, ..Default::default() };
+        s.update(0.0, 0.016, C, au(0.4), &cfg, 1.0);
+        assert_eq!(s.contre, 0.0);
+        s.update(0.016, 0.016, C, au(0.55), &cfg, 1.0);
+        assert!(s.contre > 0.8, "{}", s.contre);
+        // passage du temps (0,9 → 0,1) : pas un contretemps ; sans tempo connu : rien
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, C, au(0.9), &cfg, 1.0);
+        s.update(0.016, 0.016, C, au(0.1), &cfg, 1.0);
+        s.update(0.032, 0.016, C, AudioView { phase: 0.6, ..Default::default() }, &cfg, 1.0);
+        assert_eq!(s.contre, 0.0);
+    }
+
+    #[test]
+    fn stereo_penche_l_essaim_du_cote_le_plus_fort() {
+        let mut cfg = Config::default();
+        let au = AudioView { balance: 1.0, ..Default::default() };
+        let mut s = Swarm::new();
+        for i in 0..60 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, au, &cfg, 1.0);
+        }
+        assert!((s.center.unwrap().0 - C.0).abs() < 0.5, "réglage à 0 : l'essaim reste centré");
+        cfg.musique.stereo = 1.0;
+        for i in 60..120 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, au, &cfg, 1.0);
+        }
+        let d = s.center.unwrap().0 - C.0;
+        assert!(d > 0.8 * cfg.orbite.rayon, "décalage {d}");
+        assert!(d <= CENTER_LAG_MAX + 1.6 * cfg.orbite.rayon);
+    }
+
+    #[test]
+    fn inertie_fait_trainer_puis_rattraper_le_centre() {
+        let mut cfg = Config::default();
+        let suivre = |cfg: &Config| {
+            let mut s = Swarm::new();
+            s.update(0.0, 1.0 / 60.0, (0.0, 0.0), AudioView::default(), cfg, 1.0);
+            // le pointeur file vers la droite à 1500 px/s pendant 0,3 s
+            let mut ecart: f32 = 0.0;
+            for i in 1..=18 {
+                let x = i as f32 * 25.0;
+                s.update(i as f64 / 60.0, 1.0 / 60.0, (x, 0.0), AudioView::default(), cfg, 1.0);
+                ecart = ecart.max(x - s.center.unwrap().0);
+            }
+            // puis s'arrête : 3 s plus tard, le centre est revenu sur lui
+            for i in 19..200 {
+                s.update(i as f64 / 60.0, 1.0 / 60.0, (450.0, 0.0), AudioView::default(), cfg, 1.0);
+            }
+            (ecart, (s.center.unwrap().0 - 450.0).abs())
+        };
+        let (pres, fin_pres) = suivre(&cfg);
+        cfg.orbite.inertie = 1.0;
+        let (souple, fin_souple) = suivre(&cfg);
+        assert!(souple > 2.0 * pres, "retard {souple} contre {pres}");
+        assert!(souple <= CENTER_LAG_MAX * 6.0 + 1.0);
+        assert!(fin_pres < 0.5 && fin_souple < 1.0, "{fin_pres} {fin_souple}");
+    }
+
+    #[test]
+    fn particules_rebondissent_sur_la_fenetre_active() {
+        let mut p = Particule { x: 105.0, y: 50.0, vx: -300.0, vy: 0.0, ne: 0.0, vie: 1.0, taille: 1.0, genre: Genre::Etincelle };
+        let (x0, y0) = (p.x, p.y);
+        p.x += p.vx * 0.02;
+        rebondir(&mut p, x0, y0, (100.0, 0.0, 400.0, 300.0));
+        assert!(p.x > 100.0 && p.vx > 0.0, "{} {}", p.x, p.vx);
+        // hors de la hauteur de la fenêtre : pas de rebond
+        let mut q = Particule { y: 400.0, ..p };
+        q.vx = -300.0;
+        q.x = 105.0;
+        q.x += q.vx * 0.02;
+        rebondir(&mut q, 105.0, 400.0, (100.0, 0.0, 400.0, 300.0));
+        assert!(q.x < 100.0 && q.vx < 0.0);
+        // dans l'essaim : les étincelles des aigus rebondissent, si le réglage le veut
+        let mut cfg = Config::default();
+        let mut s = Swarm::new();
+        s.murs = Some((C.0 - 5.0, 0.0, 2000.0, 2000.0));
+        s.update(0.0, 0.016, C, AudioView::default(), &cfg, 1.0);
+        s.particules.push(Particule { x: C.0, y: C.1, vx: -400.0, vy: 0.0, ne: 0.0, vie: 1.0, taille: 1.0, genre: Genre::Etincelle });
+        s.update(0.02, 0.02, C, AudioView::default(), &cfg, 1.0);
+        assert!(s.particules.last().unwrap().x > C.0 - 5.0);
+        cfg.scintillement.rebonds = false;
+        s.particules.push(Particule { x: C.0, y: C.1, vx: -400.0, vy: 0.0, ne: 0.02, vie: 1.0, taille: 1.0, genre: Genre::Etincelle });
+        s.update(0.04, 0.02, C, AudioView::default(), &cfg, 1.0);
+        assert!(s.particules.last().unwrap().x < C.0 - 5.0);
+    }
+
+    #[test]
+    fn palette_partage_les_teintes() {
+        let mut cfg = Config::default();
+        (cfg.couleur.vitesse_teinte, cfg.couleur.synchro_prisme) = (0.0, false);
+        // une seule teinte : toutes pareilles
+        assert_eq!(prisme_palette(&cfg, 0.0, 1.0, 0), prisme_palette(&cfg, 0.0, 1.0, 1));
+        cfg.couleur.palette = 3;
+        let t: Vec<_> = (0..4).map(|j| prisme_palette(&cfg, 0.0, 1.0, j)).collect();
+        assert_ne!(t[0], t[1]);
+        assert_ne!(t[1], t[2]);
+        assert_eq!(t[0], t[3], "la palette revient à sa première teinte");
+        assert_eq!(t[0], prisme(&cfg, 0.0, 1.0));
+    }
+
+    #[test]
+    fn constellation_relie_les_tetes_proches() {
+        let mut l = Vec::new();
+        liens(&[(0.0, 0.0), (10.0, 0.0), (100.0, 0.0)], 20.0, &mut l);
+        assert_eq!(l.len(), 1);
+        assert_eq!((l[0].0, l[0].1), (0, 1));
+        assert!((l[0].2 - 0.5).abs() < 1e-6);
+        // au plus LIENS_MAX liens, même serrés
+        let serres: Vec<(f32, f32)> = (0..64).map(|i| (i as f32 * 0.1, 0.0)).collect();
+        liens(&serres, 50.0, &mut l);
+        assert_eq!(l.len(), LIENS_MAX);
+        liens(&serres, f32::NAN, &mut l);
+        assert!(l.is_empty());
+    }
+
+    #[test]
+    fn clic_droit_se_referme() {
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, C, AudioView::default(), &cfg, 1.0);
+        s.clic_droit(C.0, C.1, 0.016, &cfg, 1.0);
+        assert_eq!(s.particules.iter().filter(|p| p.genre == Genre::Implosion).count(), 1);
+        // les étincelles partent du cercle et vont vers le centre
+        for p in s.particules.iter().filter(|p| p.genre == Genre::Etincelle) {
+            let (dx, dy) = (C.0 - p.x, C.1 - p.y);
+            assert!(dx * p.vx + dy * p.vy > 0.0);
+        }
+        let (x0, y0, x1, y1) = s.bounds(C, 1.0, cfg.eclat.taille);
+        assert!(x0 <= C.0 - 52.0 && y0 <= C.1 - 52.0 && x1 >= C.0 + 52.0 && y1 >= C.1 + 52.0);
+    }
+
+    #[test]
+    fn sans_flashs_au_plus_trois_eclats_par_seconde() {
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        s.doux = true;
+        let mut eclats = 0;
+        // 8 kicks par seconde pendant une seconde
+        for i in 0..60 {
+            let au = AudioView { kicks: i / 7, ..Default::default() };
+            let avant = s.env;
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, au, &cfg, 1.0);
+            if s.env > avant + 0.1 {
+                eclats += 1;
+            }
+            assert!(s.env <= 0.5 + 1e-6, "éclat trop fort : {}", s.env);
+        }
+        assert!((2..=3).contains(&eclats), "{eclats} éclats");
+    }
 
     #[test]
     fn rafale_de_changement_de_piste() {

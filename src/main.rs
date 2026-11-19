@@ -196,12 +196,23 @@ fn main() {
     log::info!("arrêt");
 }
 
-/// Bouton principal de la souris enfoncé (le droit si les boutons sont inversés dans Windows :
-/// `GetAsyncKeyState` lit le bouton physique).
-fn bouton_principal() -> bool {
+/// Bouton principal (`secondaire` = faux) ou secondaire de la souris enfoncé. Boutons inversés
+/// dans Windows (gauchers) : `GetAsyncKeyState` lit le bouton physique, le principal est alors
+/// le droit.
+fn bouton(secondaire: bool) -> bool {
     unsafe {
-        let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 { VK_RBUTTON } else { VK_LBUTTON };
+        let inverses = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+        let vk = if inverses != secondaire { VK_RBUTTON } else { VK_LBUTTON };
         GetAsyncKeyState(vk.0 as i32) < 0
+    }
+}
+
+/// Mode sans flashs voulu : selon le réglage, ou selon Windows (animations réduites).
+fn sans_flashs(mode: config::SansFlashs) -> bool {
+    match mode {
+        config::SansFlashs::Oui => true,
+        config::SansFlashs::Non => false,
+        config::SansFlashs::Auto => !win::animations_windows(),
     }
 }
 
@@ -275,6 +286,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let shared = Arc::new(audio::AudioShared::default());
     shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
     shared.set_min_gap(conf.cfg.audio.delai_kick);
+    shared.set_musique(conf.cfg.musique.analyse_voulue());
     // capture lancée au premier tour de boucle ; un échec n'empêche pas Essaim de tourner
     let mut son = Son::default();
 
@@ -321,6 +333,11 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut fs_paused = false;
     let mut conf_gen = 0u32;
     let mut was_down = false;
+    let mut droit_avant = false;
+    // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) et cadre de la fenêtre
+    // au premier plan (rebonds des particules, relu toutes les 250 ms)
+    let mut doux = sans_flashs(conf.cfg.rendu.sans_flashs);
+    let mut murs: Option<(f32, f32, f32, f32)> = None;
     let mut last_state = "";
     let mut cleared = false;
     let mut backend_gen = 0u32;
@@ -410,6 +427,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         if now >= next_fs {
             next_fs = now + Duration::from_millis(250);
             let fs = cur.as_ref().is_some_and(|c| win::fullscreen_under(c.pos.0, c.pos.1));
+            murs = if conf.cfg.scintillement.rebonds { win::cadre_premier_plan() } else { None };
             if fs != fs_paused {
                 fs_paused = fs;
                 log::info!("{}", if fs { "plein écran : en veille" } else { "fin du plein écran" });
@@ -419,6 +437,11 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         let timed = now >= next_conf;
         if timed {
             next_conf = now + Duration::from_secs(1);
+            let d = sans_flashs(conf.cfg.rendu.sans_flashs);
+            if d != doux {
+                doux = d;
+                log::info!("{}", if d { "mode sans flashs" } else { "fin du mode sans flashs" });
+            }
         }
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
@@ -429,6 +452,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             }
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
+            shared.set_musique(conf.cfg.musique.analyse_voulue());
             maj::regler(conf.cfg.mise_a_jour.auto);
             win::masquer_captures(conf.cfg.rendu.masquer_captures);
         }
@@ -445,6 +469,8 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         son.regler(son_voulu, &conf.cfg.audio.sortie, &shared, now);
         automatique.tick(&conf.cfg, now);
         let cfg = &conf.cfg;
+        // bordure sans illumination sur les kicks en mode sans flashs
+        let bordure_cfg = bordure::sans_flashs(&cfg.bordure, doux);
         prisme.set_wanted(cfg.couleur.synchro_prisme);
         let fields = (user_paused, fs_paused, !user_paused && !retrait, backend.is_gpu(), prisme.connected(), conf_gen);
         if published != Some(fields) {
@@ -486,8 +512,8 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             last_kicks = au.kicks;
             last_sound = now;
         }
-        let down = bouton_principal();
-        if down {
+        let (down, droit) = (bouton(false), bouton(true));
+        if down || droit {
             last_click = now;
         }
         // changement de piste : vu même en pause (pas de rafale en retard à la reprise)
@@ -496,7 +522,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         pistes_vues = pistes;
         let Some(cur) = cur.filter(|c| active && c.showing) else {
             // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
-            border.tick(active, &cfg.bordure, render::prisme(cfg, t, 1.0), au.kicks, now);
+            border.tick(active, &bordure_cfg, render::prisme(cfg, t, 1.0), au.kicks, now);
             if !cleared {
                 backend.clear();
                 cracks.clear();
@@ -504,7 +530,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             }
             // à la reprise, un bouton tenu pendant la pause ne compte pas comme un clic, et le
             // compte à rebours de la veille profonde repart de zéro
-            was_down = down;
+            (was_down, droit_avant) = (down, droit);
             last_move = now;
             if profond {
                 profond = false;
@@ -529,6 +555,11 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             cracks.push(Crack::new(cursor.0, cursor.1, t, cfg.fissures.taille * scale, &mut rng));
         }
         was_down = down;
+        // clic droit : une onde qui se referme
+        if droit && !droit_avant && cfg.clic.droit {
+            swarm.clic_droit(cursor.0, cursor.1, t, cfg, scale);
+        }
+        droit_avant = droit;
         if nouvelle_piste && cfg.musique.rafale_piste {
             swarm.rafale(cursor.0, cursor.1, t, cfg, scale);
         }
@@ -549,7 +580,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
                 charge::publier_veille(true);
                 log::info!("veille profonde : plus rien n'est dessiné");
             }
-            border.tick(true, &cfg.bordure, render::prisme(cfg, t, 1.0), au.kicks, now);
+            border.tick(true, &bordure_cfg, render::prisme(cfg, t, 1.0), au.kicks, now);
             win::attendre(VEILLE_LECTURE);
             continue;
         }
@@ -584,6 +615,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         eveil = if endormi { (eveil - df / FONDU_EXTINCTION).max(0.0) } else { (eveil + df / FONDU_REVEIL).min(1.0) };
 
         // simulation ; teinte qui glisse avec la musique, lissée (~150 ms)
+        (swarm.murs, swarm.doux) = (murs, doux);
         swarm.avance(t, dt, cursor, au, cfg, scale);
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
         let d = render::decalage();
@@ -627,7 +659,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         crack_rects.extend(effets.rect_ecran());
         let rgb = render::prisme(cfg, t, 1.0);
-        border.tick(true, &cfg.bordure, rgb, au.kicks, now);
+        border.tick(true, &bordure_cfg, rgb, au.kicks, now);
         let env = swarm.env;
         let dessiner = |cv: &mut dyn canvas::Canvas, here: bool| {
             effets.dessiner_voile(cv, cfg, t, scale);

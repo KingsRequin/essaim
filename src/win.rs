@@ -363,6 +363,40 @@ pub fn fullscreen_under(x: i32, y: i32) -> bool {
     }
 }
 
+/// Cadre affiché (gauche, haut, droite, bas, en pixels de l'écran) de la fenêtre au premier
+/// plan, si c'est une fenêtre d'application visible : ni réduite, ni en plein écran, ni le
+/// bureau, la barre des tâches ou une fenêtre d'Essaim. Les particules rebondissent dessus.
+pub fn cadre_premier_plan() -> Option<(f32, f32, f32, f32)> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() || IsIconic(fg).as_bool() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == windows::Win32::System::Threading::GetCurrentProcessId() {
+            return None;
+        }
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(fg, &mut class) as usize;
+        let class = String::from_utf16_lossy(&class[..n]);
+        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") || covers_monitor(fg) {
+            return None;
+        }
+        let mut r = RECT::default();
+        DwmGetWindowAttribute(fg, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut RECT as *mut c_void, std::mem::size_of::<RECT>() as u32).ok()?;
+        (r.right > r.left && r.bottom > r.top).then_some((r.left as f32, r.top as f32, r.right as f32, r.bottom as f32))
+    }
+}
+
+/// Windows affiche-t-il les animations (Accessibilité › Effets visuels › Effets d'animation) ?
+/// Non : l'utilisateur a demandé de les réduire.
+pub fn animations_windows() -> bool {
+    let mut oui = windows::core::BOOL(1);
+    let lu = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some(&mut oui as *mut _ as *mut c_void), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) };
+    lu.is_err() || oui.as_bool()
+}
+
 /// La fenêtre est en plein écran sur son écran (jeu, vidéo F11, présentation…). Une fenêtre
 /// simplement agrandie n'en est pas une, même quand la barre des tâches masquée la laisse couvrir
 /// tout l'écran.
