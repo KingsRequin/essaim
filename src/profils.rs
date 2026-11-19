@@ -117,10 +117,34 @@ pub fn list() -> Vec<Profile> {
         .collect();
     user.sort_by_key(|p| p.name.to_lowercase());
     let mut all = builtins();
-    all.retain(|b| !user.iter().any(|u| u.name.eq_ignore_ascii_case(&b.name)));
+    all.retain(|b| !user.iter().any(|u| meme_nom(&u.name, &b.name)));
     all.extend(user);
     all
 }
+
+/// Deux noms de preset désignent-ils le même fichier ? (Windows ignore la casse, accents
+/// compris : « Été » et « été ».)
+pub fn meme_nom(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
+/// Nom réservé par Windows (CON, PRN, AUX, NUL, COM1 à 9, LPT1 à 9), avec ou sans extension :
+/// le fichier « nul.toml » ne peut pas être créé.
+pub fn nom_reserve(nom: &str) -> bool {
+    let racine = nom.split('.').next().unwrap_or("").trim_end().to_uppercase();
+    let chiffre = |c: char| matches!(c, '1'..='9' | '¹' | '²' | '³');
+    match racine.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" => true,
+        r => {
+            let mut c = r.chars();
+            let tete: String = c.by_ref().take(3).collect();
+            matches!(tete.as_str(), "COM" | "LPT") && c.next().is_some_and(chiffre) && c.next().is_none()
+        }
+    }
+}
+
+/// Longueur maximale d'un nom de preset.
+const NOM_MAX: usize = 40;
 
 /// Nom de profil utilisable comme nom de fichier.
 fn check_name(name: &str) -> Result<&str, String> {
@@ -128,17 +152,20 @@ fn check_name(name: &str) -> Result<&str, String> {
     if name.is_empty() {
         return Err("donne un nom au profil".into());
     }
-    if name.chars().count() > 40 {
-        return Err("nom trop long (40 caractères au plus)".into());
+    if name.chars().count() > NOM_MAX {
+        return Err(format!("nom trop long ({NOM_MAX} caractères au plus)"));
     }
     if name.chars().any(|c| c.is_control() || r#"\/:*?"<>|"#.contains(c)) || name.ends_with('.') {
         return Err(r#"caractères interdits dans le nom : \ / : * ? " < > |"#.into());
+    }
+    if nom_reserve(name) {
+        return Err(format!("« {name} » est un nom réservé par Windows : choisis un autre nom"));
     }
     Ok(name)
 }
 
 fn is_builtin(name: &str) -> bool {
-    builtins().iter().any(|b| b.name.eq_ignore_ascii_case(name))
+    builtins().iter().any(|b| meme_nom(&b.name, name))
 }
 
 /// Enregistre les sections de profil de `cfg` sous `name` (remplace un profil du même nom).
@@ -151,14 +178,34 @@ fn save_in(dir: &std::path::Path, name: &str, cfg: &Config) -> Result<String, St
     if is_builtin(name) {
         return Err(format!("« {name} » est un préréglage : choisis un autre nom"));
     }
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let body = config::text_with_keys("", cfg, in_profile)?;
     let p = dir.join(format!("{name}.toml"));
-    let failed = |e: std::io::Error| format!("écriture de {} impossible : {e}", p.display());
-    std::fs::write(&p, "").map_err(failed)?;
-    config::apply_keys_in(&p, cfg, in_profile)?;
-    let body = std::fs::read_to_string(&p).map_err(failed)?;
-    std::fs::write(&p, format!("# Profil d'Essaim « {name} » (fenêtre des réglages).\n\n{body}")).map_err(failed)?;
+    let _verrou = config::verrou();
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    config::ecrire_atomique(&p, &format!("# Profil d'Essaim « {name} » (fenêtre des réglages).\n\n{body}"))
+        .map_err(|e| format!("écriture de {} impossible : {e}", p.display()))?;
     Ok(name.to_owned())
+}
+
+/// Enregistre un preset venu d'ailleurs (bibliothèque, fichier importé) sans écraser un preset
+/// de l'utilisateur différent qui porte déjà ce nom (à la casse près).
+pub fn ajouter(name: &str, cfg: &Config) -> Result<String, String> {
+    ajouter_in(&dir(), name, cfg)
+}
+
+fn ajouter_in(dir: &std::path::Path, name: &str, cfg: &Config) -> Result<String, String> {
+    let nom = check_name(name)?;
+    let existant = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).find(|p| {
+        p.extension().is_some_and(|x| x.eq_ignore_ascii_case("toml")) && p.file_stem().is_some_and(|s| meme_nom(&s.to_string_lossy(), nom))
+    });
+    if let Some(p) = existant {
+        // le même preset déjà installé : rien à refuser
+        if !Config::read(&p).is_ok_and(|c| same_strict(&c, cfg)) {
+            let deja = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            return Err(format!("un de tes presets s'appelle déjà « {deja} » : renomme-le ou supprime-le d'abord"));
+        }
+    }
+    save_in(dir, nom, cfg)
 }
 
 /// Fichier d'un profil de l'utilisateur.
@@ -166,7 +213,8 @@ pub fn fichier(name: &str) -> PathBuf {
     dir().join(format!("{}.toml", name.trim()))
 }
 
-/// Renomme un profil de l'utilisateur ; renvoie le nouveau nom.
+/// Renomme un profil de l'utilisateur, et les règles automatiques qui le citent ; renvoie le
+/// nouveau nom.
 pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
     let ancien = check_name(ancien)?;
     let nouveau = check_name(nouveau)?;
@@ -175,24 +223,62 @@ pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
     }
     let cible = fichier(nouveau);
     // même nom à la casse près : Windows accepte le renommage
-    if cible.exists() && !ancien.eq_ignore_ascii_case(nouveau) {
+    if cible.exists() && !meme_nom(ancien, nouveau) {
         return Err(format!("un preset s'appelle déjà « {nouveau} »"));
     }
     std::fs::rename(fichier(ancien), &cible).map_err(|_| format!("aucun profil « {ancien} »"))?;
+    regles_suivent(ancien, Some(nouveau));
     Ok(nouveau.to_owned())
+}
+
+/// Les règles `[automatique]` qui citent le preset `ancien` passent à `nouveau` (renommage) ou
+/// disparaissent (`None` : suppression). Renvoie vrai si une règle a changé.
+fn regles_renommees(cfg: &mut Config, ancien: &str, nouveau: Option<&str>) -> bool {
+    let a = &mut cfg.automatique;
+    let n = a.applis.len() + a.horaires.len();
+    let mut change = false;
+    match nouveau {
+        Some(nouveau) => {
+            let presets = a.applis.iter_mut().map(|r| &mut r.preset).chain(a.horaires.iter_mut().map(|r| &mut r.preset));
+            for p in presets.filter(|p| meme_nom(p, ancien)) {
+                *p = nouveau.to_owned();
+                change = true;
+            }
+        }
+        None => {
+            a.applis.retain(|r| !meme_nom(&r.preset, ancien));
+            a.horaires.retain(|r| !meme_nom(&r.preset, ancien));
+        }
+    }
+    change || a.applis.len() + a.horaires.len() != n
+}
+
+/// Met à jour les règles automatiques dans `config.toml` (un échec est seulement noté : le
+/// preset, lui, a bien été renommé ou supprimé).
+fn regles_suivent(ancien: &str, nouveau: Option<&str>) {
+    let mut change = false;
+    match config::modifier(|c| change = regles_renommees(c, ancien, nouveau)) {
+        Ok(()) if change => config::request_reload(),
+        Ok(()) => {}
+        Err(e) => log::warn!("règles automatiques non mises à jour pour « {ancien} » ({e})"),
+    }
 }
 
 /// Copie un preset (fourni ou non) sous « nom (copie) » ; renvoie le nom de la copie.
 pub fn dupliquer(name: &str) -> Result<String, String> {
     let liste = list();
     let p = liste.iter().find(|p| p.name == name).ok_or_else(|| format!("aucun preset « {name} »"))?;
-    let base: String = name.chars().take(30).collect();
-    let pris = |n: &str| liste.iter().any(|q| q.name.eq_ignore_ascii_case(n));
-    let nom = (1..100)
-        .map(|i| if i == 1 { format!("{base} (copie)") } else { format!("{base} (copie {i})") })
-        .find(|n| !pris(n))
-        .ok_or("trop de copies")?;
+    let pris = |n: &str| liste.iter().any(|q| meme_nom(&q.name, n));
+    let nom = (1..100).map(|i| nom_de_copie(name, i)).find(|n| !pris(n)).ok_or("trop de copies")?;
     save(&nom, &p.cfg)
+}
+
+/// « nom (copie) », « nom (copie 2) »… : le nom est raccourci pour que le tout tienne dans la
+/// longueur permise.
+fn nom_de_copie(name: &str, i: u32) -> String {
+    let suffixe = if i == 1 { " (copie)".to_owned() } else { format!(" (copie {i})") };
+    let base: String = name.trim().chars().take(NOM_MAX - suffixe.chars().count()).collect();
+    format!("{}{suffixe}", base.trim_end())
 }
 
 /// Importe un fichier de preset (.toml) sous le nom du fichier ; renvoie ce nom.
@@ -202,28 +288,43 @@ pub fn importer(chemin: &std::path::Path) -> Result<String, String> {
         return Err(format!("« {nom} » n'est pas un preset (.toml attendu)"));
     }
     let cfg = Config::read(chemin).map_err(|e| format!("« {nom} » illisible : {e}"))?;
-    save(&nom, &cfg)
+    ajouter(&nom, &cfg)
+}
+
+/// Deux valeurs de réglage pareilles (nombres aux arrondis près). `vide_neutre` : un jeu de
+/// curseurs non précisé d'un côté ne départage pas.
+fn pareilles(v: &serde_json::Value, w: Option<&serde_json::Value>, vide_neutre: bool) -> bool {
+    match (v, w) {
+        (serde_json::Value::String(x), Some(serde_json::Value::String(y))) if vide_neutre && (x.is_empty() || y.is_empty()) => true,
+        (serde_json::Value::Number(m), Some(serde_json::Value::Number(n))) => {
+            let (m, n) = (m.as_f64().unwrap_or(0.0), n.as_f64().unwrap_or(0.0));
+            (m - n).abs() <= 1e-3 * m.abs().max(n.abs()).max(1.0)
+        }
+        (v, w) => Some(v) == w,
+    }
+}
+
+/// Réglages de profil `(section, clé, valeur)` de `cfg`.
+fn reglages_de_profil(cfg: &Config) -> Vec<(String, String, serde_json::Value)> {
+    let Ok(serde_json::Value::Object(v)) = serde_json::to_value(cfg) else { return Vec::new() };
+    v.into_iter()
+        .flat_map(|(s, keys)| {
+            let keys = if let serde_json::Value::Object(k) = keys { k } else { Default::default() };
+            keys.into_iter().map(move |(k, x)| (s.clone(), k, x))
+        })
+        .filter(|(s, k, _)| in_profile(s, k))
+        .collect()
+}
+
+/// Valeur `[section] key` de `cfg` en JSON.
+fn valeur(cfg: &serde_json::Value, section: &str, key: &str) -> Option<serde_json::Value> {
+    cfg.get(section).and_then(|s| s.get(key)).cloned()
 }
 
 /// Nombre de réglages de profil qui diffèrent entre `a` et `b`.
 pub fn ecarts(a: &Config, b: &Config) -> usize {
-    let (Ok(a), Ok(b)) = (serde_json::to_value(a), serde_json::to_value(b)) else { return usize::MAX };
-    let mut n = 0;
-    for (s, keys) in a.as_object().into_iter().flatten() {
-        for (k, v) in keys.as_object().into_iter().flatten().filter(|(k, _)| in_profile(s, k)) {
-            let w = b.get(s).and_then(|y| y.get(k));
-            let pareil = match (v, w) {
-                (serde_json::Value::Number(m), Some(serde_json::Value::Number(n))) => {
-                    let (m, n) = (m.as_f64().unwrap_or(0.0), n.as_f64().unwrap_or(0.0));
-                    (m - n).abs() <= 1e-3 * m.abs().max(n.abs()).max(1.0)
-                }
-                (serde_json::Value::String(x), Some(serde_json::Value::String(y))) if x.is_empty() || y.is_empty() => true,
-                (v, w) => Some(v) == w,
-            };
-            n += usize::from(!pareil);
-        }
-    }
-    n
+    let Ok(b) = serde_json::to_value(b) else { return usize::MAX };
+    reglages_de_profil(a).iter().filter(|(s, k, v)| !pareilles(v, valeur(&b, s, k).as_ref(), true)).count()
 }
 
 pub fn delete(name: &str) -> Result<(), String> {
@@ -232,16 +333,15 @@ pub fn delete(name: &str) -> Result<(), String> {
         return Err(format!("« {name} » est un préréglage : il ne peut pas être supprimé"));
     }
     let p = dir().join(format!("{name}.toml"));
-    std::fs::remove_file(&p).map_err(|_| format!("aucun profil « {name} »"))
+    std::fs::remove_file(&p).map_err(|_| format!("aucun profil « {name} »"))?;
+    regles_suivent(name, None);
+    Ok(())
 }
 
 /// Écrit le profil dans `config.toml`. Un profil sans jeu de curseurs garde celui des réglages.
 pub fn apply(p: &Profile) -> Result<(), String> {
-    let mut cfg = p.cfg.clone();
-    if cfg.souris.jeu.is_empty() {
-        cfg.souris.jeu = Config::read(&config::path()).map(|c| c.souris.jeu).unwrap_or_default();
-    }
-    config::apply_keys(&cfg, in_profile)
+    let sans_jeu = p.cfg.souris.jeu.is_empty();
+    config::apply_keys(&p.cfg, |s, k| in_profile(s, k) && !(sans_jeu && (s, k) == ("souris", "jeu")))
 }
 
 /// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée et
@@ -264,15 +364,61 @@ pub fn appliquer(nom: &str) -> Result<(), String> {
     curseurs_du_preset(&p.cfg)
 }
 
-/// Remet des réglages gardés (« Annuler », fin d'une règle automatique), curseurs compris.
-pub fn remettre(avant: &Config) -> Result<(), String> {
-    config::apply_keys(avant, in_profile)?;
+/// Réglages et curseurs gardés pour y revenir (« Annuler », fin d'une règle automatique).
+pub struct Avant {
+    /// Réglages tels qu'écrits dans `config.toml`.
+    cfg: Config,
+    /// Jeu de curseurs réellement en place (celui du fichier peut être périmé ou vide).
+    jeu: String,
+    /// Valeurs des curseurs en place, pour revenir aussi à des curseurs sans nom de jeu.
+    curseurs: Option<crate::souris::Etat>,
+}
+
+/// Note les réglages et les curseurs en place ; `None` si `config.toml` est illisible.
+pub fn capturer() -> Option<Avant> {
+    let cfg = Config::read(&config::path()).ok()?;
+    Some(Avant { cfg, jeu: crate::souris::actuel(), curseurs: crate::souris::etat() })
+}
+
+/// Remet des réglages gardés (« Annuler »), curseurs compris.
+pub fn remettre(avant: &Avant) -> Result<(), String> {
+    let mut cfg = avant.cfg.clone();
+    cfg.souris.jeu.clone_from(&avant.jeu);
+    config::apply_keys(&cfg, in_profile)?;
     config::request_reload();
-    let jeu = &avant.souris.jeu;
-    if !jeu.is_empty() && *jeu != crate::souris::actuel() {
-        crate::souris::installer(jeu)?;
+    match &avant.curseurs {
+        Some(e) if crate::souris::etat().as_ref() != Some(e) => crate::souris::restaurer(e),
+        Some(_) => Ok(()),
+        None if !avant.jeu.is_empty() && avant.jeu != crate::souris::actuel() => crate::souris::installer(&avant.jeu),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// Fin d'une règle automatique : ne remet que ce que les presets de la règle ont changé (de
+/// `avant` à `apres`) et que l'utilisateur n'a pas retouché depuis.
+pub fn remettre_partiel(avant: &Avant, apres: &Avant) -> Result<(), String> {
+    let actuel = Config::read(&config::path()).map_err(|e| format!("réglages illisibles ({e})"))?;
+    let cles = cles_a_remettre(&avant.cfg, &apres.cfg, &actuel);
+    if !cles.is_empty() {
+        config::apply_keys(&avant.cfg, |s, k| cles.iter().any(|(a, b)| a == s && b == k))?;
+        config::request_reload();
+    }
+    // curseurs : seulement s'ils sont toujours ceux mis par la règle
+    match (&avant.curseurs, &apres.curseurs) {
+        (Some(a), Some(p)) if a != p && crate::souris::etat().as_ref() == Some(p) => crate::souris::restaurer(a),
+        _ => Ok(()),
+    }
+}
+
+/// Réglages de profil changés de `avant` à `apres` et encore à leur valeur de `apres` dans
+/// `actuel`.
+fn cles_a_remettre(avant: &Config, apres: &Config, actuel: &Config) -> Vec<(String, String)> {
+    let (Ok(av), Ok(ac)) = (serde_json::to_value(avant), serde_json::to_value(actuel)) else { return Vec::new() };
+    reglages_de_profil(apres)
+        .into_iter()
+        .filter(|(s, k, v)| !pareilles(v, valeur(&av, s, k).as_ref(), false) && pareilles(v, valeur(&ac, s, k).as_ref(), false))
+        .map(|(s, k, _)| (s, k))
+        .collect()
 }
 
 /// Preset voisin de celui en place dans la liste (`pas` = 1 : suivant, -1 : précédent).
@@ -287,21 +433,19 @@ pub fn voisin(cfg: &Config, pas: i32) -> Option<String> {
 }
 
 /// Les réglages de profil de `a` et `b` sont-ils identiques (aux arrondis près) ?
+/// Un jeu de curseurs non précisé d'un côté ne départage pas.
 pub fn same(a: &Config, b: &Config) -> bool {
-    let (Ok(a), Ok(b)) = (serde_json::to_value(a), serde_json::to_value(b)) else { return false };
-    a.as_object().into_iter().flatten().all(|(s, keys)| {
-        keys.as_object().into_iter().flatten().filter(|(k, _)| in_profile(s, k)).all(|(k, v)| {
-            match (v, b.get(s).and_then(|y| y.get(k))) {
-                // jeu de curseurs non précisé d'un côté : il ne départage pas
-                (serde_json::Value::String(x), Some(serde_json::Value::String(y))) if x.is_empty() || y.is_empty() => true,
-                (serde_json::Value::Number(m), Some(serde_json::Value::Number(n))) => {
-                    let (m, n) = (m.as_f64().unwrap_or(0.0), n.as_f64().unwrap_or(0.0));
-                    (m - n).abs() <= 1e-3 * m.abs().max(n.abs()).max(1.0)
-                }
-                (v, w) => Some(v) == w,
-            }
-        })
-    })
+    meme_reglages(a, b, true)
+}
+
+/// Comme `same`, mais le jeu de curseurs compte même vide.
+fn same_strict(a: &Config, b: &Config) -> bool {
+    meme_reglages(a, b, false)
+}
+
+fn meme_reglages(a: &Config, b: &Config, vide_neutre: bool) -> bool {
+    let Ok(b) = serde_json::to_value(b) else { return false };
+    reglages_de_profil(a).iter().all(|(s, k, v)| pareilles(v, valeur(&b, s, k).as_ref(), vide_neutre))
 }
 
 #[cfg(test)]
@@ -336,6 +480,104 @@ mod tests {
         assert!(check_name("a/b").is_err());
         assert!(check_name("fin.").is_err());
         assert_eq!(check_name(" Soirée ").unwrap(), "Soirée");
+        // noms réservés par Windows, avec ou sans extension, toutes casses
+        for n in ["CON", "con", "Nul", "aux.txt", "PRN.toml", "COM1", "lpt9", "com¹", "nul .x"] {
+            assert!(check_name(n).is_err(), "{n} accepté");
+        }
+        for n in ["Console", "COM0", "COM10", "LPT", "Nullité", "AUXI"] {
+            assert!(check_name(n).is_ok(), "{n} refusé");
+        }
+    }
+
+    #[test]
+    fn prereglages_reconnus_sans_casse() {
+        assert!(is_builtin("défaut"));
+        assert!(is_builtin("DÉFAUT"), "casse Unicode ignorée");
+        assert!(is_builtin(" point SEUL "));
+        assert!(!is_builtin("Défauts"));
+    }
+
+    #[test]
+    fn noms_de_copie_dans_la_longueur_permise() {
+        assert_eq!(nom_de_copie("Nuit", 1), "Nuit (copie)");
+        assert_eq!(nom_de_copie("Nuit", 12), "Nuit (copie 12)");
+        let long = "Une soirée électro très très longue à nommer";
+        for i in [1, 2, 99] {
+            let n = nom_de_copie(long, i);
+            assert!(check_name(&n).is_ok(), "{n}");
+            assert!(n.chars().count() <= NOM_MAX);
+        }
+    }
+
+    #[test]
+    fn un_preset_installe_n_ecrase_pas_un_autre() {
+        let d = std::env::temp_dir().join(format!("essaim-profils-ajout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let mut mien = Config::default();
+        mien.orbite.rayon = 40.0;
+        save_in(&d, "Soirée", &mien).unwrap();
+        let mut autre = Config::default();
+        autre.orbite.rayon = 60.0;
+        let e = ajouter_in(&d, "SOIRÉE", &autre).unwrap_err();
+        assert!(e.contains("Soirée"), "{e}");
+        assert!(same(&Config::read(&d.join("Soirée.toml")).unwrap(), &mien), "preset écrasé");
+        // le même preset réinstallé : accepté
+        assert_eq!(ajouter_in(&d, "soirée", &mien).unwrap(), "soirée");
+        assert_eq!(ajouter_in(&d, "Autre", &autre).unwrap(), "Autre");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn un_echec_d_ecriture_laisse_le_preset_intact() {
+        let d = std::env::temp_dir().join(format!("essaim-profils-echec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        save_in(&d, "Fixe", &Config::default()).unwrap();
+        let p = d.join("Fixe.toml");
+        let avant = std::fs::read(&p).unwrap();
+        let mut perms = std::fs::metadata(&p).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&p, perms.clone()).unwrap();
+        let mut cfg = Config::default();
+        cfg.orbite.rayon = 50.0;
+        assert!(save_in(&d, "Fixe", &cfg).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), avant, "preset abîmé");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&p, perms).unwrap();
+        let restes = std::fs::read_dir(&d).unwrap().flatten().count();
+        assert_eq!(restes, 1, "fichier temporaire resté");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn regles_automatiques_suivent_le_preset() {
+        let mut cfg = Config::default();
+        cfg.automatique.applis = vec![
+            config::RegleAppli { appli: "jeu.exe".into(), preset: "Nuit".into() },
+            config::RegleAppli { appli: "film.exe".into(), preset: "Autre".into() },
+        ];
+        cfg.automatique.horaires = vec![config::Horaire { debut: "22:00".into(), fin: "07:00".into(), preset: "NUIT".into() }];
+        assert!(regles_renommees(&mut cfg, "nuit", Some("Soir")));
+        assert_eq!(cfg.automatique.applis[0].preset, "Soir");
+        assert_eq!(cfg.automatique.applis[1].preset, "Autre");
+        assert_eq!(cfg.automatique.horaires[0].preset, "Soir");
+        assert!(!regles_renommees(&mut cfg, "Absent", Some("X")));
+        assert!(regles_renommees(&mut cfg, "soir", None));
+        assert_eq!(cfg.automatique.applis.len(), 1);
+        assert!(cfg.automatique.horaires.is_empty());
+    }
+
+    #[test]
+    fn fin_de_regle_garde_les_retouches() {
+        let avant = Config::default();
+        let mut apres = avant.clone();
+        (apres.orbite.rayon, apres.essaim.maximum, apres.couleur.teinte) = (40.0, 30, 200.0);
+        let mut actuel = apres.clone();
+        actuel.essaim.maximum = 5; // retouché pendant la règle : gardé
+        actuel.fissures.taille = 3.0; // changé par l'utilisateur seulement : gardé
+        let mut cles = cles_a_remettre(&avant, &apres, &actuel);
+        cles.sort();
+        assert_eq!(cles, vec![("couleur".to_owned(), "teinte".to_owned()), ("orbite".to_owned(), "rayon".to_owned())]);
     }
 
     #[test]

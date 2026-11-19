@@ -144,8 +144,12 @@ struct Fenetre {
     dates: (Option<SystemTime>, Option<SystemTime>),
     /// Aperçus des jeux de curseurs déjà dessinés (clé → images).
     apercus: std::collections::HashMap<String, Value>,
-    /// Réglages d'avant le dernier preset appliqué (pour « Annuler »).
-    avant: Option<Config>,
+    /// Réglages et curseurs d'avant le dernier preset appliqué (pour « Annuler »).
+    avant: Option<profils::Avant>,
+    /// Jeux de curseurs de Windows, lus une fois par ouverture (relus à chaque liste demandée).
+    jeux: Option<Vec<crate::souris::Jeu>>,
+    /// Fenêtre réduite : la vue est cachée et le son n'est plus envoyé.
+    reduite: bool,
 }
 
 thread_local! {
@@ -196,6 +200,26 @@ impl Fenetre {
         }));
     }
 
+    /// Réduite : la vue est cachée (WebView2 suspend alors son rendu) et le son n'est plus
+    /// envoyé ; tout reprend à la restauration.
+    fn reduire(&mut self, reduite: bool) {
+        if reduite == self.reduite {
+            return;
+        }
+        self.reduite = reduite;
+        if let Err(e) = self.vue.set_visible(!reduite) {
+            log::warn!("réglages : vue non {} ({e})", if reduite { "cachée" } else { "montrée" });
+        }
+        unsafe {
+            if reduite {
+                let _ = KillTimer(Some(self.hwnd), TIMER_SON);
+            } else {
+                SetTimer(Some(self.hwnd), TIMER_SON, 33, None);
+                self.son_envoye = (u32::MAX, 0);
+            }
+        }
+    }
+
     fn message(&self, texte: &str) {
         self.envoyer(&json!({ "type": "message", "texte": texte }));
     }
@@ -217,7 +241,7 @@ impl Fenetre {
             },
             Demande::Appliquer { nom } => {
                 let liste = profils::list();
-                let avant = Config::read(&config::path()).ok();
+                let avant = profils::capturer();
                 match liste.iter().find(|p| p.name == nom).map(|p| (p, profils::apply(p))) {
                     Some((p, Ok(()))) => {
                         config::request_reload();
@@ -256,10 +280,11 @@ impl Fenetre {
             },
             Demande::Installer { nom, reglages, appliquer } => {
                 let cfg = serde_json::from_value::<Config>(reglages).map_err(|e| format!("preset illisible ({e})"));
-                match cfg.and_then(|cfg| profils::save(&nom, &cfg).map(|n| (n, cfg))) {
+                // un preset de l'utilisateur du même nom (à la casse près) n'est pas écrasé
+                match cfg.and_then(|cfg| profils::ajouter(&nom, &cfg).map(|n| (n, cfg))) {
                     Ok((nom, cfg)) => {
                         if appliquer {
-                            self.avant = Config::read(&config::path()).ok();
+                            self.avant = profils::capturer();
                             let p = profils::list().into_iter().find(|p| p.name == nom);
                             match p.as_ref().map(profils::apply) {
                                 Some(Ok(())) => self.curseurs_du_preset(&cfg),
@@ -276,25 +301,30 @@ impl Fenetre {
             }
             Demande::OuvrirConfig => crate::win::open_file(&config::path()),
             Demande::Jeux => {
-                let jeux: Vec<Value> =
-                    crate::souris::jeux().iter().map(|j| json!({ "cle": j.cle, "nom": j.nom, "systeme": j.systeme })).collect();
-                self.envoyer(&json!({ "type": "jeux", "jeux": jeux }));
+                // la liste est relue (un pack a pu être installé depuis l'ouverture)
+                let jeux = crate::souris::jeux();
+                let liste: Vec<Value> = jeux.iter().map(|j| json!({ "cle": j.cle, "nom": j.nom, "systeme": j.systeme })).collect();
+                self.jeux = Some(jeux);
+                self.envoyer(&json!({ "type": "jeux", "jeux": liste }));
             }
             Demande::ApercuJeu { cle } => {
                 if !self.apercus.contains_key(&cle) {
-                    let jeux = crate::souris::jeux();
-                    let Some(j) = jeux.iter().find(|j| j.cle == cle) else { return };
-                    self.apercus.insert(cle.clone(), json!(crate::souris::apercu(j)));
+                    // jeu inconnu (preset venu d'une autre machine) : réponse vide, la page
+                    // n'attend pas
+                    let apercu = self.jeux().iter().find(|j| j.cle == cle).map_or(json!([]), |j| json!(crate::souris::apercu(j)));
+                    self.apercus.insert(cle.clone(), apercu);
                 }
                 self.envoyer(&json!({ "type": "apercu_jeu", "cle": cle, "curseurs": self.apercus[&cle] }));
             }
             Demande::DetailJeu { cle } => {
-                let jeux = crate::souris::jeux();
-                if let Some(j) = jeux.iter().find(|j| j.cle == cle) {
-                    let curseurs: Vec<Value> =
-                        crate::souris::curseurs(j).into_iter().map(|(nom, image)| json!({ "nom": nom, "image": image })).collect();
-                    self.envoyer(&json!({ "type": "detail_jeu", "cle": cle, "nom": j.nom, "curseurs": curseurs }));
-                }
+                let (nom, curseurs) = match self.jeux().iter().find(|j| j.cle == cle) {
+                    Some(j) => (
+                        j.nom.clone(),
+                        crate::souris::curseurs(j).into_iter().map(|(nom, image)| json!({ "nom": nom, "image": image })).collect(),
+                    ),
+                    None => (cle.clone(), Vec::<Value>::new()),
+                };
+                self.envoyer(&json!({ "type": "detail_jeu", "cle": cle, "nom": nom, "curseurs": curseurs }));
             }
             Demande::Souris { jeu } => {
                 match crate::souris::installer(&jeu).and_then(|()| config::set_value("souris", "jeu", &json!(jeu))) {
@@ -349,7 +379,7 @@ impl Fenetre {
             },
             Demande::AppliquerReglages { nom, reglages } => match serde_json::from_value::<Config>(reglages) {
                 Ok(cfg) => {
-                    self.avant = Config::read(&config::path()).ok();
+                    self.avant = profils::capturer();
                     match config::apply_keys(&cfg, |s, k| profils::in_profile(s, k) && (s, k) != ("souris", "jeu")) {
                         Ok(()) => {
                             config::request_reload();
@@ -388,6 +418,11 @@ impl Fenetre {
         }
     }
 
+    /// Jeux de curseurs, lus au premier besoin.
+    fn jeux(&mut self) -> &[crate::souris::Jeu] {
+        self.jeux.get_or_insert_with(crate::souris::jeux)
+    }
+
     fn importer(&mut self, chemins: &[std::path::PathBuf]) {
         let (mut faits, mut erreurs) = (Vec::new(), Vec::new());
         for c in chemins {
@@ -421,27 +456,45 @@ impl Fenetre {
             Ok(t) => t,
             Err(e) => return self.erreur(&format!("Preset « {nom} » enregistré, mais illisible pour la publication ({e}).")),
         };
-        let url = format!(
-            "https://github.com/{depot}/new/main?filename={}&value={}",
-            encoder(&format!("presets/{nom}.toml")),
-            encoder(&texte)
-        );
-        crate::win::open_url(&url);
-        self.message(&format!("Preset « {nom} » enregistré. GitHub s'ouvre pour le proposer à la bibliothèque."));
+        let page = format!("https://github.com/{depot}/new/main?filename={}", encoder(&format!("presets/{nom}.toml")));
+        let url = format!("{page}&value={}", encoder(&texte));
+        // une adresse trop longue est coupée par le navigateur ou refusée par GitHub : le
+        // preset passe alors par le presse-papiers
+        if url.len() <= URL_MAX {
+            crate::win::open_url(&url);
+            self.message(&format!("Preset « {nom} » enregistré. GitHub s'ouvre pour le proposer à la bibliothèque."));
+            return;
+        }
+        if let Err(e) = copier(&texte) {
+            return self.erreur(&format!(
+                "Preset « {nom} » enregistré, mais trop long pour l'adresse et non copié ({e}) : exporte-le pour le publier."
+            ));
+        }
+        crate::win::open_url(&page);
+        self.message(&format!(
+            "Preset « {nom} » enregistré et copié : GitHub s'ouvre, colle-le (Ctrl+V) dans le fichier pour le proposer à la bibliothèque."
+        ));
     }
 
     /// Son et fichiers : envoyés à la page quand ils changent.
     fn tick(&mut self, quoi: usize) {
-        if quoi == TIMER_SON {
+        if quoi == TIMER_SON && !self.reduite {
             let au = self.son.view();
             let cle = (au.kicks ^ au.aigus.rotate_left(16), au.bass.to_bits());
             if cle != self.son_envoye {
                 self.son_envoye = cle;
                 self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "aigus": au.aigus, "brillance": au.brillance, "teinte": crate::render::sync_hue() }));
             }
-        } else {
+        } else if quoi == TIMER_FICHIERS {
             let (ms, ips) = crate::charge::lire();
-            self.envoyer(&json!({ "type": "charge", "ms": ms, "ips": ips, "pause": crate::charge::pause() }));
+            self.envoyer(&json!({
+                "type": "charge",
+                "ms": ms,
+                "ips": ips,
+                "pause": crate::charge::pause(),
+                "capture": crate::charge::capture(),
+                "veille": crate::charge::veille(),
+            }));
             if dates() != self.dates {
                 self.etat();
             }
@@ -513,12 +566,55 @@ fn enregistrer_gif(nom: &str, donnees: &str) -> Result<std::path::PathBuf, Strin
     if !octets.starts_with(b"GIF89a") || octets.len() > 40 << 20 {
         return Err("ce n'est pas un GIF".into());
     }
-    let propre: String = nom.chars().filter(|c| !r#"\/:*?"<>|"#.contains(*c) && !c.is_control()).take(40).collect();
     let dossier = dossier_images().ok_or("dossier Images introuvable")?.join("Essaim");
     std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
-    let f = dossier.join(format!("{}.gif", if propre.trim().is_empty() { "Essaim" } else { propre.trim() }));
+    let f = dossier.join(format!("{}.gif", nom_de_gif(nom)));
     std::fs::write(&f, octets).map_err(|e| e.to_string())?;
     Ok(f)
+}
+
+/// Nom de fichier du GIF : sans caractère interdit ni nom réservé par Windows (« CON »…).
+fn nom_de_gif(nom: &str) -> String {
+    let propre: String = nom.chars().filter(|c| !r#"\/:*?"<>|"#.contains(*c) && !c.is_control()).take(40).collect();
+    match propre.trim().trim_end_matches('.') {
+        "" => "Essaim".to_owned(),
+        p if profils::nom_reserve(p) => format!("Essaim {p}"),
+        p => p.to_owned(),
+    }
+}
+
+/// Adresse la plus longue confiée au navigateur (au-delà, le preset passe par le presse-papiers).
+const URL_MAX: usize = 6000;
+
+/// Copie `texte` dans le presse-papiers de Windows.
+fn copier(texte: &str) -> Result<(), String> {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+    let utf16: Vec<u16> = texte.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        OpenClipboard(None).map_err(|e| e.message())?;
+        let r = (|| -> windows::core::Result<()> {
+            EmptyClipboard()?;
+            let mem: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, utf16.len() * 2)?;
+            let p = GlobalLock(mem) as *mut u16;
+            if p.is_null() {
+                let _ = GlobalFree(Some(mem));
+                return Err(windows::core::Error::from_thread());
+            }
+            std::ptr::copy_nonoverlapping(utf16.as_ptr(), p, utf16.len());
+            let _ = GlobalUnlock(mem);
+            // le presse-papiers devient propriétaire de la mémoire, sauf en cas d'échec
+            if let Err(e) = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(mem.0))) {
+                let _ = GlobalFree(Some(mem));
+                return Err(e);
+            }
+            Ok(())
+        })();
+        let _ = CloseClipboard();
+        r.map_err(|e| e.message())
+    }
 }
 
 fn montrer_dans_l_explorateur(f: &std::path::Path) {
@@ -646,7 +742,18 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         .with_devtools(cfg!(debug_assertions))
         .build(&Parent(hwnd))?;
     let _ = vue.focus();
-    FENETRE.with(|f| *f.borrow_mut() = Some(Fenetre { hwnd, vue, son, son_envoye: (u32::MAX, 0), dates: (None, None), apercus: Default::default(), avant: None }));
+    let fenetre = Fenetre {
+        hwnd,
+        vue,
+        son,
+        son_envoye: (u32::MAX, 0),
+        dates: (None, None),
+        apercus: Default::default(),
+        avant: None,
+        jeux: None,
+        reduite: false,
+    };
+    FENETRE.with(|f| *f.borrow_mut() = Some(fenetre));
     unsafe {
         SetTimer(Some(hwnd), TIMER_SON, 33, None);
         SetTimer(Some(hwnd), TIMER_FICHIERS, 700, None);
@@ -733,6 +840,19 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 });
                 return LRESULT(0);
             }
+            WM_SIZE => {
+                // réduite ou restaurée ; le message continue vers wry (taille de la vue)
+                let reduite = wp.0 == SIZE_MINIMIZED as usize;
+                if reduite || wp.0 == SIZE_RESTORED as usize || wp.0 == SIZE_MAXIMIZED as usize {
+                    FENETRE.with(|f| {
+                        if let Ok(mut f) = f.try_borrow_mut() {
+                            if let Some(f) = f.as_mut() {
+                                f.reduire(reduite);
+                            }
+                        }
+                    });
+                }
+            }
             WM_GETMINMAXINFO => {
                 let dpi = GetDpiForWindow(hwnd).max(96) as i32;
                 let mm = &mut *(lp.0 as *mut MINMAXINFO);
@@ -789,6 +909,15 @@ mod tests {
         assert_eq!(depuis_base64("TWE=").unwrap(), b"Ma");
         assert_eq!(depuis_base64("TQ==").unwrap(), b"M");
         assert!(depuis_base64("T@==").is_none());
+    }
+
+    #[test]
+    fn noms_de_gif() {
+        assert_eq!(nom_de_gif("Nuit / blanche"), "Nuit  blanche");
+        assert_eq!(nom_de_gif("con"), "Essaim con");
+        assert_eq!(nom_de_gif("LPT1.x"), "Essaim LPT1.x");
+        assert_eq!(nom_de_gif(" ?? "), "Essaim");
+        assert_eq!(nom_de_gif("fin..."), "fin");
     }
 
     #[test]

@@ -12,8 +12,9 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS,
 };
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-    KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_EXPAND_SZ, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    RegCloseKey, RegDeleteValueW, RegEnumValueW, RegGetValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE,
+    RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
 };
 use windows::Win32::UI::Shell::SHLoadIndirectString;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -141,6 +142,59 @@ pub fn installer(cle: &str) -> Result<(), String> {
         }
     }
     log::info!("curseurs : jeu « {} » installé", jeu.nom);
+    Ok(())
+}
+
+/// Valeurs de `HKCU\Control Panel\Cursors` qui font les curseurs en place, telles quelles (type
+/// et octets ; `None` = absente). Garde aussi des curseurs choisis un par un, sans nom de jeu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Etat(Vec<(&'static str, Option<Valeur>)>);
+
+/// Valeur brute du registre : type (`REG_SZ`…) et octets.
+type Valeur = (u32, Vec<u8>);
+
+/// Valeurs gardées : le nom du jeu (valeur par défaut), sa source et les 17 rôles.
+fn valeurs_etat() -> impl Iterator<Item = &'static str> {
+    ["", "Scheme Source"].into_iter().chain(ROLES)
+}
+
+/// Curseurs en place, pour y revenir (« Annuler », fin d'une règle automatique).
+pub fn etat() -> Option<Etat> {
+    let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, false)?;
+    let lire = |nom: &str| -> Option<Valeur> {
+        let nom = HSTRING::from(nom);
+        let (mut genre, mut n) = (REG_VALUE_TYPE(0), 0u32);
+        unsafe {
+            if RegQueryValueExW(k.0, &nom, None, Some(&mut genre), None, Some(&mut n)) != ERROR_SUCCESS {
+                return None;
+            }
+            let mut octets = vec![0u8; n as usize];
+            if RegQueryValueExW(k.0, &nom, None, Some(&mut genre), Some(octets.as_mut_ptr()), Some(&mut n)) != ERROR_SUCCESS {
+                return None;
+            }
+            octets.truncate(n as usize);
+            Some((genre.0, octets))
+        }
+    };
+    Some(Etat(valeurs_etat().map(|nom| (nom, lire(nom))).collect()))
+}
+
+/// Remet des curseurs gardés par `etat`, puis les fait recharger par Windows.
+pub fn restaurer(etat: &Etat) -> Result<(), String> {
+    let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, true).ok_or("réglages des curseurs de Windows inaccessibles")?;
+    unsafe {
+        for (nom, valeur) in &etat.0 {
+            let nom = HSTRING::from(*nom);
+            let _ = match valeur {
+                Some((genre, octets)) => RegSetValueExW(k.0, &nom, None, REG_VALUE_TYPE(*genre), Some(octets)),
+                None => RegDeleteValueW(k.0, &nom),
+            };
+        }
+        if let Err(e) = SystemParametersInfoW(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE) {
+            log::info!("curseurs : SPI_SETCURSORS a renvoyé {e}");
+        }
+    }
+    log::info!("curseurs : curseurs d'avant remis");
     Ok(())
 }
 

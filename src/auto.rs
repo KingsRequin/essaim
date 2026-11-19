@@ -1,16 +1,21 @@
 //! Preset automatique (`[automatique]`) : selon l'application au premier plan (prioritaire) ou
-//! selon l'heure. Quand plus aucune règle ne s'applique, les réglages d'avant reviennent.
+//! selon l'heure. Quand plus aucune règle ne s'applique, les réglages d'avant reviennent, sauf
+//! ceux que l'utilisateur a retouchés pendant la règle.
 
-use crate::config::{self, Config, Horaire};
-use crate::profils;
+use crate::config::{Config, Horaire};
+use crate::profils::{self, Avant};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub struct Auto {
-    /// Preset mis par une règle, et les réglages d'avant la première règle.
+    /// Preset mis par une règle.
     courant: Option<String>,
-    avant: Option<Config>,
+    /// Réglages d'avant la première règle, et juste après le dernier preset appliqué.
+    avant: Option<Avant>,
+    apres: Option<Avant>,
     prochain: Option<Instant>,
+    /// Échec déjà noté au journal (réessayé à chaque tour sans le répéter).
+    echec: bool,
 }
 
 /// Minutes depuis minuit d'une heure « HH:MM ».
@@ -60,23 +65,41 @@ impl Auto {
         match &cible {
             Some(nom) => {
                 if self.courant.is_none() {
-                    self.avant = Config::read(&config::path()).ok();
+                    // réglages illisibles : rien n'est appliqué, nouvel essai au tour suivant
+                    let Some(avant) = profils::capturer() else { return self.echoue("réglages d'avant illisibles") };
+                    self.avant = Some(avant);
                 }
                 match profils::appliquer(nom) {
                     Ok(()) => log::info!("automatique : preset « {nom} »"),
                     Err(e) => log::warn!("automatique : preset « {nom} » non appliqué ({e})"),
                 }
+                self.apres = profils::capturer();
             }
             None => {
-                if let Some(avant) = self.avant.take() {
-                    match profils::remettre(&avant) {
-                        Ok(()) => log::info!("automatique : réglages d'avant remis"),
-                        Err(e) => log::warn!("automatique : retour impossible ({e})"),
+                if let Some(avant) = &self.avant {
+                    let r = match &self.apres {
+                        Some(apres) => profils::remettre_partiel(avant, apres),
+                        // état d'après inconnu : tout revient
+                        None => profils::remettre(avant),
+                    };
+                    if let Err(e) = r {
+                        return self.echoue(&format!("retour impossible ({e})"));
                     }
+                    log::info!("automatique : réglages d'avant remis");
+                    (self.avant, self.apres) = (None, None);
                 }
             }
         }
+        self.echec = false;
         self.courant = cible;
+    }
+
+    /// Note l'échec une fois ; `courant` ne bouge pas, donc le tour suivant réessaie.
+    fn echoue(&mut self, quoi: &str) {
+        if !self.echec {
+            self.echec = true;
+            log::warn!("automatique : {quoi}, nouvel essai dans un instant");
+        }
     }
 }
 
