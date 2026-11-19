@@ -55,6 +55,9 @@ static SYNC_HUE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 static DECALAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub fn set_decalage(d: f32) {
+    if !d.is_finite() {
+        return; // un NaN y resterait pour toujours (le lissage repart de la valeur stockée)
+    }
     DECALAGE.store(d.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -278,6 +281,23 @@ pub fn chemin(forme: Forme, a: f32) -> (f32, f32) {
     }
 }
 
+/// Nouveaux événements depuis le compteur `vu` (kicks, aigus), au plus 4 par image. Un compteur
+/// qui recule (analyse rouverte) n'en compte aucun, au lieu d'un saut énorme.
+fn nouveaux(vu: Option<u32>, compteur: u32) -> u32 {
+    let d = vu.map_or(0, |v| compteur.wrapping_sub(v));
+    if d > u32::MAX / 2 {
+        0
+    } else {
+        d.min(4)
+    }
+}
+
+/// Pas de simulation le plus long : au-delà (cadence basse, machine chargée), l'image est
+/// simulée en plusieurs pas, sinon l'essaim ralentirait sous 20 images par seconde.
+pub const PAS_MAX: f32 = 0.05;
+/// Écart le plus long rattrapé (retour de veille, de pause) : au-delà, le temps perdu est oublié.
+const RATTRAPAGE_MAX: f32 = 0.25;
+
 /// Rayon (relatif) et vitesse (relative) de l'anneau `k` : les anneaux extérieurs, plus
 /// larges, tournent moins vite.
 fn anneau(k: usize) -> (f32, f32) {
@@ -306,6 +326,25 @@ pub struct Swarm {
     pitch: f32,
     /// Éclat du dernier kick, 1 → 0.
     pub env: f32,
+    /// Têtes des traînées (étincelles des aigus), tampon gardé d'une image à l'autre.
+    tetes: Vec<(f32, f32)>,
+    /// Tampons du dessin, gardés d'une image à l'autre (le dessin ne prend que `&self`).
+    tampons: std::cell::RefCell<Tampons>,
+}
+
+/// Tête d'une traînée à dessiner.
+struct Head {
+    x: f32,
+    y: f32,
+    s: f32,
+    al: f32,
+    front: bool,
+}
+
+#[derive(Default)]
+struct Tampons {
+    heads: Vec<Head>,
+    xy: Vec<(f32, f32)>,
 }
 
 impl Swarm {
@@ -327,6 +366,8 @@ impl Swarm {
             center: None,
             pitch: 50.0,
             env: 0.0,
+            tetes: Vec::new(),
+            tampons: Default::default(),
         }
     }
 
@@ -351,6 +392,21 @@ impl Swarm {
         (b.0 - pad, b.1 - pad, b.2 + pad, b.3 + pad)
     }
 
+    /// Avance la simulation jusqu'à `t`, `dt` secondes après l'image précédente : en plusieurs
+    /// pas d'au plus `PAS_MAX` si besoin, le pointeur glissant de sa position précédente à
+    /// `cursor` (le sillage voit ainsi la vraie vitesse).
+    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), au: AudioView, cfg: &Config, scale: f32) {
+        let dt = if dt.is_finite() { dt.clamp(0.0005, RATTRAPAGE_MAX) } else { 0.0005 };
+        let n = (dt / PAS_MAX).ceil().max(1.0) as usize;
+        let pas = dt / n as f32;
+        let depart = self.dernier_curseur.unwrap_or(cursor);
+        for i in 1..=n {
+            let f = i as f32 / n as f32;
+            let c = (depart.0 + (cursor.0 - depart.0) * f, depart.1 + (cursor.1 - depart.1) * f);
+            self.update(t - (dt * (1.0 - f)) as f64, pas, c, au, cfg, scale);
+        }
+    }
+
     pub fn update(&mut self, t: f64, dt: f32, cursor: (f32, f32), au: AudioView, cfg: &Config, scale: f32) {
         // centre de l'orbite : suit le pointeur avec un léger retard, borné
         let (mut cx, mut cy) = self.center.unwrap_or(cursor);
@@ -368,7 +424,7 @@ impl Swarm {
         self.center = Some((cx, cy));
 
         // kicks : sens inversé + satellites
-        let new = self.kicks_seen.map_or(0, |k| au.kicks.wrapping_sub(k)).min(4);
+        let new = nouveaux(self.kicks_seen, au.kicks);
         self.kicks_seen = Some(au.kicks);
         let e = &cfg.essaim;
         for _ in 0..new {
@@ -387,11 +443,12 @@ impl Swarm {
         self.env *= (-dt * 9.0).exp();
 
         // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
-        let nouveaux = self.aigus_vus.map_or(0, |a| au.aigus.wrapping_sub(a)).min(4);
+        let nouveaux = nouveaux(self.aigus_vus, au.aigus);
         self.aigus_vus = Some(au.aigus);
-        if cfg.scintillement.actif {
-            let tetes: Vec<(f32, f32)> =
-                self.trails.iter().chain(self.sats.iter().chain(&self.fixes).map(|s| &s.trail)).filter_map(|tr| tr.back().map(|p| (p.1, p.2))).collect();
+        if cfg.scintillement.actif && nouveaux > 0 {
+            let mut tetes = std::mem::take(&mut self.tetes);
+            tetes.clear();
+            tetes.extend(self.trails.iter().chain(self.sats.iter().chain(&self.fixes).map(|s| &s.trail)).filter_map(|tr| tr.back().map(|p| (p.1, p.2))));
             let quantite = cfg.scintillement.quantite.clamp(1.0, 10.0).round() as u32;
             for _ in 0..(nouveaux * quantite).min(MAX_PARTICULES as u32) {
                 let (x, y) = if tetes.is_empty() {
@@ -405,6 +462,7 @@ impl Swarm {
                 let taille = self.rng.range(1.1, 2.1) * scale;
                 self.particules.push(Particule { x, y, vx: a.cos() * v, vy: a.sin() * v, ne: t, vie, taille, genre: Genre::Etincelle });
             }
+            self.tetes = tetes;
         }
         // sillage : poussière le long du trajet de la souris quand elle file vite
         if let (true, Some(avant)) = (cfg.sillage.actif, self.dernier_curseur) {
@@ -446,6 +504,16 @@ impl Swarm {
         self.spd += ((o.vitesse_base + o.vitesse_basse * au.bass) - self.spd) * (dt * 10.0).min(1.0);
         let presence = (au.bass * 2.5).clamp(0.0, 1.0);
         self.far += ((1.0 + o.eloignement_grave * depth * presence) - self.far) * (dt * 16.0).min(1.0);
+        // une valeur non finie (son abîmé) figerait l'essaim pour toujours : retour au repos
+        if !self.spd.is_finite() {
+            self.spd = o.vitesse_base;
+        }
+        if !self.far.is_finite() {
+            self.far = 1.0;
+        }
+        if !self.pitch.is_finite() {
+            self.pitch = 50.0;
+        }
 
         let w = self.dir * self.spd;
         // comètes : `nombre` par anneau, réparties sur le trajet
@@ -456,7 +524,8 @@ impl Swarm {
         // position sur le trajet à la fraction `f` de l'image (centre et rayon interpolés) : les
         // points intermédiaires suivent la vraie forme, coins compris
         let (rayon, rayon0) = (o.rayon * scale * self.far, o.rayon * scale * far0);
-        let (rot0, drot) = (self.rot, o.rotation * TAU / 60.0 * dt);
+        let drot = o.rotation * TAU / 60.0 * dt;
+        let (rot0, drot) = (if self.rot.is_finite() { self.rot } else { 0.0 }, if drot.is_finite() { drot } else { 0.0 });
         self.rot = (rot0 + drot).rem_euclid(TAU);
         let point = |forme, a: f32, rel: f32, f: f32| {
             let (x, y) = chemin(forme, a);
@@ -539,20 +608,15 @@ impl Swarm {
         let o = &cfg.orbite;
         let dur = cfg.essaim.duree.max(0.1) as f64;
 
-        struct Head {
-            x: f32,
-            y: f32,
-            s: f32,
-            al: f32,
-            front: bool,
-        }
-        let mut heads: Vec<Head> = Vec::with_capacity(2 + self.sats.len());
+        let mut tampons = self.tampons.borrow_mut();
+        let Tampons { heads, xy } = &mut *tampons;
+        heads.clear();
 
         // satellites (traînées sans halo, pour rester léger) ; les permanents restent à 0,8
         for s in self.sats.iter().chain(&self.fixes) {
             let k = if s.born.is_finite() { (1.0 - (t - s.born) / dur) as f32 } else { 0.8 };
             let al = (k * 1.5).min(1.0);
-            draw_trail(cv, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
+            draw_trail(cv, xy, &s.trail, t, SAT_TRAIL, 2.6 * k * scale, al, false, cfg);
             if let Some(&(_, x, y)) = s.trail.back() {
                 heads.push(Head { x, y, s: (0.6 + 1.6 * k) * scale, al, front: y > self.center.map_or(0.0, |c| c.1) });
             }
@@ -561,7 +625,7 @@ impl Swarm {
         if o.cometes {
             let cy = self.center.map_or(0.0, |c| c.1);
             for tr in &self.trails {
-                draw_trail(cv, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg);
+                draw_trail(cv, xy, tr, t, o.trainee.max(0.01) as f64, 3.5 * scale, 1.0, true, cfg);
                 if let Some(&(_, x, y)) = tr.back() {
                     heads.push(Head { x, y, s: 2.4 * scale, al: 1.0, front: y > cy });
                 }
@@ -615,14 +679,16 @@ impl Swarm {
 const TRAIL_CHUNK: usize = 4;
 
 #[allow(clippy::too_many_arguments)]
-fn draw_trail(cv: &mut dyn Canvas, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
+fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64, life: f64, width: f32, al: f32, halo: bool, cfg: &Config) {
     if tr.len() < 2 {
         return;
     }
-    let q: Vec<f32> = tr.iter().map(|&(ti, _, _)| (1.0 - (t - ti) / life).max(0.0) as f32).collect();
-    let xy: Vec<(f32, f32)> = tr.iter().map(|&(_, x, y)| (x, y)).collect();
+    // fraîcheur du point `i` : 1 en tête, 0 en bout de vie
+    let q = |i: usize| (1.0 - (t - tr[i].0) / life).max(0.0) as f32;
+    xy.clear();
+    xy.extend(tr.iter().map(|&(_, x, y)| (x, y)));
     if halo {
-        cv.polyline(&xy, (0.8 + width * 0.7) * 2.6, prisme(cfg, t, 0.7), 0.12 * al, false);
+        cv.polyline(xy, (0.8 + width * 0.7) * 2.6, prisme(cfg, t, 0.7), 0.12 * al, false);
     }
     // les comètes (avec halo) sont lissées ; les satellites non, en deux morceaux (tête vive,
     // queue pâle) : c'est le poste le plus coûteux sur processeur
@@ -631,7 +697,7 @@ fn draw_trail(cv: &mut dyn Canvas, tr: &Trail, t: f64, life: f64, width: f32, al
     let mut i = 0;
     while i + 1 < xy.len() {
         let end = (i + chunk).min(xy.len() - 1);
-        let k = (q[i] + q[end]) * 0.5;
+        let k = (q(i) + q(end)) * 0.5;
         cv.polyline(&xy[i..=end], 0.8 + k * width, prisme(cfg, t, k), k * 0.9 * al, smooth);
         i = end;
     }
@@ -645,6 +711,12 @@ pub struct Crack {
     /// Demi-largeur du carré qui contient la fissure.
     pub ext: f32,
     pub born: f64,
+    /// Passes fixes (trait sombre et reflet) déjà tracées, pour les moteurs qui recopient des
+    /// images (processeur) : faites à la première image, recopiées ensuite.
+    fixe: std::cell::RefCell<Option<tiny_skia::Pixmap>>,
+    /// Branches de la fissure (suites de segments bout à bout), en coordonnées écran : l'éclat,
+    /// de largeur constante, est tracé branche par branche plutôt que segment par segment.
+    branches: Vec<Vec<(f32, f32)>>,
 }
 
 impl Crack {
@@ -674,7 +746,15 @@ impl Crack {
             }
         }
         let ext = segs.iter().fold(8.0f32, |m, s| m.max(s[0].abs()).max(s[1].abs()).max(s[2].abs()).max(s[3].abs())) + 6.0;
-        Self { x, y, segs, ext, born: t }
+        let mut branches: Vec<Vec<(f32, f32)>> = Vec::new();
+        for s in &segs {
+            let (a, b) = ((x + s[0], y + s[1]), (x + s[2], y + s[3]));
+            match branches.last_mut() {
+                Some(br) if br.last() == Some(&a) => br.push(b),
+                _ => branches.push(vec![a, b]),
+            }
+        }
+        Self { x, y, segs, ext, born: t, fixe: Default::default(), branches }
     }
 
     /// Rectangle écran (gauche, haut, droite, bas) qui contient la fissure.
@@ -684,7 +764,40 @@ impl Crack {
     }
 
     /// Dessine la fissure (coordonnées écran) ; `glow` 0..1 = éclat coloré, `opacity` = fondu.
+    /// Sur processeur, les deux passes fixes sont recopiées d'une image faite une fois (tracer
+    /// chaque segment à chaque image coûtait plusieurs millisecondes pour 12 fissures) ; seul
+    /// l'éclat, qui change de couleur et d'intensité, est retracé.
     pub fn draw(&self, cv: &mut dyn Canvas, glow: f32, rgb: (u8, u8, u8), opacity: f32) {
+        if cv.images() {
+            let (l, t, r, b) = self.rect();
+            let mut fixe = self.fixe.borrow_mut();
+            if fixe.is_none() {
+                *fixe = tiny_skia::Pixmap::new((r - l) as u32, (b - t) as u32).map(|mut pm| {
+                    self.passes_fixes(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (l as f32, t as f32) }, 1.0);
+                    pm
+                });
+            }
+            match fixe.as_ref() {
+                Some(pm) => {
+                    cv.image(pm, l, t, opacity);
+                }
+                None => self.passes_fixes(cv, opacity),
+            }
+        } else {
+            self.passes_fixes(cv, opacity);
+        }
+        if glow > 0.02 {
+            for br in &self.branches {
+                cv.polyline(br, 3.5, rgb, glow * 0.3 * opacity, true);
+            }
+            for br in &self.branches {
+                cv.polyline(br, 1.2, rgb, glow * opacity, true);
+            }
+        }
+    }
+
+    /// Trait sombre puis reflet décalé.
+    fn passes_fixes(&self, cv: &mut dyn Canvas, opacity: f32) {
         let (x, y) = (self.x, self.y);
         for s in &self.segs {
             cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), s[4], (2, 3, 8), 0.92 * opacity, true);
@@ -692,14 +805,6 @@ impl Crack {
         for s in &self.segs {
             let w = (s[4] * 0.35).max(0.5);
             cv.line((x + s[0] + 0.8, y + s[1] + 0.8), (x + s[2] + 0.8, y + s[3] + 0.8), w, (170, 185, 250), 0.25 * opacity, true);
-        }
-        if glow > 0.02 {
-            for s in &self.segs {
-                cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), 3.5, rgb, glow * 0.3 * opacity, true);
-            }
-            for s in &self.segs {
-                cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), 1.2, rgb, glow * opacity, true);
-            }
         }
     }
 }
@@ -723,6 +828,84 @@ mod tests {
         // les satellites disparaissent après leur durée de vie
         s.update(10.0, 0.016, (100.0, 100.0), au, &cfg, 1.0);
         assert!(s.sats.is_empty());
+    }
+
+    #[test]
+    fn compteur_qui_recule_aucun_nouveau() {
+        assert_eq!(nouveaux(None, 12), 0);
+        assert_eq!(nouveaux(Some(3), 5), 2);
+        assert_eq!(nouveaux(Some(3), 50), 4);
+        // analyse rouverte : le compteur repart de 0
+        assert_eq!(nouveaux(Some(57), 0), 0);
+        // tour complet du compteur
+        assert_eq!(nouveaux(Some(u32::MAX), 1), 2);
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        let au = AudioView { kicks: 40, ..Default::default() };
+        s.update(0.0, 0.016, (100.0, 100.0), au, &cfg, 1.0);
+        let dir = s.dir;
+        s.update(0.016, 0.016, (100.0, 100.0), AudioView { kicks: 0, ..au }, &cfg, 1.0);
+        assert_eq!((s.dir, s.sats.len()), (dir, 0), "faux kicks");
+    }
+
+    #[test]
+    fn la_vitesse_ne_depend_pas_de_la_cadence() {
+        // une seconde à 10 images/s ou à 60 : l'essaim a tourné pareil (avant : bridé à 0,05 s
+        // par image, il faisait moitié moins de chemin à 10 images/s)
+        let cfg = Config::default();
+        let au = AudioView { bass: 0.6, pitch: 40.0, ..Default::default() };
+        let angle = |ips: u32| {
+            let mut s = Swarm::new();
+            let dt = 1.0 / ips as f32;
+            let mut total = 0.0f32;
+            s.avance(0.0, dt, (300.0, 300.0), au, &cfg, 1.0);
+            for i in 1..=ips {
+                let a0 = s.angles[0];
+                s.avance(i as f64 * dt as f64, dt, (300.0, 300.0), au, &cfg, 1.0);
+                total += (s.angles[0] - a0 + 3.0 * PI).rem_euclid(TAU) - PI;
+            }
+            total
+        };
+        let (lent, vif) = (angle(10), angle(60));
+        assert!((lent - vif).abs() < 0.05 * vif.abs(), "10 i/s : {lent} rad, 60 i/s : {vif} rad");
+        // retour de pause : un écart de plusieurs secondes n'est pas rattrapé
+        let mut s = Swarm::new();
+        s.avance(0.0, 0.016, (0.0, 0.0), au, &cfg, 1.0);
+        s.avance(30.0, 30.0, (0.0, 0.0), au, &cfg, 1.0);
+        assert!(s.angles[0].is_finite());
+    }
+
+    #[test]
+    fn un_son_non_fini_ne_fige_pas_l_essaim() {
+        let mut cfg = Config::default();
+        cfg.orbite.rotation = 20.0;
+        let mut s = Swarm::new();
+        let nan = AudioView { bass: f32::NAN, pitch: f32::NAN, brillance: f32::INFINITY, ..Default::default() };
+        for i in 0..10 {
+            s.update(i as f64 * 0.016, 0.016, (100.0, 100.0), nan, &cfg, 1.0);
+        }
+        s.update(0.2, 0.016, (100.0, 100.0), AudioView::default(), &cfg, 1.0);
+        assert!(s.spd.is_finite() && s.far.is_finite() && s.rot.is_finite() && s.angles.iter().all(|a| a.is_finite()));
+        assert!(s.trails[0].back().is_some_and(|p| p.1.is_finite() && p.2.is_finite()));
+        let d = decalage();
+        set_decalage(f32::NAN);
+        assert_eq!(decalage(), d);
+    }
+
+    #[test]
+    fn dessins_successifs_identiques_tampons_gardes() {
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        let au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0, ..Default::default() };
+        for i in 0..100 {
+            s.update(i as f64 * 0.007, 0.007, (300.0, 300.0), AudioView { kicks: i / 25, ..au }, &cfg, 1.0);
+        }
+        let (a, _) = render(&s, (300.0, 300.0), 0.7, &cfg, 1.0);
+        let cap = (s.tampons.borrow().heads.capacity(), s.tampons.borrow().xy.capacity());
+        assert!(cap.0 > 0 && cap.1 > 0);
+        let (b, _) = render(&s, (300.0, 300.0), 0.7, &cfg, 1.0);
+        assert!(a.data() == b.data(), "le second dessin diffère");
+        assert_eq!(cap, (s.tampons.borrow().heads.capacity(), s.tampons.borrow().xy.capacity()));
     }
 
     #[test]
@@ -816,6 +999,61 @@ mod tests {
         }
         let per = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
         eprintln!("{} satellites, image {size} px de large : {per:.3} ms par image", s.sats.len());
+    }
+
+    /// Coût du dessin de 12 fissures (le maximum) sur processeur :
+    /// `cargo test --release mesure_fissures -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn mesure_fissures() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let cracks: Vec<Crack> = (0..12).map(|i| Crack::new(200.0 + 60.0 * i as f32, 300.0, 0.0, 1.5, &mut rng)).collect();
+        let segs: usize = cracks.iter().map(|c| c.segs.len()).sum();
+        let mut pm = Pixmap::new(1200, 600).unwrap();
+        for glow in [0.0f32, 1.0] {
+            let n = 200;
+            let t0 = std::time::Instant::now();
+            for _ in 0..n {
+                let cv = &mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) };
+                for c in &cracks {
+                    c.draw(cv, glow, (120, 160, 255), 1.0);
+                }
+            }
+            eprintln!("12 fissures ({segs} segments), éclat {glow} : {:.3} ms par image", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        }
+    }
+
+    #[test]
+    fn fissure_recopiee_comme_tracee() {
+        // l'image des passes fixes, recopiée, donne le même dessin que le tracé direct
+        struct SansImage<'a>(crate::canvas::PixCanvas<'a>);
+        impl Canvas for SansImage<'_> {
+            fn line(&mut self, a: (f32, f32), b: (f32, f32), w: f32, c: (u8, u8, u8), al: f32, sm: bool) {
+                self.0.line(a, b, w, c, al, sm);
+            }
+            fn polyline(&mut self, p: &[(f32, f32)], w: f32, c: (u8, u8, u8), al: f32, sm: bool) {
+                self.0.polyline(p, w, c, al, sm);
+            }
+            fn circle(&mut self, x: f32, y: f32, r: f32, c: (u8, u8, u8), al: f32) {
+                self.0.circle(x, y, r, c, al);
+            }
+            fn ring(&mut self, x: f32, y: f32, r: f32, w: f32, c: (u8, u8, u8), al: f32) {
+                self.0.ring(x, y, r, w, c, al);
+            }
+        }
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let c = Crack::new(300.0, 200.0, 0.0, 1.5, &mut rng);
+        let points: usize = c.branches.iter().map(Vec::len).sum();
+        assert_eq!(points, c.segs.len() + c.branches.len(), "branches incomplètes");
+        let (mut a, mut b) = (Pixmap::new(600, 400).unwrap(), Pixmap::new(600, 400).unwrap());
+        for _ in 0..2 {
+            a.fill(tiny_skia::Color::TRANSPARENT);
+            c.draw(&mut crate::canvas::PixCanvas { pm: &mut a, origin: (10.0, 20.0) }, 0.0, (255, 0, 0), 1.0);
+        }
+        c.draw(&mut SansImage(crate::canvas::PixCanvas { pm: &mut b, origin: (10.0, 20.0) }), 0.0, (255, 0, 0), 1.0);
+        let ecart = a.data().iter().zip(b.data()).map(|(p, q)| p.abs_diff(*q) as u32).max().unwrap();
+        let peint = a.data().chunks_exact(4).filter(|p| p[3] > 100).count();
+        assert!(peint > 100 && ecart <= 40, "{peint} pixels, écart {ecart}");
     }
 
     #[test]

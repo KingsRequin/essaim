@@ -9,32 +9,6 @@ static PAUSE: AtomicBool = AtomicBool::new(false);
 static CAPTURE: AtomicU8 = AtomicU8::new(0);
 static VEILLE: AtomicBool = AtomicBool::new(false);
 
-/// États de la capture du son, dans l'ordre de `CAPTURE`.
-const CAPTURES: [&str; 3] = ["active", "coupee", "erreur"];
-
-/// État de la capture du son : `"active"`, `"coupee"` (réglage `[audio] actif`) ou `"erreur"`.
-/// Une autre valeur compte comme une erreur.
-// appelée par la boucle principale (main.rs, équipe cœur) ; en attendant, « active »
-#[allow(dead_code)]
-pub fn publier_capture(etat: &str) {
-    let i = CAPTURES.iter().position(|c| *c == etat).unwrap_or(2);
-    CAPTURE.store(i as u8, Ordering::Relaxed);
-}
-
-pub fn capture() -> &'static str {
-    CAPTURES.get(CAPTURE.load(Ordering::Relaxed) as usize).copied().unwrap_or("erreur")
-}
-
-/// Veille plein écran (jeu, vidéo sur l'écran de la souris).
-#[allow(dead_code)] // appelée par main.rs (équipe cœur)
-pub fn publier_veille(v: bool) {
-    VEILLE.store(v, Ordering::Relaxed);
-}
-
-pub fn veille() -> bool {
-    VEILLE.load(Ordering::Relaxed)
-}
-
 /// Pause demandée par l'utilisateur (menu, Horizon, fenêtre des réglages).
 pub fn publier_pause(p: bool) {
     PAUSE.store(p, Ordering::Relaxed);
@@ -42,6 +16,28 @@ pub fn publier_pause(p: bool) {
 
 pub fn pause() -> bool {
     PAUSE.load(Ordering::Relaxed)
+}
+
+/// États de la capture du son, dans l'ordre de leur code.
+const CAPTURES: [&str; 3] = ["active", "coupee", "erreur"];
+
+/// Capture du son : "active", "coupee" (pause, plein écran, son désactivé) ou "erreur".
+pub fn publier_capture(etat: &str) {
+    let code = CAPTURES.iter().position(|&c| c == etat).unwrap_or(2);
+    CAPTURE.store(code as u8, Ordering::Relaxed);
+}
+
+pub fn capture() -> &'static str {
+    CAPTURES.get(CAPTURE.load(Ordering::Relaxed) as usize).copied().unwrap_or("erreur")
+}
+
+/// Veille profonde : souris immobile, ni son ni clic depuis `[rendu] veille_apres`.
+pub fn publier_veille(v: bool) {
+    VEILLE.store(v, Ordering::Relaxed);
+}
+
+pub fn veille() -> bool {
+    VEILLE.load(Ordering::Relaxed)
 }
 
 /// Temps de calcul moyen d'une image (ms, sans l'attente de l'écran) et images par seconde.
