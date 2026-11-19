@@ -10,7 +10,7 @@
 //! et à la fermeture : entre deux fenêtres, il peut désigner une fenêtre déjà rendue (la lui
 //! rendre encore est sans effet).
 
-use crate::config::Bordure;
+use crate::config::{Action, Bordure, Declencheur, Evenement};
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -46,21 +46,11 @@ pub fn pulse(s: f32) -> f32 {
     x * x
 }
 
-/// Luminosité de la bordure (0 = noire, 1 = couleur de l'essaim) : `repos` sans kick, montée
-/// vers 1 sur un kick, d'autant plus que `intensite` est grande.
-pub fn level(cfg: &Bordure, pulse: f32) -> f32 {
+/// Luminosité de la bordure (0 = noire, 1 = couleur de l'essaim) : `repos` au calme, montée
+/// vers 1 sur un déclencheur, d'autant plus que sa `force` est grande.
+pub fn level(cfg: &Bordure, force: f32, pulse: f32) -> f32 {
     let repos = cfg.repos.clamp(0.0, 1.0);
-    (repos + (1.0 - repos) * cfg.intensite.clamp(0.0, 1.0) * pulse).clamp(0.0, 1.0)
-}
-
-/// Réglages de la bordure à appliquer : en mode sans flashs (photosensibilité), plus
-/// d'illumination sur les kicks, la bordure garde sa luminosité de repos.
-pub fn sans_flashs(cfg: &Bordure, doux: bool) -> Bordure {
-    if doux {
-        Bordure { intensite: 0.0, ..cfg.clone() }
-    } else {
-        cfg.clone()
-    }
+    (repos + (1.0 - repos) * force.clamp(0.0, 1.0) * pulse).clamp(0.0, 1.0)
 }
 
 /// COLORREF (0x00BBGGRR) de la couleur `rgb` à la luminosité `level`, quantifié.
@@ -132,8 +122,12 @@ pub struct Border {
     fg: Option<(isize, bool)>,
     checked: Option<Instant>,
     sent: Option<Instant>,
-    kicks_seen: Option<u32>,
+    /// Dernière illumination (déclencheur « bordure ») et sa force.
     kick_at: Option<Instant>,
+    force: f32,
+    /// Dernier déclenchement de chaque déclencheur (délai minimal), tirage de la chance.
+    derniers: Vec<Instant>,
+    tirage: u64,
     /// Fenêtres qui refusent la couleur (administrateur) : notées une fois au journal.
     refused: HashSet<isize>,
     /// Fenêtre notée dans le témoin `bordure.hwnd`.
@@ -141,18 +135,42 @@ pub struct Border {
 }
 
 impl Border {
+    /// Un événement (kick, clic…) : ses déclencheurs « bordure » l'illuminent, chacun après son
+    /// délai minimal et avec sa chance ; rien en mode sans flashs (`doux`).
+    pub fn reagir(&mut self, ev: Evenement, liste: &[Declencheur], doux: bool, now: Instant) {
+        if doux {
+            return;
+        }
+        if self.derniers.len() != liste.len() {
+            self.derniers.resize(liste.len(), now.checked_sub(Duration::from_secs(3600)).unwrap_or(now));
+        }
+        for (i, d) in liste.iter().enumerate() {
+            if d.quand != ev || d.faire != Action::Bordure || (d.delai > 0.0 && (now - self.derniers[i]).as_secs_f32() < d.delai) {
+                continue;
+            }
+            if d.probabilite < 1.0 {
+                // xorshift : chance tirée sans dépendre de l'essaim
+                self.tirage ^= (self.tirage << 13) | 1;
+                self.tirage ^= self.tirage >> 7;
+                self.tirage ^= self.tirage << 17;
+                if (self.tirage >> 40) as f32 / (1u64 << 24) as f32 >= d.probabilite {
+                    continue;
+                }
+            }
+            self.derniers[i] = now;
+            self.kick_at = Some(now);
+            self.force = d.force;
+        }
+    }
+
     /// Une image : `on` = bordure voulue (active, ni pause ni plein écran) ; `rgb` = couleur de
-    /// l'essaim ; `kicks` = compteur de kicks de l'analyse.
-    pub fn tick(&mut self, on: bool, cfg: &Bordure, rgb: (u8, u8, u8), kicks: u32, now: Instant) {
-        self.tick_for(on, cfg, rgb, kicks, now, || unsafe { GetForegroundWindow() });
+    /// l'essaim.
+    pub fn tick(&mut self, on: bool, cfg: &Bordure, rgb: (u8, u8, u8), now: Instant) {
+        self.tick_for(on, cfg, rgb, now, || unsafe { GetForegroundWindow() });
     }
 
     /// `tick`, avec la fenêtre au premier plan donnée par `foreground` (lue seulement si utile).
-    fn tick_for(&mut self, on: bool, cfg: &Bordure, rgb: (u8, u8, u8), kicks: u32, now: Instant, foreground: impl FnOnce() -> HWND) {
-        if self.kicks_seen.is_some_and(|k| k != kicks) {
-            self.kick_at = Some(now);
-        }
-        self.kicks_seen = Some(kicks);
+    fn tick_for(&mut self, on: bool, cfg: &Bordure, rgb: (u8, u8, u8), now: Instant, foreground: impl FnOnce() -> HWND) {
         if !on || !cfg.active {
             self.reset();
             return;
@@ -179,7 +197,7 @@ impl Border {
             return;
         }
         let p = self.kick_at.map_or(0.0, |k| pulse((now - k).as_secs_f32()));
-        let c = colorref(rgb, level(cfg, p));
+        let c = colorref(rgb, level(cfg, self.force, p));
         if self.colored == Some((id, c)) {
             return;
         }
@@ -252,14 +270,29 @@ mod tests {
     }
 
     #[test]
-    fn luminosite_repos_et_intensite() {
-        let cfg = Bordure { active: true, intensite: 1.0, repos: 0.5 };
-        assert!((level(&cfg, 0.0) - 0.5).abs() < 1e-6);
-        assert!((level(&cfg, 1.0) - 1.0).abs() < 1e-6);
-        let doux = Bordure { intensite: 0.4, ..cfg.clone() };
-        assert!((level(&doux, 1.0) - 0.7).abs() < 1e-6);
-        let nul = Bordure { intensite: 0.0, ..cfg };
-        assert!((level(&nul, 1.0) - 0.5).abs() < 1e-6);
+    fn luminosite_repos_et_force() {
+        let cfg = Bordure { active: true, repos: 0.5 };
+        assert!((level(&cfg, 1.0, 0.0) - 0.5).abs() < 1e-6);
+        assert!((level(&cfg, 1.0, 1.0) - 1.0).abs() < 1e-6);
+        assert!((level(&cfg, 0.4, 1.0) - 0.7).abs() < 1e-6);
+        assert!((level(&cfg, 0.0, 1.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn illuminee_par_ses_declencheurs() {
+        use crate::config::{Action, Declencheur, Evenement};
+        let maintenant = Instant::now();
+        let liste = [
+            Declencheur { force: 0.6, ..Declencheur::new(Evenement::Caisse, Action::Bordure) },
+            Declencheur::new(Evenement::Kick, Action::Eclat),
+        ];
+        let mut b = Border::default();
+        b.reagir(Evenement::Kick, &liste, false, maintenant);
+        assert!(b.kick_at.is_none(), "le kick n'a pas de déclencheur « bordure » ici");
+        b.reagir(Evenement::Caisse, &liste, true, maintenant);
+        assert!(b.kick_at.is_none(), "rien en mode sans flashs");
+        b.reagir(Evenement::Caisse, &liste, false, maintenant);
+        assert_eq!((b.kick_at, b.force), (Some(maintenant), 0.6));
     }
 
     #[test]
@@ -317,15 +350,16 @@ mod tests {
         let rgb = (40, 200, 255);
         let mut b = Border::default();
         let t0 = Instant::now();
-        b.tick_for(true, &cfg, rgb, 0, t0, || pad);
+        b.tick_for(true, &cfg, rgb, t0, || pad);
         assert!(marker().exists());
         wait();
         let rest = edge_pixel(pad);
         // kick : illumination puis retombée
         let tk = Instant::now();
+        b.reagir(crate::config::Evenement::Kick, &crate::config::Declencheurs::default().liste, false, tk);
         let mut seen = Vec::new();
         for i in 0..9 {
-            b.tick_for(true, &cfg, rgb, 1, Instant::now(), || pad);
+            b.tick_for(true, &cfg, rgb, Instant::now(), || pad);
             wait();
             seen.push(((Instant::now() - tk).as_millis(), b.colored.unwrap().1, edge_pixel(pad)));
             if i == 0 {
@@ -337,11 +371,11 @@ mod tests {
         let tc = Instant::now();
         for i in 0..n {
             b.sent = None;
-            b.tick_for(true, &cfg, (40, 200, (i % 2 * 100) as u8), 1, tk + Duration::from_secs(5), || pad);
+            b.tick_for(true, &cfg, (40, 200, (i % 2 * 100) as u8), tk + Duration::from_secs(5), || pad);
         }
         println!("changement de couleur : {:.1} µs", tc.elapsed().as_secs_f64() * 1e6 / n as f64);
         // la fenêtre perd le premier plan : couleur du système rendue (le témoin reste)
-        b.tick_for(true, &cfg, rgb, 1, tk + Duration::from_secs(6), HWND::default);
+        b.tick_for(true, &cfg, rgb, tk + Duration::from_secs(6), HWND::default);
         assert!(b.colored.is_none());
         b.reset();
         assert!(!marker().exists());

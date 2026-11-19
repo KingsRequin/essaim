@@ -12,10 +12,16 @@
 //!   `config.toml` en gardant ses commentaires ; Essaim la recharge dans la seconde ;
 //! - `open_config` : ouvre `config.toml` dans l'éditeur.
 //!
+//! Clés d'avant les modulations et les déclencheurs, encore lues et écrites par Horizon
+//! (`orbite.vitesse_basse`, `orbite.eloignement_grave`, `fissures.actives`) : `config` les
+//! donne, calculées, et `set_config` les traduit (`ALIAS`).
+//!
 //! Les pages web et les applis web locales (Tauri, Electron) sont refusées : tout en-tête
 //! `Origin` ferme la connexion. `set_config` ne touche pas aux réglages qui font télécharger ou
 //! changer de comportement en arrière-plan (`SECTIONS_PROTEGEES`).
 
+use crate::config::{Action, Cible, Config, Declencheur, Evenement, Groupe, Modulation, Source};
+use crate::modulation;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::{TcpListener, TcpStream};
@@ -183,6 +189,7 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>) -> Value {
         Request::SetConfig { section, .. } if SECTIONS_PROTEGEES.contains(&section.as_str()) => {
             Err(format!("la section [{section}] ne se change pas par l'interface locale"))
         }
+        Request::SetConfig { section, key, value } if ALIAS.contains(&(section.as_str(), key.as_str())) => ecrire_alias(&section, &key, &value).map(|_| Value::Null),
         Request::SetConfig { section, key, value } => crate::config::set_value(&section, &key, &value).map(|_| Value::Null),
     });
     match result {
@@ -191,9 +198,78 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>) -> Value {
     }
 }
 
+/// Clés d'avant gardées pour les clients (Horizon) : la vitesse ajoutée par la basse (rad/s à
+/// fond) et l'éloignement sur les graves (part du rayon) sont les deux modulations de base ; les
+/// fissures, le déclencheur « clic → fissure ».
+const ALIAS: [(&str, &str); 3] = [("orbite", "vitesse_basse"), ("orbite", "eloignement_grave"), ("fissures", "actives")];
+
+/// Modulation de base visée par un alias (source, cible, échelle de la quantité).
+fn base(cle: &str) -> (Source, Cible, f32) {
+    if cle == "vitesse_basse" { (Source::Basse, Cible::Vitesse, modulation::VITESSE) } else { (Source::Grave, Cible::Rayon, modulation::RAYON) }
+}
+
+/// Réglages publiés aux clients : ceux de `config.toml`, plus les clés d'avant calculées.
+pub fn config_publiee(cfg: &Config) -> Value {
+    let mut v = serde_json::to_value(cfg).unwrap_or(Value::Null);
+    for cle in ["vitesse_basse", "eloignement_grave"] {
+        let (source, cible, echelle) = base(cle);
+        let q = cfg.modulations.liste.iter().find(|m| m.source == source && m.cible == cible && m.sur == Groupe::Tout).map_or(0.0, |m| m.quantite);
+        v["orbite"][cle] = json!(q * echelle);
+    }
+    v["fissures"]["actives"] = json!(cfg.declencheurs.liste.iter().any(|d| d.quand == Evenement::Clic && d.faire == Action::Fissure));
+    v
+}
+
+/// Écrit une clé d'avant : la modulation de base (ajoutée au début si elle manque, retirée à 0),
+/// ou le déclencheur « clic → fissure » (ajouté ou retiré).
+fn ecrire_alias(section: &str, cle: &str, valeur: &Value) -> Result<(), String> {
+    if section == "fissures" {
+        let oui = valeur.as_bool().ok_or("[fissures] actives : vrai ou faux attendu")?;
+        return crate::config::modifier(|c| {
+            let l = &mut c.declencheurs.liste;
+            let est = |d: &Declencheur| d.quand == Evenement::Clic && d.faire == Action::Fissure;
+            if !oui {
+                l.retain(|d| !est(d));
+            } else if !l.iter().any(est) {
+                l.push(Declencheur::new(Evenement::Clic, Action::Fissure));
+            }
+        })
+        .map(|_| crate::config::request_reload());
+    }
+    let (source, cible, echelle) = base(cle);
+    let x = valeur.as_f64().filter(|x| x.is_finite()).ok_or(format!("[{section}] {cle} : nombre attendu"))? as f32;
+    let q = ((x / echelle).clamp(-1.0, 1.0) * 1e4).round() / 1e4;
+    crate::config::modifier(|c| {
+        let l = &mut c.modulations.liste;
+        let i = l.iter().position(|m| m.source == source && m.cible == cible && m.sur == Groupe::Tout);
+        match (i, q == 0.0) {
+            (Some(i), true) => {
+                l.remove(i);
+            }
+            (Some(i), false) => l[i].quantite = q,
+            (None, false) => l.insert(0, Modulation { source, cible, sur: Groupe::Tout, quantite: q, ..Default::default() }),
+            (None, true) => {}
+        }
+    })
+    .map(|_| crate::config::request_reload())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cles_d_avant_publiees() {
+        let mut cfg = Config::default();
+        let v = config_publiee(&cfg);
+        assert!((v["orbite"]["vitesse_basse"].as_f64().unwrap() - 11.0).abs() < 1e-3);
+        assert!((v["orbite"]["eloignement_grave"].as_f64().unwrap() - 1.3).abs() < 1e-3);
+        assert_eq!(v["fissures"]["actives"], true);
+        cfg.declencheurs.liste.retain(|d| d.faire != Action::Fissure);
+        cfg.modulations.liste.clear();
+        let v = config_publiee(&cfg);
+        assert_eq!((v["fissures"]["actives"].clone(), v["orbite"]["vitesse_basse"].clone()), (json!(false), json!(0.0)));
+    }
 
     #[test]
     fn sections_protegees_refusees() {

@@ -209,14 +209,18 @@ mod tests {
             (("orbite.anneaux", |c, v| c.orbite.anneaux = v as u32), 1.0, 4.0),
             (("orbite.rayon", |c, v| c.orbite.rayon = v), 4.0, 80.0),
             (("orbite.vitesse_base", |c, v| c.orbite.vitesse_base = v), 0.0, 15.0),
-            // réactions de base à la basse, devenues des modulations
-            (("modulations.basse", |c, v| c.modulations.liste = crate::config::reactions_de_base(v, crate::config::ELOIGNEMENT_GRAVE)), 0.0, 40.0),
-            (("modulations.grave", |c, v| c.modulations.liste = crate::config::reactions_de_base(crate::config::VITESSE_BASSE, v)), 0.0, 4.0),
+            // réactions de base à la basse : les deux premières modulations par défaut
+            (("modulations.basse", |c, v| c.modulations.liste[0].quantite = v), 0.0, 1.0),
+            (("modulations.grave", |c, v| c.modulations.liste[1].quantite = v), 0.0, 1.0),
             (("orbite.trainee", |c, v| c.orbite.trainee = v), 0.05, 2.0),
             (("orbite.cometes", |c, v| c.orbite.cometes = v > 0.5), 0.0, 1.0),
             (("essaim.maximum", |c, v| c.essaim.maximum = v as usize), 0.0, 64.0),
             (("essaim.fixes", |c, v| c.essaim.fixes = v as u32), 0.0, 32.0),
-            (("essaim.par_kick_max", |c, v| (c.essaim.par_kick_min, c.essaim.par_kick_max) = (v as u32, v as u32)), 0.0, 10.0),
+            (("declencheurs.satellites", |c, v| {
+                for d in c.declencheurs.liste.iter_mut().filter(|d| d.faire == crate::config::Action::Satellites) {
+                    (d.nombre, d.nombre_max) = (v as u32, v as u32);
+                }
+            }), 0.0, 10.0),
             (("essaim.duree", |c, v| c.essaim.duree = v), 0.5, 10.0),
             (("eclat.taille", |c, v| c.eclat.taille = v), 0.0, 12.0),
             (("orbite.forme", |c, v| c.orbite.forme = if v > 0.5 { crate::config::Forme::Huit } else { crate::config::Forme::Cercle }), 0.0, 1.0),

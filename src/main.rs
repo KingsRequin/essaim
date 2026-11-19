@@ -26,6 +26,7 @@ mod ipc;
 mod layer;
 mod maj;
 mod media;
+mod migration;
 mod modulation;
 mod pauses;
 mod prisme;
@@ -36,6 +37,7 @@ mod souris;
 mod stream;
 mod win;
 
+use config::Evenement;
 use render::{Crack, Rng, Swarm};
 use std::io::Write;
 use std::sync::Arc;
@@ -329,6 +331,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut effets = effets::Effets::new();
     let mut rng = Rng::seeded();
     let mut border = bordure::Border::default();
+    let mut ecoute_bordure = render::Ecoute::default();
     // pauses automatiques (ne pas déranger, batterie, applications) et raison publiée
     let mut pauses = pauses::Pauses::default();
     let mut raison_publiee = String::new();
@@ -435,7 +438,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         if now >= next_fs {
             next_fs = now + Duration::from_millis(250);
             let fs = cur.as_ref().is_some_and(|c| win::fullscreen_under(c.pos.0, c.pos.1));
-            murs = if conf.cfg.scintillement.rebonds { win::cadre_premier_plan() } else { None };
+            murs = if conf.cfg.particules.rebonds { win::cadre_premier_plan() } else { None };
             if fs != fs_paused {
                 fs_paused = fs;
                 log::info!("{}", if fs { "plein écran : en veille" } else { "fin du plein écran" });
@@ -478,8 +481,6 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         son.regler(son_voulu, &conf.cfg.audio.sortie, &shared, now);
         automatique.tick(&conf.cfg, now, shared.view().bpm);
         let cfg = &conf.cfg;
-        // bordure sans illumination sur les kicks en mode sans flashs
-        let bordure_cfg = bordure::sans_flashs(&cfg.bordure, doux);
         prisme.set_wanted(cfg.couleur.synchro_prisme);
         let fields = (user_paused, fs_paused, !user_paused && !retrait, backend.is_gpu(), prisme.connected(), conf_gen);
         if published != Some(fields) {
@@ -489,7 +490,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 "active": fields.2,
                 "gpu": fields.3,
                 "prisme": fields.4,
-                "config": cfg,
+                "config": ipc::config_publiee(cfg),
             }));
             published = Some(fields);
         }
@@ -529,9 +530,17 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let pistes = media::pistes();
         let nouvelle_piste = pistes != pistes_vues;
         pistes_vues = pistes;
+        let (clic_neuf, droit_neuf) = (down && !was_down, droit && !droit_avant);
+        // bordure : ses déclencheurs (kick, clic…), même quand le pointeur est masqué par la frappe ;
+        // rien en mode sans flashs
+        let declencheurs = &cfg.declencheurs.liste;
+        let souris = [(Evenement::Clic, clic_neuf), (Evenement::ClicDroit, droit_neuf), (Evenement::Piste, nouvelle_piste)];
+        for ev in ecoute_bordure.lire(&au).evenements().chain(souris.into_iter().filter(|e| e.1).map(|e| e.0)) {
+            border.reagir(ev, declencheurs, doux, now);
+        }
         let Some(cur) = cur.filter(|c| active && c.showing) else {
             // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
-            border.tick(active, &bordure_cfg, render::prisme(cfg, t, 1.0), au.kicks, now);
+            border.tick(active, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
             if !cleared {
                 backend.clear();
                 cracks.clear();
@@ -553,25 +562,14 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let scale = win::scale_at(cur.pos.0, cur.pos.1);
         let cursor = (cur.pos.0 as f32, cur.pos.1 as f32);
 
-        // clic : onde, éclats et nouvelle fissure (lus à chaque tour, même sans image à dessiner)
-        if down && !was_down && (cfg.clic.onde || cfg.clic.eclats) {
-            swarm.clic(cursor.0, cursor.1, t, cfg, scale);
-        }
-        if down && !was_down && cfg.fissures.actives {
-            if cracks.len() >= MAX_CRACKS {
-                cracks.remove(0);
+        // clic, clic droit, changement de piste : leurs déclencheurs (lus à chaque tour, même
+        // sans image à dessiner) ; les fissures demandées s'ouvrent plus bas
+        for (ev, oui) in souris {
+            if oui {
+                swarm.evenement(ev, cursor.0, cursor.1, t, cfg, scale);
             }
-            cracks.push(Crack::new(cursor.0, cursor.1, t, cfg.fissures.taille * scale, &mut rng));
         }
-        was_down = down;
-        // clic droit : une onde qui se referme
-        if droit && !droit_avant && cfg.clic.droit {
-            swarm.clic_droit(cursor.0, cursor.1, t, cfg, scale);
-        }
-        droit_avant = droit;
-        if nouvelle_piste && cfg.musique.rafale_piste {
-            swarm.rafale(cursor.0, cursor.1, t, cfg, scale);
-        }
+        (was_down, droit_avant) = (down, droit);
         if cur.pos != last_pos {
             last_pos = cur.pos;
             last_move = now;
@@ -589,7 +587,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 charge::publier_veille(true);
                 log::info!("veille profonde : plus rien n'est dessiné");
             }
-            border.tick(true, &bordure_cfg, render::prisme(cfg, t, 1.0), au.kicks, now);
+            border.tick(true, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
             win::attendre(VEILLE_LECTURE);
             continue;
         }
@@ -627,8 +625,15 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         (swarm.murs, swarm.doux) = (murs, doux);
         swarm.avance(t, dt, cursor, au, cfg, scale);
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
-        let d = render::decalage();
-        render::set_decalage(d + (render::decalage_vise(&au) - d) * (dt * 6.0).min(1.0));
+        // fissures demandées par les déclencheurs (clic, drop…) ; teinte de tout ce qu'Essaim
+        // dessine (modulations « sur tout »)
+        for (x, y, force) in swarm.fissures.drain(..) {
+            if cracks.len() >= MAX_CRACKS {
+                cracks.remove(0);
+            }
+            cracks.push(Crack::new(x, y, t, cfg.fissures.taille * force * scale, &mut rng));
+        }
+        render::set_decalage(swarm.teinte_globale());
         // teinte imposée : la pochette du morceau qui joue, sinon l'application ou le site au
         // premier plan, sinon l'éclairage (Prisme) ; suivie en douceur, par le plus court
         let c = &cfg.couleur;
@@ -668,7 +673,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         crack_rects.extend(effets.rect_ecran());
         let rgb = render::prisme(cfg, t, 1.0);
-        border.tick(true, &bordure_cfg, rgb, au.kicks, now);
+        border.tick(true, &cfg.bordure, rgb, now);
         let env = swarm.env;
         let dessiner = |cv: &mut dyn canvas::Canvas, here: bool| {
             effets.dessiner_voile(cv, cfg, t, scale);

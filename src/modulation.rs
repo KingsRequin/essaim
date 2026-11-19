@@ -1,29 +1,36 @@
 //! Modulations (`[modulations]`) : une source du son (basse, note grave ou aiguë, kick, caisse
-//! claire, charleston, montée, drop, stéréo, tempo) agit sur un paramètre de l'essaim (rotation
-//! du trajet, vitesse, rayon, taille, teinte), pour les comètes, les satellites ou les deux.
-//! Chaque source est ramenée de 0 à 1 (stéréo de -1 à 1) ; les coups (kick, caisse claire,
-//! charleston, drop) sont des enveloppes qui montent d'un coup et retombent. Les réactions de
-//! base (la basse qui accélère, la note grave qui éloigne l'orbite) sont deux modulations,
-//! présentes par défaut (`config::reactions_de_base`). Reproduit dans `ui/apercu.js`
-//! (`Sources`, `effetsModulations`).
+//! claire, charleston, montée, drop, stéréo, tempo, contretemps, brillance) agit sur un
+//! paramètre de l'essaim (rotation du trajet, vitesse, rayon, taille, teinte, décalage,
+//! luminosité, traînée, opacité), pour les comètes, les satellites ou les deux. Chaque source
+//! est ramenée de 0 à 1 (stéréo de -1 à 1) ; les coups (kick, caisse claire, charleston, drop,
+//! contretemps) sont des enveloppes qui montent d'un coup et retombent. Chaque modulation a son
+//! seuil, son lissage et peut prendre sa source à l'envers. Les réactions continues d'avant (la
+//! basse qui accélère, la note grave qui éloigne l'orbite, la montée qui resserre…) sont des
+//! modulations par défaut (`migration::Ancien`). Reproduit dans `ui/apercu.js` (`Sources`,
+//! `effetsModulations`).
 
 use crate::audio::AudioView;
-use crate::config::{Cible, Modulation, Source};
+use crate::config::{Cible, Groupe, Modulation, Source};
 use std::f32::consts::TAU;
 
-/// Effet d'une modulation à fond (quantité 1, source 1) : tours par minute ajoutés à la
-/// rotation du trajet, radians/s ajoutés à la vitesse sur le trajet (comme l'ancien
-/// `vitesse_basse` à fond), part du rayon et de la taille ajoutée (comme l'ancien
-/// `eloignement_grave`), degrés de teinte ajoutés.
+/// Effet d'une modulation à fond (quantité 1, source 1) : tours/min ajoutés à la rotation du
+/// trajet, radians/s ajoutés à la vitesse sur le trajet, part du rayon, de la taille, de la
+/// lueur, de la traînée et de l'opacité ajoutée (ou ôtée), degrés de teinte, rayons de
+/// décalage (vers la droite).
 pub const ROTATION: f32 = 90.0;
 pub const VITESSE: f32 = 40.0;
+pub const ACCELERATION: f32 = 2.0;
 pub const RAYON: f32 = 4.0;
 pub const TAILLE: f32 = 1.5;
 pub const TEINTE: f32 = 180.0;
+pub const DECALAGE: f32 = 1.6;
+pub const LUMINOSITE: f32 = 2.0;
+pub const TRAINEE: f32 = 3.0;
+pub const OPACITE: f32 = 1.0;
 
-/// Retombée des enveloppes (par seconde) : kick, caisse claire, charleston, drop ; suivi de la
-/// montée.
-const RETOMBEE: [f32; 4] = [7.0, 8.0, 10.0, 0.9];
+/// Retombée des enveloppes (par seconde) : kick, caisse claire, charleston, drop, contretemps ;
+/// suivi de la montée.
+const RETOMBEE: [f32; 5] = [7.0, 8.0, 10.0, 0.9, 10.0];
 const SUIVI_MONTEE: f32 = 6.0;
 
 /// Enveloppes des coups (1 au coup, puis retombée) et montée suivie.
@@ -33,14 +40,15 @@ pub struct Sources {
     pub caisse: f32,
     pub charleston: f32,
     pub drop: f32,
+    pub contretemps: f32,
     pub montee: f32,
 }
 
 impl Sources {
-    /// Avance de `dt` secondes : `coups` = nouveaux kicks, caisses claires, attaques des aigus et
-    /// drops depuis l'image précédente ; `tension` = montée détectée (0 à 1).
-    pub fn avancer(&mut self, dt: f32, coups: [u32; 4], tension: f32) {
-        let env = [&mut self.kick, &mut self.caisse, &mut self.charleston, &mut self.drop];
+    /// Avance de `dt` secondes : `coups` = nouveaux kicks, caisses claires, attaques des aigus,
+    /// drops et contretemps depuis l'image précédente ; `tension` = montée détectée (0 à 1).
+    pub fn avancer(&mut self, dt: f32, coups: [u32; 5], tension: f32) {
+        let env = [&mut self.kick, &mut self.caisse, &mut self.charleston, &mut self.drop, &mut self.contretemps];
         for ((e, n), r) in env.into_iter().zip(coups).zip(RETOMBEE) {
             *e = if n > 0 { 1.0 } else { *e * (-dt * r).exp() };
             if !e.is_finite() {
@@ -66,6 +74,8 @@ impl Sources {
             Source::Charleston => self.charleston,
             Source::Montee => self.montee,
             Source::Drop => self.drop,
+            Source::Contretemps => self.contretemps,
+            Source::Brillance => au.brillance.clamp(0.0, 1.0),
             Source::Stereo => au.balance.clamp(-1.0, 1.0),
             Source::Tempo => au.bpm.map_or(0.0, |_| 0.5 + 0.5 * (TAU * au.phase).cos()),
             Source::Aucune => 0.0,
@@ -74,70 +84,105 @@ impl Sources {
     }
 }
 
+/// Valeur visée d'une modulation (quantité × source) : la source à l'envers si demandé (1 − v ;
+/// stéréo : −v), rien sous le seuil puis jusqu'à 1 au-dessus (stéréo : de chaque côté).
+pub fn visee(m: &Modulation, source: f32) -> f32 {
+    let signe = if m.source == Source::Stereo { source.signum() } else { 1.0 };
+    let v = if m.source == Source::Stereo { source.abs() } else { source.max(0.0) };
+    let v = if m.inverser && m.source != Source::Stereo { 1.0 - v.min(1.0) } else { v };
+    let signe = if m.inverser && m.source == Source::Stereo { -signe } else { signe };
+    let s = m.seuil.clamp(0.0, 0.95);
+    let v = ((v - s) / (1.0 - s)).max(0.0);
+    let q = if m.quantite.is_finite() { m.quantite.clamp(-1.0, 1.0) } else { 0.0 };
+    let r = q * v * signe;
+    if r.is_finite() { r } else { 0.0 }
+}
+
+/// Part du chemin vers la valeur visée faite en `dt` secondes : `lissage` 0 = aussitôt, 1 =
+/// constante de temps de 0,4 s (0,35 ≈ 50 ms).
+pub fn part_lissage(lissage: f32, dt: f32) -> f32 {
+    let tau = 0.4 * lissage.clamp(0.0, 1.0).powi(2);
+    if tau < 1e-4 { 1.0 } else { 1.0 - (-dt / tau).exp() }
+}
+
 /// Paramètres modulés d'un groupe (comètes ou satellites).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Effet {
     /// Tours par minute ajoutés à la rotation du trajet, radians/s ajoutés à la vitesse sur le
-    /// trajet.
+    /// trajet, degrés de teinte ajoutés, décalage vers la droite (en rayons de l'orbite).
     pub rotation: f32,
     pub vitesse: f32,
-    /// Facteurs du rayon et de la taille.
+    pub teinte: f32,
+    pub decalage: f32,
+    /// Facteurs de la vitesse (accélération), du rayon, de la taille, de la lueur, de la traînée
+    /// et de l'opacité.
+    pub acceleration: f32,
     pub rayon: f32,
     pub taille: f32,
-    /// Degrés de teinte ajoutés.
-    pub teinte: f32,
+    pub luminosite: f32,
+    pub trainee: f32,
+    pub opacite: f32,
 }
 
 impl Default for Effet {
     fn default() -> Self {
-        Self { rotation: 0.0, vitesse: 0.0, rayon: 1.0, taille: 1.0, teinte: 0.0 }
+        Self { rotation: 0.0, vitesse: 0.0, teinte: 0.0, decalage: 0.0, acceleration: 1.0, rayon: 1.0, taille: 1.0, luminosite: 1.0, trainee: 1.0, opacite: 1.0 }
     }
 }
 
-impl Effet {
-    /// Rapproche de `vise` d'une part `k` (0 à 1).
-    pub fn lisser(&mut self, vise: &Effet, k: f32) {
-        self.rotation += (vise.rotation - self.rotation) * k;
-        self.vitesse += (vise.vitesse - self.vitesse) * k;
-        self.rayon += (vise.rayon - self.rayon) * k;
-        self.taille += (vise.taille - self.taille) * k;
-        self.teinte += (vise.teinte - self.teinte) * k;
-        if ![self.rotation, self.vitesse, self.rayon, self.taille, self.teinte].iter().all(|v| v.is_finite()) {
-            *self = Effet::default();
+/// Effets des modulations : sur les comètes et sur les satellites, et teinte de tout ce qu'Essaim
+/// dessine (modulations de la teinte « sur tout »).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Effets {
+    pub groupes: [Effet; 2],
+    pub teinte: f32,
+}
+
+/// Effets de `liste`, `valeurs[i]` étant la valeur lissée de la modulation `i` (`visee`). Les
+/// rotations, vitesses, teintes et décalages s'additionnent ; rayon, taille, lueur, traînée et
+/// opacité se multiplient (chaque modulation garde sa part : deux réactions qui resserrent
+/// l'orbite de moitié la resserrent au quart), dans des bornes lisibles (le rayon ne s'annule
+/// pas). La vitesse totale est bornée par `Swarm::update` (jamais négative).
+pub fn effets(liste: &[Modulation], valeurs: &[f32]) -> Effets {
+    let mut r = Effets::default();
+    for (m, &v) in liste.iter().zip(valeurs) {
+        if !v.is_finite() {
+            continue;
         }
-    }
-}
-
-/// Effets de `liste` sur les comètes (`[0]`) et les satellites (`[1]`), `valeur` donnant la
-/// valeur de chaque source. Les modulations d'une même cible s'additionnent ; rayon et taille
-/// restent dans des bornes lisibles (le rayon ne s'annule pas) ; la vitesse totale est bornée
-/// par `Swarm::update` (jamais négative).
-pub fn effets(liste: &[Modulation], valeur: impl Fn(Source) -> f32) -> [Effet; 2] {
-    let mut somme = [[0f32; 5]; 2];
-    for m in liste {
-        let q = if m.quantite.is_finite() { m.quantite.clamp(-1.0, 1.0) } else { 0.0 };
-        let i = match m.cible {
-            Cible::Rotation => 0,
-            Cible::Vitesse => 1,
-            Cible::Rayon => 2,
-            Cible::Taille => 3,
-            Cible::Teinte => 4,
-            Cible::Aucune => continue,
-        };
-        let v = q * valeur(m.source);
-        for (g, s) in somme.iter_mut().enumerate() {
-            if m.sur.inclut(g == 1) {
-                s[i] += v;
+        let facteur = |echelle: f32| (1.0 + v * echelle).max(0.0);
+        // teinte « sur tout » : celle de tout ce qu'Essaim dessine
+        if m.cible == Cible::Teinte && m.sur == Groupe::Tout {
+            r.teinte += v * TEINTE;
+            continue;
+        }
+        for (g, e) in r.groupes.iter_mut().enumerate() {
+            if !m.sur.inclut(g == 1) {
+                continue;
+            }
+            match m.cible {
+                Cible::Rotation => e.rotation += v * ROTATION,
+                Cible::Vitesse => e.vitesse += v * VITESSE,
+                Cible::Teinte => e.teinte += v * TEINTE,
+                Cible::Decalage => e.decalage += v * DECALAGE,
+                Cible::Acceleration => e.acceleration *= facteur(ACCELERATION),
+                Cible::Rayon => e.rayon *= facteur(RAYON),
+                Cible::Taille => e.taille *= facteur(TAILLE),
+                Cible::Luminosite => e.luminosite *= facteur(LUMINOSITE),
+                Cible::Trainee => e.trainee *= facteur(TRAINEE),
+                Cible::Opacite => e.opacite *= facteur(OPACITE),
+                Cible::Aucune => {}
             }
         }
     }
-    somme.map(|s| Effet {
-        rotation: s[0] * ROTATION,
-        vitesse: s[1] * VITESSE,
-        rayon: (1.0 + s[2] * RAYON).clamp(0.1, 5.0),
-        taille: (1.0 + s[3] * TAILLE).clamp(0.0, 4.0),
-        teinte: s[4] * TEINTE,
-    })
+    for e in &mut r.groupes {
+        e.acceleration = e.acceleration.clamp(0.0, 5.0);
+        e.rayon = e.rayon.clamp(0.1, 5.0);
+        e.taille = e.taille.clamp(0.0, 4.0);
+        e.luminosite = e.luminosite.clamp(0.0, 4.0);
+        e.trainee = e.trainee.clamp(0.1, 5.0);
+        e.opacite = e.opacite.clamp(0.0, 1.0);
+    }
+    r
 }
 
 #[cfg(test)]
@@ -146,52 +191,94 @@ mod tests {
     use crate::config::Groupe;
 
     fn m(source: Source, cible: Cible, sur: Groupe, quantite: f32) -> Modulation {
-        Modulation { source, cible, sur, quantite }
+        Modulation { source, cible, sur, quantite, ..Default::default() }
+    }
+
+    fn a_fond(liste: &[Modulation]) -> Effets {
+        let v: Vec<f32> = liste.iter().map(|x| visee(x, 1.0)).collect();
+        effets(liste, &v)
     }
 
     #[test]
     fn chaque_modulation_touche_son_groupe() {
-        let liste = [m(Source::Drop, Cible::Rotation, Groupe::Satellites, 0.5), m(Source::Basse, Cible::Rayon, Groupe::Tout, 1.0)];
-        let [c, s] = effets(&liste, |_| 1.0);
+        let liste = [m(Source::Drop, Cible::Rotation, Groupe::Satellites, 0.5), m(Source::Basse, Cible::Rayon, Groupe::Tout, 0.25)];
+        let [c, s] = a_fond(&liste).groupes;
         assert_eq!(c.rotation, 0.0);
         assert_eq!(s.rotation, 0.5 * ROTATION);
-        assert_eq!((c.rayon, s.rayon), (5.0, 5.0));
+        assert_eq!((c.rayon, s.rayon), (2.0, 2.0));
         // source muette : rien ne change
-        assert_eq!(effets(&liste, |_| 0.0), [Effet::default(); 2]);
+        assert_eq!(effets(&liste, &[0.0, 0.0]), Effets::default());
     }
 
     #[test]
-    fn bornes_et_valeurs_absurdes() {
+    fn rayons_qui_se_multiplient_et_bornes() {
+        // deux réactions qui resserrent de moitié : au quart
+        let moitie = m(Source::Montee, Cible::Rayon, Groupe::Tout, -0.5 / RAYON);
+        assert!((a_fond(&[moitie, moitie]).groupes[0].rayon - 0.25).abs() < 1e-5);
         let liste = [
             m(Source::Kick, Cible::Rayon, Groupe::Cometes, -1.0),
             m(Source::Kick, Cible::Vitesse, Groupe::Cometes, -1.0),
             m(Source::Kick, Cible::Taille, Groupe::Cometes, f32::NAN),
+            m(Source::Kick, Cible::Opacite, Groupe::Cometes, 1.0),
             m(Source::Aucune, Cible::Aucune, Groupe::Tout, 1.0),
         ];
-        let [c, s] = effets(&liste, |_| 1.0);
-        assert_eq!((c.rayon, c.vitesse, c.taille), (0.1, -VITESSE, 1.0));
+        let [c, s] = a_fond(&liste).groupes;
+        assert_eq!((c.rayon, c.vitesse, c.taille, c.opacite), (0.1, -VITESSE, 1.0, 1.0));
         assert_eq!(s, Effet::default());
+    }
+
+    #[test]
+    fn teinte_sur_tout_et_par_groupe() {
+        let liste = [m(Source::Basse, Cible::Teinte, Groupe::Tout, 0.5), m(Source::Basse, Cible::Teinte, Groupe::Cometes, 0.25)];
+        let e = a_fond(&liste);
+        assert_eq!(e.teinte, 90.0);
+        assert_eq!((e.groupes[0].teinte, e.groupes[1].teinte), (45.0, 0.0));
+    }
+
+    #[test]
+    fn seuil_inverser_et_stereo() {
+        let mut x = m(Source::Basse, Cible::Rayon, Groupe::Tout, 1.0);
+        x.seuil = 0.5;
+        assert_eq!((visee(&x, 0.4), visee(&x, 0.75), visee(&x, 1.0)), (0.0, 0.5, 1.0));
+        x.seuil = 0.0;
+        x.inverser = true;
+        assert_eq!((visee(&x, 0.0), visee(&x, 1.0)), (1.0, 0.0));
+        let mut st = m(Source::Stereo, Cible::Decalage, Groupe::Tout, 1.0);
+        assert_eq!((visee(&st, -0.5), visee(&st, 0.5)), (-0.5, 0.5));
+        st.inverser = true;
+        st.seuil = 0.5;
+        assert_eq!((visee(&st, -1.0), visee(&st, 0.25)), (1.0, 0.0));
+        assert_eq!(visee(&st, f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn lissage() {
+        assert_eq!(part_lissage(0.0, 0.016), 1.0);
+        let k = part_lissage(0.35, 0.016);
+        assert!(k > 0.2 && k < 0.35, "{k}");
+        assert!(part_lissage(1.0, 0.016) < 0.05);
     }
 
     #[test]
     fn coups_montent_puis_retombent() {
         let mut s = Sources::default();
-        s.avancer(0.01, [1, 0, 0, 1], 0.0);
-        assert_eq!((s.kick, s.drop, s.caisse), (1.0, 1.0, 0.0));
+        s.avancer(0.01, [1, 0, 0, 1, 1], 0.0);
+        assert_eq!((s.kick, s.drop, s.caisse, s.contretemps), (1.0, 1.0, 0.0, 1.0));
         for _ in 0..50 {
-            s.avancer(0.01, [0; 4], 1.0);
+            s.avancer(0.01, [0; 5], 1.0);
         }
         // le kick est retombé en une demi-seconde, le drop dure plus longtemps ; la montée suit
         assert!(s.kick < 0.05 && s.drop > 0.6 && s.montee > 0.9, "{s:?}");
-        s.avancer(0.01, [0; 4], f32::NAN);
+        s.avancer(0.01, [0; 5], f32::NAN);
         assert!(s.montee.is_finite());
     }
 
     #[test]
     fn valeurs_des_sources() {
         let s = Sources::default();
-        let au = AudioView { balance: -0.5, bpm: Some(120.0), phase: 0.0, bass: 0.3, ..Default::default() };
+        let au = AudioView { balance: -0.5, bpm: Some(120.0), phase: 0.0, bass: 0.3, brillance: 0.6, ..Default::default() };
         assert_eq!(s.valeur(Source::Basse, &au, 0.0, 0.75), 0.3);
+        assert_eq!(s.valeur(Source::Brillance, &au, 0.0, 0.0), 0.6);
         assert_eq!(s.valeur(Source::Stereo, &au, 0.0, 0.0), -0.5);
         assert_eq!(s.valeur(Source::Tempo, &au, 0.0, 0.0), 1.0);
         assert_eq!(s.valeur(Source::Tempo, &AudioView::default(), 0.0, 0.0), 0.0);
@@ -203,18 +290,22 @@ mod tests {
 #[cfg(test)]
 mod reactions {
     use super::*;
-    use crate::config::{reactions_de_base, Groupe};
+    use crate::migration::Ancien;
 
     #[test]
     fn reactions_de_base_comme_avant() {
-        // vitesse_basse = 11 et eloignement_grave = 1,3 : basse à fond, +11 rad/s ; note très
-        // grave avec la basse là, rayon × 2,3
-        let l = reactions_de_base(11.0, 1.3);
-        assert!(l.iter().all(|m| m.sur == Groupe::Tout));
-        let [c, s] = effets(&l, |src| if src == Source::Basse || src == Source::Grave { 1.0 } else { 0.0 });
+        // basse à fond : +11 rad/s ; note très grave, basse là : rayon × 2,3 ; montée à fond :
+        // rayon × 0,55, vitesse × 2,2
+        let l = Ancien::default().modulations(true, true);
+        assert_eq!(l.len(), 4);
+        let un = |sources: &[Source]| -> Effets {
+            let v: Vec<f32> = l.iter().map(|x| visee(x, if sources.contains(&x.source) { 1.0 } else { 0.0 })).collect();
+            effets(&l, &v)
+        };
+        let [c, s] = un(&[Source::Basse, Source::Grave]).groupes;
         assert!((c.vitesse - 11.0).abs() < 0.01 && (c.rayon - 2.3).abs() < 0.01, "{c:?}");
         assert_eq!(c, s);
-        // réaction nulle : omise
-        assert_eq!(reactions_de_base(0.0, 1.0).len(), 1);
+        let [c, _] = un(&[Source::Montee]).groupes;
+        assert!((c.acceleration - 2.2).abs() < 0.01 && (c.rayon - 0.55).abs() < 0.01, "{c:?}");
     }
 }

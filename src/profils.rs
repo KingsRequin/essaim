@@ -7,12 +7,13 @@
 //! `[audio] sortie`.
 
 use crate::config::{self, Config, Forme};
+use crate::migration::Ancien;
 use std::path::PathBuf;
 
 /// Sections enregistrées dans un profil.
-const SECTIONS: [&str; 16] = [
-    "eclat", "orbite", "essaim", "couleur", "fissures", "scintillement", "clic", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure",
-    "souris", "musique", "modulations",
+const SECTIONS: [&str; 15] = [
+    "eclat", "orbite", "essaim", "couleur", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure",
+    "souris", "modulations", "declencheurs",
 ];
 
 /// Le réglage `[section] key` fait-il partie des profils ?
@@ -32,64 +33,68 @@ pub fn dir() -> PathBuf {
     config::dir().join("profils")
 }
 
+/// Presets fournis. Leurs réactions (modulations et déclencheurs) sont celles de toujours,
+/// réglées comme avant (`migration::Ancien` : vitesse ajoutée par la basse, satellites par kick,
+/// éclats au clic…), pour que chacun garde son allure (essai `presets_comme_avant`).
 pub(crate) fn builtins() -> Vec<Profile> {
-    let make = |name: &str, change: fn(&mut Config)| {
-        let mut cfg = Config::default();
-        change(&mut cfg);
+    let make = |name: &str, change: fn(&mut Config, &mut Ancien)| {
+        let (mut cfg, mut a) = (Config::default(), Ancien::default());
+        change(&mut cfg, &mut a);
+        reagir(&mut cfg, &a);
         Profile { name: name.to_owned(), builtin: true, cfg, date: None }
     };
-    vec![
-        make("Défaut", |_| {}),
-        make("Discret", |c| {
+    let mut l = vec![
+        make("Défaut", |_, _| {}),
+        make("Discret", |c, a| {
             (c.orbite.rayon, c.orbite.vitesse_base, c.orbite.trainee) = (16.0, 2.0, 0.2);
-            c.modulations.liste = config::reactions_de_base(5.0, 0.6);
-            (c.essaim.par_kick_min, c.essaim.par_kick_max, c.essaim.maximum, c.essaim.duree) = (1, 2, 8, 2.0);
+            (a.orbite.vitesse_basse, a.orbite.eloignement_grave) = (5.0, 0.6);
+            (a.essaim.par_kick_min, a.essaim.par_kick_max, c.essaim.maximum, c.essaim.duree) = (1, 2, 8, 2.0);
             (c.couleur.vitesse_teinte, c.couleur.ecart_teinte) = (20.0, 90.0);
             (c.fissures.taille, c.fissures.duree) = (1.0, 2.0);
-            (c.bordure.intensite, c.bordure.repos) = (0.5, 0.3);
+            (a.bordure.intensite, c.bordure.repos) = (0.5, 0.3);
         }),
-        make("Intense", |c| {
+        make("Intense", |c, a| {
             (c.orbite.rayon, c.orbite.vitesse_base, c.orbite.trainee) = (28.0, 5.0, 0.6);
-            c.modulations.liste = config::reactions_de_base(18.0, 1.8);
-            (c.essaim.par_kick_min, c.essaim.par_kick_max, c.essaim.maximum, c.essaim.duree) = (3, 5, 40, 3.5);
+            (a.orbite.vitesse_basse, a.orbite.eloignement_grave) = (18.0, 1.8);
+            (a.essaim.par_kick_min, a.essaim.par_kick_max, c.essaim.maximum, c.essaim.duree) = (3, 5, 40, 3.5);
             (c.couleur.vitesse_teinte, c.couleur.ecart_teinte) = (120.0, 200.0);
             (c.fissures.taille, c.fissures.duree) = (2.2, 4.0);
             c.audio.sensibilite_kick = 6.0;
             c.orbite.nombre = 3;
         }),
-        make("Point seul", |c| {
+        make("Point seul", |c, a| {
             c.orbite.cometes = false;
             c.essaim.maximum = 0;
-            c.fissures.actives = false;
+            a.fissures.actives = false;
             c.bordure.active = false;
         }),
         // formes : une teinte fixe chacune (la synchro Prisme la remplacerait)
-        make("Delta", |c| {
+        make("Delta", |c, _| {
             (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Triangle, 3, 2.4);
             c.essaim.maximum = 0;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (175.0, 0.0, 40.0, false);
         }),
-        make("Ruche", |c| {
+        make("Ruche", |c, _| {
             (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Hexagone, 6, 1.25);
             c.essaim.maximum = 0;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (38.0, 0.0, 30.0, false);
         }),
-        make("Huit", |c| {
+        make("Huit", |c, _| {
             (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Huit, 2, 1.65);
             c.essaim.maximum = 0;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.synchro_prisme) = (265.0, 60.0, false);
         }),
-        make("Pollen", |c| {
+        make("Pollen", |c, _| {
             (c.orbite.cometes, c.orbite.vitesse_base) = (false, 1.4);
             (c.essaim.maximum, c.essaim.fixes) = (0, 14);
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (52.0, 0.0, 20.0, false);
         }),
-        make("Losange", |c| {
+        make("Losange", |c, _| {
             (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (Forme::Losange, 4, 2.1);
             c.essaim.maximum = 0;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (25.0, 0.0, 40.0, false);
         }),
-        make("Spirale", |c| {
+        make("Spirale", |c, _| {
             (c.orbite.anneaux, c.orbite.nombre, c.orbite.vitesse_base) = (3, 1, 2.6);
             c.essaim.maximum = 0;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.synchro_prisme) = (215.0, 60.0, false);
@@ -105,30 +110,39 @@ pub(crate) fn builtins() -> Vec<Profile> {
         forme("Lissajous", Forme::Lissajous, 3, 1.3, 240.0),
         forme("Astroïde", Forme::Astroide, 4, 1.6, 275.0),
         // les réactions à la musique et les couleurs en plus
-        make("Constellation", |c| {
+        make("Constellation", |c, _| {
             (c.orbite.nombre, c.orbite.vitesse_base) = (3, 2.0);
             (c.essaim.fixes, c.essaim.maximum, c.essaim.constellation) = (12, 12, true);
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.palette, c.couleur.ecart_palette, c.couleur.synchro_prisme) = (200.0, 15.0, 2, 150.0, false);
         }),
-        make("Festival", |c| {
+        make("Festival", |c, a| {
             (c.orbite.nombre, c.orbite.rayon, c.orbite.inertie) = (3, 26.0, 0.4);
-            (c.essaim.maximum, c.essaim.par_kick_max) = (30, 4);
-            (c.musique.contretemps, c.musique.stereo) = (true, 0.6);
-            (c.clic.eclats, c.couleur.palette, c.couleur.ecart_palette, c.couleur.vitesse_teinte) = (true, 3, 120.0, 40.0);
+            (c.essaim.maximum, a.essaim.par_kick_max) = (30, 4);
+            (a.musique.contretemps, a.musique.stereo) = (true, 0.6);
+            (a.clic.eclats, c.couleur.palette, c.couleur.ecart_palette, c.couleur.vitesse_teinte) = (true, 3, 120.0, 40.0);
         }),
         // modulations : le trajet des satellites, à part, s'emballe au drop ; l'orbite s'ouvre
-        // sur les graves ; les comètes grossissent au kick
-        make("Tourbillon", |c| {
-            use crate::config::{Cible, FormeSatellites, Groupe, Modulation, Source};
+        // un peu sur les graves (+60 %) ; les comètes grossissent au kick
+        make("Tourbillon", |c, a| {
+            use crate::config::{FormeSatellites, Groupe};
             (c.orbite.forme, c.orbite.rotation, c.orbite.rotation_sur) = (Forme::Etoile, 12.0, Groupe::Satellites);
             (c.essaim.forme, c.essaim.maximum, c.essaim.fixes) = (FormeSatellites::Cercle, 24, 6);
-            let m = |source, cible, sur, quantite| Modulation { source, cible, sur, quantite };
-            // la basse accélère comme d'habitude ; la note grave éloigne un peu moins (+60 %)
-            c.modulations.liste = config::reactions_de_base(config::VITESSE_BASSE, 0.6);
-            c.modulations.liste.extend([m(Source::Drop, Cible::Rotation, Groupe::Satellites, 0.8), m(Source::Kick, Cible::Taille, Groupe::Cometes, 0.6)]);
+            a.orbite.eloignement_grave = 0.6;
             (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.palette, c.couleur.ecart_palette, c.couleur.synchro_prisme) = (280.0, 0.0, 2, 60.0, false);
         }),
-    ]
+    ];
+    if let Some(p) = l.iter_mut().find(|p| p.name == "Tourbillon") {
+        use crate::config::{Cible, Groupe, Modulation, Source};
+        let m = |source, cible, sur, quantite| Modulation { source, cible, sur, quantite, ..Default::default() };
+        p.cfg.modulations.liste.extend([m(Source::Drop, Cible::Rotation, Groupe::Satellites, 0.8), m(Source::Kick, Cible::Taille, Groupe::Cometes, 0.6)]);
+    }
+    l
+}
+
+/// Réactions d'un preset fourni : celles d'avant, réglées par `a`.
+fn reagir(c: &mut Config, a: &Ancien) {
+    c.modulations.liste = a.modulations(true, true);
+    c.declencheurs.liste = a.declencheurs();
 }
 
 /// Preset de base d'une forme du trajet : `nombre` comètes, vitesse de rotation (radians/s),
@@ -138,6 +152,7 @@ fn forme(nom: &str, forme: Forme, nombre: u32, vitesse: f32, teinte: f32) -> Pro
     (c.orbite.forme, c.orbite.nombre, c.orbite.vitesse_base) = (forme, nombre, vitesse);
     c.essaim.maximum = 0;
     (c.couleur.teinte, c.couleur.vitesse_teinte, c.couleur.ecart_teinte, c.couleur.synchro_prisme) = (teinte, 0.0, 40.0, false);
+    reagir(&mut c, &Ancien::default());
     Profile { name: nom.to_owned(), builtin: true, cfg: c, date: None }
 }
 
@@ -545,19 +560,19 @@ mod tests {
         b.rendu.cadence = 60; // hors profil
         b.audio.sortie = "{casque}".into(); // propre à la machine : hors profil
         assert_eq!(ecarts(&a, &b), 2);
-        b.audio.pulsation_tempo = false; // dans les profils
+        b.declencheurs.liste.pop(); // dans les profils
         assert_eq!(ecarts(&a, &b), 3);
     }
 
     #[test]
     fn la_sortie_son_reste_hors_des_presets() {
         assert!(!in_profile("audio", "sortie"));
-        assert!(in_profile("audio", "pulsation_tempo"));
+        assert!(in_profile("audio", "sensibilite_kick"));
         let mut cfg = Config::default();
         cfg.audio.sortie = "{casque}".into();
         let texte = config::text_with_keys("", &cfg, in_profile).unwrap();
         assert!(!texte.contains("sortie"), "{texte}");
-        assert!(texte.contains("pulsation_tempo"), "{texte}");
+        assert!(texte.contains("sensibilite_kick"), "{texte}");
     }
 
     #[test]

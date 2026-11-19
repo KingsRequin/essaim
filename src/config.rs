@@ -14,8 +14,7 @@ pub struct Config {
     pub essaim: Essaim,
     pub couleur: Couleur,
     pub fissures: Fissures,
-    pub scintillement: Scintillement,
-    pub clic: Clic,
+    pub particules: Particules,
     pub sillage: Sillage,
     pub projecteur: Projecteur,
     pub reticule: Reticule,
@@ -28,10 +27,10 @@ pub struct Config {
     pub raccourcis: Raccourcis,
     pub bibliotheque: Bibliotheque,
     pub mise_a_jour: MiseAJour,
-    pub musique: Musique,
     pub pause: Pause,
     pub stream: Stream,
     pub modulations: Modulations,
+    pub declencheurs: Declencheurs,
 }
 
 /// Fenêtre pour le stream (`stream.rs`), propre à la machine : hors presets.
@@ -53,71 +52,28 @@ pub enum Fond {
     Noir,
 }
 
-/// Réactions à la musique au-delà du kick : morceau en cours (API média de Windows,
-/// `media.rs`), montée et drop, caisse claire, contretemps, stéréo (`audio.rs`).
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(default)]
-pub struct Musique {
-    /// Rafale (satellites, éclat et grande onde) quand la piste change pendant la lecture.
-    pub rafale_piste: bool,
-    /// L'essaim se resserre et accélère pendant une montée, puis explose au drop.
-    pub montee: bool,
-    /// Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire (ou clap).
-    pub caisse_claire: bool,
-    /// Petite pulsation des têtes sur chaque contretemps, quand le tempo est connu.
-    pub contretemps: bool,
-    /// Décalage de l'essaim vers le côté qui joue le plus fort (0 = aucun, 1 = fort).
-    pub stereo: f32,
-}
-
-impl Default for Musique {
-    fn default() -> Self {
-        Self { rafale_piste: true, montee: true, caisse_claire: true, contretemps: false, stereo: 0.0 }
-    }
-}
-
 impl Config {
-    /// Un effet ou une modulation demande-t-il l'analyse musicale (caisse claire, montée, drop) ?
+    /// Une modulation ou un déclencheur demande-t-il l'analyse musicale (caisse claire, montée,
+    /// drop) ?
     pub fn analyse_musicale(&self) -> bool {
-        self.musique.montee
-            || self.musique.caisse_claire
-            || self.modulations.liste.iter().any(|m| matches!(m.source, Source::Caisse | Source::Montee | Source::Drop))
+        self.modulations.liste.iter().any(|m| matches!(m.source, Source::Caisse | Source::Montee | Source::Drop))
+            || self.declencheurs.liste.iter().any(|d| matches!(d.quand, Evenement::Caisse | Evenement::Drop))
     }
 }
 
-/// Étincelles sur les attaques des aigus (charleston, cymbales).
+/// Apparence des particules, quel que soit l'événement qui les fait naître (`[declencheurs]`).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
-pub struct Scintillement {
-    pub actif: bool,
-    /// Étincelles par attaque (1 à 10).
-    pub quantite: f32,
+pub struct Particules {
     /// Étincelles, éclats et poussière rebondissent sur les bords de la fenêtre au premier plan.
     pub rebonds: bool,
-}
-
-impl Default for Scintillement {
-    fn default() -> Self {
-        Self { actif: true, quantite: 4.0, rebonds: true }
-    }
-}
-
-/// Effets d'un clic, en plus des fissures.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(default)]
-pub struct Clic {
-    /// Onde de choc : un anneau qui s'élargit.
-    pub onde: bool,
-    /// Éclats projetés autour du clic.
-    pub eclats: bool,
+    /// Taille des ondes, des éclats et des implosions (0,3 à 3).
     pub taille: f32,
-    /// Clic droit : une onde qui se referme et des étincelles aspirées vers le pointeur.
-    pub droit: bool,
 }
 
-impl Default for Clic {
+impl Default for Particules {
     fn default() -> Self {
-        Self { onde: true, eclats: false, taille: 1.0, droit: true }
+        Self { rebonds: true, taille: 1.0 }
     }
 }
 
@@ -312,15 +268,14 @@ pub enum ModeBatterie {
 pub struct Bordure {
     /// La bordure de la fenêtre au premier plan prend la couleur d'Essaim (Windows 11).
     pub active: bool,
-    /// Force de l'illumination sur un kick (0 = aucune, 1 = jusqu'à la couleur pleine).
-    pub intensite: f32,
-    /// Luminosité sans kick (0 = noire, 1 = couleur pleine).
+    /// Luminosité au repos (0 = noire, 1 = couleur pleine). Elle s'illumine sur les
+    /// déclencheurs « bordure » (par défaut : chaque kick).
     pub repos: f32,
 }
 
 impl Default for Bordure {
     fn default() -> Self {
-        Self { active: true, intensite: 1.0, repos: 0.5 }
+        Self { active: true, repos: 0.5 }
     }
 }
 
@@ -392,8 +347,6 @@ pub struct Orbite {
     pub rotation: f32,
     /// Ce qui tourne avec le trajet : comètes, satellites ou tout.
     pub rotation_sur: Groupe,
-    /// Chaque kick inverse le sens de rotation des comètes et des satellites.
-    pub inverse_au_kick: bool,
     /// Trajet dessiné à la main (`forme = "trace"`) : points (x, y), rayon 1 environ.
     pub trace: Vec<[f32; 2]>,
     /// Inertie du centre de l'orbite : 0 = suit le pointeur de près, 1 = ressort souple qui
@@ -406,8 +359,6 @@ pub struct Orbite {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Essaim {
-    pub par_kick_min: u32,
-    pub par_kick_max: u32,
     pub maximum: usize,
     pub duree: f32,
     /// Satellites permanents, présents même sans musique.
@@ -449,73 +400,21 @@ pub struct Modulations {
 
 impl Default for Modulations {
     fn default() -> Self {
-        Self { liste: reactions_de_base(VITESSE_BASSE, ELOIGNEMENT_GRAVE) }
+        Self { liste: crate::migration::Ancien::default().modulations(true, true) }
     }
 }
 
-/// Réactions de base à la basse, par défaut : vitesse ajoutée quand la basse est au maximum
-/// (radians/s), écartement de l'orbite pour une note très grave (1,3 = +130 %).
-pub const VITESSE_BASSE: f32 = 11.0;
-pub const ELOIGNEMENT_GRAVE: f32 = 1.3;
-
-/// Modulations des réactions de base : la basse accélère (`vitesse` radians/s ajoutés à fond),
-/// une note grave éloigne l'orbite (`eloignement` : part du rayon ajoutée). Une réaction nulle
-/// est omise. Ce sont les anciens `[orbite] vitesse_basse` et `eloignement_grave`.
-pub fn reactions_de_base(vitesse: f32, eloignement: f32) -> Vec<Modulation> {
-    use crate::modulation::{RAYON, VITESSE};
-    let m = |source, cible, quantite: f32| Modulation { source, cible, sur: Groupe::Tout, quantite: (quantite * 1e4).round() / 1e4 };
-    let mut l = Vec::new();
-    if vitesse != 0.0 {
-        l.push(m(Source::Basse, Cible::Vitesse, (vitesse / VITESSE).clamp(-1.0, 1.0)));
-    }
-    if eloignement != 0.0 {
-        l.push(m(Source::Grave, Cible::Rayon, (eloignement / RAYON).clamp(-1.0, 1.0)));
-    }
-    l
-}
-
-/// Réglages d'avant les modulations dans une table TOML (fichier de réglages ou preset) :
-/// `[orbite] vitesse_basse` et `eloignement_grave` deviennent les modulations de base, placées
-/// en tête de `[modulations] liste`. Si la liste en a déjà une de même source et même cible
-/// (basse → vitesse, grave → rayon), celle-là est gardée et l'ancienne clé oubliée. Renvoie
-/// vrai si la table a changé.
-fn migrer(t: &mut toml::Table) -> bool {
-    let Some(orbite) = t.get_mut("orbite").and_then(|o| o.as_table_mut()) else { return false };
-    let lire = |v: Option<toml::Value>| v.and_then(|v| v.as_float().or(v.as_integer().map(|i| i as f64)));
-    let (vb, eg) = (lire(orbite.remove("vitesse_basse")), lire(orbite.remove("eloignement_grave")));
-    if vb.is_none() && eg.is_none() {
-        return false;
-    }
-    let base = reactions_de_base(vb.unwrap_or(VITESSE_BASSE as f64) as f32, eg.unwrap_or(ELOIGNEMENT_GRAVE as f64) as f32);
-    let modulations = t.entry("modulations").or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let Some(m) = modulations.as_table_mut() else { return true };
-    let mut liste = match m.remove("liste") {
-        Some(toml::Value::Array(a)) => a,
-        _ => Vec::new(),
-    };
-    let texte = |v: &toml::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
-    fn nom<T: Serialize>(x: T) -> Option<String> {
-        toml::Value::try_from(x).ok().and_then(|v| v.as_str().map(str::to_owned))
-    }
-    let mut tete: Vec<toml::Value> = base
-        .iter()
-        .filter(|r| !liste.iter().any(|v| texte(v, "source") == nom(r.source) && texte(v, "cible") == nom(r.cible)))
-        .filter_map(|r| toml::Value::try_from(r).ok())
-        .collect();
-    tete.append(&mut liste);
-    m.insert("liste".into(), toml::Value::Array(tete));
-    true
-}
-
-/// Réglages lus d'un texte TOML, réglages d'avant les modulations convertis (`migrer`).
+/// Réglages lus d'un texte TOML, réglages d'avant les réactions converties
+/// (`migration::migrer`).
 pub fn de_texte(texte: &str) -> Result<Config, toml::de::Error> {
     let mut t: toml::Table = toml::from_str(texte)?;
-    migrer(&mut t);
+    crate::migration::migrer(&mut t);
     Config::deserialize(t)
 }
 
-/// Convertit `config.toml` une fois pour toutes : les anciennes clés de la basse sont retirées et
-/// remplacées par leurs modulations (si le fichier n'en a pas déjà), commentaires gardés.
+/// Convertit `config.toml` une fois pour toutes : les anciennes clés (réactions à la basse,
+/// à la musique, aux clics) sont retirées et remplacées par leurs modulations et déclencheurs,
+/// commentaires gardés.
 pub fn migrer_fichier() -> Result<(), String> {
     migrer_fichier_in(&path())
 }
@@ -526,17 +425,25 @@ pub(crate) fn migrer_fichier_in(p: &Path) -> Result<(), String> {
     }
     edit_file(p, |doc, known| {
         let mut t: toml::Table = toml::from_str(&doc.to_string()).map_err(|e| format!("config.toml illisible : {e}"))?;
-        if !migrer(&mut t) {
+        if !crate::migration::migrer(&mut t) {
             return Ok(());
         }
         let cfg = Config::deserialize(t).map_err(|e| format!("config.toml illisible : {e}"))?;
-        if let Some(o) = doc.get_mut("orbite").and_then(|o| o.as_table_like_mut()) {
-            o.remove("vitesse_basse");
-            o.remove("eloignement_grave");
+        for (section, cle) in crate::migration::ANCIENNES_CLES {
+            if let Some(sec) = doc.get_mut(section).and_then(|o| o.as_table_like_mut()) {
+                sec.remove(cle);
+            }
         }
-        let liste = serde_json::to_value(&cfg.modulations.liste).map_err(|e| e.to_string())?;
-        set_in_doc(doc, known, "modulations", "liste", &liste)?;
-        log::info!("config : réactions à la basse converties en modulations");
+        for section in crate::migration::ANCIENNES_SECTIONS {
+            if doc.get(section).and_then(|o| o.as_table_like()).is_some_and(|t| t.is_empty()) {
+                doc.remove(section);
+            }
+        }
+        let valeurs = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
+        for (section, cle) in [("modulations", "liste"), ("declencheurs", "liste"), ("particules", "rebonds"), ("particules", "taille")] {
+            set_in_doc(doc, known, section, cle, &valeurs[section][cle])?;
+        }
+        log::info!("config : réactions converties en modulations et déclencheurs");
         Ok(())
     })
 }
@@ -552,11 +459,21 @@ pub struct Modulation {
     pub sur: Groupe,
     /// Force, de -1 à 1 (négatif : dans l'autre sens).
     pub quantite: f32,
+    /// En dessous de ce niveau de la source (0 à 0,95), rien ; au-dessus, l'effet monte jusqu'au
+    /// maximum.
+    pub seuil: f32,
+    /// Réaction douce (1, ~0,4 s) ou brusque (0, aussitôt).
+    pub lissage: f32,
+    /// La source à l'envers : 1 − valeur (stéréo : de l'autre côté).
+    pub inverser: bool,
 }
+
+/// Lissage d'une modulation par défaut (~50 ms).
+pub const LISSAGE: f32 = 0.35;
 
 impl Default for Modulation {
     fn default() -> Self {
-        Self { source: Source::Basse, cible: Cible::Rotation, sur: Groupe::Tout, quantite: 0.5 }
+        Self { source: Source::Basse, cible: Cible::Rotation, sur: Groupe::Tout, quantite: 0.5, seuil: 0.0, lissage: LISSAGE, inverser: false }
     }
 }
 
@@ -565,7 +482,7 @@ impl Default for Modulation {
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
-    /// Quantité de basse.
+    /// Niveau de la basse.
     Basse,
     /// Basse présente et note grave.
     Grave,
@@ -585,6 +502,10 @@ pub enum Source {
     Stereo,
     /// Battement du tempo (1 sur chaque temps), quand il est régulier.
     Tempo,
+    /// Coup de chaque contretemps (milieu du temps), quand le tempo est régulier.
+    Contretemps,
+    /// Brillance du son (part d'aigus).
+    Brillance,
     #[serde(other)]
     Aucune,
 }
@@ -595,14 +516,130 @@ pub enum Source {
 pub enum Cible {
     /// Rotation du trajet (tours par minute ajoutés).
     Rotation,
-    /// Vitesse sur le trajet.
+    /// Vitesse sur le trajet (radians/s ajoutés).
     Vitesse,
+    /// Accélération : la vitesse sur le trajet multipliée.
+    Acceleration,
     /// Rayon de l'orbite.
     Rayon,
     /// Taille des têtes et épaisseur des traînées.
     Taille,
-    /// Teinte (degrés ajoutés).
+    /// Teinte (degrés ajoutés) ; « tout » : celle de tout ce qu'Essaim dessine, bordure comprise.
     Teinte,
+    /// Décalage de l'orbite vers la gauche ou la droite (en rayons).
+    Decalage,
+    /// Lueur des têtes.
+    Luminosite,
+    /// Longueur des traînées.
+    Trainee,
+    /// Opacité des traînées et des têtes.
+    Opacite,
+    #[serde(other)]
+    Aucune,
+}
+
+/// Déclencheurs (`[declencheurs] liste`) : quand un événement arrive (kick, caisse claire, drop,
+/// clic…), une action (éclat, onde, satellites, fissure…). Ils remplacent les réactions fixes
+/// d'avant : ce sont, par défaut, celles-là (`migration::Ancien::declencheurs`).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Declencheurs {
+    pub liste: Vec<Declencheur>,
+}
+
+impl Default for Declencheurs {
+    fn default() -> Self {
+        Self { liste: crate::migration::Ancien::default().declencheurs() }
+    }
+}
+
+/// Déclencheurs gardés au plus.
+pub const DECLENCHEURS_MAX: usize = 24;
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+pub struct Declencheur {
+    pub quand: Evenement,
+    pub faire: Action,
+    /// Force de l'éclat (0 à 1), de l'illumination de la bordure (0 à 1), ou taille de l'onde,
+    /// des éclats, de la fissure, du carré, de l'implosion (0,2 à 3).
+    pub force: f32,
+    /// Satellites, étincelles : au moins `nombre`, au plus `nombre_max`.
+    pub nombre: u32,
+    pub nombre_max: u32,
+    /// Délai minimal entre deux déclenchements (s ; 0 = aucun).
+    pub delai: f32,
+    /// Chance de se déclencher à chaque événement (0 à 1).
+    pub probabilite: f32,
+}
+
+impl Default for Declencheur {
+    fn default() -> Self {
+        Self { quand: Evenement::Kick, faire: Action::Onde, force: 1.0, nombre: 3, nombre_max: 3, delai: 0.0, probabilite: 1.0 }
+    }
+}
+
+impl Declencheur {
+    pub fn new(quand: Evenement, faire: Action) -> Self {
+        Self { quand, faire, ..Default::default() }
+    }
+}
+
+/// Événement qui déclenche. Un événement inconnu ne déclenche rien.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Evenement {
+    Kick,
+    /// Caisse claire ou clap.
+    Caisse,
+    /// Attaque des aigus (charleston, cymbales).
+    Charleston,
+    /// Drop, après une montée ou un passage calme.
+    Drop,
+    /// Chaque temps, quand le tempo est régulier.
+    Temps,
+    /// Chaque temps pendant un break (la musique continue sans kick).
+    Break,
+    /// Milieu de chaque temps, quand le tempo est régulier.
+    Contretemps,
+    /// Changement de piste pendant la lecture.
+    Piste,
+    /// Clic (bouton principal), au point du clic.
+    Clic,
+    /// Clic droit (bouton secondaire), au point du clic.
+    ClicDroit,
+    #[serde(other)]
+    Aucun,
+}
+
+/// Action d'un déclencheur. Une action inconnue ne fait rien.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Action {
+    /// Éclat sous le pointeur (halo et anneau), qui fait aussi briller les têtes.
+    Eclat,
+    /// Satellites ajoutés.
+    Satellites,
+    /// Inverse le sens de rotation.
+    Inversion,
+    /// Illumine la bordure de la fenêtre au premier plan.
+    Bordure,
+    /// Onde de choc qui s'élargit.
+    Onde,
+    /// Éclats projetés.
+    Eclats,
+    /// Fissure de l'écran.
+    Fissure,
+    /// Onde qui se referme et étincelles aspirées.
+    Implosion,
+    /// Carré posé sur la pointe qui s'ouvre.
+    Carre,
+    /// Étincelles qui jaillissent des têtes.
+    Etincelles,
+    /// Explosion du drop : éclat, satellites, grande onde, gerbe d'étincelles.
+    Explosion,
+    /// Rafale : éclat, satellites et grande onde.
+    Rafale,
     #[serde(other)]
     Aucune,
 }
@@ -706,8 +743,6 @@ pub struct Couleur {
     pub application: bool,
     /// Dans un navigateur, prend la couleur dominante du haut de la page affichée.
     pub site: bool,
-    /// La teinte glisse avec la musique : plus elle est forte et brillante, plus elle s'écarte.
-    pub musique: bool,
     /// Prend la teinte dominante de la pochette du morceau qui joue (prioritaire sur
     /// `application`, `site` et Prisme).
     pub pochette: bool,
@@ -720,7 +755,6 @@ pub struct Couleur {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Fissures {
-    pub actives: bool,
     pub duree: f32,
     pub taille: f32,
 }
@@ -732,9 +766,6 @@ pub struct Audio {
     pub sensibilite_kick: f32,
     /// Délai minimal entre deux kicks (s) : un kick long qui ondule n'est compté qu'une fois.
     pub delai_kick: f32,
-    /// Sans kick depuis 2 s alors qu'un tempo stable était connu (break), l'essaim continue de
-    /// pulser doucement au tempo.
-    pub pulsation_tempo: bool,
     /// Sortie son écoutée (identifiant Windows) ; vide = sortie par défaut. Propre à la
     /// machine : hors presets.
     pub sortie: String,
@@ -755,7 +786,6 @@ impl Default for Orbite {
             anneaux: 1,
             rotation: 0.0,
             rotation_sur: Groupe::Tout,
-            inverse_au_kick: true,
             trace: Vec::new(),
             inertie: 0.0,
             vitesse_base: 3.5,
@@ -765,7 +795,7 @@ impl Default for Orbite {
 }
 impl Default for Essaim {
     fn default() -> Self {
-        Self { par_kick_min: 2, par_kick_max: 3, maximum: 16, duree: 2.8, fixes: 0, forme: FormeSatellites::Cometes, constellation: false }
+        Self { maximum: 16, duree: 2.8, fixes: 0, forme: FormeSatellites::Cometes, constellation: false }
     }
 }
 impl Default for Couleur {
@@ -777,7 +807,6 @@ impl Default for Couleur {
             synchro_prisme: true,
             application: false,
             site: false,
-            musique: false,
             pochette: false,
             palette: 1,
             ecart_palette: 120.0,
@@ -786,12 +815,12 @@ impl Default for Couleur {
 }
 impl Default for Fissures {
     fn default() -> Self {
-        Self { actives: true, duree: 3.0, taille: 1.4 }
+        Self { duree: 3.0, taille: 1.4 }
     }
 }
 impl Default for Audio {
     fn default() -> Self {
-        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1, pulsation_tempo: true, sortie: String::new() }
+        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1, sortie: String::new() }
     }
 }
 
@@ -810,15 +839,12 @@ nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
 rotation_sur = "tout"   # ce qui tourne avec le trajet : "tout", "cometes" ou "satellites"
-inverse_au_kick = true  # chaque kick inverse le sens de rotation des comètes et des satellites
 trace = []              # trajet dessiné à la main (forme = "trace"), points [x, y]
 inertie = 0             # 0 = l'orbite suit le pointeur de près, 1 = ressort souple qui traîne derrière
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
 trainee = 0.3           # durée de la traînée des comètes (s)
 
 [essaim]
-par_kick_min = 2        # satellites ajoutés à chaque kick
-par_kick_max = 3
 maximum = 16            # satellites en même temps, au plus
 duree = 2.8             # durée de vie d'un satellite (s)
 fixes = 0               # satellites permanents, présents même sans musique
@@ -832,51 +858,69 @@ ecart_teinte = 140      # écart de teinte entre la tête et la queue des traîn
 synchro_prisme = true   # prend la teinte de l'éclairage de Prisme quand il tourne
 application = false     # prend la teinte de l'icône de l'application au premier plan
 site = false            # dans un navigateur, prend la couleur du haut de la page affichée
-musique = false         # la teinte glisse avec l'intensité et la brillance de la musique
 pochette = false        # prend la teinte de la pochette du morceau qui joue (avant appli, site et Prisme)
 palette = 1             # teintes que se partagent comètes et satellites (1 à 3)
 ecart_palette = 120     # écart entre deux teintes de la palette (degrés)
 
 [fissures]
-actives = true
 duree = 3.0             # secondes avant que la fissure soit refermée
 taille = 1.4
 
-[scintillement]
-actif = true            # étincelles sur les attaques des aigus (charleston, cymbales)
-quantite = 4            # étincelles par attaque (1 à 10)
+[particules]
 rebonds = true          # étincelles, éclats et poussière rebondissent sur les bords de la fenêtre active
-
-[clic]
-onde = true             # onde de choc à chaque clic
-eclats = false          # éclats projetés autour du clic
-taille = 1.0
-droit = true            # clic droit : une onde qui se referme, des étincelles aspirées
+taille = 1.0            # taille des ondes, des éclats et des implosions (0.3 à 3)
 
 [sillage]
 actif = false           # poussière derrière la souris quand elle file vite
 densite = 5             # 1 à 10
 
-[musique]
-rafale_piste = true     # rafale de satellites et grande onde quand la piste change pendant la lecture
-montee = true           # l'essaim se resserre et accélère pendant une montée, puis explose au drop
-caisse_claire = true    # un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire (ou clap)
-contretemps = false     # petite pulsation sur chaque contretemps, quand le tempo est connu
-stereo = 0              # l'essaim penche vers le côté qui joue le plus fort (0 = jamais, 1 = beaucoup)
-
 [modulations]
 # Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
 # satellites ou tout (16 au plus) :
-#   source   : basse, grave, aigu (note de la basse), kick, caisse, charleston, montee, drop,
-#              stereo (côté qui joue), tempo (battement)
-#   cible    : rotation (du trajet, 1 = +90 tr/min), vitesse (1 = +40 radians/s), rayon
-#              (1 = +400 %), taille (1 = +150 %), teinte (1 = +180°)
+#   source   : basse (niveau), grave, aigu (note de la basse), kick, caisse, charleston, montee,
+#              drop, contretemps, tempo (battement), brillance, stereo (côté qui joue)
+#   cible    : rotation (du trajet, 1 = +90 tr/min), vitesse (1 = +40 radians/s),
+#              acceleration (vitesse multipliée, 1 = ×3), rayon
+#              (1 = +400 %), taille (1 = +150 %), teinte (1 = +180° ; « sur tout » : tout ce
+#              qu'Essaim dessine), decalage (1 = 1,6 rayon vers la droite), luminosite (1 = +200 %),
+#              trainee (1 = +300 %), opacite (-1 = transparent)
 #   sur      : "tout", "cometes" ou "satellites"
 #   quantite : de -1 à 1 (négatif : dans l'autre sens)
-# Par défaut, les réactions de base : la basse accélère (vitesse : 1 = +40 radians/s), une note
-# grave éloigne l'orbite (rayon : 1 = +400 %). Autre exemple : le trajet des satellites qui
-# s'emballe au drop, { source = "drop", cible = "rotation", sur = "satellites", quantite = 0.8 }
-liste = [{ source = "basse", cible = "vitesse", sur = "tout", quantite = 0.275 }, { source = "grave", cible = "rayon", sur = "tout", quantite = 0.325 }]
+#   seuil    : rien sous ce niveau de la source (0 à 0.95) ; lissage : 0 = aussitôt, 1 = doux
+#   inverser : la source à l'envers (1 - valeur ; stéréo : l'autre côté)
+# Par défaut, les réactions de base : la basse accélère, une note grave éloigne l'orbite, une
+# montée resserre l'orbite et accélère. Exemple : le trajet des satellites qui s'emballe au
+# drop, { source = "drop", cible = "rotation", sur = "satellites", quantite = 0.8 }
+liste = [
+    { source = "basse", cible = "vitesse", sur = "tout", quantite = 0.275 },
+    { source = "grave", cible = "rayon", sur = "tout", quantite = 0.325 },
+    { source = "montee", cible = "acceleration", sur = "tout", quantite = 0.6, lissage = 0 },
+    { source = "montee", cible = "rayon", sur = "tout", quantite = -0.1125, lissage = 0.4 },
+]
+
+[declencheurs]
+# Chaque déclencheur fait une action quand un événement arrive (24 au plus), dans l'ordre :
+#   quand    : kick, caisse, charleston (aigus), drop, temps, break (temps sans kick),
+#              contretemps, piste (changement de piste), clic, clic_droit
+#   faire    : eclat, satellites, inversion (du sens), bordure, onde, eclats, fissure, implosion,
+#              carre, etincelles, explosion, rafale
+#   force    : 0 à 3 (éclat et bordure : 0 à 1) ; nombre, nombre_max : satellites, étincelles
+#   delai    : secondes au moins entre deux fois ; probabilite : chance à chaque fois (0 à 1)
+# Par défaut, les réactions de toujours.
+liste = [
+    { quand = "kick", faire = "inversion" },
+    { quand = "kick", faire = "eclat" },
+    { quand = "kick", faire = "satellites", nombre = 2, nombre_max = 3 },
+    { quand = "kick", faire = "bordure" },
+    { quand = "break", faire = "eclat", force = 0.35 },
+    { quand = "caisse", faire = "carre" },
+    { quand = "drop", faire = "explosion", nombre = 6, nombre_max = 6 },
+    { quand = "charleston", faire = "etincelles", nombre = 4, nombre_max = 4 },
+    { quand = "clic", faire = "onde" },
+    { quand = "clic", faire = "fissure" },
+    { quand = "clic_droit", faire = "implosion" },
+    { quand = "piste", faire = "rafale", nombre = 6, nombre_max = 6 },
+]
 
 [projecteur]
 actif = true            # secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur
@@ -897,7 +941,6 @@ hauteur = 24            # longueur des barres à pleine énergie
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
 delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un kick long compte double
-pulsation_tempo = true  # sans kick depuis 2 s (break), l'essaim continue de pulser au tempo
 sortie = ""             # sortie son écoutée (identifiant Windows) ; "" = sortie par défaut ; hors presets
 
 [rendu]
@@ -939,8 +982,8 @@ fond = "vert"           # fond de la fenêtre pour le stream : "vert", "bleu", "
 
 [bordure]
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim
-intensite = 1.0         # illumination sur chaque kick : 0 = aucune, 1 = jusqu'à la couleur pleine
-repos = 0.5             # luminosité sans kick : 0 = noire, 1 = couleur pleine
+repos = 0.5             # luminosité au calme : 0 = noire, 1 = couleur pleine ; elle s'illumine sur les
+                        # déclencheurs « bordure » (par défaut, chaque kick)
 "#;
 
 pub fn dir() -> PathBuf {
@@ -971,8 +1014,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("orbite", "inertie") => (0.0, 1.0),
         ("orbite", _) => (0.0, 100.0),
         ("essaim", "fixes") => (0.0, 32.0),
-        ("scintillement", "quantite") => (1.0, 10.0),
-        ("clic", "taille") => (0.3, 3.0),
+        ("particules", "taille") => (0.3, 3.0),
         ("sillage", "densite") => (1.0, 10.0),
         ("projecteur", "duree") => (0.3, 5.0),
         ("reticule", "taille") => (10.0, 200.0),
@@ -986,7 +1028,6 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("couleur", "teinte") => (0.0, 360.0),
         ("couleur", "palette") => (1.0, 3.0),
         ("couleur", "ecart_palette") => (0.0, 180.0),
-        ("musique", "stereo") => (0.0, 1.0),
         ("couleur", _) => (0.0, 720.0),
         ("fissures", "duree") => (0.2, 30.0),
         ("fissures", "taille") => (0.2, 6.0),
@@ -1019,8 +1060,19 @@ impl Config {
         self.orbite.trace.retain(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e6));
         self.orbite.trace.truncate(2000);
         self.modulations.liste.truncate(MODULATIONS_MAX);
+        let borne = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
         for m in &mut self.modulations.liste {
-            m.quantite = if m.quantite.is_finite() { m.quantite.clamp(-1.0, 1.0) } else { 0.0 };
+            m.quantite = borne(m.quantite, -1.0, 1.0, 0.0);
+            m.seuil = borne(m.seuil, 0.0, 0.95, 0.0);
+            m.lissage = borne(m.lissage, 0.0, 1.0, LISSAGE);
+        }
+        self.declencheurs.liste.truncate(DECLENCHEURS_MAX);
+        for d in &mut self.declencheurs.liste {
+            d.force = borne(d.force, 0.0, 3.0, 1.0);
+            d.nombre = d.nombre.min(40);
+            d.nombre_max = d.nombre_max.min(40);
+            d.delai = borne(d.delai, 0.0, 10.0, 0.0);
+            d.probabilite = borne(d.probabilite, 0.0, 1.0, 1.0);
         }
         if !depot_valide(&self.bibliotheque.depot) {
             log::warn!("config : [bibliotheque] depot « {} » invalide, dépôt par défaut utilisé", self.bibliotheque.depot);
@@ -1405,32 +1457,62 @@ mod tests {
     }
 
     #[test]
-    fn reactions_a_la_basse_d_avant_converties_en_modulations() {
-        use super::{reactions_de_base, Cible, Source};
-        // preset ou réglages d'avant : valeurs gardées, en modulations
-        let ancien = "[orbite]\nrayon = 28\nvitesse_basse = 18\neloignement_grave = 1.8\n";
+    fn reglages_d_avant_convertis_en_modulations_et_declencheurs() {
+        use super::{Action, Cible, Evenement, Source};
+        use crate::migration::Ancien;
+        let quand = |c: &super::Config, e: Evenement, f: Action| c.declencheurs.liste.iter().find(|d| d.quand == e && d.faire == f).copied();
+        // preset d'Essaim 0.3 : la basse et les réactions fixes, avec leurs valeurs
+        let ancien = "[orbite]\nrayon = 28\nvitesse_base = 5\nvitesse_basse = 18\neloignement_grave = 1.8\n\
+                      [essaim]\npar_kick_min = 3\npar_kick_max = 5\n[clic]\neclats = true\ntaille = 1.5\ndroit = false\n\
+                      [fissures]\nactives = false\n[bordure]\nintensite = 0.5\n[musique]\ncontretemps = true\nstereo = 0.6\n\
+                      [scintillement]\nquantite = 7\nrebonds = false\n[couleur]\nmusique = true\n[audio]\npulsation_tempo = false\n";
         let c = super::de_texte(ancien).unwrap();
-        assert_eq!(c.modulations.liste, reactions_de_base(18.0, 1.8));
         assert_eq!(c.orbite.rayon, 28.0);
-        // une seule des deux : l'autre garde sa valeur par défaut ; à zéro : pas de modulation
-        let c = super::de_texte("[orbite]\nvitesse_basse = 0\n").unwrap();
-        assert_eq!(c.modulations.liste.len(), 1);
-        assert_eq!((c.modulations.liste[0].source, c.modulations.liste[0].cible), (Source::Grave, Cible::Rayon));
-        // des modulations déjà là : les réactions passent en tête, sans doubler celles déjà là
-        let c = super::de_texte("[orbite]\nvitesse_basse = 18\n[modulations]\nliste = [{ source = \"kick\", cible = \"taille\" }]\n").unwrap();
-        let attendu: Vec<_> = reactions_de_base(18.0, super::ELOIGNEMENT_GRAVE).into_iter().chain([super::Modulation { source: Source::Kick, cible: Cible::Taille, ..Default::default() }]).collect();
-        assert_eq!(c.modulations.liste, attendu);
-        let c = super::de_texte("[orbite]\nvitesse_basse = 18\n[modulations]\nliste = [{ source = \"basse\", cible = \"vitesse\", quantite = 0.1 }]\n").unwrap();
-        assert_eq!(c.modulations.liste.len(), 2);
-        assert_eq!(c.modulations.liste[1].quantite, 0.1, "celle déjà là est gardée");
+        let l = &c.modulations.liste;
+        let m = |s: Source, ci: Cible| l.iter().find(|m| m.source == s && m.cible == ci).map(|m| m.quantite);
+        assert_eq!((m(Source::Basse, Cible::Vitesse), m(Source::Grave, Cible::Rayon)), (Some(18.0 / 40.0), Some(1.8 / 4.0)));
+        assert_eq!(m(Source::Montee, Cible::Acceleration), Some(0.6), "la montée : +120 % de vitesse");
+        assert!(m(Source::Contretemps, Cible::Taille).is_some() && m(Source::Stereo, Cible::Decalage) == Some(0.6));
+        assert!(m(Source::Basse, Cible::Teinte).is_some() && m(Source::Brillance, Cible::Teinte).is_some());
+        let sats = quand(&c, Evenement::Kick, Action::Satellites).unwrap();
+        assert_eq!((sats.nombre, sats.nombre_max), (3, 5));
+        assert_eq!(quand(&c, Evenement::Drop, Action::Explosion).map(|d| d.nombre), Some(10));
+        assert_eq!(quand(&c, Evenement::Kick, Action::Bordure).map(|d| d.force), Some(0.5));
+        assert_eq!(quand(&c, Evenement::Charleston, Action::Etincelles).map(|d| d.nombre), Some(7));
+        assert!(quand(&c, Evenement::Clic, Action::Eclats).is_some() && quand(&c, Evenement::Clic, Action::Onde).is_some());
+        assert!(quand(&c, Evenement::Clic, Action::Fissure).is_none() && quand(&c, Evenement::ClicDroit, Action::Implosion).is_none());
+        assert!(quand(&c, Evenement::Break, Action::Eclat).is_none());
+        assert_eq!((c.particules.rebonds, c.particules.taille), (false, 1.5));
+        // preset sans ces listes (fait à la main, ou partiel) : les réactions de toujours
+        let c = super::de_texte("[orbite]\nrayon = 26\n").unwrap();
+        assert_eq!(c.modulations.liste, super::Modulations::default().liste);
+        assert_eq!(c.declencheurs.liste, super::Declencheurs::default().liste);
+        // réglages d'Essaim 0.4 : modulations déjà là (gardées), réactions fixes ajoutées après
+        let v04 = "[modulations]\nliste = [{ source = \"kick\", cible = \"taille\" }]\n[musique]\nmontee = false\n";
+        let c = super::de_texte(v04).unwrap();
+        assert_eq!(c.modulations.liste.len(), 1, "ni basse (déjà convertie en 0.4) ni montée (coupée)");
+        assert_eq!(c.modulations.liste[0].source, Source::Kick);
+        assert!(quand(&c, Evenement::Drop, Action::Explosion).is_none() && quand(&c, Evenement::Caisse, Action::Carre).is_some());
+        // réglages de cette version : rien à faire ; une vieille clé égarée est retirée
+        let mut t: toml::Table = toml::from_str("[declencheurs]\nliste = []\n[modulations]\nliste = []\n").unwrap();
+        assert!(!crate::migration::migrer(&mut t));
+        let c = super::de_texte("[declencheurs]\nliste = []\n[clic]\nonde = true\n").unwrap();
+        assert!(c.declencheurs.liste.is_empty());
+        // les réglages par défaut sont ceux d'avant
+        assert_eq!(super::Modulations::default().liste, Ancien::default().modulations(true, true));
         // le fichier est converti une fois, commentaires gardés
         let d = dossier("conversion");
         let p = d.join("config.toml");
-        std::fs::write(&p, "# mes réglages\n[orbite]\nrayon = 30 # grand\nvitesse_basse = 5\neloignement_grave = 0.6\n").unwrap();
+        std::fs::write(&p, "# mes réglages\n[orbite]\nrayon = 30 # grand\nvitesse_basse = 5\n[clic]\nonde = false\n[musique]\nrafale_piste = false\n").unwrap();
         super::migrer_fichier_in(&p).unwrap();
         let texte = std::fs::read_to_string(&p).unwrap();
-        assert!(!texte.contains("vitesse_basse") && !texte.contains("eloignement_grave") && texte.contains("rayon = 30 # grand"), "{texte}");
-        assert_eq!(super::Config::read(&p).unwrap().modulations.liste, reactions_de_base(5.0, 0.6));
+        for vieux in ["vitesse_basse", "[clic]", "[musique]", "onde = false"] {
+            assert!(!texte.contains(vieux), "{vieux} : {texte}");
+        }
+        assert!(texte.contains("rayon = 30 # grand") && texte.contains("[declencheurs]"), "{texte}");
+        let c = super::Config::read(&p).unwrap();
+        assert!(quand(&c, Evenement::Clic, Action::Onde).is_none() && quand(&c, Evenement::Piste, Action::Rafale).is_none());
+        assert_eq!(c.modulations.liste[0].quantite, 5.0 / 40.0);
         super::migrer_fichier_in(&p).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), texte, "rien de plus la deuxième fois");
         let _ = std::fs::remove_dir_all(&d);
@@ -1442,8 +1524,9 @@ mod tests {
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
         // par défaut, les réactions de base ; le fichier par défaut dit la même chose
         assert_eq!(c.modulations.liste, super::Modulations::default().liste);
-        assert_eq!(c.modulations.liste.len(), 2);
-        assert!(c.orbite.inverse_au_kick && c.orbite.rotation_sur == Groupe::Tout);
+        assert_eq!(c.declencheurs.liste, super::Declencheurs::default().liste);
+        assert_eq!((c.modulations.liste.len(), c.declencheurs.liste.len()), (4, 12));
+        assert!(c.orbite.rotation_sur == Groupe::Tout);
         assert!(crate::profils::in_profile("modulations", "liste") && crate::profils::in_profile("orbite", "rotation_sur"));
         let d = dossier("modulations");
         let p = d.join("config.toml");
@@ -1455,10 +1538,11 @@ mod tests {
         assert_eq!(c.modulations.liste.len(), 1);
         let m = c.modulations.liste[0];
         assert_eq!((m.source, m.cible, m.sur, m.quantite), (Source::Drop, Cible::Rotation, Groupe::Satellites, 0.8));
-        // la musique analysée seulement si une source la demande
+        // la musique analysée seulement si une source ou un événement la demande
         let mut a = super::Config::default();
-        a.musique.montee = false;
-        a.musique.caisse_claire = false;
+        assert!(a.analyse_musicale());
+        a.modulations.liste.retain(|m| m.source != Source::Montee);
+        a.declencheurs.liste.retain(|d| !matches!(d.quand, super::Evenement::Caisse | super::Evenement::Drop));
         assert!(!a.analyse_musicale());
         a.modulations.liste = c.modulations.liste.clone();
         assert!(a.analyse_musicale());
@@ -1672,13 +1756,20 @@ mod tests {
         let c = c.clamped();
         assert_eq!(c.essaim.maximum, 64);
         assert_eq!(c.rendu.cadence, 500);
-        let c: super::Config = toml::from_str("[bordure]\nintensite = 3\nrepos = -1").unwrap();
+        let c: super::Config = toml::from_str("[bordure]\nrepos = -1").unwrap();
         let c = c.clamped();
-        assert_eq!((c.bordure.intensite, c.bordure.repos), (1.0, 0.0));
+        assert_eq!(c.bordure.repos, 0.0);
         // nan, inf et points non finis du tracé : bornés ou écartés
-        let texte = "[scintillement]\nquantite = nan\n[clic]\ntaille = inf\n[orbite]\ntrace = [[1.0, nan], [2.0, 3.0]]";
+        let texte = "[particules]\ntaille = inf\n[orbite]\ntrace = [[1.0, nan], [2.0, 3.0]]";
         let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
-        assert_eq!((c.scintillement.quantite, c.clic.taille), (1.0, 0.3));
+        assert_eq!(c.particules.taille, 0.3);
         assert_eq!(c.orbite.trace, vec![[2.0, 3.0]]);
+        // déclencheurs : force, nombres, délai et chance bornés ; 24 au plus
+        let texte = "[declencheurs]\nliste = [{ quand = \"kick\", faire = \"onde\", force = 9, nombre = 500, delai = -1, probabilite = 2 }]";
+        let d = toml::from_str::<super::Config>(texte).unwrap().clamped().declencheurs.liste[0];
+        assert_eq!((d.force, d.nombre, d.delai, d.probabilite), (3.0, 40, 0.0, 1.0));
+        let mut c = super::Config::default();
+        c.declencheurs.liste = vec![super::Declencheur::default(); 50];
+        assert_eq!(c.clamped().declencheurs.liste.len(), super::DECLENCHEURS_MAX);
     }
 }

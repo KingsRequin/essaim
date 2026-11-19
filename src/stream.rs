@@ -173,12 +173,14 @@ fn run(son: Arc<AudioShared>) -> windows::core::Result<()> {
         let centre = (l as f32 / 2.0, h as f32 / 2.0);
         let au = son.view();
         let p = crate::media::pistes();
-        if p != pistes && cfg.musique.rafale_piste {
-            swarm.rafale(centre.0, centre.1, t, cfg, scale);
+        if p != pistes {
+            swarm.evenement(crate::config::Evenement::Piste, centre.0, centre.1, t, cfg, scale);
         }
         pistes = p;
         swarm.doux = doux;
         swarm.avance(t, dt, centre, au, cfg, scale);
+        // pas de fissures dans la fenêtre pour le stream
+        swarm.fissures.clear();
         effets.avance(t, dt, centre, scale, swarm.env, &son, cfg, &[]);
         let (r, g, b) = couleur_fond(cfg.stream.fond);
         pm.fill(Color::from_rgba8(r, g, b, 255));
