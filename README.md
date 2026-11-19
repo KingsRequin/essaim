@@ -86,13 +86,26 @@ Un preset peut emporter le sien.</td>
 **Et aussi :** preset automatique selon l'appli au premier plan ou l'heure, raccourcis globaux
 (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> preset suivant, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
 pause), presets dans le menu de l'icône, export de l'aperçu en GIF, *Surprends-moi*, thème clair
-ou sombre comme Windows. Le jeu de curseurs **Dotter** (un simple point) est fourni.
+ou sombre comme Windows, mises à jour automatiques (téléchargées, vérifiées, appliquées au
+redémarrage). Le jeu de curseurs **Dotter** (un simple point) est fourni.
 
 Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## Installation
 
-Pas encore de version prête à télécharger : Essaim se compile en une commande.
+**Le plus simple :** télécharge `essaim.exe` dans la
+[dernière version](https://github.com/KingsRequin/essaim/releases/latest) et lance-le. Rien à
+installer, pas de droits administrateur : la fenêtre des réglages s'ouvre au premier lancement.
+
+- Range d'abord le fichier là où il restera (par exemple `%LOCALAPPDATA%\Programs\Essaim`),
+  puis coche *Démarrer Essaim avec Windows* dans les réglages avancés.
+- Windows peut afficher « Windows a protégé votre ordinateur » : l'exécutable n'est pas signé.
+  *Informations complémentaires* → *Exécuter quand même*.
+- Le curseur **Dotter** est à côté : `curseur-Dotter.zip` (voir l'étape 3 plus bas).
+- Essaim se met ensuite à jour tout seul : une notification prévient du téléchargement, puis
+  propose de redémarrer.
+
+**Depuis les sources :** Essaim se compile en une commande.
 
 1. Installe [Rust](https://rustup.rs) et [Git](https://git-scm.com).
 2. Dans PowerShell :
@@ -137,7 +150,7 @@ Non. Pas de hook clavier ni souris : les clics sont lus à chaque image, et les 
 par `RegisterHotKey` (Windows ne prévient Essaim que pour ces touches-là). La couleur du site
 vient d'une petite bande du haut de la page à l'écran ; le titre de la fenêtre sert seulement à
 voir qu'on a changé de page. L'adresse n'est pas lue, et rien n'est noté ni envoyé : Essaim ne
-se connecte qu'à GitHub, pour la bibliothèque de presets.
+se connecte qu'à GitHub, pour la bibliothèque de presets et les mises à jour.
 </details>
 
 <details>
@@ -164,7 +177,6 @@ Dans `%APPDATA%\Essaim` : `config.toml` (commenté, modifiable à la main), tes 
 
 ## Feuille de route
 
-- **Version prête à télécharger** (Releases GitHub), sans avoir à compiler.
 - **Bibliothèque de presets partagés** sur GitHub : publier les tiens, installer ceux des autres.
 - **D'autres curseurs en point**, pensés pour aller avec l'essaim.
 

@@ -88,11 +88,24 @@ preset can carry its own.</td>
 **Also:** automatic preset by foreground app or time of day, global hotkeys
 (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> next preset, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
 pause), presets in the tray menu, GIF export of the preview, *Surprends-moi* (random settings),
-light or dark theme like Windows. The **Dotter** cursor scheme (a simple dot) is included.
+light or dark theme like Windows, automatic updates (downloaded, verified, applied on restart).
+The **Dotter** cursor scheme (a simple dot) is included.
 
 ## Install
 
-No ready-made download yet: Essaim builds with one command.
+**Easiest:** download `essaim.exe` from the
+[latest release](https://github.com/KingsRequin/essaim/releases/latest) and run it. Nothing to
+install, no administrator rights: the settings window opens on first launch.
+
+- First put the file where it will stay (for example `%LOCALAPPDATA%\Programs\Essaim`), then
+  tick *Démarrer Essaim avec Windows* in the advanced settings.
+- Windows may show « Windows protected your PC »: the executable isn't signed. *More info* →
+  *Run anyway*.
+- The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
+- Essaim then updates itself: a notification tells you about the download, then offers to
+  restart.
+
+**From source:** Essaim builds with one command.
 
 1. Install [Rust](https://rustup.rs) and [Git](https://git-scm.com).
 2. In PowerShell:
@@ -135,7 +148,7 @@ No. No keyboard or mouse hook: clicks are read once per frame, and hotkeys go th
 `RegisterHotKey` (Windows notifies Essaim of those keys only). The website color comes from a
 thin strip at the top of the page on screen; the window title is only used to notice a page
 change. The address is not read, and nothing is logged or sent: Essaim only connects to GitHub,
-for the preset library.
+for the preset library and updates.
 </details>
 
 <details>
@@ -161,7 +174,6 @@ and the log `essaim.log`.
 
 ## Roadmap
 
-- **Ready-made download** (GitHub Releases), no build needed.
 - **Shared preset library** on GitHub: publish yours, install others'.
 - **More dot cursors**, designed to go with the swarm.
 

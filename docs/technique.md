@@ -93,6 +93,22 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
 
+## Mises à jour et publication
+
+`src/maj.rs` : fil « mise à jour », WinHTTP (proxy et certificats du système, aucune dépendance
+de plus). Il lit `releases/latest` de l'API GitHub, compare le tag à `CARGO_PKG_VERSION`,
+télécharge l'élément `essaim.exe` (adresse limitée à `github.com/KingsRequin/essaim/releases/download/`),
+vérifie l'en-tête `MZ` et l'empreinte `digest` (SHA-256 par `BCryptHash`), puis renomme
+l'exécutable en cours en `.ancien` et met le nouveau à sa place (Windows autorise le renommage
+d'un exécutable lancé). Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
+d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
+ne vérifie rien.
+
+Publier une version : monter `version` dans `Cargo.toml`, commiter, puis pousser un tag
+`vX.Y.Z` identique. Le workflow `.github/workflows/publication.yml` (Windows) vérifie le tag,
+lance les tests, compile, et crée la version GitHub avec `essaim.exe` (nom attendu par les
+mises à jour) et `curseur-Dotter.zip`.
+
 ## Développement
 
 `cargo build --release` suffit : l'analyse du son vient de la bibliothèque

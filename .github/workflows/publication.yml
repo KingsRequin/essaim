@@ -1,0 +1,50 @@
+# Publication d'une version : pousser un tag `vX.Y.Z` (égal à la version de Cargo.toml) compile
+# Essaim sous Windows, lance les tests et crée la version GitHub avec :
+#   - essaim.exe : l'appli, prête à lancer (c'est ce fichier que les mises à jour automatiques
+#     téléchargent : son nom ne doit pas changer) ;
+#   - curseur-Dotter.zip : le jeu de curseurs conseillé.
+name: Publication
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Le tag correspond à la version de Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages[0].version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Le tag $env:GITHUB_REF_NAME ne correspond pas à la version $version de Cargo.toml"
+          }
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --release
+
+      - name: Compilation
+        run: cargo build --release
+
+      - name: Fichiers de la version
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/essaim.exe dist/
+          Compress-Archive -Path curseurs/Dotter -DestinationPath dist/curseur-Dotter.zip
+
+      - name: Création de la version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME dist/essaim.exe dist/curseur-Dotter.zip `
+            --title "Essaim $env:GITHUB_REF_NAME" --generate-notes
