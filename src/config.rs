@@ -164,11 +164,14 @@ pub struct Rendu {
     pub carte_graphique: bool,
     /// Images par seconde quand rien ne bouge (souris immobile, pas de musique) ; 0 = pas de repos.
     pub cadence_repos: u32,
+    /// Veille profonde (plus aucun dessin) après ce nombre de secondes sans mouvement de souris,
+    /// son ni clic ; 0 = jamais.
+    pub veille_apres: u32,
 }
 
 impl Default for Rendu {
     fn default() -> Self {
-        Self { cadence: 0, carte_graphique: true, cadence_repos: 30 }
+        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60 }
     }
 }
 
@@ -429,6 +432,7 @@ delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un 
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
 carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
+veille_apres = 60       # plus rien n'est dessiné après ces secondes sans souris, son ni clic ; 0 = jamais
 
 [souris]
 jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
@@ -493,6 +497,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("fissures", "taille") => (0.2, 6.0),
         ("audio", "sensibilite_kick") => (1.0, 10.0),
         ("audio", "delai_kick") => (0.05, 1.0),
+        ("rendu", "veille_apres") => (0.0, 3600.0),
         ("rendu", _) => (0.0, 500.0),
         ("bordure", _) => (0.0, 1.0),
         _ => (0.0, 1000.0),
