@@ -288,6 +288,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut published: Option<(bool, bool, bool, bool, bool, u32)> = None;
     // un calque immobile par écran visité ; les fissures y sont retracées à chaque image
     let mut backend = backend::Backend::new(conf.cfg.rendu.carte_graphique);
+    win::masquer_captures(conf.cfg.rendu.masquer_captures);
     let mut cracks: Vec<Crack> = Vec::new();
     let mut swarm = Swarm::new();
     let mut rng = Rng::seeded();
@@ -398,6 +399,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
             maj::regler(conf.cfg.mise_a_jour.auto);
+            win::masquer_captures(conf.cfg.rendu.masquer_captures);
         }
         // son : coupé en pause et en plein écran (sauf fenêtre des réglages ouverte, qui le montre)
         let son_voulu = conf.cfg.audio.actif && (!(user_paused || fs_paused) || reglages_ouverts());

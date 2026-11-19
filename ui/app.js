@@ -727,6 +727,10 @@ const AVANCES = [
     note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
   },
   {
+    bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
+    note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
+  },
+  {
     bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
     note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
   },

@@ -169,11 +169,13 @@ pub struct Rendu {
     /// Veille profonde (plus aucun dessin) après ce nombre de secondes sans mouvement de souris,
     /// son ni clic ; 0 = jamais.
     pub veille_apres: u32,
+    /// Calques exclus des captures d'écran et des streams (`WDA_EXCLUDEFROMCAPTURE`).
+    pub masquer_captures: bool,
 }
 
 impl Default for Rendu {
     fn default() -> Self {
-        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60 }
+        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60, masquer_captures: false }
     }
 }
 
@@ -435,6 +437,7 @@ cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran
 carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
 veille_apres = 60       # plus rien n'est dessiné après ces secondes sans souris, son ni clic ; 0 = jamais
+masquer_captures = false # invisible des captures d'écran et des streams (OBS, Discord, Teams…)
 
 [souris]
 jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
