@@ -12,7 +12,9 @@
 //!   `config.toml` en gardant ses commentaires ; Essaim la recharge dans la seconde ;
 //! - `open_config` : ouvre `config.toml` dans l'éditeur.
 //!
-//! Les pages web sont refusées (en-tête `Origin` présent), sauf Horizon (Tauri).
+//! Les pages web et les applis web locales (Tauri, Electron) sont refusées : tout en-tête
+//! `Origin` ferme la connexion. `set_config` ne touche pas aux réglages qui font télécharger ou
+//! changer de comportement en arrière-plan (`SECTIONS_PROTEGEES`).
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -22,10 +24,18 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tungstenite::handshake::server::{ErrorResponse, Request as HsRequest, Response as HsResponse};
+use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Message, WebSocket};
 
 pub const PORT: u16 = 28670;
 const MAX_CLIENTS: usize = 8;
+/// Taille maximale d'un message reçu (une commande JSON tient en quelques centaines d'octets).
+const MESSAGE_MAX: usize = 64 * 1024;
+/// Un client muet depuis ce délai est fermé (il libère sa place).
+const INACTIVITE_MAX: Duration = Duration::from_secs(60);
+/// Sections que `set_config` refuse : mises à jour, dépôt de la bibliothèque, règles
+/// automatiques et pauses. Elles ne se changent que dans la fenêtre des réglages ou le fichier.
+const SECTIONS_PROTEGEES: [&str; 4] = ["mise_a_jour", "bibliotheque", "automatique", "pause"];
 
 /// Commandes qui doivent passer par la boucle principale.
 pub enum Cmd {
@@ -99,9 +109,10 @@ pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
 // signature imposée par tungstenite (rappel de la poignée de main)
 #[allow(clippy::result_large_err)]
 fn check_origin(req: &HsRequest, resp: HsResponse) -> Result<HsResponse, ErrorResponse> {
-    match req.headers().get("origin").and_then(|o| o.to_str().ok()) {
-        None | Some("tauri://localhost") | Some("http://tauri.localhost") => Ok(resp),
+    match req.headers().get("origin") {
+        None => Ok(resp),
         Some(o) => {
+            let o = o.to_str().unwrap_or("?");
             log::warn!("interface locale : connexion refusée depuis l'origine « {o} »");
             let mut r = ErrorResponse::new(Some("origine refusée".into()));
             *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
@@ -130,11 +141,20 @@ fn client(stream: TcpStream, shared: &Shared, tx: &Sender<Cmd>) -> anyhow::Resul
     // une poignée de main qui traîne ne doit pas garder sa place
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    let mut ws: WebSocket<TcpStream> = tungstenite::accept_hdr(stream, check_origin)?;
+    let limites = WebSocketConfig::default().max_message_size(Some(MESSAGE_MAX)).max_frame_size(Some(MESSAGE_MAX));
+    let mut ws: WebSocket<TcpStream> = tungstenite::accept_hdr_with_config(stream, check_origin, Some(limites))?;
     ws.get_mut().set_read_timeout(Some(Duration::from_millis(250)))?;
-    let (mut sent_version, mut last_push) = (u64::MAX, Instant::now());
+    let (mut sent_version, mut last_push, mut dernier_message) = (u64::MAX, Instant::now(), Instant::now());
     loop {
-        match ws.read() {
+        if dernier_message.elapsed() >= INACTIVITE_MAX {
+            let _ = ws.close(None);
+            return Ok(());
+        }
+        let lu = ws.read();
+        if lu.is_ok() {
+            dernier_message = Instant::now();
+        }
+        match lu {
             Ok(Message::Text(t)) => {
                 let reply = handle(t.as_str(), shared, tx);
                 ws.send(Message::Text(reply.to_string().into()))?;
@@ -160,10 +180,43 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>) -> Value {
         Request::GetState => Ok(shared.snapshot().1),
         Request::SetPaused { paused } => tx.send(Cmd::SetPaused(paused)).map(|_| Value::Null).map_err(|e| e.to_string()),
         Request::OpenConfig => tx.send(Cmd::OpenConfig).map(|_| Value::Null).map_err(|e| e.to_string()),
+        Request::SetConfig { section, .. } if SECTIONS_PROTEGEES.contains(&section.as_str()) => {
+            Err(format!("la section [{section}] ne se change pas par l'interface locale"))
+        }
         Request::SetConfig { section, key, value } => crate::config::set_value(&section, &key, &value).map(|_| Value::Null),
     });
     match result {
         Ok(data) => json!({ "id": id, "ok": true, "data": data }),
         Err(e) => json!({ "id": id, "ok": false, "error": e }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sections_protegees_refusees() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let shared = Shared::default();
+        for section in SECTIONS_PROTEGEES {
+            let r = handle(&json!({ "id": 1, "cmd": "set_config", "section": section, "key": "x", "value": 1 }).to_string(), &shared, &tx);
+            assert_eq!(r["ok"], false, "{section}");
+        }
+    }
+
+    #[test]
+    fn origine_web_refusee() {
+        let req = |origine: Option<&str>| {
+            let mut b = HsRequest::builder().uri("/");
+            if let Some(o) = origine {
+                b = b.header("origin", o);
+            }
+            check_origin(&b.body(()).unwrap(), HsResponse::default()).is_ok()
+        };
+        assert!(req(None));
+        for o in ["http://tauri.localhost", "tauri://localhost", "https://exemple.org", "null"] {
+            assert!(!req(Some(o)), "{o}");
+        }
     }
 }
