@@ -103,7 +103,7 @@ fn run(son: Arc<AudioShared>) -> windows::core::Result<()> {
             hInstance: instance.into(),
             lpszClassName: CLASSE,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hIcon: crate::win::app_icon().unwrap_or_default(),
+            hIcon: crate::win::app_icon(false).unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassW(&wc); // déjà inscrite à la deuxième ouverture : sans conséquence

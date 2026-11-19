@@ -821,16 +821,27 @@ impl Drop for Tray {
     }
 }
 
-/// Icône de l'appli (pour une fenêtre), dessinée à la volée.
-pub fn app_icon() -> Option<HICON> {
-    make_icon(false)
+/// Icône de l'appli pour une fenêtre (barre des tâches, Alt+Tab), à la taille voulue par Windows
+/// (`petite` : celle de la barre de titre) : celle de l'exécutable (`ressources/essaim.ico`,
+/// intégrée par `build.rs`), sinon dessinée à la volée.
+pub fn app_icon(petite: bool) -> Option<HICON> {
+    unsafe {
+        let (cx, cy) = if petite { (SM_CXSMICON, SM_CYSMICON) } else { (SM_CXICON, SM_CYICON) };
+        let hinst = GetModuleHandleW(None).ok()?;
+        let h = LoadImageW(Some(hinst.into()), PCWSTR(std::ptr::without_provenance(1)), IMAGE_ICON, GetSystemMetrics(cx), GetSystemMetrics(cy), LR_DEFAULTCOLOR);
+        h.ok().map(|h| HICON(h.0)).or_else(|| make_icon(false))
+    }
 }
 
-/// Icône 32×32 dessinée à la volée : le point et deux comètes ; `gris` : variante éteinte (pause).
-fn make_icon(gris: bool) -> Option<HICON> {
+/// Le motif de l'icône d'Essaim (le point et trois comètes) dans un carré de `cote` pixels ;
+/// `gris` : variante éteinte (pause). Sert à l'icône de notification et au fichier
+/// `ressources/essaim.ico` (essai `exporter_icone`).
+pub fn dessin_icone(cote: u32, gris: bool) -> Option<Pixmap> {
     use tiny_skia::{Color, FillRule, Paint, PathBuilder, Transform};
-    let mut pm = Pixmap::new(32, 32)?;
+    let mut pm = Pixmap::new(cote, cote)?;
+    let k = cote as f32 / 32.0;
     let mut fill = |x: f32, y: f32, r: f32, c: (u8, u8, u8)| {
+        let (x, y, r) = (x * k, y * k, r * k);
         let c = if gris {
             let l = (0.3 * c.0 as f32 + 0.59 * c.1 as f32 + 0.11 * c.2 as f32) * 0.6;
             (l as u8, l as u8, l as u8)
@@ -848,6 +859,12 @@ fn make_icon(gris: bool) -> Option<HICON> {
     fill(26.0, 10.0, 3.5, (122, 162, 247));
     fill(6.0, 22.0, 3.5, (187, 154, 247));
     fill(9.0, 6.0, 2.0, (125, 207, 255));
+    Some(pm)
+}
+
+/// Icône 32×32 dessinée à la volée (`dessin_icone`) ; `gris` : variante éteinte (pause).
+fn make_icon(gris: bool) -> Option<HICON> {
+    let pm = dessin_icone(32, gris)?;
     unsafe {
         let dc = CreateCompatibleDC(None);
         let bi = BITMAPINFO {
@@ -942,6 +959,34 @@ mod tests {
         assert!(calque(0x0828_00a8) && calque((WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST).0));
         // fenêtre superposée qui prend les clics (fondu, jeu), fenêtre ordinaire
         assert!(!calque(WS_EX_LAYERED.0) && !calque(WS_EX_TRANSPARENT.0) && !calque(0x0020_0000));
+    }
+
+    /// Refait `ressources/essaim.ico` (le motif de l'icône en 16 à 256 px, images PNG) :
+    /// `cargo test --release exporter_icone -- --ignored`. `build.rs` l'intègre à l'exécutable.
+    #[test]
+    #[ignore]
+    fn exporter_icone() {
+        let tailles = [16u32, 20, 24, 32, 40, 48, 64, 96, 128, 256];
+        let images: Vec<Vec<u8>> = tailles.iter().map(|&c| dessin_icone(c, false).unwrap().encode_png().unwrap()).collect();
+        // ICONDIR, une entrée de 16 octets par image, puis les images
+        let mut ico = vec![0, 0, 1, 0];
+        ico.extend((tailles.len() as u16).to_le_bytes());
+        let mut decalage = 6 + 16 * tailles.len();
+        for (&c, png) in tailles.iter().zip(&images) {
+            let cote = if c >= 256 { 0 } else { c as u8 };
+            ico.extend([cote, cote, 0, 0]);
+            ico.extend(1u16.to_le_bytes());
+            ico.extend(32u16.to_le_bytes());
+            ico.extend((png.len() as u32).to_le_bytes());
+            ico.extend((decalage as u32).to_le_bytes());
+            decalage += png.len();
+        }
+        for png in &images {
+            ico.extend(png);
+        }
+        let dossier = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ressources");
+        std::fs::create_dir_all(&dossier).unwrap();
+        std::fs::write(dossier.join("essaim.ico"), ico).unwrap();
     }
 
     #[test]

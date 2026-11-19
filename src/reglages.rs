@@ -833,7 +833,8 @@ unsafe fn creer_fenetre() -> windows::core::Result<HWND> {
         hInstance: hinst.into(),
         lpszClassName: CLASS,
         hCursor: LoadCursorW(None, IDC_ARROW)?,
-        hIcon: crate::win::app_icon().unwrap_or_default(),
+        hIcon: crate::win::app_icon(false).unwrap_or_default(),
+        hIconSm: crate::win::app_icon(true).unwrap_or_default(),
         ..Default::default()
     };
     RegisterClassExW(&wc);
