@@ -4,6 +4,10 @@
 //! kicks (`audio_commun::pulsation`, sans FFT), avec la phase du temps et le relais (musique sans
 //! kick depuis 2 s alors qu'un tempo stable était connu). Les résultats sont publiés après chaque paquet reçu
 //! (~10 ms), sans attendre l'image suivante.
+//!
+//! Seulement si un effet les demande (`set_musique`) : caisses claires (`Caisse`, sans FFT
+//! non plus), montée et drops (`Montee`). Les niveaux des deux canaux donnent l'équilibre
+//! gauche-droite (`balance`).
 
 use audio_commun::capture::{self, Capture, Sink, Sortie};
 use audio_commun::kick::Analyzer;
@@ -32,6 +36,14 @@ pub struct AudioShared {
     bandes_voulues: AtomicU32,
     /// Niveau de chaque bande, 0 à 1 (bits d'un f32), pour l'anneau de spectre.
     bandes: [AtomicU32; BANDES_MAX],
+    /// Analyse musicale voulue (caisse claire, montée, drop) ; sinon rien n'est calculé.
+    musique_voulue: AtomicBool,
+    /// Caisses claires et drops (compteurs), tension de la montée (0 à 1), équilibre
+    /// gauche-droite (−1 à 1).
+    caisses: AtomicU32,
+    drops: AtomicU32,
+    tension: AtomicU32,
+    balance: AtomicU32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -50,6 +62,14 @@ pub struct AudioView {
     /// Relais du tempo : la musique joue sans kick depuis 2 s (break, couplet sans grosse
     /// caisse) alors qu'un tempo stable était connu.
     pub relais: bool,
+    /// Caisses claires (et claps) depuis le démarrage, sans celles qui tombent avec un kick.
+    pub caisses: u32,
+    /// Drops depuis le démarrage : retour brutal de l'énergie, ou premier kick après une montée.
+    pub drops: u32,
+    /// Montée en cours (roulement de caisse claire qui s'accélère, son qui s'éclaircit), 0 à 1.
+    pub tension: f32,
+    /// Côté qui joue le plus fort : −1 tout à gauche, 0 au centre, 1 tout à droite.
+    pub balance: f32,
 }
 
 impl AudioShared {
@@ -65,6 +85,10 @@ impl AudioShared {
             bpm: Some(f(&self.bpm)).filter(|&b| b > 0.0),
             phase: f(&self.phase),
             relais: self.relais.load(Ordering::Relaxed),
+            caisses: self.caisses.load(Ordering::Relaxed),
+            drops: self.drops.load(Ordering::Relaxed),
+            tension: f(&self.tension).clamp(0.0, 1.0),
+            balance: f(&self.balance).clamp(-1.0, 1.0),
         }
     }
     pub fn set_sensitivity(&self, s: f32) {
@@ -76,12 +100,16 @@ impl AudioShared {
     /// Capture arrêtée : niveaux à zéro (sinon basse, hauteur et brillance resteraient figées et
     /// la musique semblerait jouer). Les compteurs gardent leur valeur : ils ne reculent jamais.
     pub fn reset(&self) {
-        for a in [&self.bass, &self.pitch, &self.brillance, &self.bpm, &self.phase] {
+        for a in [&self.bass, &self.pitch, &self.brillance, &self.bpm, &self.phase, &self.tension, &self.balance] {
             a.store(0f32.to_bits(), Ordering::Relaxed);
         }
         self.relais.store(false, Ordering::Relaxed);
         self.effacer_bandes();
         self.perdu.store(false, Ordering::Relaxed);
+    }
+    /// Analyse musicale voulue (un effet lit les caisses claires, la montée ou les drops).
+    pub fn set_musique(&self, voulue: bool) {
+        self.musique_voulue.store(voulue, Ordering::Relaxed);
     }
     /// Nombre de bandes à calculer pour l'anneau de spectre (0 = aucune, coût nul ; sinon 8 à 32).
     pub fn set_bandes(&self, n: u32) {
@@ -132,6 +160,12 @@ struct Kick {
     tempo: Pulsation,
     /// Bandes de l'anneau de spectre (aucun filtre tant que l'effet est coupé).
     bandes: Option<Bandes>,
+    /// Analyse musicale (caisse claire, montée, drop), seulement si un effet la demande.
+    musique: Option<Musique>,
+    fs: u32,
+    /// Équilibre gauche-droite lissé, et durée du dernier paquet (s) pour le lissage.
+    balance: f32,
+    duree_paquet: f32,
     /// Compteurs (kicks, aigus) déjà publiés à l'ouverture du flux : l'analyse rouverte repart
     /// de 0, les compteurs publiés continuent (sinon l'affichage verrait un saut, donc de faux
     /// kicks).
@@ -142,7 +176,24 @@ struct Kick {
 
 impl Kick {
     fn new(shared: Arc<AudioShared>) -> Self {
-        Self { shared, an: None, aigus: None, tempo: Pulsation::new(), bandes: None, base: (0, 0), propre: Vec::new() }
+        Self {
+            shared,
+            an: None,
+            aigus: None,
+            tempo: Pulsation::new(),
+            bandes: None,
+            musique: None,
+            fs: 48000,
+            balance: 0.0,
+            duree_paquet: 0.01,
+            base: (0, 0),
+            propre: Vec::new(),
+        }
+    }
+
+    /// Instant de l'analyse du kick et son compteur.
+    fn instant_kick(&self) -> Option<(f64, u32)> {
+        self.an.as_ref().map(|an| (an.t, an.kicks))
     }
 
     /// Tempo : avancé et publié à chaque paquet (tempo, phase, relais).
@@ -412,6 +463,9 @@ impl Sink for Kick {
         // nouvelle horloge (l'analyse repart de 0) : tempo à retrouver
         self.tempo = Pulsation::new();
         self.bandes = Some(Bandes::new(sample_rate));
+        // analyse musicale refaite à la nouvelle fréquence ; ses compteurs publiés continuent
+        self.fs = sample_rate;
+        self.musique = None;
         self.shared.perdu.store(false, Ordering::Relaxed);
     }
 
@@ -434,6 +488,9 @@ impl Sink for Kick {
         if let Some(a) = &mut self.aigus {
             a.push(mono);
         }
+        self.duree_paquet = mono.len() as f32 / self.fs.max(1) as f32;
+        let kick = self.an.as_ref().map(|an| (an.t, an.kicks));
+        ecouter_musique(&self.shared, &mut self.musique, self.fs, Some(mono), mono.len(), kick);
         // bandes du spectre : seulement si l'effet est voulu (sinon aucun filtre, coût nul)
         let voulues = self.shared.bandes_voulues.load(Ordering::Relaxed) as usize;
         let (mut publier, mut effacer) = (false, false);
@@ -467,6 +524,10 @@ impl Sink for Kick {
         }
         self.suivre_tempo(false);
         self.publier_aigus();
+        let kick = self.instant_kick();
+        ecouter_musique(&self.shared, &mut self.musique, self.fs, None, frames, kick);
+        self.balance = 0.0;
+        self.shared.balance.store(0f32.to_bits(), Ordering::Relaxed);
         if let Some(b) = self.bandes.as_mut().filter(|b| b.actives()) {
             b.push_silence(frames);
             self.publier_bandes();
@@ -484,17 +545,515 @@ impl Sink for Kick {
         sh.brillance.store(0f32.to_bits(), Ordering::Relaxed);
         sh.bpm.store(0f32.to_bits(), Ordering::Relaxed);
         sh.relais.store(false, Ordering::Relaxed);
+        sh.tension.store(0f32.to_bits(), Ordering::Relaxed);
+        sh.balance.store(0f32.to_bits(), Ordering::Relaxed);
         sh.effacer_bandes();
         sh.perdu.store(true, Ordering::Relaxed);
+    }
+
+    fn stereo(&mut self, gauche: f32, droite: f32) {
+        self.balance = lisser_balance(self.balance, gauche, droite, self.duree_paquet);
+        self.shared.balance.store(self.balance.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// Équilibre gauche-droite lissé (~0,25 s) après un paquet de `duree` secondes aux niveaux
+/// `gauche` et `droite` : −1 tout à gauche, 1 tout à droite. Un paquet presque muet tire vers le
+/// centre.
+fn lisser_balance(avant: f32, gauche: f32, droite: f32, duree: f32) -> f32 {
+    let somme = gauche + droite;
+    let vise = if somme.is_finite() && somme > AUDIBLE { ((droite - gauche) / somme).clamp(-1.0, 1.0) } else { 0.0 };
+    let k = 1.0 - (-duree.max(0.0) / 0.25).exp();
+    fini(avant + (vise - avant) * k).clamp(-1.0, 1.0)
+}
+
+/// Analyse musicale de `n` échantillons (`mono`, ou du silence) quand un effet la demande ;
+/// caisses claires, drops et montée publiés. `kick` : instant de l'analyse du kick et son
+/// compteur. Analyse retirée (coût nul) quand plus aucun effet ne la demande.
+fn ecouter_musique(sh: &AudioShared, musique: &mut Option<Musique>, fs: u32, mono: Option<&[f32]>, n: usize, kick: Option<(f64, u32)>) {
+    if !sh.musique_voulue.load(Ordering::Relaxed) {
+        if musique.take().is_some() {
+            sh.tension.store(0f32.to_bits(), Ordering::Relaxed);
+        }
+        return;
+    }
+    let m = musique.get_or_insert_with(|| Musique::new(fs, sh.caisses.load(Ordering::Relaxed), sh.drops.load(Ordering::Relaxed)));
+    m.ecouter(mono, n, kick);
+    sh.caisses.store(m.caisses, Ordering::Relaxed);
+    sh.drops.store(m.drops, Ordering::Relaxed);
+    sh.tension.store(fini(m.montee.tension).to_bits(), Ordering::Relaxed);
+}
+
+/// Écart minimal entre deux caisses claires (s) : un roulement de 20 coups par seconde passe.
+const CAISSE_REFRACTAIRE: f32 = 0.05;
+/// Une attaque n'est une caisse claire que si son bruit tient encore 25 ms plus tard (au moins
+/// 30 % de son pic) : le clic d'attaque d'un kick, qui touche aussi cette bande, s'éteint en
+/// quelques millisecondes. Une caisse claire jouée avec un kick (claps de la house) compte.
+const CAISSE_TENUE: f32 = 0.025;
+const CAISSE_TENUE_MIN: f32 = 0.3;
+/// Sous ce niveau efficace (−60 dBFS), un paquet compte comme silencieux pour la montée.
+const MUSIQUE_SILENCE: f32 = 0.001;
+
+/// Caisses claires, drops et montée.
+struct Musique {
+    caisse: Caisse,
+    /// Horloge propre (s, d'après les échantillons reçus).
+    t: f64,
+    fs: f64,
+    /// Compteur de kicks déjà vu.
+    kicks_vus: Option<u32>,
+    /// Compteurs publiés (continuent d'une analyse à l'autre).
+    caisses: u32,
+    drops: u32,
+    montee: Montee,
+}
+
+impl Musique {
+    fn new(fs: u32, caisses: u32, drops: u32) -> Self {
+        let fs = fs.max(8000);
+        Self { caisse: Caisse::new(fs), t: 0.0, fs: f64::from(fs), kicks_vus: None, caisses, drops, montee: Montee::default() }
+    }
+
+    /// `n` échantillons (`mono`, ou du silence). `kick` : instant de l'analyse du kick et son
+    /// compteur après ce paquet.
+    fn ecouter(&mut self, mono: Option<&[f32]>, n: usize, kick: Option<(f64, u32)>) {
+        let mut carres = 0f64;
+        for i in 0..n {
+            let x = mono.map_or(0.0, |m| m[i]);
+            carres += f64::from(x * x);
+            if self.caisse.step(x) {
+                self.caisses = self.caisses.wrapping_add(1);
+                self.montee.caisse();
+            }
+        }
+        self.t += n as f64 / self.fs;
+        // kick reconnu dans ce paquet : noté à la fin du paquet
+        if let Some((_, k)) = kick {
+            if self.kicks_vus.is_some_and(|v| v != k) && self.montee.kick(self.t) {
+                self.drops = self.drops.wrapping_add(1);
+            }
+            self.kicks_vus = Some(k);
+        }
+        let rms = (carres / n.max(1) as f64).sqrt() as f32;
+        if self.montee.avancer(self.t, n as f32 / self.fs as f32, self.caisse.brillance(), rms) {
+            self.drops = self.drops.wrapping_add(1);
+        }
+    }
+}
+
+/// Attaques de caisse claire (et de claps) : bande 1–4 kHz (deux passe-bande en série centrés
+/// sur 2 kHz), enveloppe rapide (~3 ms) comparée à une lente (~100 ms). Une attaque = la rapide
+/// passe 2,5 fois au-dessus de la lente, assez fort, et domine la bande 8–12 kHz : le charleston
+/// et les cymbales, presque tout dans l'aigu, ne comptent pas. Elle n'est retenue que si elle
+/// tient (`CAISSE_TENUE`). Mesure aussi la brillance du son (part de la bande 8–12 kHz, en dB).
+struct Caisse {
+    medium: [PasseBande; 2],
+    aigu: [PasseBande; 2],
+    rapide: f32,
+    lent: f32,
+    rapide_aigu: f32,
+    /// Niveaux lissés (~0,3 s) de la bande aiguë et du son entier, pour la brillance.
+    haut: f32,
+    tout: f32,
+    k_rapide: f32,
+    k_lent: f32,
+    k_doux: f32,
+    attente: u32,
+    refractaire: u32,
+    /// Attaque en cours de vérification : échantillons restants avant de juger sa tenue, et son pic.
+    suivi: u32,
+    pic: f32,
+    tenue: u32,
+}
+
+impl Caisse {
+    fn new(fs: u32) -> Self {
+        let fs = fs.max(8000) as f32;
+        let k = |s: f32| 1.0 - (-1.0 / (s * fs)).exp();
+        let medium = PasseBande::new(fs, 2000.0f32.min(0.4 * fs), 0.9);
+        let aigu = PasseBande::new(fs, 10_000.0f32.min(0.4 * fs), 1.6);
+        Self {
+            medium: [medium, medium],
+            aigu: [aigu, aigu],
+            rapide: 0.0,
+            lent: 0.0,
+            rapide_aigu: 0.0,
+            haut: 0.0,
+            tout: 0.0,
+            k_rapide: k(0.003),
+            k_lent: k(0.1),
+            k_doux: k(0.3),
+            attente: 0,
+            refractaire: (CAISSE_REFRACTAIRE * fs) as u32,
+            suivi: 0,
+            pic: 0.0,
+            tenue: (CAISSE_TENUE * fs) as u32,
+        }
+    }
+
+    /// Un échantillon ; vrai quand une caisse claire est reconnue (25 ms après son attaque).
+    #[inline]
+    fn step(&mut self, x: f32) -> bool {
+        let [m0, m1] = &mut self.medium;
+        let m = m1.step(m0.step(x)).abs();
+        let [a0, a1] = &mut self.aigu;
+        let a = a1.step(a0.step(x)).abs();
+        self.rapide += (m - self.rapide) * self.k_rapide;
+        self.lent += (m - self.lent) * self.k_lent;
+        self.rapide_aigu += (a - self.rapide_aigu) * self.k_rapide;
+        self.haut += (a - self.haut) * self.k_doux;
+        self.tout += (x.abs() - self.tout) * self.k_doux;
+        let mut reconnue = false;
+        if self.suivi > 0 {
+            self.pic = self.pic.max(self.rapide);
+            self.suivi -= 1;
+            reconnue = self.suivi == 0 && self.rapide >= CAISSE_TENUE_MIN * self.pic;
+        }
+        if self.attente > 0 {
+            self.attente -= 1;
+        } else if self.rapide > 2.5 * self.lent && self.rapide > 0.004 && self.rapide > 0.4 * self.rapide_aigu {
+            (self.attente, self.suivi, self.pic) = (self.refractaire, self.tenue.max(1), self.rapide);
+        }
+        reconnue
+    }
+
+    /// Part de l'aigu dans le son, 0 (−40 dB) à 1 (autant que le son entier).
+    fn brillance(&self) -> f32 {
+        if self.tout < 1e-6 {
+            return 0.0;
+        }
+        fini(1.0 + 20.0 * (self.haut.max(1e-9) / self.tout).log10() / 40.0).clamp(0.0, 1.0)
+    }
+}
+
+/// Montée (build-up) et drop.
+///
+/// - `tension` (0 à 1) : roulement de caisse claire bien plus serré que d'habitude, et son qui
+///   s'éclaircit (filtre qui s'ouvre) ; monte en ~0,6 s, retombe en ~1,5 s.
+/// - Drop : le premier kick après une montée (au moins 1,2 s sans kick, tension passée au-dessus
+///   de 0,45), ou le retour brutal de l'énergie après un passage calme (niveau des 0,5 dernières
+///   secondes face à celui des 12 dernières, comme `spectre` d'`audio-commun`). Au plus un toutes
+///   les 8 s ; la tension retombe alors à 0.
+struct Montee {
+    /// Caisses claires par seconde, sur ~1 s et sur ~12 s.
+    rythme_court: f32,
+    rythme_long: f32,
+    /// Brillance (0 à 1), sur ~0,5 s et sur ~8 s ; amorcée par la première valeur entendue.
+    brillance_court: f32,
+    brillance_long: f32,
+    amorcee: bool,
+    tension: f32,
+    /// Tension la plus haute depuis le dernier kick (un drop arrive souvent après une courte
+    /// retombée : silence, cassure).
+    tension_max: f32,
+    dernier_kick: f64,
+    dernier_drop: f64,
+    /// Niveau (dB) sur ~0,5 s et sur ~12 s, durée de son entendue depuis le dernier silence, et
+    /// temps passé depuis le dernier passage calme.
+    niveau_court: f32,
+    niveau_long: f32,
+    entendu: f32,
+    depuis_calme: f32,
+    /// Puissance du son lissée sur ~85 ms, et durée passée sous le seuil de silence (s).
+    puissance: f32,
+    muet: f32,
+}
+
+/// Écart minimal entre deux drops (s).
+const DROP_ECART: f64 = 8.0;
+/// Intensité (0,5 = niveau habituel) sous laquelle un passage est calme, au-dessus de laquelle
+/// l'énergie est revenue ; fenêtre entre les deux (s) ; écart de niveau qui fait varier
+/// l'intensité de 0,5 (dB).
+const CALME: f32 = 0.32;
+const FORT: f32 = 0.66;
+const CALME_FENETRE: f32 = 4.0;
+const INTENSITE_DB: f32 = 8.0;
+
+impl Default for Montee {
+    fn default() -> Self {
+        Self {
+            rythme_court: 0.0,
+            rythme_long: 0.0,
+            brillance_court: 0.0,
+            brillance_long: 0.0,
+            amorcee: false,
+            tension: 0.0,
+            tension_max: 0.0,
+            dernier_kick: f64::NEG_INFINITY,
+            dernier_drop: f64::NEG_INFINITY,
+            niveau_court: -70.0,
+            niveau_long: -70.0,
+            entendu: 0.0,
+            depuis_calme: CALME_FENETRE,
+            puissance: 0.0,
+            muet: 0.0,
+        }
+    }
+}
+
+impl Montee {
+    /// Une caisse claire (comptée dans les deux rythmes, en caisses par seconde).
+    fn caisse(&mut self) {
+        self.rythme_court += 1.0;
+        self.rythme_long += 1.0 / 12.0;
+    }
+
+    /// Un drop à l'instant `t`, s'il est assez loin du précédent : la tension retombe.
+    fn drop_permis(&mut self, t: f64) -> bool {
+        if t - self.dernier_drop < DROP_ECART {
+            return false;
+        }
+        self.dernier_drop = t;
+        (self.tension, self.tension_max) = (0.0, 0.0);
+        true
+    }
+
+    /// Un kick à l'instant `t` ; vrai si c'est le drop d'une montée.
+    fn kick(&mut self, t: f64) -> bool {
+        let apres_montee = t - self.dernier_kick >= 1.2 && self.tension_max > 0.45;
+        self.dernier_kick = t;
+        let drop = apres_montee && self.drop_permis(t);
+        self.tension_max = 0.0;
+        drop
+    }
+
+    /// `dt` secondes de son, de brillance et de niveau efficace donnés ; vrai sur un drop
+    /// d'énergie (retour brutal après un passage calme).
+    fn avancer(&mut self, t: f64, dt: f32, brillance: f32, rms: f32) -> bool {
+        let k = |tau: f32| 1.0 - (-dt.max(0.0) / tau).exp();
+        self.rythme_court *= 1.0 - k(1.0);
+        self.rythme_long *= 1.0 - k(12.0);
+        // silence : sous le seuil depuis 250 ms (un paquet muet entre deux coups n'en est pas un)
+        self.muet = if !rms.is_finite() || rms < MUSIQUE_SILENCE { self.muet + dt } else { 0.0 };
+        let silence = self.muet >= 0.25;
+        let vise = if silence {
+            self.amorcee = false;
+            0.0
+        } else {
+            let b = if brillance.is_finite() { brillance.clamp(0.0, 1.0) } else { 0.5 };
+            if !self.amorcee {
+                (self.brillance_court, self.brillance_long, self.amorcee) = (b, b, true);
+            }
+            self.brillance_court += (b - self.brillance_court) * k(0.5);
+            // amorçage : la première seconde de son, la moyenne longue suit la courte
+            self.brillance_long = if self.entendu < 1.0 { self.brillance_court } else { self.brillance_long + (b - self.brillance_long) * k(8.0) };
+            // accélération : bien plus de caisses claires que d'habitude (au moins 1,5 par seconde)
+            let acceleration = ((self.rythme_court - self.rythme_long.max(1.5)) / 5.0).clamp(0.0, 1.0);
+            let eclaircie = ((self.brillance_court - self.brillance_long) / 0.12).clamp(0.0, 1.0);
+            (0.75 * acceleration + 0.45 * eclaircie).clamp(0.0, 1.0)
+        };
+        let tau = if vise > self.tension { 0.6 } else { 1.5 };
+        self.tension = fini(self.tension + (vise - self.tension) * k(tau)).clamp(0.0, 1.0);
+        self.tension_max = self.tension_max.max(self.tension);
+        self.energie(t, dt, rms, silence, &k)
+    }
+
+    /// Intensité du passage (niveau court face au niveau long) ; vrai sur un drop d'énergie.
+    fn energie(&mut self, t: f64, dt: f32, rms: f32, silence: bool, k: &impl Fn(f32) -> f32) -> bool {
+        self.depuis_calme += dt;
+        if silence {
+            // le morceau suivant aura son propre niveau de référence
+            self.entendu = 0.0;
+            return false;
+        }
+        // puissance lissée sur ~85 ms (une fenêtre d'analyse), puis en dB
+        if self.entendu == 0.0 {
+            self.puissance = rms * rms;
+        }
+        self.puissance += (rms * rms - self.puissance) * k(0.085);
+        let db = (10.0 * self.puissance.max(1e-12).log10()).max(-70.0);
+        if self.entendu == 0.0 {
+            (self.niveau_court, self.niveau_long) = (db, db);
+        }
+        self.niveau_court += (db - self.niveau_court) * k(0.5);
+        self.entendu += dt;
+        // amorçage : moyenne de tout ce qui a été entendu pendant les 12 premières secondes
+        // (une moyenne glissante partie d'un mauvais début en garderait la trace longtemps)
+        let poids = if self.entendu < 12.0 { dt / self.entendu } else { k(12.0) };
+        self.niveau_long += (db - self.niveau_long) * poids;
+        let intensite = (0.5 + (self.niveau_court - self.niveau_long) / (2.0 * INTENSITE_DB)).clamp(0.0, 1.0);
+        if intensite < CALME {
+            self.depuis_calme = 0.0;
+        } else if intensite > FORT && self.depuis_calme < CALME_FENETRE && self.drop_permis(t) {
+            self.depuis_calme = CALME_FENETRE;
+            return true;
+        }
+        false
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{assainir, Aigus, AudioShared, Bandes, Kick, BANDES_MAX};
+    use super::{assainir, lisser_balance, Aigus, AudioShared, Bandes, Kick, BANDES_MAX};
     use audio_commun::capture::Sink;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+
+    /// Batterie synthétique : kicks (sinus qui descend de 110 à 50 Hz), caisses claires (bruit
+    /// et ton à 190 Hz, ~80 ms) et charleston en croches à 120 BPM, plus un bruit aigu dont le
+    /// niveau suit `eclat(t)` (filtre qui s'ouvre pendant une montée).
+    fn batterie(secs: f64, kicks: &[f64], caisses: &[f64], eclat: impl Fn(f64) -> f32) -> Vec<f32> {
+        let mut g = 0x5851_f42d_4c95_7f2du64;
+        let n = (secs * f64::from(FS)) as usize;
+        // charleston et bruit de la montée : bruit dérivé deux fois (presque tout au-dessus de
+        // 6 kHz, comme de vraies cymbales)
+        let mut aigu: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f64 / f64::from(FS);
+                let th = t % 0.25;
+                let mut v = eclat(t) * 0.1 * bruit(&mut g);
+                if th < 0.03 {
+                    v += 0.08 * bruit(&mut g) * (-th * 120.0).exp() as f32;
+                }
+                v
+            })
+            .collect();
+        for _ in 0..2 {
+            for i in (1..aigu.len()).rev() {
+                aigu[i] = 0.5 * (aigu[i] - aigu[i - 1]);
+            }
+        }
+        let mut son: Vec<f32> = aigu.iter().map(|&a| a + 0.004 * bruit(&mut g)).collect();
+        for &k in kicks {
+            let debut = (k * f64::from(FS)) as usize;
+            for (j, v) in son.iter_mut().skip(debut).take(FS as usize / 4).enumerate() {
+                let b = j as f64 / f64::from(FS);
+                let phase = 50.0 * b + 60.0 * (1.0 - (-b * 30.0).exp()) / 30.0;
+                *v += ((std::f64::consts::TAU * phase).sin() * 0.9 * (b / 0.003).min(1.0) * (-b * 12.0).exp()) as f32;
+            }
+        }
+        for &c in caisses {
+            let debut = (c * f64::from(FS)) as usize;
+            for (j, v) in son.iter_mut().skip(debut).take(FS as usize / 8).enumerate() {
+                let b = j as f64 / f64::from(FS);
+                let env = (b / 0.002).min(1.0) * (-b * 30.0).exp();
+                *v += (env * (0.45 * f64::from(bruit(&mut g)) + 0.25 * (std::f64::consts::TAU * 190.0 * b).sin())) as f32;
+            }
+        }
+        son
+    }
+
+    /// Kick avec l'analyse musicale voulue.
+    fn kick_musique() -> (Arc<AudioShared>, Kick) {
+        let shared = Arc::new(AudioShared::default());
+        shared.set_musique(true);
+        let mut k = Kick::new(shared.clone());
+        k.open(FS);
+        (shared, k)
+    }
+
+    /// Temps d'une mesure à 120 BPM à partir de `debut` jusqu'à `fin` : kicks sur chaque temps,
+    /// caisses claires sur les temps 2 et 4.
+    fn groove(debut: f64, fin: f64) -> (Vec<f64>, Vec<f64>) {
+        let temps: Vec<f64> = (0..).map(|i| debut + i as f64 * 0.5).take_while(|&t| t < fin).collect();
+        let caisses = temps.iter().enumerate().filter(|(i, _)| i % 2 == 1).map(|(_, &t)| t).collect();
+        (temps, caisses)
+    }
+
+    #[test]
+    fn caisses_claires_trouvees_sans_celles_des_kicks() {
+        let (shared, mut k) = kick_musique();
+        let (kicks, caisses) = groove(0.3, 10.3);
+        let v = ecouter(&mut k, &shared, &batterie(10.5, &kicks, &caisses, |_| 0.0));
+        let attendu = caisses.len() as i64;
+        assert!((i64::from(v.caisses) - attendu).abs() <= 2, "{} caisses claires pour {attendu} ({} kicks)", v.caisses, v.kicks);
+        // kicks seuls : aucune caisse claire
+        let (shared, mut k) = kick_musique();
+        let v = ecouter(&mut k, &shared, &batterie(8.0, &groove(0.3, 7.8).0, &[], |_| 0.0));
+        assert!(v.kicks >= 10, "{} kicks", v.kicks);
+        assert!(v.caisses <= 1, "{} caisses claires sur des kicks seuls", v.caisses);
+        // analyse non voulue : rien n'est compté
+        let shared = Arc::new(AudioShared::default());
+        let mut k = Kick::new(shared.clone());
+        k.open(FS);
+        let v = ecouter(&mut k, &shared, &batterie(4.0, &kicks, &caisses, |_| 0.0));
+        assert_eq!((v.caisses, v.drops, v.tension), (0, 0, 0.0));
+        assert!(k.musique.is_none());
+    }
+
+    #[test]
+    fn groove_regulier_sans_montee_ni_drop() {
+        let (shared, mut k) = kick_musique();
+        let (kicks, caisses) = groove(0.3, 16.0);
+        let son = batterie(16.0, &kicks, &caisses, |_| 0.0);
+        let mut pire = 0f32;
+        for paquet in son.chunks(FS as usize / 100) {
+            k.samples(paquet);
+            k.tick(std::time::Instant::now());
+            pire = pire.max(shared.view().tension);
+        }
+        assert!(pire < 0.3, "tension {pire} sur un groove régulier");
+        assert_eq!(shared.view().drops, 0);
+    }
+
+    #[test]
+    fn montee_puis_drop() {
+        let (shared, mut k) = kick_musique();
+        // 8 s de groove, 6 s de montée sans kick (roulement de 4 à 16 caisses par seconde, son
+        // qui s'éclaircit), puis le drop : le groove reprend
+        let (mut kicks, mut caisses) = groove(0.3, 8.0);
+        let mut t = 8.0;
+        while t < 14.0 {
+            caisses.push(t);
+            t += 1.0 / (4.0 + 12.0 * (t - 8.0) / 6.0);
+        }
+        let (k2, c2) = groove(14.0, 18.0);
+        kicks.extend(k2);
+        caisses.extend(c2);
+        let son = batterie(18.0, &kicks, &caisses, |t| if (8.0..14.0).contains(&t) { ((t - 8.0) / 6.0) as f32 } else { 0.0 });
+        let (mut tension_montee, mut drops_avant) = (0f32, 0);
+        for (i, paquet) in son.chunks(FS as usize / 100).enumerate() {
+            k.samples(paquet);
+            k.tick(std::time::Instant::now());
+            let t = i as f64 * 0.01;
+            if t < 13.95 {
+                drops_avant = shared.view().drops;
+            }
+            if (12.5..13.95).contains(&t) {
+                tension_montee = tension_montee.max(shared.view().tension);
+            }
+        }
+        let v = shared.view();
+        assert!(tension_montee > 0.5, "tension pendant la montée : {tension_montee}");
+        assert_eq!(drops_avant, 0, "drop avant la fin de la montée");
+        assert_eq!(v.drops, 1, "un drop à la reprise du groove");
+        assert!(v.tension < 0.3, "tension après le drop : {}", v.tension);
+    }
+
+    #[test]
+    fn drop_d_energie_apres_un_passage_calme() {
+        // 12 s de groove, 3 s de passage calme (le même, 16 dB plus bas), puis le groove revient
+        // d'un coup : un drop, au retour seulement
+        let (shared, mut k) = kick_musique();
+        let (kicks, caisses) = groove(0.3, 12.0);
+        let mut son = batterie(12.0, &kicks, &caisses, |_| 0.0);
+        let (kicks_calmes, caisses_calmes) = groove(0.0, 3.0);
+        son.extend(batterie(3.0, &kicks_calmes, &caisses_calmes, |_| 0.0).iter().map(|x| x * 0.15));
+        let avant = ecouter(&mut k, &shared, &son);
+        assert_eq!(avant.drops, 0);
+        let (kicks, caisses) = groove(0.0, 4.0);
+        let v = ecouter(&mut k, &shared, &batterie(4.0, &kicks, &caisses, |_| 0.0));
+        assert_eq!(v.drops, 1);
+    }
+
+    #[test]
+    fn balance_suit_le_cote_le_plus_fort() {
+        let mut b = 0.0;
+        for _ in 0..100 {
+            b = lisser_balance(b, 0.0, 0.3, 0.01);
+        }
+        assert!(b > 0.95, "tout à droite : {b}");
+        for _ in 0..100 {
+            b = lisser_balance(b, 0.3, 0.1, 0.01);
+        }
+        assert!((b + 0.5).abs() < 0.05, "plutôt à gauche : {b}");
+        // presque muet ou abîmé : retour au centre
+        for _ in 0..200 {
+            b = lisser_balance(b, 0.0001, 0.0, 0.01);
+        }
+        assert!(b.abs() < 0.01, "{b}");
+        assert!(lisser_balance(0.2, f32::NAN, 0.1, 0.01).is_finite());
+    }
 
     #[test]
     fn la_brillance_retombe_en_silence() {
