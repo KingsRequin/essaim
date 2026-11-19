@@ -1,14 +1,18 @@
 //! Effets autour du pointeur, en plus de l'essaim : projecteur « retrouver la souris »
-//! (`[projecteur]`) et réticule (`[reticule]`). Simulation et dessin ; `main.rs` ajoute leurs
-//! zones au rectangle modifié : le réticule à celui de l'essaim, le projecteur (qui assombrit tout
-//! l'écran du pointeur) aux zones à part, et seulement pendant l'effet.
+//! (`[projecteur]`), réticule (`[reticule]`) et anneau de spectre (`[spectre]`). Simulation et
+//! dessin ; `main.rs` ajoute leurs zones au rectangle modifié : le réticule et le spectre à celui
+//! de l'essaim, le projecteur (qui assombrit tout l'écran du pointeur) aux zones à part, et
+//! seulement pendant l'effet.
 //!
-//! `ui/apercu.js` reproduit le réticule (mêmes formules) : le modifier ici oblige à le reporter là.
+//! `ui/apercu.js` reproduit le réticule et le spectre (mêmes formules) : les modifier ici oblige
+//! à les reporter là.
 
+use crate::audio::{AudioShared, BANDES_MAX};
 use crate::canvas::Canvas;
 use crate::config::Config;
 use crate::layer::IRect;
 use crate::render::prisme;
+use std::f32::consts::{PI, TAU};
 
 // --- Secousse de la souris ----------------------------------------------------------------------
 
@@ -125,13 +129,23 @@ pub fn projecteur_forme(p: f32, env: f32, scale: f32) -> (f32, f32) {
     (r, a.max(0.0))
 }
 
-// --- Réticule -----------------------------------------------------------------------------------
+// --- Réticule et spectre ------------------------------------------------------------------------
 
 /// Vide au centre du réticule (px à 100 %) : le pointeur n'est jamais couvert.
 const RETICULE_VIDE: f32 = 12.0;
 /// Épaisseur des lignes du réticule et de leur lueur au kick (px à 100 %).
 const RETICULE_LARGEUR: f32 = 1.2;
 const RETICULE_LUEUR: f32 = 4.0;
+/// Longueur des barres sans énergie (px à 100 %).
+const SPECTRE_BARRE_MIN: f32 = 1.5;
+/// Lissage de l'affichage des bandes (par seconde) : montée vive, retombée douce.
+const SPECTRE_MONTEE: f32 = 30.0;
+const SPECTRE_DESCENTE: f32 = 8.0;
+
+/// Épaisseur des barres du spectre (px écran) : la moitié de l'espace entre deux barres, bornée.
+pub fn spectre_largeur(n: usize, rayon: f32, scale: f32) -> f32 {
+    (TAU * rayon / n.max(1) as f32 * 0.5).clamp(1.5 * scale, 6.0 * scale)
+}
 
 pub struct Effets {
     secousse: Secousse,
@@ -141,13 +155,16 @@ pub struct Effets {
     projecteur: Option<f64>,
     /// Projecteur de cette image : écran assombri, centre, rayon du disque clair, opacité.
     voile: Option<(IRect, (f32, f32), f32, f32)>,
+    /// Bandes lues dans l'analyse du son, et affichées (lissées).
+    lues: [f32; BANDES_MAX],
+    bandes: [f32; BANDES_MAX],
     /// Éclat du kick (celui de l'essaim), 1 → 0.
     env: f32,
 }
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, env: 0.0 }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], env: 0.0 }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -155,8 +172,10 @@ impl Effets {
         self.demande = true;
     }
 
-    /// Avance d'une image : secousse et projecteur. `env` = éclat du kick de l'essaim.
-    pub fn avance(&mut self, t: f64, cursor: (f32, f32), scale: f32, env: f32, cfg: &Config, monitors: &[(isize, IRect)]) {
+    /// Avance d'une image : secousse et projecteur, bandes du spectre (calculées par l'analyse du
+    /// son seulement si l'effet est voulu). `env` = éclat du kick de l'essaim.
+    #[allow(clippy::too_many_arguments)]
+    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, env: f32, shared: &AudioShared, cfg: &Config, monitors: &[(isize, IRect)]) {
         self.env = env;
         // projecteur
         let p = &cfg.projecteur;
@@ -185,6 +204,16 @@ impl Effets {
         if self.voile.is_none() {
             self.projecteur = None;
         }
+        // bandes du spectre : demandées à l'analyse du son seulement si l'effet est voulu
+        let s = &cfg.spectre;
+        let voulues = if s.actif && cfg.audio.actif { s.bandes.clamp(8, BANDES_MAX as u32) } else { 0 };
+        shared.set_bandes(voulues);
+        if voulues > 0 {
+            let n = shared.bandes(&mut self.lues);
+            lisser_bandes(&mut self.bandes[..n], &self.lues[..n], dt);
+        } else {
+            self.bandes = [0.0; BANDES_MAX];
+        }
     }
 
     /// Projecteur en cours (écran assombri à redessiner en entier à chaque image).
@@ -192,11 +221,16 @@ impl Effets {
         self.voile.map(|v| v.0)
     }
 
-    /// Zone du réticule autour du pointeur, à ajouter à celle de l'essaim.
+    /// Zone du réticule et du spectre autour du pointeur, à ajouter à celle de l'essaim.
     pub fn rect_pointeur(&self, cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
         let mut e = 0.0f32;
         if cfg.reticule.actif {
             e = e.max((RETICULE_VIDE + cfg.reticule.taille) * scale + RETICULE_LUEUR * scale);
+        }
+        if cfg.spectre.actif {
+            let n = cfg.spectre.bandes.clamp(8, BANDES_MAX as u32) as usize;
+            let r = cfg.spectre.rayon * scale;
+            e = e.max(r + (SPECTRE_BARRE_MIN + cfg.spectre.hauteur) * scale + spectre_largeur(n, r, scale));
         }
         (e > 0.0).then(|| {
             let e = e + 2.0;
@@ -213,9 +247,21 @@ impl Effets {
         cv.ring(x, y, r, 2.0 * scale, prisme(cfg, t, 1.0), 0.5 * a / PROJ_OPACITE);
     }
 
-    /// Réticule autour de `cursor`, sous l'essaim.
+    /// Réticule et anneau de spectre autour de `cursor`, sous l'essaim.
     pub fn dessiner(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
         let (cx, cy) = cursor;
+        let s = &cfg.spectre;
+        if s.actif {
+            let n = s.bandes.clamp(8, BANDES_MAX as u32) as usize;
+            let r = s.rayon * scale;
+            let w = spectre_largeur(n, r, scale);
+            for (i, &v) in self.bandes[..n].iter().enumerate() {
+                // la bande la plus grave en haut, puis dans le sens des aiguilles d'une montre
+                let (sin, cos) = (-PI / 2.0 + i as f32 / n as f32 * TAU).sin_cos();
+                let long = (SPECTRE_BARRE_MIN + s.hauteur * v) * scale;
+                cv.line((cx + cos * r, cy + sin * r), (cx + cos * (r + long), cy + sin * (r + long)), w, prisme(cfg, t, v), 0.35 + 0.6 * v, true);
+            }
+        }
         let re = &cfg.reticule;
         if re.actif {
             let rgb = prisme(cfg, t, 1.0);
@@ -232,10 +278,17 @@ impl Effets {
     }
 }
 
+/// Lissage des bandes affichées vers celles lues : montée vive, retombée douce.
+pub fn lisser_bandes(affichees: &mut [f32], lues: &[f32], dt: f32) {
+    let (km, kd) = ((dt * SPECTRE_MONTEE).min(1.0), (dt * SPECTRE_DESCENTE).min(1.0));
+    for (a, &l) in affichees.iter_mut().zip(lues) {
+        *a += (l - *a) * if l > *a { km } else { kd };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f32::consts::TAU;
 
     /// Trajectoire échantillonnée à `ips` images/s : `pos(t)` pendant `duree` s ; nombre de
     /// secousses reconnues.
@@ -311,15 +364,16 @@ mod tests {
     fn projecteur_le_temps_de_l_effet_seulement() {
         let mut cfg = Config::default();
         cfg.projecteur.duree = 1.0;
+        let shared = AudioShared::default();
         let mut e = Effets::new();
-        let dt = 1.0f32 / 60.0;
-        e.avance(0.0, (2500.0, 400.0), 1.0, 0.0, &cfg, &ecran());
+        let dt = 1.0 / 60.0;
+        e.avance(0.0, dt, (2500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
         assert_eq!(e.rect_ecran(), None);
         // raccourci : l'écran du pointeur (le second) est assombri pendant la durée de l'effet
         e.demander_projecteur();
         let mut vus = 0;
         for i in 1..=90 {
-            e.avance(i as f64 * dt as f64, (2500.0, 400.0), 1.0, 0.0, &cfg, &ecran());
+            e.avance(i as f64 * dt as f64, dt, (2500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
             if let Some(r) = e.rect_ecran() {
                 assert_eq!(r, (1920, 0, 3840, 1080));
                 vus += 1;
@@ -330,25 +384,27 @@ mod tests {
         // coupé : ni raccourci ni secousse
         cfg.projecteur.actif = false;
         e.demander_projecteur();
-        e.avance(2.0, (500.0, 400.0), 1.0, 0.0, &cfg, &ecran());
+        e.avance(2.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
         assert_eq!(e.rect_ecran(), None);
         // secousse : le projecteur part
         cfg.projecteur.actif = true;
         let geste = va_et_vient(250.0, 3.0);
         let lance = (0..60).any(|i| {
             let t = 3.0 + i as f64 * dt as f64;
-            e.avance(t, geste(t), 1.0, 0.0, &cfg, &ecran());
+            e.avance(t, dt, geste(t), 1.0, 0.0, &shared, &cfg, &ecran());
             e.rect_ecran().is_some()
         });
         assert!(lance);
     }
 
     #[test]
-    fn reticule_tient_dans_sa_zone() {
+    fn reticule_et_spectre_tiennent_dans_leur_zone() {
         // dessin dans une grande image : aucun pixel peint hors de `rect_pointeur`
         let mut cfg = Config::default();
-        (cfg.reticule.actif, cfg.reticule.taille) = (true, 200.0);
+        (cfg.reticule.actif, cfg.reticule.taille, cfg.spectre.actif, cfg.spectre.bandes) = (true, 200.0, true, 8);
+        (cfg.spectre.rayon, cfg.spectre.hauteur) = (150.0, 100.0);
         let mut e = Effets::new();
+        e.bandes = [1.0; BANDES_MAX];
         e.env = 1.0;
         let cursor = (600.0, 600.0);
         for scale in [1.0f32, 1.5] {
@@ -365,7 +421,7 @@ mod tests {
                     }
                 }
             }
-            assert!(peints > 300, "{peints} pixels");
+            assert!(peints > 500, "{peints} pixels");
             // le centre reste vide : le pointeur n'est jamais couvert
             let c = pm.pixel(600, 600).unwrap();
             assert_eq!(c.alpha(), 0);
@@ -387,12 +443,23 @@ mod tests {
         assert!(bord > 0 && bord < 150, "bord adouci : {bord}");
     }
 
-    /// Coût d'une image (carte graphique puis processeur, simulation comprise) avec chaque effet :
+    #[test]
+    fn spectre_lisse_monte_vite_retombe_doucement() {
+        let mut a = [0.0f32; 4];
+        lisser_bandes(&mut a, &[1.0; 4], 1.0 / 60.0);
+        assert!(a[0] > 0.45, "{a:?}");
+        let mut b = [1.0f32; 4];
+        lisser_bandes(&mut b, &[0.0; 4], 1.0 / 60.0);
+        assert!(b[0] > 0.8, "{b:?}");
+    }
+
+    /// Coût d'une image (carte graphique puis processeur, simulation comprise) avec chaque effet,
+    /// et coût du banc de filtres du spectre :
     /// `cargo test --release mesure_effets -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn mesure_effets() {
-        use crate::audio::AudioView;
+        use crate::audio::{AudioView, Bandes};
         use crate::backend::Backend;
         use crate::render::Swarm;
         use std::time::Instant;
@@ -400,6 +467,7 @@ mod tests {
             let dt = 1.0 / 144.0;
             let mut s = Swarm::new();
             let mut e = Effets::new();
+            let shared = AudioShared::default();
             let mut au = AudioView { kicks: 0, bass: 0.8, pitch: 40.0, ..Default::default() };
             let mut b = Backend::new(gpu);
             let mons = [(1isize, (0, 0, 1920, 1080))];
@@ -416,7 +484,7 @@ mod tests {
                     e.demander_projecteur();
                 }
                 s.update(t, dt, cursor, au, cfg, 1.0);
-                e.avance(t, cursor, 1.0, s.env, cfg, &mons);
+                e.avance(t, dt, cursor, 1.0, s.env, &shared, cfg, &mons);
                 let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
                 let rect = crate::layer::union(Some(rect), e.rect_pointeur(cursor, 1.0, cfg)).unwrap();
@@ -436,12 +504,27 @@ mod tests {
         let base = Config::default();
         let mut reticule = base.clone();
         reticule.reticule.actif = true;
+        let mut spectre = base.clone();
+        (spectre.spectre.actif, spectre.spectre.bandes) = (true, 32);
         for gpu in [true, false] {
             let moteur = if gpu { "carte graphique" } else { "processeur" };
             let b = cout(&base, gpu, false);
             eprintln!("{moteur} : sans effet {b:.3} ms");
             eprintln!("{moteur} : réticule {:+.3} ms", cout(&reticule, gpu, false) - b);
+            eprintln!("{moteur} : spectre (32 bandes) {:+.3} ms", cout(&spectre, gpu, false) - b);
             eprintln!("{moteur} : projecteur (pendant l'effet, 1920 × 1080) {:+.3} ms", cout(&base, gpu, true) - b);
+        }
+        // banc de filtres : une seconde de son à 48 kHz
+        let son: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.07).sin() * 0.3).collect();
+        for n in [8usize, 16, 32] {
+            let mut bandes = Bandes::new(48_000);
+            bandes.regler(n);
+            let t0 = Instant::now();
+            for paquet in son.chunks(480) {
+                bandes.push(paquet);
+            }
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("filtres du spectre, {n} bandes : {ms:.2} ms par seconde de son ({:.2} % d'un cœur)", ms / 10.0);
         }
     }
 }

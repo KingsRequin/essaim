@@ -19,6 +19,7 @@ pub struct Config {
     pub sillage: Sillage,
     pub projecteur: Projecteur,
     pub reticule: Reticule,
+    pub spectre: Spectre,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -106,6 +107,25 @@ pub struct Reticule {
 impl Default for Reticule {
     fn default() -> Self {
         Self { actif: false, taille: 40.0, opacite: 0.6 }
+    }
+}
+
+/// Anneau de spectre : barres radiales autour du pointeur, une par bande de fréquences.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Spectre {
+    pub actif: bool,
+    /// Nombre de bandes (8 à 32), réparties de 40 Hz à 12 kHz.
+    pub bandes: u32,
+    /// Rayon intérieur de l'anneau (px).
+    pub rayon: f32,
+    /// Longueur des barres à pleine énergie (px).
+    pub hauteur: f32,
+}
+
+impl Default for Spectre {
+    fn default() -> Self {
+        Self { actif: false, bandes: 16, rayon: 40.0, hauteur: 24.0 }
     }
 }
 
@@ -469,6 +489,12 @@ actif = false           # deux fines lignes croisées centrées sur le pointeur
 taille = 40             # longueur de chaque branche
 opacite = 0.6           # 0.05 à 1
 
+[spectre]
+actif = false           # barres autour du pointeur qui suivent l'énergie de chaque bande de fréquences
+bandes = 16             # nombre de bandes (8 à 32), de 40 Hz à 12 kHz
+rayon = 40              # rayon intérieur de l'anneau
+hauteur = 24            # longueur des barres à pleine énergie
+
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
@@ -537,6 +563,9 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("projecteur", "duree") => (0.3, 5.0),
         ("reticule", "taille") => (10.0, 200.0),
         ("reticule", "opacite") => (0.05, 1.0),
+        ("spectre", "bandes") => (8.0, 32.0),
+        ("spectre", "rayon") => (10.0, 150.0),
+        ("spectre", "hauteur") => (4.0, 100.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -908,25 +937,29 @@ mod tests {
     }
 
     #[test]
-    fn effets_projecteur_reticule_lus_et_bornes() {
+    fn effets_projecteur_reticule_spectre_lus_et_bornes() {
         // fichier par défaut : mêmes valeurs que les réglages par défaut
         let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
         let d = super::Config::default();
-        assert_eq!((c.projecteur.actif, c.reticule.actif), (true, false));
+        assert_eq!((c.projecteur.actif, c.reticule.actif, c.spectre.actif), (true, false, false));
         assert_eq!((c.projecteur.duree, c.reticule.taille, c.reticule.opacite), (d.projecteur.duree, d.reticule.taille, d.reticule.opacite));
+        assert_eq!((c.spectre.bandes, c.spectre.rayon, c.spectre.hauteur), (d.spectre.bandes, d.spectre.rayon, d.spectre.hauteur));
         // valeurs absurdes ramenées dans leurs bornes
-        let texte = "[projecteur]\nduree = 99\n[reticule]\ntaille = 1\nopacite = 7";
+        let texte = "[projecteur]\nduree = 99\n[reticule]\ntaille = 1\nopacite = 7\n[spectre]\nbandes = 300\nrayon = -5\nhauteur = 1e9";
         let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
         assert_eq!((c.projecteur.duree, c.reticule.taille, c.reticule.opacite), (5.0, 10.0, 1.0));
-        let c = toml::from_str::<super::Config>("[projecteur]\nduree = 0").unwrap().clamped();
-        assert_eq!(c.projecteur.duree, 0.3);
+        assert_eq!((c.spectre.bandes, c.spectre.rayon, c.spectre.hauteur), (32, 10.0, 100.0));
+        let c = toml::from_str::<super::Config>("[spectre]\nbandes = 2\n[projecteur]\nduree = 0").unwrap().clamped();
+        assert_eq!((c.spectre.bandes, c.projecteur.duree), (8, 0.3));
         // écriture depuis la fenêtre : refusée hors bornes, acceptée dedans
         let p = std::env::temp_dir().join(format!("essaim-test-effets-{}.toml", std::process::id()));
         std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        assert!(super::set_value_in(&p, "spectre", "bandes", &serde_json::json!(33)).is_err());
         assert!(super::set_value_in(&p, "reticule", "opacite", &serde_json::json!(0.0)).is_err());
+        super::set_value_in(&p, "spectre", "bandes", &serde_json::json!(24)).unwrap();
         super::set_value_in(&p, "projecteur", "actif", &serde_json::json!(false)).unwrap();
         let c = super::Config::read(&p).unwrap();
-        assert!(!c.projecteur.actif);
+        assert_eq!((c.spectre.bandes, c.projecteur.actif), (24, false));
         let _ = std::fs::remove_file(&p);
     }
 

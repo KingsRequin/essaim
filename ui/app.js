@@ -145,7 +145,7 @@ const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE]
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
-  "orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "projecteur", "reticule", "audio", "bordure", "souris",
+  "orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure", "souris",
 ];
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
@@ -631,12 +631,15 @@ const IMPACT = {
   "scintillement.actif": [1, "estime"], "scintillement.quantite": [1, "estime"], "clic.taille": [1, "estime"], "sillage.densite": [1, "estime"],
   // banc `mesure_effets` (carte graphique, 144 images/s)
   "projecteur.actif": [1], "projecteur.duree": [1, "estime"], "reticule.actif": [1], "reticule.taille": [1, "estime"], "reticule.opacite": [1, "estime"],
+  "spectre.actif": [2], "spectre.bandes": [2], "spectre.rayon": [1, "estime"], "spectre.hauteur": [1, "estime"],
 };
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
   "rendu.cadence": "Multiplie le coût de tout le reste : 240 images/s coûtent huit fois plus que 30.",
   "rendu.carte_graphique": "Mesuré : 0,35 ms par image avec la carte graphique, 1,09 ms avec le processeur.",
   "projecteur.actif": "Rien hors de l'effet ; pendant l'effet, tout l'écran est redessiné : +0,13 ms par image avec la carte graphique, +9 ms avec le processeur.",
+  "spectre.actif": "Analyse du son en bandes : 0,9 % d'un cœur à 32 bandes, rien quand l'anneau est coupé ; le dessin ne coûte presque rien.",
+  "spectre.bandes": "L'analyse du son coûte en proportion : 0,2 % d'un cœur à 8 bandes, 0,9 % à 32.",
 };
 
 // Jauge d'impact : dix cases, et son texte (score, précision) dans un élément lu par les lecteurs
@@ -675,6 +678,7 @@ const SI = {
   sillage: (r) => r.sillage.actif,
   projecteur: (r) => !!(r.projecteur && r.projecteur.actif),
   reticule: (r) => !!(r.reticule && r.reticule.actif),
+  spectre: (r) => !!(r.spectre && r.spectre.actif) && r.audio.actif,
 };
 
 // Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
@@ -725,6 +729,9 @@ const AVANCES = [
   { libelle: "Durée du projecteur", section: "projecteur", cle: "duree", si: SI.projecteur, min: 0.3, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
   { libelle: "Taille du réticule", section: "reticule", cle: "taille", si: SI.reticule, min: 10, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
   { libelle: "Opacité du réticule", section: "reticule", cle: "opacite", si: SI.reticule, min: 0.05, max: 1, pas: 0.05, ...pourcent },
+  { libelle: "Bandes du spectre", section: "spectre", cle: "bandes", si: SI.spectre, min: 8, max: 32, pas: 1, aff: (v) => String(Math.round(v)) },
+  { libelle: "Rayon du spectre", section: "spectre", cle: "rayon", si: SI.spectre, min: 10, max: 150, pas: 1, aff: (v) => String(Math.round(v)) },
+  { libelle: "Hauteur des barres du spectre", section: "spectre", cle: "hauteur", si: SI.spectre, min: 4, max: 100, pas: 1, aff: (v) => String(Math.round(v)) },
   { groupe: "Son" },
   { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Cet ordinateur (hors presets)" },
@@ -879,6 +886,7 @@ function construireReglages() {
         bascule("Sillage de la souris", "sillage", "actif"),
         projecteur,
         bascule("Réticule", "reticule", "actif"),
+        bascule("Anneau de spectre", "spectre", "actif"),
       ]);
     } else if (def.special === "couleur") {
       teintes = TEINTES.map((h) => {
@@ -1292,7 +1300,7 @@ function libelleReglage(section, cle) {
     "orbite.forme": "Trajet des comètes", "essaim.forme": "Trajet des satellites", "couleur.application": "Couleur de l'application",
     "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique", "scintillement.actif": "Étincelles sur les aigus",
     "clic.onde": "Onde au clic", "clic.eclats": "Éclats au clic", "sillage.actif": "Sillage de la souris", "souris.jeu": "Curseurs",
-    "projecteur.actif": "Projecteur (secouer la souris)", "reticule.actif": "Réticule",
+    "projecteur.actif": "Projecteur (secouer la souris)", "reticule.actif": "Réticule", "spectre.actif": "Anneau de spectre",
     "couleur.synchro_prisme": "Synchro Prisme",
   };
   return [noms[section + "." + cle] || section + "." + cle];

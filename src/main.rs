@@ -539,7 +539,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
 
         // simulation ; teinte qui glisse avec la musique, lissée (~150 ms)
         swarm.avance(t, dt, cursor, au, cfg, scale);
-        effets.avance(t, cursor, scale, swarm.env, cfg, &monitors);
+        effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
         let d = render::decalage();
         render::set_decalage(d + (render::decalage_vise(&au) - d) * (dt * 6.0).min(1.0));
         // teinte imposée : celle de l'application au premier plan, sinon celle de l'éclairage
@@ -575,7 +575,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         // dessin : sur chaque écran que l'essaim ou une fissure touche
         let (x0, y0, x1, y1) = swarm.bounds(cursor, scale, cfg.eclat.taille);
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
-        // réticule autour du pointeur : dans la zone de l'essaim ; projecteur : tout
+        // réticule et spectre autour du pointeur : dans la zone de l'essaim ; projecteur : tout
         // l'écran du pointeur, le temps de l'effet seulement
         let swarm_rect = layer::union(Some(swarm_rect), effets.rect_pointeur(cursor, scale, cfg)).unwrap_or(swarm_rect);
         let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
