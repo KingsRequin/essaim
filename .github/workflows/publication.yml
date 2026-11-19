@@ -26,8 +26,8 @@ jobs:
             throw "Le tag $env:GITHUB_REF_NAME ne correspond pas à la version $version de Cargo.toml"
           }
 
-      - uses: Swatinem/rust-cache@v2
-
+      # Pas d'action tierce (cache compris) : cet exécutable est celui que les mises à jour
+      # automatiques installent chez tout le monde.
       - name: Tests
         run: cargo test --release
 
