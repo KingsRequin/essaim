@@ -52,7 +52,25 @@ pub enum Fond {
     Noir,
 }
 
+impl Orbite {
+    /// Contours du trajet « image » : ceux d'une image, sinon le trajet dessiné d'avant.
+    pub fn chemins(&self) -> Vec<Vec<[f32; 2]>> {
+        if !self.contours.is_empty() {
+            self.contours.clone()
+        } else if self.trace.len() >= 3 {
+            vec![self.trace.clone()]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 impl Config {
+    /// Le trajet suit-il l'icône de l'application au premier plan (comètes ou satellites) ?
+    pub fn suit_icone(&self) -> bool {
+        self.orbite.forme == Forme::Icone || self.essaim.forme == FormeSatellites::Icone
+    }
+
     /// Une modulation ou un déclencheur demande-t-il l'analyse musicale (caisse claire, montée,
     /// drop) ?
     pub fn analyse_musicale(&self) -> bool {
@@ -347,8 +365,12 @@ pub struct Orbite {
     pub rotation: f32,
     /// Ce qui tourne avec le trajet : comètes, satellites ou tout.
     pub rotation_sur: Groupe,
-    /// Trajet dessiné à la main (`forme = "trace"`) : points (x, y), rayon 1 environ.
+    /// Trajet dessiné à la main d'avant (`forme = "trace"`) : points (x, y). Gardé pour les presets
+    /// d'avant ; une image le remplit aussi (son plus grand contour, pour les versions d'avant).
     pub trace: Vec<[f32; 2]>,
+    /// Contours d'une image (`forme = "trace"`), un par anneau de comètes (4 au plus) : points
+    /// (x, y) d'un même repère (pixels de l'image), que le moteur met à l'échelle ensemble.
+    pub contours: Vec<Vec<[f32; 2]>>,
     /// Inertie du centre de l'orbite : 0 = suit le pointeur de près, 1 = ressort souple qui
     /// traîne derrière la souris et la dépasse un peu à l'arrêt.
     pub inertie: f32,
@@ -665,6 +687,7 @@ pub enum FormeSatellites {
     Lissajous,
     Astroide,
     Trace,
+    Icone,
 }
 
 impl FormeSatellites {
@@ -687,6 +710,7 @@ impl FormeSatellites {
             Self::Lissajous => Forme::Lissajous,
             Self::Astroide => Forme::Astroide,
             Self::Trace => Forme::Trace,
+            Self::Icone => Forme::Icone,
         }
     }
 }
@@ -710,8 +734,11 @@ pub enum Forme {
     Trefle,
     Lissajous,
     Astroide,
-    /// Dessiné à la main (`[orbite] trace`).
+    /// Contours d'une image (`[orbite] contours`), ou trajet dessiné à la main d'avant
+    /// (`[orbite] trace`).
     Trace,
+    /// Contours de l'icône de l'application au premier plan.
+    Icone,
 }
 
 /// Jeu de curseurs de Windows.
@@ -787,6 +814,7 @@ impl Default for Orbite {
             rotation: 0.0,
             rotation_sur: Groupe::Tout,
             trace: Vec::new(),
+            contours: Vec::new(),
             inertie: 0.0,
             vitesse_base: 3.5,
             trainee: 0.3,
@@ -834,12 +862,14 @@ taille = 3.4            # éclat du kick sous le pointeur ; 0 = aucun
 rayon = 22              # rayon de l'orbite sans basse
 cometes = true          # comètes en orbite
 forme = "cercle"        # trajet : cercle, triangle, losange, hexagone, huit, etoile, fleur, carre,
-                        # pentagone, ellipse, coeur, trefle, lissajous ou astroide
+                        # pentagone, ellipse, coeur, trefle, lissajous, astroide, trace (une image)
+                        # ou icone (l'icône de l'application au premier plan)
 nombre = 2              # comètes par anneau
 anneaux = 1             # anneaux emboîtés (les extérieurs tournent moins vite)
 rotation = 0            # rotation du trajet lui-même (tours/min ; négatif : autre sens)
 rotation_sur = "tout"   # ce qui tourne avec le trajet : "tout", "cometes" ou "satellites"
-trace = []              # trajet dessiné à la main (forme = "trace"), points [x, y]
+trace = []              # trajet d'avant les images (forme = "trace"), points [x, y]
+contours = []           # contours d'une image (forme = "trace"), un par anneau : [[[x, y], …], …]
 inertie = 0             # 0 = l'orbite suit le pointeur de près, 1 = ressort souple qui traîne derrière
 vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
 trainee = 0.3           # durée de la traînée des comètes (s)
@@ -1059,6 +1089,12 @@ impl Config {
         // JSON, où un point non fini empêcherait toute la relecture)
         self.orbite.trace.retain(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e6));
         self.orbite.trace.truncate(2000);
+        self.orbite.contours.truncate(crate::contours::CONTOURS_MAX);
+        for c in &mut self.orbite.contours {
+            c.retain(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e6));
+            c.truncate(2000);
+        }
+        self.orbite.contours.retain(|c| c.len() >= 3);
         self.modulations.liste.truncate(MODULATIONS_MAX);
         let borne = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
         for m in &mut self.modulations.liste {
@@ -1611,6 +1647,13 @@ mod tests {
         assert!(super::set_value_in(&p, "automatique", "applis", &serde_json::json!([{ "appli": 3 }])).is_err());
         let c: super::Config = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(c.orbite.trace, vec![[0.5, -1.0], [1.0, 0.25], [-0.75, 0.5]]);
+        // contours d'une image, forme « icône »
+        let tri = serde_json::json!([[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]);
+        super::set_value_in(&p, "orbite", "contours", &serde_json::json!([tri, tri])).unwrap();
+        super::set_value_in(&p, "orbite", "forme", &serde_json::json!("icone")).unwrap();
+        let c: super::Config = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!((c.orbite.contours.len(), c.orbite.contours[1][2]), (2, [5.0, 8.0]));
+        assert!(c.suit_icone() && c.orbite.chemins().len() == 2);
         assert_eq!(c.automatique.applis[0].preset, "Discret");
         let _ = std::fs::remove_file(&p);
     }

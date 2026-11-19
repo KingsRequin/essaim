@@ -199,6 +199,49 @@ fn teinte_page(hwnd: HWND) -> Option<f32> {
     }
 }
 
+/// Contours de l'icône de l'application au premier plan (`[orbite] forme = "icone"`), relus à
+/// chaque changement d'application et gardés par exécutable. Essaim lui-même (ses réglages) ne
+/// compte pas : c'est l'application d'avant qui reste suivie. Une application sans icône ou une
+/// icône sans forme nette gardent les contours précédents.
+#[derive(Default)]
+pub struct IconeAppli {
+    fenetre: isize,
+    /// Dernière application au premier plan (hors Essaim), et celle dont les contours sont suivis.
+    derniere: String,
+    exe: String,
+    cache: HashMap<String, Vec<Vec<[f32; 2]>>>,
+}
+
+impl IconeAppli {
+    /// Les contours, s'ils ont changé depuis l'appel précédent ; `actif` : le trajet suit l'icône
+    /// (sinon, seule l'application au premier plan est notée).
+    pub fn suivre(&mut self, actif: bool) -> Option<Vec<Vec<[f32; 2]>>> {
+        let fg = unsafe { GetForegroundWindow() };
+        if fg.0 as isize != self.fenetre {
+            self.fenetre = fg.0 as isize;
+            if let Some(exe) = executable(fg) {
+                self.derniere = exe;
+            }
+        }
+        if !actif || self.derniere.is_empty() || self.derniere == self.exe {
+            return None;
+        }
+        let exe = self.derniere.clone();
+        self.exe = exe.clone();
+        let contours = self
+            .cache
+            .entry(exe.clone())
+            .or_insert_with(|| {
+                let o = crate::contours::Options { tous: true, ..Default::default() };
+                let c = icone_rgba(&exe, 128).map(|(px, l, h)| crate::contours::contours(&px, l, h, &o).contours).unwrap_or_default();
+                log::info!("contour de l'icône de {} : {} forme(s)", exe.rsplit('\\').next().unwrap_or(&exe), c.len());
+                c
+            })
+            .clone();
+        (!contours.is_empty()).then_some(contours)
+    }
+}
+
 /// Nom (en minuscules) de l'exécutable de la fenêtre au premier plan ; aucun pour Essaim.
 pub fn nom_premier_plan() -> Option<String> {
     let exe = executable(unsafe { GetForegroundWindow() })?;
@@ -254,9 +297,41 @@ fn icone(exe: &str) -> Option<Vec<u8>> {
         if ExtractIconExW(PCWSTR(wide.as_ptr()), 0, Some(&mut grande), None, 1) == 0 || grande.is_invalid() {
             return None;
         }
+        pixels_icone(grande).map(|(px, _, _)| px)
+    }
+}
+
+/// Pixels RGBA de l'icône de l'exécutable, en `cote` × `cote` si elle existe à cette taille
+/// (sinon la plus proche que Windows propose), avec sa largeur et sa hauteur. Une vieille icône
+/// sans transparence est rendue opaque.
+fn icone_rgba(exe: &str, cote: i32) -> Option<(Vec<u8>, usize, usize)> {
+    use windows::Win32::UI::WindowsAndMessaging::PrivateExtractIconsW;
+    let mut nom = [0u16; 260];
+    for (d, c) in nom.iter_mut().zip(exe.encode_utf16().take(259)) {
+        *d = c;
+    }
+    let mut h = [HICON::default()];
+    let n = unsafe { PrivateExtractIconsW(&nom, 0, cote, cote, Some(&mut h), None, 0) };
+    if n == 0 || n == u32::MAX || h[0].is_invalid() {
+        return None;
+    }
+    let (mut px, l, ht) = unsafe { pixels_icone(h[0])? };
+    let sans_alpha = px.chunks_exact(4).all(|p| p[3] == 0);
+    for p in px.chunks_exact_mut(4) {
+        p.swap(0, 2);
+        if sans_alpha {
+            p[3] = 255;
+        }
+    }
+    Some((px, l, ht))
+}
+
+/// Pixels BGRA d'une icône (détruite ensuite), avec sa largeur et sa hauteur.
+unsafe fn pixels_icone(icone: HICON) -> Option<(Vec<u8>, usize, usize)> {
+    unsafe {
         let mut info = ICONINFO::default();
-        let lu = GetIconInfo(grande, &mut info).is_ok();
-        let _ = DestroyIcon(grande);
+        let lu = GetIconInfo(icone, &mut info).is_ok();
+        let _ = DestroyIcon(icone);
         if !lu {
             return None;
         }
@@ -284,7 +359,7 @@ fn icone(exe: &str) -> Option<Vec<u8>> {
             let dc = GetDC(None);
             let n = GetDIBits(dc, info.hbmColor, 0, h as u32, Some(px.as_mut_ptr() as *mut c_void), &mut bi, DIB_RGB_COLORS);
             ReleaseDC(None, dc);
-            (n > 0).then_some(px)
+            (n > 0).then_some((px, w as usize, h as usize))
         })();
         let _ = DeleteObject(info.hbmColor.into());
         let _ = DeleteObject(info.hbmMask.into());

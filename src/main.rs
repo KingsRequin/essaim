@@ -20,6 +20,7 @@ mod bordure;
 mod canvas;
 mod charge;
 mod config;
+mod contours;
 mod effets;
 mod gpu;
 mod ipc;
@@ -288,7 +289,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         log::warn!("config : conversion des réactions à la basse impossible ({e})");
     }
     let mut conf = config::Watched::load();
-    render::set_trace(&conf.cfg.orbite.trace);
+    render::set_traces(&conf.cfg.orbite.chemins());
     let shared = Arc::new(audio::AudioShared::default());
     shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
     shared.set_min_gap(conf.cfg.audio.delai_kick);
@@ -332,6 +333,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut rng = Rng::seeded();
     let mut border = bordure::Border::default();
     let mut ecoute_bordure = render::Ecoute::default();
+    // trajet « icône » : contours de l'icône de l'application au premier plan
+    let mut icone_appli = appli::IconeAppli::default();
     // pauses automatiques (ne pas déranger, batterie, applications) et raison publiée
     let mut pauses = pauses::Pauses::default();
     let mut raison_publiee = String::new();
@@ -456,7 +459,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
-            render::set_trace(&conf.cfg.orbite.trace);
+            render::set_traces(&conf.cfg.orbite.chemins());
             if conf.cfg.raccourcis.actif != raccourcis {
                 raccourcis = conf.cfg.raccourcis.actif;
                 win::raccourcis(raccourcis);
@@ -634,6 +637,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             cracks.push(Crack::new(x, y, t, cfg.fissures.taille * force * scale, &mut rng));
         }
         render::set_decalage(swarm.teinte_globale());
+        if let Some(c) = icone_appli.suivre(cfg.suit_icone()) {
+            render::set_icone(&c);
+        }
         // teinte imposée : la pochette du morceau qui joue, sinon l'application ou le site au
         // premier plan, sinon l'éclairage (Prisme) ; suivie en douceur, par le plus court
         let c = &cfg.couleur;

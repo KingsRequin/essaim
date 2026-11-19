@@ -384,7 +384,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   display: flex; flex-direction: column; gap: var(--esp-4); overflow: auto; border-top: var(--trait-epais) solid var(--signal);
 }
 .boite.large { width: 860px; }
-#toile-dessin { width: 420px; height: 420px; max-width: 100%; cursor: crosshair; touch-action: none; }
+.image-trajet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-4); }
+.image-trajet canvas { aspect-ratio: 1; width: 100%; }
 .comparaison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-5); }
 .comparaison .cote { display: flex; flex-direction: column; gap: var(--esp-2); }
 .comparaison canvas { aspect-ratio: 1; }

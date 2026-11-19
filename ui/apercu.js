@@ -137,18 +137,16 @@ function prisme(c, t, k, imposee, decalage = 0, j = 0, plus = 0) {
   return hsl((((queue + dh * k) % 360) + 360) % 360, 1, 0.66);
 }
 
-// Trajet dessiné : rééchantillonné à 256 pas égaux, centré, rayon le plus grand 1,2 (comme
-// render::reechantillonner) ; gardé par tableau de points.
-const traces = new WeakMap();
+// Contour fermé rééchantillonné à 256 pas égaux (comme render::reechantillonner) ; null s'il est
+// trop court.
 function reechantillonner(points) {
   if (!Array.isArray(points) || points.length < 3) return null;
-  if (traces.has(points)) return traces.get(points);
   const p = points.filter((q) => Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1])).slice(0, 2000);
   const n = p.length;
   const long = (i) => Math.hypot(p[(i + 1) % n][0] - p[i][0], p[(i + 1) % n][1] - p[i][1]);
   let total = 0;
   for (let i = 0; i < n; i++) total += long(i);
-  if (n < 3 || total <= 1e-6) { traces.set(points, null); return null; }
+  if (n < 3 || total <= 1e-6) return null;
   const out = [];
   let i = 0, fait = 0;
   for (let k = 0; k < 256; k++) {
@@ -158,21 +156,46 @@ function reechantillonner(points) {
     const a = p[i], b = p[(i + 1) % n];
     out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
   }
-  const cx = out.reduce((s, q) => s + q[0], 0) / 256, cy = out.reduce((s, q) => s + q[1], 0) / 256;
-  const r = Math.max(1e-6, ...out.map((q) => Math.hypot(q[0] - cx, q[1] - cy)));
-  const res = out.map((q) => [((q[0] - cx) / r) * 1.2, ((q[1] - cy) / r) * 1.2]);
-  traces.set(points, res);
+  return out;
+}
+
+// Contours rééchantillonnés, centrés sur le milieu de l'ensemble et mis à la même échelle (point
+// le plus loin : 1,2), comme render::reechantillonner_tous ; gardés par liste.
+const contoursVus = new WeakMap();
+function reechantillonnerTous(liste) {
+  if (!Array.isArray(liste) || !liste.length) return [];
+  if (contoursVus.has(liste)) return contoursVus.get(liste);
+  const tous = liste.slice(0, 4).map(reechantillonner).filter(Boolean);
+  const pts = tous.flat(), n = Math.max(1, pts.length);
+  const cx = pts.reduce((s, q) => s + q[0], 0) / n, cy = pts.reduce((s, q) => s + q[1], 0) / n;
+  const r = Math.max(1e-6, ...pts.map((q) => Math.hypot(q[0] - cx, q[1] - cy)));
+  const res = tous.map((c) => c.map((q) => [((q[0] - cx) / r) * 1.2, ((q[1] - cy) / r) * 1.2]));
+  contoursVus.set(liste, res);
   return res;
 }
 
-// Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin). `trace` : points du
-// trajet dessiné, pour la forme « trace ».
-function chemin(forme, a, trace) {
-  if (forme === "trace") {
-    const t = reechantillonner(trace);
+// Contours du trajet d'un réglage d'orbite : ceux d'une image, sinon le trajet dessiné d'avant
+// (comme Orbite::chemins) ; ceux de l'icône de l'application au premier plan, que la page reçoit
+// de l'appli (`window.contoursIcone`, déjà mis à l'échelle).
+function contoursDe(o, forme) {
+  if (forme === "icone") return window.contoursIcone || [];
+  if (forme !== "trace" || !o) return [];
+  if (Array.isArray(o.contours) && o.contours.length) return reechantillonnerTous(o.contours);
+  if (Array.isArray(o.trace) && o.trace.length >= 3) {
+    if (!contoursVus.has(o.trace)) contoursVus.set(o.trace, reechantillonnerTous([o.trace]));
+    return contoursVus.get(o.trace);
+  }
+  return [];
+}
+
+// Point du trajet à l'angle a, pour un rayon de 1 (comme render::chemin). `contours` : ceux de la
+// forme « trace » ou « icone » (contoursDe), `i` : le contour suivi.
+function chemin(forme, a, contours, i = 0) {
+  if (forme === "trace" || forme === "icone") {
+    const t = Array.isArray(contours) && contours.length ? contours[i % contours.length] : null;
     if (!t) return [Math.cos(a), Math.sin(a)];
-    const u = (((a / TAU) * 256) % 256 + 256) % 256, i = Math.floor(u), f = u - i;
-    const p = t[i % 256], q = t[(i + 1) % 256];
+    const u = (((a / TAU) * 256) % 256 + 256) % 256, j = Math.floor(u), f = u - j;
+    const p = t[j % 256], q = t[(j + 1) % 256];
     return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
   }
   const poly = (k, r, r2, depart = -Math.PI / 2) => {
@@ -448,8 +471,8 @@ class Apercu {
     const poses = [pose(0, this.rot), pose(1, this.rotSats)];
     this.rot = reste(poses[0].rot0 + poses[0].drot, TAU);
     this.rotSats = reste(poses[1].rot0 + poses[1].drot, TAU);
-    const point = (q, forme, a, rel, f) => {
-      const [x, y] = chemin(forme, a, o.trace);
+    const point = (q, forme, contour, a, rel, f) => {
+      const [x, y] = chemin(forme, a, contoursDe(o, forme), contour);
       const th = q.rot0 + q.drot * f, cos = Math.cos(th), sin = Math.sin(th);
       const rr = (q.rayon0 + (q.rayon - q.rayon0) * f) * rel;
       return [cx + q.dx0 + (q.dx - q.dx0) * f + (x * cos - y * sin) * rr, cy + (x * sin + y * cos) * rr];
@@ -457,15 +480,18 @@ class Apercu {
     const wCometes = this.dir * this.vitesse(0), wSats = this.dir * this.vitesse(1);
     // les écarts de render.rs sont en pixels d'écran : ici, à l'échelle de l'aperçu
     const finCometes = [FINESSE_COMETES[0], FINESSE_COMETES[1] * S], finSats = [FINESSE_SATELLITES[0], FINESSE_SATELLITES[1] * S];
+    // plusieurs contours (une image, une icône) : chaque anneau suit le sien, à sa place
+    const contoursCometes = Math.max(1, contoursDe(o, o.forme).length);
     for (let k = 0; k < nAnneaux; k++) {
-      const [rk, wk] = anneau(k);
+      const [rk, wk] = contoursCometes > 1 ? [1, 1] : anneau(k);
+      const contour = k % contoursCometes;
       const a0 = this.angles[k], da = wCometes * wk * dt;
       this.angles[k] = reste(a0 + da, TAU);
       const n = sousPas(da, poses[0].rayon * rk * 1.2, finCometes);
       for (let i = 0; i < nombre; i++) {
         const decale = (i * TAU) / nombre;
         for (let j = 1; j <= n; j++) {
-          const f = j / n, [x, y] = point(poses[0], o.forme, a0 + da * f + decale, rk, f);
+          const f = j / n, [x, y] = point(poses[0], o.forme, contour, a0 + da * f + decale, rk, f);
           pousser(this.trainees[k * nombre + i], t - dt * (1 - f), x, y, vie, finCometes[1]);
         }
       }
@@ -482,12 +508,15 @@ class Apercu {
     // satellites : sur le trajet des comètes, ou le leur, à des distances variées
     const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
     const vieSats = SAT_TRAINEE * this.mods[1].trainee;
+    // plusieurs contours : chaque satellite suit l'un d'eux, de près
+    const contoursSats = Math.max(1, contoursDe(o, forme).length);
     for (const s of this.sats.concat(this.fixes)) {
+      const contour = contoursSats > 1 ? (s.couleur || 0) % contoursSats : 0, rel = contoursSats > 1 ? 1 + (s.r - 1.3) * 0.25 : s.r;
       const a0 = s.a, da = wSats * s.mul * dt;
       s.a = reste(a0 + da, TAU);
-      const n = sousPas(da, poses[1].rayon * s.r * 1.2, finSats);
+      const n = sousPas(da, poses[1].rayon * rel * 1.2, finSats);
       for (let j = 1; j <= n; j++) {
-        const f = j / n, [x, y] = point(poses[1], forme, a0 + da * f, s.r, f);
+        const f = j / n, [x, y] = point(poses[1], forme, contour, a0 + da * f, rel, f);
         pousser(s.trainee, t - dt * (1 - f), x, y, vieSats, finSats[1]);
       }
     }
@@ -831,4 +860,5 @@ function imageA(image, ms) {
 
 window.Apercu = Apercu;
 window.chemin = chemin;
+window.contoursDe = contoursDe;
 window.imageA = imageA;

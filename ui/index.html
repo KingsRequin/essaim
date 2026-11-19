@@ -204,15 +204,32 @@
   </section>
 </div>
 
-<div class="voile centre" id="voile-dessin" hidden>
-  <div class="boite" role="dialog" aria-modal="true" aria-labelledby="titre-dessin">
-    <span class="t-titre" id="titre-dessin">Dessiner un trajet</span>
-    <p class="note">Trace une boucle d'un seul geste autour du pointeur (le point au centre). Les comètes la parcourront à vitesse constante.</p>
-    <canvas class="scene" id="toile-dessin" width="420" height="420"></canvas>
+<div class="voile centre" id="voile-image" hidden>
+  <div class="boite large" role="dialog" aria-modal="true" aria-labelledby="titre-image">
+    <span class="t-titre" id="titre-image">Trajet d'une image</span>
+    <p class="note">Les comètes suivent le contour d'une image : un logo, une silhouette, une icône (une image à fond transparent marche le mieux), ou d'un texte, d'un emoji. Tu peux aussi glisser une image sur la fenêtre.</p>
+    <div class="image-trajet">
+      <canvas class="scene" id="toile-image" width="380" height="380" aria-label="L'image et ses contours"></canvas>
+      <canvas class="scene" id="apercu-image" aria-label="Aperçu de l'essaim sur ce trajet"></canvas>
+    </div>
     <div class="groupe-puces aere">
-      <button class="signal" id="valider-dessin">Utiliser ce trajet →</button>
-      <button class="puce" id="effacer-dessin">Effacer</button>
-      <button class="puce" id="fermer-dessin">Annuler</button>
+      <button class="puce" id="choisir-image">Choisir une image…</button>
+      <input type="file" id="fichier-image" accept="image/*,.svg" hidden>
+      <label class="option-ligne"><span class="t-label">ou un texte, un emoji</span><input class="champ petit" id="texte-image" maxlength="12" placeholder="♥, ESSAIM, 🦋…" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div class="groupe-puces aere">
+      <label class="option-ligne"><span class="t-label">Seuil</span><input type="range" id="seuil-image" min="1" max="255" value="128"><span class="valeur-mod" id="valeur-seuil">auto</span></label>
+      <button class="puce" id="seuil-auto" aria-pressed="true" title="Seuil calculé d'après l'image (méthode d'Otsu)">Auto</button>
+      <button class="puce" id="inverser-image" aria-pressed="false" title="La forme est de l'autre côté du seuil">Inverser</button>
+      <span class="groupe-puces" role="group" aria-label="Contours gardés">
+        <button class="puce" data-contours="un" aria-pressed="true">Le plus grand</button>
+        <button class="puce" data-contours="tous" aria-pressed="false" title="Chaque anneau de comètes suit un contour, à sa place (4 au plus)">Tous, un par anneau</button>
+      </span>
+    </div>
+    <p class="note" id="info-image" role="status"></p>
+    <div class="groupe-puces aere">
+      <button class="signal" id="valider-image">Utiliser ce trajet →</button>
+      <button class="puce" id="fermer-image">Annuler</button>
     </div>
   </div>
 </div>

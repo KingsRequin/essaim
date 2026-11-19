@@ -187,10 +187,11 @@ const FORMES = [
   ["pentagone", "Pentagone"], ["hexagone", "Hexagone"], ["etoile", "Étoile"], ["astroide", "Astroïde"], ["fleur", "Fleur"],
   ["trefle", "Trèfle"], ["coeur", "Cœur"], ["huit", "Huit"], ["lissajous", "Lissajous"],
 ];
-// Dans les réglages, en plus : le trajet dessiné à la main (ouvre la toile).
-const FORMES_REGLAGE = [...FORMES, ["trace", "Dessiné…"]];
+// Dans les réglages, en plus : les contours d'une image (ouvre la boîte « Trajet d'une
+// image ») et ceux de l'icône de l'application au premier plan.
+const FORMES_REGLAGE = [...FORMES, ["trace", "Image…"], ["icone", "Icône de l'appli"]];
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
-const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
+const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Icône de l'appli" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure", "souris",
@@ -664,21 +665,25 @@ function deplacerDansLaGrille(e) {
 // ---------------------------------------------------------------------------------------------
 // Réglages
 
-// Pictogramme d'une forme : son trajet, calculé comme l'essaim (window.chemin), en SVG.
-function picto(forme, trace) {
+// Pictogramme d'une forme : son trajet, calculé comme l'essaim (window.chemin), en SVG ; pour
+// une image ou l'icône, chacun de ses contours (`orbite` : le réglage qui les porte).
+function picto(forme, orbite) {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "-1.45 -1.45 2.9 2.9");
   svg.setAttribute("class", "picto");
   svg.setAttribute("aria-hidden", "true");
-  const pts = [];
-  for (let i = 0; i <= 120; i++) {
-    const [x, y] = window.chemin(forme, (i / 120) * Math.PI * 2, trace || (etat.reglages && etat.reglages.orbite.trace));
-    pts.push(x.toFixed(3) + "," + y.toFixed(3));
+  const contours = window.contoursDe(orbite || (etat.reglages && etat.reglages.orbite), forme);
+  for (let c = 0; c < Math.max(1, contours.length); c++) {
+    const pts = [];
+    for (let i = 0; i <= 120; i++) {
+      const [x, y] = window.chemin(forme, (i / 120) * Math.PI * 2, contours, c);
+      pts.push(x.toFixed(3) + "," + y.toFixed(3));
+    }
+    const ligne = document.createElementNS(NS, "polyline");
+    ligne.setAttribute("points", pts.join(" "));
+    svg.append(ligne);
   }
-  const ligne = document.createElementNS(NS, "polyline");
-  ligne.setAttribute("points", pts.join(" "));
-  svg.append(ligne);
   return svg;
 }
 
@@ -1176,9 +1181,9 @@ function choixForme(section, cle, liste) {
     const b = el("button", "puce forme");
     if (id !== "cometes") b.append(picto(id));
     b.append(document.createTextNode(libelle));
-    b.title = id === "trace" ? "Dessine toi-même le trajet" : libelle;
+    b.title = id === "trace" ? "Le contour d'une image, d'un texte ou d'un emoji" : id === "icone" ? "Le contour de l'icône de l'application au premier plan, qui change avec elle" : libelle;
     b.addEventListener("click", () => {
-      if (id === "trace") { ouvrirDessin(section, cle); return; }
+      if (id === "trace") { ouvrirImage(section, cle); return; }
       regler(section, cle, id);
       majReglages();
     });
@@ -1817,10 +1822,11 @@ function majReglages() {
   for (const c of choix) c.bouton.setAttribute("aria-pressed", val(c.section, c.cle) === c.valeur);
   for (const f of formes) {
     f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
-    // le pictogramme du trajet dessiné suit le dessin
-    if (f.id === "trace" && f.trace !== etat.reglages.orbite.trace) {
-      f.trace = etat.reglages.orbite.trace;
-      f.b.querySelector("svg").replaceWith(picto("trace", f.trace));
+    // le pictogramme d'une image ou de l'icône suit ses contours
+    const source = f.id === "trace" ? etat.reglages.orbite.contours || etat.reglages.orbite.trace : f.id === "icone" ? window.contoursIcone : null;
+    if (source && f.source !== source) {
+      f.source = source;
+      f.b.querySelector("svg").replaceWith(picto(f.id, etat.reglages.orbite));
     }
   }
   const c = etat.reglages.couleur;
@@ -2317,83 +2323,196 @@ $("fermer-comparaison").addEventListener("click", fermerComparaison);
 $("voile-comparaison").addEventListener("click", (e) => { if (e.target === $("voile-comparaison")) fermerComparaison(); });
 
 // ---------------------------------------------------------------------------------------------
-// Trajet dessiné à la main : une boucle tracée d'un geste sur la toile.
+// Trajet d'une image : les contours d'une image (choisie, glissée sur la fenêtre) ou d'un texte,
+// d'un emoji ; l'appli les calcule (`contours.rs`), la page les montre sur l'image et sur un
+// aperçu de l'essaim, puis les garde dans `[orbite] contours`.
 
-const dessin = { points: [], trace: false, cible: null };
-const RAYON_GUIDE = 140;
+const image = {
+  cible: null, // réglage de forme à mettre sur « trace » (orbite ou essaim)
+  source: null, // image chargée, ou null pour le texte
+  nom: "",
+  seuil: null, // null : calculé par l'appli
+  inverser: false,
+  tous: false,
+  contours: [], // en pixels de l'image analysée
+  taille: [0, 0],
+  apercu: null,
+  attente: 0, // minuterie de la prochaine analyse
+};
+const COTE_ANALYSE = 256;
 
 // Couleur d'un jeton de style.css, pour dessiner dans un canevas.
 function couleurJeton(nom) {
   return getComputedStyle(document.documentElement).getPropertyValue(nom).trim();
 }
 
-function redessinerToile() {
-  const c = $("toile-dessin"), g = c.getContext("2d"), m = c.width / 2;
+function ouvrirImage(section, cle) {
+  image.cible = { section, cle };
+  if (!image.apercu) image.apercu = new window.Apercu($("apercu-image"));
+  ouvrirBoite("voile-image", $("choisir-image"));
+  requestAnimationFrame(() => image.apercu.dimensionner());
+  dessinerImage();
+}
+
+function fermerImage() {
+  fermerBoite("voile-image");
+}
+
+// Image à analyser : un fichier (adresse `data:` ou `blob:`).
+function chargerImage(adresse, nom) {
+  const img = new Image();
+  img.onload = () => {
+    image.source = img;
+    image.nom = nom || "";
+    $("texte-image").value = "";
+    analyser();
+  };
+  img.onerror = () => bandeau(`« ${nom || "Cette image"} » ne s'ouvre pas.`);
+  img.src = adresse;
+}
+
+// L'image (ou le texte) dans un canevas de `COTE_ANALYSE` pixels de côté au plus, proportions
+// gardées ; un texte est dessiné en noir sur transparent (sa forme : la transparence).
+function rasteriser() {
+  const c = document.createElement("canvas"), texte = $("texte-image").value.trim();
+  if (texte) {
+    c.width = c.height = COTE_ANALYSE;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    const police = (px) => `900 ${px}px Archivo, "Segoe UI Emoji", "Segoe UI Symbol", sans-serif`;
+    g.font = police(200);
+    const m = g.measureText(texte);
+    const px = Math.max(10, Math.floor(200 * Math.min((COTE_ANALYSE * 0.86) / Math.max(1, m.width), 1.05)));
+    g.font = police(px);
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillStyle = "#000";
+    g.fillText(texte, COTE_ANALYSE / 2, COTE_ANALYSE / 2 + px * 0.04);
+    return { c, g };
+  }
+  const img = image.source;
+  if (!img) return null;
+  const l0 = img.naturalWidth || img.width || COTE_ANALYSE, h0 = img.naturalHeight || img.height || COTE_ANALYSE;
+  const k = Math.min(1, COTE_ANALYSE / Math.max(l0, h0)) || 1;
+  c.width = Math.max(8, Math.round(l0 * k));
+  c.height = Math.max(8, Math.round(h0 * k));
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(img, 0, 0, c.width, c.height);
+  return { c, g };
+}
+
+// Octets en base64 (par paquets : `String.fromCharCode` refuse les très longs tableaux).
+function base64(octets) {
+  let s = "";
+  for (let i = 0; i < octets.length; i += 0x8000) s += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+// Demande les contours à l'appli (un peu après le dernier changement : la glissière du seuil).
+function analyser() {
+  clearTimeout(image.attente);
+  image.attente = setTimeout(() => {
+    const r = rasteriser();
+    if (!r) { image.contours = []; dessinerImage(); return; }
+    const px = r.g.getImageData(0, 0, r.c.width, r.c.height).data;
+    image.taille = [r.c.width, r.c.height];
+    image.rendu = r.c;
+    envoyer({ cmd: "contours", largeur: r.c.width, hauteur: r.c.height, pixels: base64(px), seuil: image.seuil, inverser: image.inverser, tous: image.tous });
+  }, 80);
+}
+
+function recevoirContours(m) {
+  image.contours = Array.isArray(m.liste) ? m.liste : [];
+  if (image.seuil === null) $("seuil-image").value = m.seuil;
+  $("valeur-seuil").textContent = (image.seuil === null ? "auto · " : "") + m.seuil + (m.transparence ? " (transparence)" : "");
+  const n = image.contours.length;
+  $("info-image").textContent = !n
+    ? "Aucune forme trouvée : change le seuil, inverse, ou prends une image plus contrastée."
+    : n === 1 ? "Un contour." : `${n} contours : un par anneau de comètes.`;
+  dessinerImage();
+}
+
+// L'image en pâle, ses contours en couleur, dans la toile carrée.
+function dessinerImage() {
+  const c = $("toile-image"), g = c.getContext("2d");
   g.clearRect(0, 0, c.width, c.height);
-  g.strokeStyle = couleurJeton("--scene-guide");
-  g.setLineDash([4, 6]);
-  g.lineWidth = 1;
-  g.beginPath();
-  g.arc(m, m, RAYON_GUIDE, 0, Math.PI * 2);
-  g.stroke();
-  g.setLineDash([]);
-  g.fillStyle = couleurJeton("--scene-point");
-  g.beginPath();
-  g.arc(m, m, 3, 0, Math.PI * 2);
-  g.fill();
-  if (dessin.points.length < 2) return;
+  const [l, h] = image.taille;
+  if (!image.rendu || !l || !h) {
+    g.fillStyle = couleurJeton("--scene-guide");
+    g.font = "600 14px Archivo, sans-serif";
+    g.textAlign = "center";
+    g.fillText("Choisis une image, glisse-la ici, ou tape un texte", c.width / 2, c.height / 2);
+    return;
+  }
+  const k = Math.min(c.width / l, c.height / h) * 0.94, ox = (c.width - l * k) / 2, oy = (c.height - h * k) / 2;
+  g.globalAlpha = 0.35;
+  g.drawImage(image.rendu, ox, oy, l * k, h * k);
+  g.globalAlpha = 1;
   g.strokeStyle = couleurJeton("--signal");
-  g.lineWidth = 3;
-  g.lineJoin = g.lineCap = "round";
-  g.beginPath();
-  dessin.points.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-  if (!dessin.trace) g.closePath();
-  g.stroke();
+  g.lineWidth = 2.5;
+  g.lineJoin = "round";
+  for (const contour of image.contours) {
+    g.beginPath();
+    contour.forEach(([x, y], i) => (i ? g.lineTo(ox + x * k, oy + y * k) : g.moveTo(ox + x * k, oy + y * k)));
+    g.closePath();
+    g.stroke();
+  }
 }
 
-function ouvrirDessin(section, cle) {
-  dessin.cible = { section, cle };
-  // le tracé en place, s'il y en a un
-  const t = etat.reglages.orbite.trace || [];
-  const m = $("toile-dessin").width / 2;
-  dessin.points = t.map(([x, y]) => [m + x * RAYON_GUIDE, m + y * RAYON_GUIDE]);
-  dessin.trace = false;
-  ouvrirBoite("voile-dessin", $("valider-dessin"));
-  redessinerToile();
+// Réglages de l'aperçu de la boîte : ceux en place, avec ces contours.
+function reglagesImage() {
+  const r = etat.reglages, n = image.contours.length;
+  const orbite = { ...r.orbite, contours: image.contours };
+  const essaim = { ...r.essaim };
+  if (image.cible && image.cible.section === "essaim") essaim.forme = "trace";
+  else { orbite.forme = "trace"; if (n > 1) orbite.anneaux = n; }
+  return { ...r, orbite, essaim };
 }
 
-function fermerDessin() {
-  fermerBoite("voile-dessin");
-}
-
-const toile = $("toile-dessin");
-const pointToile = (e) => {
-  const r = toile.getBoundingClientRect();
-  return [((e.clientX - r.left) / r.width) * toile.width, ((e.clientY - r.top) / r.height) * toile.height];
-};
-toile.addEventListener("pointerdown", (e) => {
-  toile.setPointerCapture(e.pointerId);
-  dessin.points = [pointToile(e)];
-  dessin.trace = true;
-  redessinerToile();
-});
-toile.addEventListener("pointermove", (e) => {
-  if (!dessin.trace) return;
-  const p = pointToile(e), q = dessin.points[dessin.points.length - 1];
-  if (Math.hypot(p[0] - q[0], p[1] - q[1]) >= 3) { dessin.points.push(p); redessinerToile(); }
-});
-toile.addEventListener("pointerup", () => { dessin.trace = false; redessinerToile(); });
-$("effacer-dessin").addEventListener("click", () => { dessin.points = []; redessinerToile(); });
-$("fermer-dessin").addEventListener("click", fermerDessin);
-$("valider-dessin").addEventListener("click", () => {
-  if (dessin.points.length < 12) { bandeau("Trace une boucle plus grande autour du point."); return; }
-  const m = toile.width / 2, pas = Math.ceil(dessin.points.length / 200);
-  const trace = dessin.points.filter((_, i) => i % pas === 0).map(([x, y]) => [+((x - m) / RAYON_GUIDE).toFixed(3), +((y - m) / RAYON_GUIDE).toFixed(3)]);
-  regler("orbite", "trace", trace);
-  regler(dessin.cible.section, dessin.cible.cle, "trace");
+// Garde les contours (arrondis au dixième de pixel) ; le plus grand aussi dans `trace`, pour les
+// versions d'avant.
+function validerImage() {
+  if (!image.contours.length) { bandeau("Pas encore de contour : choisis une image ou tape un texte."); return; }
+  const arrondi = image.contours.map((c) => c.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]));
+  regler("orbite", "contours", arrondi);
+  const pas = Math.ceil(arrondi[0].length / 200);
+  regler("orbite", "trace", arrondi[0].filter((_, i) => i % pas === 0));
+  regler(image.cible.section, image.cible.cle, "trace");
+  if (image.cible.section === "orbite" && arrondi.length > 1) regler("orbite", "anneaux", arrondi.length);
   majReglages();
-  fermerDessin();
+  fermerImage();
+}
+
+$("choisir-image").addEventListener("click", () => $("fichier-image").click());
+$("fichier-image").addEventListener("change", (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) chargerImage(URL.createObjectURL(f), f.name);
+  e.target.value = "";
 });
+$("texte-image").addEventListener("input", () => analyser());
+$("seuil-image").addEventListener("input", (e) => {
+  image.seuil = +e.target.value;
+  $("seuil-auto").setAttribute("aria-pressed", "false");
+  analyser();
+});
+$("seuil-auto").addEventListener("click", (e) => {
+  image.seuil = null;
+  e.currentTarget.setAttribute("aria-pressed", "true");
+  analyser();
+});
+$("inverser-image").addEventListener("click", (e) => {
+  image.inverser = !image.inverser;
+  e.currentTarget.setAttribute("aria-pressed", image.inverser);
+  analyser();
+});
+for (const b of document.querySelectorAll("[data-contours]")) {
+  b.addEventListener("click", () => {
+    image.tous = b.dataset.contours === "tous";
+    for (const x of document.querySelectorAll("[data-contours]")) x.setAttribute("aria-pressed", x === b);
+    analyser();
+  });
+}
+$("valider-image").addEventListener("click", validerImage);
+$("fermer-image").addEventListener("click", fermerImage);
 
 // ---------------------------------------------------------------------------------------------
 // Export GIF : trois secondes du grand aperçu, 20 images/s, palette fixe de 256 couleurs.
@@ -2525,7 +2644,7 @@ const ETAPES_ACCUEIL = [
       const g = el("div", "choix-accueil");
       for (const p of etat.presets.filter((x) => x.fourni)) {
         const b = el("button", "puce forme");
-        b.append(picto(p.reglages.orbite.forme, p.reglages.orbite.trace), document.createTextNode(p.nom));
+        b.append(picto(p.reglages.orbite.forme, p.reglages.orbite), document.createTextNode(p.nom));
         b.setAttribute("aria-pressed", etat.actif === p.nom);
         b.addEventListener("click", () => {
           envoyer({ cmd: "appliquer", nom: p.nom });
@@ -2674,6 +2793,20 @@ const annuler = () => envoyer({ cmd: "annuler" });
 window.essaim = {
   recevoir(m) {
     switch (m.type) {
+      case "contours":
+        recevoirContours(m);
+        break;
+      case "image": {
+        // image glissée sur la fenêtre : trajet des comètes
+        if ($("voile-image").hidden) ouvrirImage("orbite", "forme");
+        chargerImage(m.donnees, m.nom);
+        break;
+      }
+      case "icone":
+        window.contoursIcone = Array.isArray(m.liste) ? m.liste : [];
+        apercuChange();
+        majReglages();
+        break;
       case "etat": {
         const premier = !etat.reglages;
         etat.reglages = reglagesRecus(m.reglages);
@@ -2813,6 +2946,13 @@ function boucle(maintenant) {
       const largeur = grand.canvas.width;
       grand.dimensionner();
       const sonGrand = sonSimule(son, maintenant);
+      // trajet « icône » : ses contours, redemandés de temps en temps (ils suivent l'application
+      // au premier plan)
+      const o = etat.reglages;
+      if ((o.orbite.forme === "icone" || o.essaim.forme === "icone") && maintenant - (etat.icone || 0) > 3000) {
+        etat.icone = maintenant;
+        envoyer({ cmd: "icone" });
+      }
       if (bouge) {
         grand.avancer(dt, sonGrand);
         grand.dessiner();
@@ -2842,6 +2982,15 @@ function boucle(maintenant) {
       }
     }));
     comparaison.fige = !bouge && comparaison.apercus.length > 0;
+  }
+  // boîte « Trajet d'une image » : l'essaim sur les contours trouvés
+  if (image.apercu && !$("voile-image").hidden && etat.reglages) {
+    protege("image", () => {
+      image.apercu.regler(reglagesImage());
+      image.apercu.dimensionner();
+      image.apercu.avancer(bouge ? dt : 1 / 30, son);
+      image.apercu.dessiner();
+    });
   }
   cumul += dt;
   if (etat.vue === "presets" && cumul >= 1 / 30) {
@@ -2885,7 +3034,7 @@ document.querySelector(".onglets").addEventListener("keydown", (e) => {
   montrerVue(VUES[j], true);
 });
 $("recherche").addEventListener("input", (e) => { etat.recherche = e.target.value; dessinerPresets(); });
-Object.assign(FERMETURES, { voile: fermerPanneau, "voile-dessin": fermerDessin, "voile-comparaison": fermerComparaison, "voile-accueil": fermerAccueil });
+Object.assign(FERMETURES, { voile: fermerPanneau, "voile-image": fermerImage, "voile-comparaison": fermerComparaison, "voile-accueil": fermerAccueil });
 $("ouvrir-panneau").addEventListener("click", ouvrirPanneau);
 $("ouvrir-panneau-2").addEventListener("click", ouvrirPanneau);
 $("annuler-panneau").addEventListener("click", fermerPanneau);

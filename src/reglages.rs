@@ -138,6 +138,11 @@ enum Demande {
     Sorties,
     /// Ouvre la fenêtre pour le stream (`stream.rs`).
     Stream,
+    /// Contours d'une image (pixels RVBA en base64, `largeur` × `hauteur`), pour le trajet
+    /// « image » (`contours.rs`).
+    Contours { largeur: usize, hauteur: usize, pixels: String, seuil: Option<u8>, inverser: bool, tous: bool },
+    /// Contours de l'icône de l'application au premier plan, pour l'aperçu (trajet « icône »).
+    Icone,
 }
 
 struct Fenetre {
@@ -380,7 +385,25 @@ impl Fenetre {
                 if !distants.is_empty() {
                     self.erreur("Fichiers sur le réseau ignorés : copie-les d'abord sur ton PC.");
                 }
-                self.importer(&locaux);
+                // une image : pour le trajet « image » (la page la décode) ; le reste : des presets
+                let (images, presets): (Vec<_>, Vec<_>) = locaux.into_iter().partition(|c| type_image(c).is_some());
+                if let Some(c) = images.first() {
+                    match image_glissee(c) {
+                        Ok(m) => self.envoyer(&m),
+                        Err(e) => self.erreur(&e),
+                    }
+                }
+                self.importer(&presets);
+            }
+            Demande::Contours { largeur, hauteur, pixels, seuil, inverser, tous } => {
+                let px = depuis_base64(&pixels).filter(|px| largeur * hauteur <= 1024 * 1024 && px.len() == largeur * hauteur * 4);
+                match px {
+                    Some(px) => {
+                        let r = crate::contours::contours(&px, largeur, hauteur, &crate::contours::Options { seuil, inverser, tous });
+                        self.envoyer(&json!({ "type": "contours", "liste": r.contours, "seuil": r.seuil, "transparence": r.transparence }));
+                    }
+                    None => self.erreur("Image illisible."),
+                }
             }
             Demande::Annuler => match self.avant.take() {
                 Some(avant) => {
@@ -411,6 +434,10 @@ impl Fenetre {
                     let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_PAUSE), LPARAM(0));
                 }
             },
+            Demande::Icone => {
+                let liste: Vec<Vec<[f32; 2]>> = crate::render::contours_icone();
+                self.envoyer(&json!({ "type": "icone", "liste": liste }));
+            }
             Demande::Stream => unsafe {
                 if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
                     let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_STREAM), LPARAM(0));
@@ -565,6 +592,47 @@ fn regler_demarrage(actif: bool) -> Result<(), String> {
             if r.is_ok() || r == windows::Win32::Foundation::ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(r.to_hresult().message()) }
         }
     }
+}
+
+/// Type MIME d'une image que la page sait ouvrir, d'après l'extension du fichier.
+fn type_image(chemin: &std::path::Path) -> Option<&'static str> {
+    let ext = chemin.extension()?.to_string_lossy().to_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        _ => return None,
+    })
+}
+
+/// Image glissée sur la fenêtre, pour la page : son nom et ses octets en adresse `data:` (20 Mo au
+/// plus).
+fn image_glissee(chemin: &std::path::Path) -> Result<Value, String> {
+    let nom = chemin.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let taille = std::fs::metadata(chemin).map_err(|e| format!("« {nom} » illisible ({e})"))?.len();
+    if taille > 20 << 20 {
+        return Err(format!("« {nom} » est trop grande (20 Mo au plus)."));
+    }
+    let octets = std::fs::read(chemin).map_err(|e| format!("« {nom} » illisible ({e})"))?;
+    let mime = type_image(chemin).unwrap_or("image/png");
+    Ok(json!({ "type": "image", "nom": nom, "donnees": format!("data:{mime};base64,{}", vers_base64(&octets)) }))
+}
+
+/// Encode en base64 standard.
+fn vers_base64(octets: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(octets.len().div_ceil(3) * 4);
+    for c in octets.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            s.push(if i <= c.len() { A[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    s
 }
 
 /// Décode du base64 standard (sans espaces).
@@ -945,6 +1013,10 @@ mod tests {
 
     #[test]
     fn base64_decode() {
+        for texte in [&b"Man"[..], b"Ma", b"M", b"", b"\x00\xff\x10essaim"] {
+            assert_eq!(depuis_base64(&vers_base64(texte)).unwrap(), texte);
+        }
+        assert_eq!(vers_base64(b"Ma"), "TWE=");
         assert_eq!(depuis_base64("TWFu").unwrap(), b"Man");
         assert_eq!(depuis_base64("TWE=").unwrap(), b"Ma");
         assert_eq!(depuis_base64("TQ==").unwrap(), b"M");
