@@ -449,6 +449,8 @@ thread_local! {
     /// Infobulle de l'icône.
     static TIP: RefCell<String> = const { RefCell::new(String::new()) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
+    /// Alimentation changée (secteur, batterie, économiseur) : `WM_POWERBROADCAST`.
+    static POWER_CHANGED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Raccourcis clavier enregistrés (le menu les affiche alors à côté des entrées).
@@ -520,6 +522,11 @@ pub fn take_display_changed() -> bool {
         ECHELLES.with(|e| *e.borrow_mut() = (Vec::new(), None));
     }
     changed
+}
+
+/// Vrai une fois après un changement d'alimentation signalé par Windows (fil principal).
+pub fn take_power_changed() -> bool {
+    POWER_CHANGED.with(|p| p.replace(false))
 }
 
 /// Commande choisie dans le menu depuis le dernier appel (0 = aucune).
@@ -651,6 +658,9 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED || (msg == WM_SETTINGCHANGE && wp.0 == SPI_SETWORKAREA.0 as usize) {
             DISPLAY_CHANGED.with(|d| d.set(true));
+        }
+        if msg == WM_POWERBROADCAST && wp.0 == PBT_APMPOWERSTATUSCHANGE as usize {
+            POWER_CHANGED.with(|p| p.set(true));
         }
         if msg == WM_ENDSESSION {
             // la session se ferme vraiment (wParam ≠ 0) : le processus peut être arrêté à tout

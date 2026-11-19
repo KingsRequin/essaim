@@ -81,6 +81,8 @@ const etat = {
   renommages: [], // { ancien, nouveau } demandés, suivis à l'état suivant (favoris)
   capture: null, // écoute du son : "active", "coupee", "erreur" (absent : inconnu)
   veille: false,
+  raison: "", // ce qui retient l'essaim (« Plein écran », « Ne pas déranger », « Batterie : 30 i/s »…)
+  recente: "", // dernière application vue au premier plan, proposée pour la liste des pauses
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -727,6 +729,15 @@ const AVANCES = [
     note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
   },
   {
+    bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
+    note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
+  },
+  {
+    choix: "Sur batterie", section: "pause", cle: "batterie",
+    valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
+    note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",
+  },
+  {
     bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
     note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
   },
@@ -740,6 +751,7 @@ const AVANCES = [
 
 const glissieres = []; // { def, input, saisie }
 const bascules = []; // { section, cle, bouton }
+const choix = []; // { section, cle, valeur, bouton } : réglages à quelques valeurs nommées
 const formes = []; // { section, cle, id, b }
 let teintes = [];
 
@@ -905,6 +917,28 @@ function construireReglages() {
   for (const def of AVANCES) {
     if (def.groupe) {
       avance.append(el("div", "t-label groupe-avance", def.groupe));
+    } else if (def.choix) {
+      const l = el("div", "ligne-avance");
+      const groupe = el("div", "groupe-puces");
+      groupe.setAttribute("role", "group");
+      const nom = el("span", "t-label", def.choix);
+      nom.id = "choix-" + def.section + "-" + def.cle;
+      groupe.setAttribute("aria-labelledby", nom.id);
+      groupe.append(nom, ...def.valeurs.map(([valeur, libelle]) => {
+        const b = el("button", "puce", libelle);
+        b.setAttribute("aria-pressed", "false");
+        b.addEventListener("click", () => { regler(def.section, def.cle, valeur); majReglages(); });
+        choix.push({ section: def.section, cle: def.cle, valeur, bouton: b });
+        return b;
+      }));
+      l.append(groupe);
+      if (def.note) {
+        const note = el("p", "note", def.note);
+        note.id = "note-" + def.section + "-" + def.cle;
+        l.append(note);
+        decrire(groupe, note.id);
+      }
+      avance.append(l);
     } else if (def.bascule || def.demarrage || def.accueil) {
       const l = el("div", "ligne-avance");
       if (def.bascule) {
@@ -981,6 +1015,7 @@ function majReglages() {
     const v = val(b.section, b.cle);
     b.bouton.setAttribute("aria-pressed", typeof v === "boolean" ? v : v > 0);
   }
+  for (const c of choix) c.bouton.setAttribute("aria-pressed", val(c.section, c.cle) === c.valeur);
   for (const f of formes) {
     f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
     // le pictogramme du trajet dessiné suit le dessin
@@ -1026,6 +1061,7 @@ function majEtatEssaim() {
   const parts = [];
   if (etat.capture) parts.push({ active: "Son capté", coupee: "Son coupé", erreur: "Son : erreur" }[etat.capture]);
   if (etat.veille) parts.push("En veille");
+  if (etat.raison) parts.push(etat.raison);
   e.hidden = !parts.length;
   if (e.dataset.texte !== parts.join("|")) {
     e.dataset.texte = parts.join("|");
@@ -1041,6 +1077,7 @@ function recevoirCharge(m) {
   // champs ajoutés plus tard par l'appli : ignorés s'ils manquent
   etat.capture = ["active", "coupee", "erreur"].includes(m.capture) ? m.capture : null;
   etat.veille = m.veille === true;
+  etat.raison = typeof m.raison === "string" ? m.raison.slice(0, 60) : "";
   $("pause").setAttribute("aria-pressed", etat.pause);
   $("pause").textContent = etat.pause ? "En pause" : "Pause";
   majEtatEssaim();
@@ -1050,7 +1087,8 @@ function recevoirCharge(m) {
   $("puissance-niveau").textContent = { repos: "à l'arrêt", faible: "faible", moyenne: "moyenne", eleve: "élevée" }[niveau];
   $("puissance-barre").style.width = Math.round(borne(part / 0.15, 0, 1) * 100) + "%";
   $("puissance-detail").textContent = m.ips < 1
-    ? (etat.pause ? "Essaim est en pause." : etat.veille ? "Essaim est en veille : rien n'est dessiné." : "Rien à dessiner en ce moment (plein écran ou curseur masqué).")
+    ? (etat.pause ? "Essaim est en pause." : etat.raison && !/i\/s$/.test(etat.raison) ? `Essaim est en pause automatique (${etat.raison}).`
+      : etat.veille ? "Essaim est en veille : rien n'est dessiné." : "Rien à dessiner en ce moment (plein écran ou curseur masqué).")
     : `${virgule(m.ms, 2)} ms de calcul par image × ${Math.round(m.ips)} images/s : ${virgule(part * 100, 1)} % d'un cœur du processeur, mesuré en direct.` +
       (niveau === "eleve" ? " Les cases à côté de chaque réglage montrent ce qui pèse le plus." : "");
 }
@@ -1212,7 +1250,41 @@ function dessinerAuto() {
     dessinerAuto();
   })) : [vide("Aucune plage horaire.")]));
   $("applis-ouvertes").replaceChildren(...etat.applis.map((n) => { const o = el("option"); o.value = n; return o; }));
+  dessinerPausesApplis(vide);
 }
+
+// Applications qui mettent Essaim en pause au premier plan (`[pause] applis`, hors presets).
+const nomExe = (texte) => { const n = texte.trim().toLowerCase(); return n && !n.endsWith(".exe") ? n + ".exe" : n; };
+function dessinerPausesApplis(vide) {
+  const p = etat.reglages.pause;
+  $("bloc-pauses").hidden = !p; // réglage que l'appli ne fournit pas (encore)
+  if (!p) return;
+  $("pauses-applis").replaceChildren(...(p.applis.length ? p.applis.map((a, i) => {
+    const d = el("div", "regle simple");
+    const b = el("button", "puce petite", "Retirer");
+    b.setAttribute("aria-label", "Retirer " + a);
+    b.addEventListener("click", () => { regler("pause", "applis", p.applis.filter((_, j) => j !== i)); dessinerAuto(); });
+    d.append(el("span", "t-petit", a), b);
+    return d;
+  }) : [vide("Aucune application : Essaim ne se met pas en pause selon l'application.")]));
+  const r = $("pause-recente");
+  r.hidden = !etat.recente || p.applis.some((a) => nomExe(a) === nomExe(etat.recente));
+  r.textContent = `Ajouter « ${etat.recente} »`;
+  r.title = "La dernière application que tu as utilisée avant d'ouvrir cette fenêtre";
+}
+function ajouterPauseAppli(texte) {
+  const appli = nomExe(texte);
+  if (!appli || appli === ".exe") { bandeau("Indique le nom d'une application (obs64.exe)."); return; }
+  const liste = etat.reglages.pause.applis;
+  if (!liste.some((a) => nomExe(a) === appli)) regler("pause", "applis", liste.concat([appli]));
+  dessinerAuto();
+}
+$("ajout-pause").addEventListener("submit", (e) => {
+  e.preventDefault();
+  ajouterPauseAppli($("pause-nom").value);
+  $("pause-nom").value = "";
+});
+$("pause-recente").addEventListener("click", () => ajouterPauseAppli(etat.recente));
 
 $("auto-actif").addEventListener("click", () => { regler("automatique", "actif", !etat.reglages.automatique.actif); dessinerAuto(); });
 $("raccourcis-actif").addEventListener("click", () => { regler("raccourcis", "actif", !etat.reglages.raccourcis.actif); dessinerAuto(); });
@@ -1749,6 +1821,7 @@ window.essaim = {
       }
       case "applis":
         etat.applis = m.applis || [];
+        etat.recente = typeof m.recente === "string" ? m.recente : "";
         dessinerAuto();
         break;
       case "son":

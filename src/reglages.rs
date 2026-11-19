@@ -403,7 +403,7 @@ impl Fenetre {
                 }
                 self.etat();
             }
-            Demande::Applis => self.envoyer(&json!({ "type": "applis", "applis": crate::appli::applis_ouvertes() })),
+            Demande::Applis => self.envoyer(&json!({ "type": "applis", "applis": crate::appli::applis_ouvertes(), "recente": crate::pauses::recente() })),
             Demande::EnregistrerGif { nom, donnees } => match enregistrer_gif(&nom, &donnees) {
                 Ok(f) => {
                     montrer_dans_l_explorateur(&f);
@@ -494,6 +494,7 @@ impl Fenetre {
                 "pause": crate::charge::pause(),
                 "capture": crate::charge::capture(),
                 "veille": crate::charge::veille(),
+                "raison": crate::charge::raison(),
             }));
             if dates() != self.dates {
                 self.etat();

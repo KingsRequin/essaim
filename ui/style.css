@@ -396,6 +396,7 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .regle { display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) auto; gap: var(--esp-3); align-items: center; padding: 10px 0; border-bottom: var(--trait-fin) solid var(--filet); }
 .regle .fleche { color: var(--signal-texte); font-weight: 900; }
 .regle .vide-regle { grid-column: 1 / -1; color: var(--encre-2); }
+.regle.simple { grid-template-columns: minmax(0, 1fr) auto; }
 .ajout-regle { display: flex; flex-wrap: wrap; gap: var(--esp-4); align-items: flex-end; padding-top: var(--esp-3); }
 .ajout-regle label { display: flex; flex-direction: column; gap: 4px; }
 .champ.petit { font-size: 18px; width: 200px; padding-bottom: 4px; border-bottom-width: var(--trait-controle); }

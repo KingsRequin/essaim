@@ -22,6 +22,7 @@ mod gpu;
 mod ipc;
 mod layer;
 mod maj;
+mod pauses;
 mod prisme;
 mod profils;
 mod reglages;
@@ -293,6 +294,9 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut swarm = Swarm::new();
     let mut rng = Rng::seeded();
     let mut border = bordure::Border::default();
+    // pauses automatiques (ne pas déranger, batterie, applications) et raison publiée
+    let mut pauses = pauses::Pauses::default();
+    let mut raison_publiee = String::new();
 
     let start = Instant::now();
     let mut last = start;
@@ -401,13 +405,21 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             maj::regler(conf.cfg.mise_a_jour.auto);
             win::masquer_captures(conf.cfg.rendu.masquer_captures);
         }
+        // pause automatique : traitée comme le plein écran (rien dessiné, son coupé, bordure rendue)
+        let retenue = pauses.tick(&conf.cfg.pause, now);
+        let retrait = fs_paused || retenue.pause.is_some();
+        let raison = pauses::raison(user_paused, fs_paused, retenue.pause.as_deref(), retenue.plafond, 0);
+        if raison != raison_publiee {
+            charge::publier_raison(&raison);
+            raison_publiee = raison;
+        }
         // son : coupé en pause et en plein écran (sauf fenêtre des réglages ouverte, qui le montre)
-        let son_voulu = conf.cfg.audio.actif && (!(user_paused || fs_paused) || reglages_ouverts());
+        let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts());
         son.regler(son_voulu, &shared, now);
         automatique.tick(&conf.cfg, now);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
-        let fields = (user_paused, fs_paused, !user_paused && !fs_paused, backend.is_gpu(), prisme.connected(), conf_gen);
+        let fields = (user_paused, fs_paused, !user_paused && !retrait, backend.is_gpu(), prisme.connected(), conf_gen);
         if published != Some(fields) {
             ipc_state.publish(serde_json::json!({
                 "paused": user_paused,
@@ -420,7 +432,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             published = Some(fields);
         }
         // icône : grisée en pause, infobulle avec le preset en place et l'état
-        let montre = (user_paused, fs_paused || profond, conf_gen);
+        let montre = (user_paused, retrait || profond, conf_gen);
         if icone != Some(montre) {
             if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
                 let nom = profils::list().into_iter().find(|p| profils::same(&p.cfg, cfg)).map(|p| p.name);
@@ -431,7 +443,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             icone = Some(montre);
         }
 
-        let active = !user_paused && !fs_paused;
+        let active = !user_paused && !retrait;
         let state = match &cur {
             _ if !active => "en pause",
             None => "position du curseur illisible",
@@ -520,6 +532,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             (true, c) => c.min(cfg.rendu.cadence_repos),
             (false, c) => c,
         };
+        let cadence = pauses::plafonner(cadence, retenue.plafond);
         // cadence choisie : attente jusqu'à l'image suivante, par tranches courtes pour que les
         // clics restent lus (un clic de 60 ms doit être vu)
         if cadence > 0 {
