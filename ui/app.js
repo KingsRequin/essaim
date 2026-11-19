@@ -229,6 +229,16 @@ function filtrer(liste) {
   return montres;
 }
 
+// Image d'aperçu d'un preset de la bibliothèque (champ `apercu` de l'index, facultatif) : chemin
+// relatif d'un PNG ou d'un GIF du dépôt, sans « .. » ; adresse sur raw.githubusercontent.com.
+function imageCommu(chemin) {
+  if (typeof chemin !== "string" || chemin.length > 200) return "";
+  const c = chemin.trim().replace(/^\.\//, "");
+  const parts = c.split("/");
+  if (!/^[\w\-. /]+\.(png|gif)$/i.test(c) || parts.some((x) => !x || x === "." || x === "..")) return "";
+  return `https://raw.githubusercontent.com/${etat.depot}/main/${parts.map(encodeURIComponent).join("/")}`;
+}
+
 async function chargerCommu(forcer) {
   if (!etat.depot || (!forcer && etat.commu.etat !== "rien")) return;
   etat.commu = { etat: "charge", liste: [], message: "" };
@@ -248,6 +258,7 @@ async function chargerCommu(forcer) {
         auteur: typeof p.auteur === "string" ? "@" + p.auteur.replace(/^@/, "").slice(0, 39) : "",
         etiquettes: Array.isArray(p.etiquettes) ? p.etiquettes.filter((e) => typeof e === "string").slice(0, 8) : [],
         reglages: fusion(base, p.reglages),
+        image: imageCommu(p.apercu),
       }))
       .filter((p) => p.reglages);
     etat.commu = { etat: "ok", liste, message: "" };
@@ -304,8 +315,13 @@ function creerTuile(p) {
   bouton.append(tete, canvas, nom, ligne);
   const actions = el("div", "actions");
   racine.append(bouton, actions);
+  // preset de la bibliothèque avec une image : montrée quand l'aperçu n'est pas animé
+  const image = el("img", "scene");
+  Object.assign(image, { alt: "", loading: "lazy", decoding: "async", hidden: true });
+  canvas.after(image);
   const apercu = new window.Apercu(canvas);
-  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, p, signature: signature(p), pret: false, erreur: false, confirmer: 0 };
+  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, canvas, image, p, signature: signature(p), pret: false, erreur: false, confirmer: 0 };
+  image.addEventListener("error", () => { t.imageKo = true; image.hidden = true; canvas.hidden = false; });
   bouton.addEventListener("click", () => { if (etat.renomme !== t.p.id) choisir(t.p); });
   bouton.addEventListener("mouseenter", () => { etat.survol = p.id; montrerLoupe(t); });
   bouton.addEventListener("mouseleave", () => { if (etat.survol === p.id) etat.survol = null; cacherLoupe(); });
@@ -365,6 +381,10 @@ function majTuile(t, p, rang) {
   const sig = signature(p);
   if (sig !== t.signature) { t.signature = sig; t.pret = false; t.erreur = false; }
   t.p = p;
+  if ((p.image || "") !== t.image.getAttribute("src") && (p.image || t.image.hasAttribute("src"))) {
+    t.imageKo = false;
+    if (p.image) t.image.src = p.image; else t.image.removeAttribute("src");
+  }
   t.apercu.regler(p.reglages);
   t.numero.textContent = deux(rang);
   t.nom.textContent = p.nom;
@@ -1977,7 +1997,10 @@ function boucle(maintenant) {
           figer(t.apercu, son);
           t.pret = true;
         }
-        if (etat.mode === "direct" || (etat.mode === "survol" && etat.survol === id)) {
+        const anime = etat.mode === "direct" || (etat.mode === "survol" && etat.survol === id);
+        const image = !anime && !!t.p.image && !t.imageKo;
+        if (t.image.hidden === image) { t.image.hidden = !image; t.canvas.hidden = image; }
+        if (anime) {
           t.apercu.dimensionner();
           t.apercu.avancer(pas, son);
           t.apercu.dessiner();

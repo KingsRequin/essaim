@@ -199,6 +199,7 @@ button, input { font-family: inherit; color: inherit; }
 .tuile .tete { display: flex; justify-content: space-between; align-items: baseline; }
 .tuile .scene { aspect-ratio: 1; outline: 0 solid var(--signal); outline-offset: -4px; transition: outline-width 0.1s; }
 .tuile > button:hover .scene { outline-width: 2px; }
+.tuile img.scene { object-fit: cover; }
 .tuile.active .scene { outline-width: 5px; }
 .tuile.active .t-numero { color: var(--signal-texte); }
 .tuile .actions { display: flex; flex-wrap: wrap; gap: var(--esp-1); min-height: 22px; }
