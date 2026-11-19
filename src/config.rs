@@ -1,7 +1,9 @@
 //! Réglages, lus dans `%APPDATA%\Essaim\config.toml` et rechargés dès que le fichier change.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
@@ -499,9 +501,16 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
     }
 }
 
+/// La valeur `f` est-elle dans `[lo, hi]`, à une erreur d'arrondi près ? Un f32 relu en f64
+/// (0,01 → 0,00999999977) ne doit être ni refusé ni signalé hors bornes.
+fn dans_les_bornes(f: f64, lo: f64, hi: f64) -> bool {
+    let marge = |b: f64| 1e-6 * b.abs().max(1e-3);
+    f >= lo - marge(lo) && f <= hi + marge(hi)
+}
+
 impl Config {
     /// Lit un fichier de réglages (manquants : valeurs par défaut), bornes appliquées.
-    pub fn read(p: &std::path::Path) -> anyhow::Result<Config> {
+    pub fn read(p: &Path) -> anyhow::Result<Config> {
         Ok(toml::from_str::<Config>(&std::fs::read_to_string(p)?)?.clamped())
     }
 
@@ -527,7 +536,7 @@ impl Config {
                         let (lo, hi) = limits(section, key);
                         // nan ou inf (écrits à la main) : la borne basse
                         let c = if f.is_finite() { f.clamp(lo, hi) } else { lo };
-                        if c != f {
+                        if !f.is_finite() || !dans_les_bornes(f, lo, hi) {
                             log::warn!("config : [{section}] {key} = {f} hors bornes, {c} utilisé");
                             *x = if x.is_f64() { c.into() } else { (c as i64).into() };
                         }
@@ -544,44 +553,133 @@ impl Config {
     }
 }
 
-pub(crate) fn set_value_in(p: &std::path::Path, section: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn set_value_in(p: &Path, section: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
     edit_file(p, |doc, known| set_in_doc(doc, known, section, key, value))
 }
 
 /// Écrit d'un coup les valeurs de `cfg` retenues par `keep(section, clé)` (application d'un
 /// profil), en gardant commentaires et mise en page.
-pub fn apply_keys(cfg: &Config, keep: fn(&str, &str) -> bool) -> Result<(), String> {
+pub fn apply_keys(cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<(), String> {
     apply_keys_in(&path(), cfg, keep)
 }
 
-pub(crate) fn apply_keys_in(p: &std::path::Path, cfg: &Config, keep: fn(&str, &str) -> bool) -> Result<(), String> {
+pub(crate) fn apply_keys_in(p: &Path, cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<(), String> {
     let values = serde_json::to_value(cfg.clone().clamped()).map_err(|e| e.to_string())?;
+    edit_file(p, |doc, known| set_keys(doc, known, &values, keep))
+}
+
+/// Texte `base` (TOML) complété des valeurs de `cfg` retenues par `keep` (fichier d'un preset).
+pub(crate) fn text_with_keys(base: &str, cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<String, String> {
+    let values = serde_json::to_value(cfg.clone().clamped()).map_err(|e| e.to_string())?;
+    Ok(edit_text(base, |doc, known| set_keys(doc, known, &values, keep))?.unwrap_or_else(|| base.to_owned()))
+}
+
+fn set_keys(
+    doc: &mut toml_edit::DocumentMut,
+    known: &serde_json::Value,
+    values: &serde_json::Value,
+    keep: impl Fn(&str, &str) -> bool,
+) -> Result<(), String> {
+    for (section, keys) in values.as_object().into_iter().flatten() {
+        for (key, v) in keys.as_object().into_iter().flatten().filter(|(k, _)| keep(section, k)) {
+            set_in_doc(doc, known, section, key, v)?;
+        }
+    }
+    Ok(())
+}
+
+/// Modifie `config.toml` par `change` sur les réglages lus : seules les valeurs changées sont
+/// réécrites (commentaires gardés), en un seul cycle lire-modifier-écrire sous le verrou.
+pub fn modifier(change: impl FnOnce(&mut Config)) -> Result<(), String> {
+    modifier_in(&path(), change)
+}
+
+pub(crate) fn modifier_in(p: &Path, change: impl FnOnce(&mut Config)) -> Result<(), String> {
     edit_file(p, |doc, known| {
-        for (section, keys) in values.as_object().into_iter().flatten() {
-            for (key, v) in keys.as_object().into_iter().flatten().filter(|(k, _)| keep(section, k)) {
-                set_in_doc(doc, known, section, key, v)?;
+        let lu: Config = toml::from_str(&doc.to_string()).map_err(|e| format!("config.toml illisible : {e}"))?;
+        let mut cfg = lu.clone();
+        change(&mut cfg);
+        let json = |c: &Config| serde_json::to_value(c).map_err(|e| e.to_string());
+        let (avant, apres) = (json(&lu)?, json(&cfg)?);
+        for (section, keys) in apres.as_object().into_iter().flatten() {
+            for (key, v) in keys.as_object().into_iter().flatten() {
+                if avant.get(section).and_then(|s| s.get(key)) != Some(v) {
+                    set_in_doc(doc, known, section, key, v)?;
+                }
             }
         }
         Ok(())
     })
 }
 
-/// Lit `config.toml` (ou le fichier par défaut), applique `change`, vérifie que le résultat se
-/// lit, puis l'écrit.
+/// Un seul écrivain à la fois pour `config.toml` et les presets : le fil des réglages, les
+/// clients de l'interface locale et la boucle principale (preset automatique, raccourcis)
+/// écrivent tous.
+static ECRITURE: Mutex<()> = Mutex::new(());
+
+/// Prend le verrou d'écriture (un écrivain qui a paniqué ne le bloque pas).
+pub(crate) fn verrou() -> MutexGuard<'static, ()> {
+    ECRITURE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Écritures de `config.toml` faites par l'appli : chacune force la relecture suivante (deux
+/// écritures dans la même date du fichier ne sont pas manquées).
+static ECRITURES: AtomicU64 = AtomicU64::new(0);
+
+/// Remplace le fichier `p` d'un coup : écrit à côté (`.tmp`), puis le met à sa place
+/// (`fs::rename`, qui remplace le fichier existant sous Windows). Un échec laisse l'ancien
+/// fichier intact : jamais de fichier vide ou à moitié écrit.
+pub(crate) fn ecrire_atomique(p: &Path, contenu: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut nom = p.file_name().unwrap_or_default().to_os_string();
+    nom.push(format!(".{}.tmp", std::process::id()));
+    let tmp = p.with_file_name(nom);
+    let r = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contenu.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, p)
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
+/// Lit `config.toml` (le fichier par défaut s'il n'existe pas), applique `change`, vérifie que
+/// le résultat se lit, puis le met en place d'un coup, le tout sous le verrou d'écriture. Un
+/// fichier présent mais illisible (UTF-16, ANSI, verrouillé…) n'est jamais remplacé.
 fn edit_file(
-    p: &std::path::Path,
+    p: &Path,
     change: impl FnOnce(&mut toml_edit::DocumentMut, &serde_json::Value) -> Result<(), String>,
 ) -> Result<(), String> {
-    let text = std::fs::read_to_string(p).unwrap_or_else(|_| DEFAULT_FILE.to_owned());
+    let _verrou = verrou();
+    let text = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DEFAULT_FILE.to_owned(),
+        Err(e) => return Err(format!("{} illisible ({e}), rien n'a été écrit", p.display())),
+    };
+    let Some(new) = edit_text(&text, change)? else { return Ok(()) };
+    ecrire_atomique(p, &new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))?;
+    ECRITURES.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Applique `change` au texte TOML ; `None` s'il reste le même. Le résultat doit se lire.
+fn edit_text(
+    text: &str,
+    change: impl FnOnce(&mut toml_edit::DocumentMut, &serde_json::Value) -> Result<(), String>,
+) -> Result<Option<String>, String> {
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("config.toml illisible : {e}"))?;
     let known = serde_json::to_value(Config::default()).map_err(|e| e.to_string())?;
     change(&mut doc, &known)?;
     let new = doc.to_string();
     if new == text {
-        return Ok(());
+        return Ok(None);
     }
     toml::from_str::<Config>(&new).map_err(|e| format!("valeur refusée : {e}"))?;
-    std::fs::write(p, new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))
+    Ok(Some(new))
 }
 
 fn set_in_doc(
@@ -591,10 +689,17 @@ fn set_in_doc(
     key: &str,
     value: &serde_json::Value,
 ) -> Result<(), String> {
+    // un f32 relu (0,00999999977 pour 0,01) passe, ramené sur la borne
+    let ramene;
+    let mut value = value;
     if let Some(f) = value.as_f64() {
         let (lo, hi) = limits(section, key);
-        if !(lo..=hi).contains(&f) {
+        if !dans_les_bornes(f, lo, hi) {
             return Err(format!("[{section}] {key} : {f} hors bornes ({lo} à {hi})"));
+        }
+        if !(lo..=hi).contains(&f) {
+            ramene = serde_json::Value::from(f.clamp(lo, hi));
+            value = &ramene;
         }
     }
     let Some(old) = known.get(section).and_then(|s| s.get(key)) else {
@@ -665,19 +770,33 @@ fn same(a: &toml_edit::Value, b: &toml_edit::Value) -> bool {
 
 /// Demande à la boucle principale de relire `config.toml` sans attendre son tour (réglages
 /// changés depuis la fenêtre : effet immédiat).
-static RELOAD_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RELOAD_NOW: AtomicBool = AtomicBool::new(false);
 
 pub fn request_reload() {
-    RELOAD_NOW.store(true, std::sync::atomic::Ordering::Relaxed);
+    RELOAD_NOW.store(true, Ordering::Relaxed);
 }
 
 pub fn take_reload_request() -> bool {
-    RELOAD_NOW.swap(false, std::sync::atomic::Ordering::Relaxed)
+    RELOAD_NOW.swap(false, Ordering::Relaxed)
+}
+
+/// Date et taille d'un fichier : deux écritures rapprochées peuvent avoir la même date.
+type Signature = (SystemTime, u64);
+
+fn signature(p: &Path) -> Option<Signature> {
+    let m = std::fs::metadata(p).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 pub struct Watched {
     pub cfg: Config,
-    modified: Option<SystemTime>,
+    p: PathBuf,
+    /// Fichier lu en dernier, noté seulement après une lecture réussie.
+    lu: Option<Signature>,
+    /// Écritures de l'appli déjà prises en compte.
+    ecritures: u64,
+    /// Dernier fichier illisible signalé au journal (pas de répétition chaque seconde).
+    signale: Option<Signature>,
 }
 
 impl Watched {
@@ -685,31 +804,40 @@ impl Watched {
         let p = path();
         if !p.exists() {
             let _ = std::fs::create_dir_all(dir());
-            if let Err(e) = std::fs::write(&p, DEFAULT_FILE) {
+            if let Err(e) = ecrire_atomique(&p, DEFAULT_FILE) {
                 log::warn!("config : écriture de {} impossible : {e}", p.display());
             }
         }
-        let mut w = Self { cfg: Config::default(), modified: None };
+        Self::watch(p)
+    }
+
+    fn watch(p: PathBuf) -> Self {
+        let mut w = Self { cfg: Config::default(), p, lu: None, ecritures: u64::MAX, signale: None };
         w.reload();
         w
     }
 
-    /// Recharge si le fichier a changé. Renvoie vrai si la configuration a été remplacée.
+    /// Recharge si le fichier a changé (date ou taille) ou si l'appli l'a écrit. Renvoie vrai si
+    /// la configuration a été remplacée. Un fichier illisible (en cours d'écriture par un
+    /// éditeur, mal tapé) est relu au tour suivant.
     pub fn reload(&mut self) -> bool {
-        let p = path();
-        let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
-        if modified.is_none() || modified == self.modified {
+        // relevés avant la lecture : une écriture faite pendant celle-ci sera vue au tour suivant
+        let ecritures = ECRITURES.load(Ordering::Relaxed);
+        let Some(sig) = signature(&self.p) else { return false };
+        if Some(sig) == self.lu && ecritures == self.ecritures {
             return false;
         }
-        self.modified = modified;
-        match Config::read(&p) {
+        match Config::read(&self.p) {
             Ok(cfg) => {
                 log::info!("config : chargée");
-                self.cfg = cfg;
+                (self.cfg, self.lu, self.ecritures, self.signale) = (cfg, Some(sig), ecritures, None);
                 true
             }
             Err(e) => {
-                log::warn!("config : {} illisible, réglages précédents conservés : {e}", p.display());
+                if self.signale != Some(sig) {
+                    self.signale = Some(sig);
+                    log::warn!("config : {} illisible, réglages précédents conservés : {e}", self.p.display());
+                }
                 false
             }
         }
@@ -757,6 +885,141 @@ mod tests {
         assert_eq!(c.orbite.trace, vec![[0.5, -1.0], [1.0, 0.25], [-0.75, 0.5]]);
         assert_eq!(c.automatique.applis[0].preset, "Discret");
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// Dossier temporaire propre à un test (jamais le vrai %APPDATA%).
+    fn dossier(nom: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("essaim-test-{}-{nom}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn un_fichier_illisible_n_est_jamais_ecrase() {
+        let d = dossier("illisible");
+        // UTF-16 (Bloc-notes « Unicode ») : ni lu ni remplacé par les défauts
+        let p = d.join("config.toml");
+        let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain("[orbite]\nrayon = 30\n".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        std::fs::write(&p, &utf16).unwrap();
+        assert!(super::set_value_in(&p, "orbite", "rayon", &serde_json::json!(40)).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), utf16);
+        // ANSI (é en Windows-1252) : pareil
+        std::fs::write(&p, b"# r\xe9glages\n[orbite]\nrayon = 30\n").unwrap();
+        assert!(super::apply_keys_in(&p, &super::Config::default(), |_, _| true).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), b"# r\xe9glages\n[orbite]\nrayon = 30\n");
+        // fichier absent : créé depuis le fichier par défaut
+        let neuf = d.join("neuf.toml");
+        super::set_value_in(&neuf, "orbite", "rayon", &serde_json::json!(40)).unwrap();
+        let text = std::fs::read_to_string(&neuf).unwrap();
+        assert!(text.contains("rayon = 40") && text.contains("[bordure]"), "{text}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn ecriture_atomique_sans_fichier_temporaire_restant() {
+        let d = dossier("atomique");
+        let p = d.join("a.toml");
+        std::fs::write(&p, "ancien").unwrap();
+        super::ecrire_atomique(&p, "nouveau").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "nouveau");
+        // remplacement impossible (un dossier à la place du fichier) : rien d'abîmé, pas de .tmp
+        let bloque = d.join("bloque.toml");
+        std::fs::create_dir(&bloque).unwrap();
+        assert!(super::ecrire_atomique(&bloque, "x").is_err());
+        assert!(bloque.is_dir());
+        let restes: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "tmp")).collect();
+        assert!(restes.is_empty(), "{restes:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn ecrivains_simultanes_sans_perte() {
+        let d = dossier("simultanes");
+        let p = d.join("config.toml");
+        std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        let cles = [("orbite", "rayon", 31), ("essaim", "maximum", 12), ("essaim", "fixes", 5), ("orbite", "nombre", 4)];
+        std::thread::scope(|s| {
+            for (section, cle, v) in cles {
+                let p = &p;
+                s.spawn(move || {
+                    for i in 0..10 {
+                        // v + 1 puis v, en alternance : la dernière écriture est v
+                        super::set_value_in(p, section, cle, &serde_json::json!(v + (i + 1) % 2)).unwrap();
+                    }
+                });
+            }
+        });
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!((c.orbite.rayon, c.essaim.maximum, c.essaim.fixes, c.orbite.nombre), (31.0, 12, 5, 4));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn rechargement_par_date_taille_et_ecritures() {
+        let d = dossier("rechargement");
+        let p = d.join("config.toml");
+        std::fs::write(&p, "[orbite]\nrayon = 30\n").unwrap();
+        let date = std::fs::metadata(&p).unwrap().modified().unwrap();
+        let mut w = super::Watched::watch(p.clone());
+        assert_eq!(w.cfg.orbite.rayon, 30.0);
+        let remettre_date = || std::fs::File::options().write(true).open(&p).unwrap().set_modified(date).unwrap();
+        // même date, autre taille : relu
+        std::fs::write(&p, "[orbite]\nrayon = 150\n").unwrap();
+        remettre_date();
+        assert!(w.reload());
+        assert_eq!(w.cfg.orbite.rayon, 150.0);
+        // fichier illisible (lu en pleine écriture) : rien de noté, relu dès qu'il est réparé,
+        // même s'il retrouve la date et la taille de la lecture ratée
+        std::fs::write(&p, "[orbite]\nrayon = 15xy\n").unwrap();
+        remettre_date();
+        assert!(!w.reload());
+        assert_eq!(w.cfg.orbite.rayon, 150.0);
+        std::fs::write(&p, "[orbite]\nrayon = 15.5\n").unwrap();
+        remettre_date();
+        assert!(w.reload());
+        assert_eq!(w.cfg.orbite.rayon, 15.5);
+        // écriture de l'appli : relue même si la date et la taille n'ont pas bougé
+        super::set_value_in(&p, "orbite", "rayon", &serde_json::json!(16.5)).unwrap(); // même taille que 15.5
+        remettre_date();
+        assert!(w.reload());
+        assert_eq!(w.cfg.orbite.rayon, 16.5);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn un_f32_relu_reste_dans_ses_bornes() {
+        let d = dossier("f32");
+        let p = d.join("config.toml");
+        let mut cfg = super::Config::default();
+        cfg.orbite.trainee = 0.01; // borne basse ; relu 0,00999999977 en f64
+        cfg.bordure.repos = 1.0;
+        super::apply_keys_in(&p, &cfg, |s, _| s == "orbite" || s == "bordure").unwrap();
+        let c = super::Config::read(&p).unwrap();
+        assert!((c.orbite.trainee - 0.01).abs() < 1e-7);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("trainee = 0.01"));
+        assert!(super::set_value_in(&p, "orbite", "trainee", &serde_json::json!(0.01f32 as f64)).is_ok());
+        assert!(super::set_value_in(&p, "orbite", "trainee", &serde_json::json!(0.009)).is_err());
+        assert!(super::set_value_in(&p, "bordure", "repos", &serde_json::json!(1.01)).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn modifier_ne_reecrit_que_les_valeurs_changees() {
+        let d = dossier("modifier");
+        let p = d.join("config.toml");
+        std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        super::modifier_in(&p, |c| {
+            c.automatique.applis.push(super::RegleAppli { appli: "jeu.exe".into(), preset: "Nuit".into() });
+            c.orbite.rayon = 25.0;
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!(c.automatique.applis[0].preset, "Nuit");
+        assert_eq!(c.orbite.rayon, 25.0);
+        assert!(text.contains("# rayon de l'orbite sans basse") && text.contains("eloignement_grave = 1.3 "), "{text}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
