@@ -36,9 +36,10 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
 - **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
 - **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; 22 presets fournis, animés en
-  direct ; des modulations pour brancher n'importe quel élément du son sur la rotation, la vitesse,
-  le rayon, la taille ou la teinte ; des règles « si l'artiste est… alors tel preset » ; chaque
-  réglage appliqué tout de suite, avec son coût affiché.
+  direct ; des déclencheurs (« au drop, une fissure », « sur la caisse claire, des étincelles ») et
+  des modulations (« la rotation s'emballe au drop », « l'orbite s'ouvre sur les graves ») pour
+  faire ton propre essaim ; des règles « si l'artiste est… alors tel preset » ; chaque réglage
+  appliqué tout de suite, avec son coût affiché.
 
 ## Fonctions
 
@@ -76,14 +77,15 @@ dans OBS ; elle suit ta musique comme l'essaim du pointeur.</td>
 
 | | |
 |---|---|
-| 🥁 **Kick** | Inverse le sens de rotation, ajoute des satellites, éclat sous le pointeur |
+| 🥁 **Kick** | Inverse le sens de rotation, ajoute des satellites, éclat sous le pointeur, bordure qui s'illumine |
 | 🔊 **Basse** | Accélère la rotation ; plus la note est grave, plus les orbites s'éloignent (deux modulations de base, à régler ou retirer) |
 | ✨ **Aigus** | Charleston et cymbales font jaillir des étincelles |
 | 🟦 **Caisse claire** | Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire ou clap |
 | 🚀 **Montée et drop** | L'essaim se resserre et accélère pendant la montée, puis explose au drop |
 | ⏱️ **Tempo** | L'essaim continue de pulser pendant les breaks sans grosse caisse ; en option, les têtes pulsent sur les contretemps |
 | 🎧 **Stéréo** | En option, l'essaim penche vers le côté qui joue le plus fort |
-| 🎛️ **Modulations** | Branche un élément du son (basse, note grave ou aiguë, kick, caisse claire, charleston, montée, drop, stéréo, tempo) sur la rotation du trajet, la vitesse, le rayon, la taille ou la teinte, des comètes, des satellites ou des deux : le trajet qui s'emballe au drop, l'orbite qui s'ouvre sur les graves… |
+| ⚡ **Déclencheurs** | Quand un événement arrive (kick, caisse claire, charleston, drop, temps, contretemps, break, changement de piste, clic, clic droit), une action : éclat, onde, éclats, étincelles, carré, fissure, implosion, satellites, explosion, rafale, inversion du sens, bordure qui s'illumine ; avec un délai minimal et une chance (« un kick sur trois ») |
+| 🎛️ **Modulations** | Un élément du son (basse, note grave ou aiguë, kick, caisse claire, charleston, montée, drop, contretemps, tempo, brillance, stéréo) fait varier la rotation du trajet, la vitesse, l'accélération, le rayon, la taille, la teinte, le décalage, la lueur, la traînée ou l'opacité, des comètes, des satellites ou des deux ; avec un seuil, un lissage, et à l'envers si on veut |
 | 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
 
 ### La souris et l'écran
@@ -128,10 +130,10 @@ filtre par forme.
 <td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Onglet Curseurs : jeux de curseurs installés"></td>
 </tr>
 <tr>
-<td valign="top"><b>Réglages</b> rangés par effet (orbite, comètes, satellites, couleur, son,
-musique, souris, fissures, bordure, spectre, modulations), chacun avec ses options de base et
-avancées, appliqués en direct sur un grand aperçu. À côté de chacun, dix cases disent ce qu'il
-coûte en puissance ; la puissance utilisée est mesurée en direct.</td>
+<td valign="top"><b>Réglages</b> rangés par familles (l'essaim, les effets, les réactions,
+l'écoute), chacun avec ses options de base et avancées, appliqués en direct sur un grand aperçu
+qui suit ta musique ; un bouton y simule une montée et un drop, un autre teste chaque
+déclencheur. À côté de chaque réglage, dix cases disent ce qu'il coûte en puissance.</td>
 <td valign="top"><b>Curseurs</b> : tes jeux de curseurs Windows, animés, mis en place d'un clic.
 Un preset peut emporter le sien.</td>
 </tr>
@@ -206,7 +208,7 @@ se connecte qu'à GitHub, pour la bibliothèque de presets et les mises à jour.
 <summary><b>L'essaim ne réagit pas au son.</b></summary>
 
 Essaim écoute la sortie audio *par défaut* de Windows. Si ta musique passe par une autre sortie,
-choisis-la dans *Réglages › Kick et son › Avancé › Sortie son écoutée*. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
+choisis-la dans *Réglages › Écoute › Avancé › Sortie son écoutée*. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
 basse, note).
 </details>
 

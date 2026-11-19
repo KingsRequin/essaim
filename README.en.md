@@ -38,8 +38,9 @@ throw sparks, and on the drop, everything bursts.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
 - **Your way.** 14 path shapes, or your own drawn by hand; 22 bundled presets, animated live;
-  modulations to wire any part of the sound to the rotation, speed, radius, size or hue; "if the
-  artist is… then this preset" rules; every setting applied instantly, with its cost shown.
+  triggers ("on the drop, a crack", "on the snare, sparks") and modulations ("the rotation spins
+  up on the drop", "the orbit opens on low notes") to build your own swarm; "if the artist is…
+  then this preset" rules; every setting applied instantly, with its cost shown.
 
 ## Features
 
@@ -76,14 +77,15 @@ in OBS; it follows your music like the swarm around the pointer.</td>
 
 | | |
 |---|---|
-| 🥁 **Kick** | Reverses the rotation, adds satellites, flash under the pointer |
+| 🥁 **Kick** | Reverses the rotation, adds satellites, flash under the pointer, lights up the border |
 | 🔊 **Bass** | Speeds up the rotation; the lower the note, the wider the orbits (two default modulations, to tune or remove) |
 | ✨ **Highs** | Hi-hats and cymbals throw sparks |
 | 🟦 **Snare** | A glowing square opens under the pointer on every snare or clap |
 | 🚀 **Build-up and drop** | The swarm tightens and speeds up during the build-up, then bursts on the drop |
 | ⏱️ **Tempo** | The swarm keeps pulsing through breaks without a kick drum; optionally, the heads pulse on the off-beats |
 | 🎧 **Stereo** | Optionally, the swarm leans towards the louder side |
-| 🎛️ **Modulations** | Wire a part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, stereo, tempo) to the path rotation, speed, radius, size or hue, of the comets, the satellites or both: the path spinning up on the drop, the orbit opening on low notes… |
+| ⚡ **Triggers** | When an event happens (kick, snare, hi-hat, drop, beat, off-beat, break, track change, click, right click), an action: flash, shockwave, shards, sparks, square, crack, implosion, satellites, explosion, burst, reversed rotation, border lighting up; with a minimum delay and a chance ("one kick in three") |
+| 🎛️ **Modulations** | A part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, off-beat, tempo, brightness, stereo) drives the path rotation, speed, acceleration, radius, size, hue, offset, glow, trail or opacity, of the comets, the satellites or both; with a threshold, smoothing, and inverted if you like |
 | 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
 
 ### The mouse and the screen
@@ -125,10 +127,10 @@ your music: one click applies it. Save your own, compare two side by side, filte
 <td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Cursors tab: installed cursor schemes"></td>
 </tr>
 <tr>
-<td valign="top"><b>Settings</b> sorted by effect (orbit, comets, satellites, colour, sound,
-music, mouse, cracks, border, spectrum, modulations), each with its basic and advanced options,
-applied live on a large preview. Next to each one, ten squares tell its power cost; the power in
-use is measured live.</td>
+<td valign="top"><b>Settings</b> sorted by family (the swarm, the effects, the reactions,
+listening), each with its basic and advanced options, applied live on a large preview that
+follows your music; one button simulates a build-up and a drop, another tests each trigger. Next
+to each setting, ten squares tell its power cost.</td>
 <td valign="top"><b>Cursors</b>: your Windows cursor schemes, animated, applied in one click. A
 preset can carry its own.</td>
 </tr>
@@ -200,7 +202,7 @@ for the preset library and updates.
 <summary><b>The swarm doesn't react to sound.</b></summary>
 
 Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
-in *Réglages › Kick et son › Avancé › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
+in *Réglages › Écoute › Avancé › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
 </details>
 
 <details>

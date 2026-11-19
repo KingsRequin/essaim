@@ -4,38 +4,105 @@ Tout ce que fait Essaim, en détail. Présentation : [README](../README.md) ; fo
 
 ## Ce que fait l'essaim
 
-Surcouche réactive à la musique autour du pointeur de Windows : deux comètes et un essaim de
-satellites en orbite, un éclat sous le pointeur à chaque kick, et des fissures qui s'ouvrent sous
-chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
+Surcouche réactive à la musique autour du pointeur de Windows : des comètes et un essaim de
+satellites en orbite, qui réagissent au son et à la souris. Le pointeur lui-même reste celui de
+Windows (voir « Curseurs »). Tout ce qui réagit passe par deux listes, gardées dans le preset :
 
-- **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
-- **Quantité de basse** : accélère la rotation ; **hauteur de la note de basse** : plus elle est
-  grave, plus les orbites s'éloignent. Ce sont les deux modulations de base (voir *Modulations*),
-  présentes par défaut : on les règle ou on les retire comme les autres.
-- **Aigus** (charleston, cymbales) : chaque attaque fait jaillir des étincelles des têtes
-  (`[scintillement]`, passe-haut à 5 kHz, enveloppes rapide et lente).
-- **Caisse claire** (`[musique] caisse_claire`, actif par défaut) : sur chaque caisse claire ou
-  clap, un carré posé sur la pointe s'ouvre sous le pointeur (0,3 s). Le charleston et le clic
-  d'attaque des kicks ne comptent pas ; une caisse claire jouée avec un kick (claps de la house),
-  si.
-- **Montée et drop** (`[musique] montee`, actif par défaut) : pendant une montée (roulement de
-  caisse claire bien plus serré que d'habitude, son qui s'éclaircit), l'essaim se resserre (jusqu'à
-  −45 %) et tourne plus vite (jusqu'à +120 %). Au drop (le premier kick après la montée, ou le
-  retour brutal de l'énergie après un passage calme ; au plus un toutes les 8 s), il explose :
-  éclat, satellites en double, grande onde et gerbe d'étincelles depuis le centre.
-- **Contretemps** (`[musique] contretemps`) : quand le tempo des kicks est connu, les têtes
-  grossissent un instant au milieu de chaque temps, et les orbites s'écartent un peu.
-- **Stéréo** (`[musique] stereo`, 0 à 1, 0 par défaut) : l'essaim penche vers le côté qui joue le
-  plus fort, jusqu'à 1,6 fois le rayon de l'orbite. Les blancs entre deux coups ne le ramènent pas
-  au centre ; un vrai silence (0,5 s), si.
+- les **déclencheurs** : quand un événement arrive (un kick, une caisse claire, un drop, un
+  clic…), une action (un éclat, une onde, des satellites, une fissure…) ;
+- les **modulations** : un élément du son (la basse, la note grave, la montée…) fait varier un
+  paramètre en continu (la vitesse, le rayon, la rotation du trajet, la teinte…).
+
+Par défaut, elles font les réactions de toujours : chaque kick inverse le sens, fait un éclat
+sous le pointeur, ajoute 2 à 3 satellites et illumine la bordure ; la basse accélère, une note
+grave éloigne les orbites ; une montée resserre l'essaim et l'accélère, le drop le fait exploser ;
+la caisse claire ouvre un carré, le charleston fait jaillir des étincelles des têtes, un break
+continue de pulser au tempo, un changement de piste lance une rafale ; un clic fait une onde et une
+fissure, un clic droit une onde qui se referme.
+
+### Ce qu'Essaim entend
+
+- **Kick** : reconnu par un petit modèle (`audio-commun`), en 25 ms environ.
+- **Caisse claire** (et clap) : bande à 2 kHz qui l'emporte sur le grave et l'aigu. Le charleston
+  et le clic d'attaque des kicks ne comptent pas ; une caisse claire jouée avec un kick (claps de
+  la house), si.
+- **Charleston** (attaques des aigus, cymbales) : passe-haut à 5 kHz, enveloppes rapide et lente.
+- **Montée** et **drop** : roulement de caisse claire bien plus serré que d'habitude et son qui
+  s'éclaircit (la tension monte) ; le drop est le premier kick après la montée, ou le retour
+  brutal de l'énergie après un passage calme (au plus un toutes les 8 s).
+- **Tempo** des kicks (affiché dans l'en-tête des réglages, « 128 BPM », quand il est régulier) :
+  chaque **temps**, chaque **contretemps** (milieu du temps), et le temps d'un **break** (la
+  musique continue sans grosse caisse depuis 2 s alors que le tempo était connu).
+- **Basse** (niveau), **note de la basse** (plus ou moins grave), **brillance** (part d'aigus).
+- **Stéréo** : le côté qui joue le plus fort ; les blancs entre deux coups ne la ramènent pas au
+  centre, un vrai silence (0,5 s), si.
+- **Changement de piste** pendant la lecture (panneau multimédia de Windows ; rien au lancement ni
+  sur une pause).
+
+### Déclencheurs
+
+`[declencheurs] liste` (24 au plus) : `{ quand = "kick", faire = "onde", force = 1 }`, dans
+l'ordre de la liste.
+
+- `quand` : `kick`, `caisse`, `charleston`, `drop`, `temps`, `break`, `contretemps`, `piste`,
+  `clic`, `clic_droit` (au point du clic ; c'est le bouton principal qui compte, même quand les
+  boutons sont inversés).
+- `faire` : `eclat` (halo blanc et anneau sous le pointeur, qui font briller les têtes),
+  `satellites` (de `nombre` à `nombre_max`, dans la limite de `[essaim] maximum`), `inversion` (du
+  sens de rotation), `bordure` (la bordure de la fenêtre au premier plan s'illumine), `onde` (de
+  choc), `eclats` (seize étincelles projetées), `fissure`, `implosion` (une onde qui se referme,
+  douze étincelles aspirées), `carre` (posé sur la pointe, qui s'ouvre), `etincelles` (`nombre`,
+  depuis les têtes), `explosion` (éclat, satellites, grande onde, gerbe d'étincelles depuis le
+  centre), `rafale` (éclat, satellites, grande onde).
+- `force` : pour un éclat ou la bordure, de 0 à 1 ; pour une onde, des éclats, une fissure, un
+  carré, une implosion, de 0,2 à 3 (la taille). `delai` : secondes au moins entre deux fois ;
+  `probabilite` : la chance de se déclencher à chaque événement (0,33 : un sur trois).
+- Un événement ou une action inconnus (preset d'une version plus récente) ne font rien.
+
+### Modulations
+
+`[modulations] liste` (16 au plus) : `{ source = "drop", cible = "rotation", sur = "satellites",
+quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s basse à fond), `grave`
+→ `rayon` (0,325 : +130 %), `montee` → `acceleration` (0,6 : vitesse × 2,2) et `montee` → `rayon`
+(−0,1125 : −45 %).
+
+- Sources, de 0 à 1 : `basse` (niveau), `grave` et `aigu` (note de la basse, quand elle est là),
+  `kick`, `caisse`, `charleston`, `contretemps` (un coup qui retombe en quelques dixièmes de
+  seconde), `montee` (la tension avant un drop), `drop` (1 au drop, retombe en deux secondes
+  environ), `tempo` (1 sur chaque temps quand le tempo est régulier), `brillance` ; `stereo` va de
+  -1 (gauche) à 1 (droite).
+- Cibles, à fond (`quantite` = 1, source à 1) : `rotation` du trajet +90 tr/min, `vitesse` sur le
+  trajet +40 radians/s (382 tr/min), `acceleration` (la vitesse multipliée : × 3), `rayon`
+  +400 %, `taille` des têtes et des traînées +150 %, `teinte` +180° (`sur = "tout"` : tout ce
+  qu'Essaim dessine, particules et bordure comprises ; comètes ou satellites : leurs têtes et
+  traînées), `decalage` de l'orbite vers la droite (1,6 rayon ; vers la gauche en négatif),
+  `luminosite` (la lueur des têtes, +200 %), `trainee` (+300 %), `opacite` (−1 : transparent).
+- `sur` : `"tout"`, `"cometes"` ou `"satellites"`. `quantite` de -1 à 1 (négatif : dans l'autre
+  sens). `seuil` (0 à 0,95) : rien sous ce niveau de la source, puis jusqu'au maximum. `lissage`
+  (0 à 1) : 0 réagit aussitôt, 1 en douceur (0,4 s ; 0,35 par défaut ≈ 50 ms). `inverser` : la
+  source à l'envers (1 − valeur ; stéréo : l'autre côté).
+- Rotations, vitesses, teintes et décalages s'additionnent ; accélération, rayon, taille, lueur,
+  traînée et opacité se multiplient (deux réactions qui resserrent l'orbite de moitié la
+  resserrent au quart), dans des bornes lisibles ; la vitesse ne devient jamais négative.
+
+Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillement]`,
+`[fissures] actives`, `[bordure] intensite`, `[couleur] musique`, `[audio] pulsation_tempo`,
+`[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`, `[essaim] par_kick_min` et
+`par_kick_max`) sont convertis avec leurs valeurs ; `config.toml` est réécrit une fois au
+lancement, commentaires gardés. Les presets fournis gardent leur allure (essai
+`presets_comme_avant`).
+
+### Les effets
+
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
   moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
   losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
   ou un trajet dessiné à la main (`forme = "trace"`, points dans `trace`, parcourus à vitesse
-  constante), qui peut tourner sur lui-même (`rotation`, tours/min) ; les
-  satellites suivent le même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des
-  satellites permanents, même sans musique. Entre deux images, les traînées suivent le vrai
-  trajet (points intermédiaires) : elles restent lisses à grande vitesse.
+  constante), qui peut tourner sur lui-même (`rotation`, tours/min ; `rotation_sur` : `"tout"`,
+  `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet) ; les satellites suivent le
+  même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des satellites permanents,
+  même sans musique. Entre deux images, les traînées suivent le vrai trajet (points
+  intermédiaires) : elles restent lisses à grande vitesse.
 - **Couleurs** : une teinte de départ qui tourne en continu ou reste fixe ; ou la couleur
   dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
   exécutable ; les icônes grises gardent la teinte précédente) ; dans un navigateur, celle du
@@ -45,8 +112,8 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`). Avec `[couleur] pochette`, la
   teinte dominante de la pochette du morceau qui joue (Spotify, navigateur… : tout ce que montre
   le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
-  sans morceau, on retombe sur eux, dans cet ordre. Avec `[couleur] musique`, la teinte glisse en
-  plus avec la basse et la brillance du son.
+  sans morceau, on retombe sur eux, dans cet ordre. Pour que la teinte glisse avec la musique :
+  une modulation de la teinte « sur tout » (idée *La teinte suit la musique*).
 - **Palette** (`[couleur] palette`, 1 à 3 teintes) : les comètes et les satellites se partagent
   plusieurs teintes, chacune décalée de `ecart_palette` degrés (120 : trois teintes à égale
   distance) de la teinte de base, qu'elle soit fixe, qui défile ou imposée (application, pochette…).
@@ -54,62 +121,32 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Constellation** (`[essaim] constellation`) : de fines lignes relient les têtes (satellites et
   comètes) plus proches que 1,1 fois le rayon de l'orbite, d'autant plus vives qu'elles sont
   proches (160 lignes au plus).
-- **Changement de piste** (`[musique] rafale_piste`, actif par défaut) : quand le titre change
-  pendant la lecture, une rafale (éclat, satellites en double, grande onde) ; rien au lancement
-  ni sur une pause.
-- **Tempo** : le tempo des kicks est suivi (affiché dans l'en-tête des réglages, « 128 BPM »,
-  quand il est régulier). Quand la musique continue sans grosse caisse depuis 2 s (break,
-  couplet) alors que ce tempo était connu, l'éclat de l'essaim continue de pulser doucement à
-  chaque temps (`[audio] pulsation_tempo`, bascule *Pulser au tempo pendant les breaks*).
-- **Clics** : une onde de choc (`[clic] onde`) et, au choix, des éclats (`eclats`), en plus des
-  fissures. C'est le bouton principal qui compte, même quand les boutons sont inversés (gauchers).
-  Au clic droit (`[clic] droit`, actif par défaut ; le bouton secondaire), un anneau se referme sur
-  le point du clic et douze étincelles y sont aspirées. Dans le grand aperçu des réglages, un clic
-  droit le montre.
+- **Particules** (`[particules]`) : `taille` des ondes, des éclats et des implosions (0,3 à 3) ;
+  `rebonds` (oui par défaut) : les étincelles (aigus, éclats, drop, clic droit) et la poussière du
+  sillage rebondissent sur les bords de la fenêtre au premier plan, dedans comme dehors, en perdant
+  un peu de vitesse ; ni le bureau, ni la barre des tâches, ni une fenêtre réduite ou en plein
+  écran. 400 particules vivantes au plus.
+- **Fissures** (`[fissures] taille`, `duree`) : une fissure qui s'ouvre sous le pointeur
+  (déclencheur `fissure`, au clic par défaut), s'éclaire au début et sur les kicks, puis s'efface.
 - **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`) ; on
   le voit aussi dans le grand aperçu des réglages quand la souris y file.
 - **Inertie** (`[orbite] inertie`, 0 à 1, 0 par défaut) : le centre de l'orbite suit le pointeur
   comme au bout d'un ressort : il traîne derrière la souris quand elle file (jusqu'à six fois plus
   loin qu'à 0), la dépasse un peu à l'arrêt, puis revient sur elle.
-- **Rebonds** (`[scintillement] rebonds`, actif par défaut) : les étincelles (aigus, éclats, drop,
-  clic droit) et la poussière du sillage rebondissent sur les bords de la fenêtre au premier plan,
-  dedans comme dehors, en perdant un peu de vitesse. Ni le bureau, ni la barre des tâches, ni une
-  fenêtre réduite ou en plein écran.
 - **Projecteur** (`[projecteur]`, actif par défaut) : secouer la souris (quelques allers-retours
   rapides de gauche à droite) ou Ctrl+Alt+F assombrit l'écran du pointeur autour d'un disque clair
-  qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les kicks.
+  qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les éclats.
 - **Réticule** (`[reticule]`) : deux fines lignes croisées centrées sur le pointeur (`taille`,
-  `opacite`), vides au centre, qui s'illuminent sur le kick.
+  `opacite`), vides au centre, qui s'illuminent sur les éclats.
 - **Anneau de spectre** (`[spectre]`) : des barres autour du pointeur, une par bande de
   fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
   (`rayon`, `hauteur`).
-- **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
-  s'illumine sur chaque kick (Windows 11), sauf en mode sans flashs.
-- **Rotation du trajet, à qui** (`[orbite] rotation_sur`) : `"tout"` (par défaut), `"cometes"` ou
-  `"satellites"` : seul ce groupe tourne avec le trajet, l'autre garde le sien immobile.
-  `[orbite] inverse_au_kick` (oui par défaut) : chaque kick inverse le sens ; coupé, l'essaim
-  tourne toujours dans le même sens et le kick n'ajoute que ses satellites et son éclat.
-- **Modulations** (`[modulations] liste`, 16 au plus, gardées dans le preset) : chacune fait agir
-  une source du son sur un paramètre, pour les comètes, les satellites ou les deux. Une ligne :
-  `{ source = "drop", cible = "rotation", sur = "satellites", quantite = 0.8 }`. Par défaut, deux
-  modulations de base : `basse` → `vitesse` (0,275, soit +11 radians/s basse à fond) et `grave` →
-  `rayon` (0,325, soit +130 %). Les réglages et presets d'avant (`[orbite] vitesse_basse` et
-  `eloignement_grave`) sont convertis en ces deux modulations, avec leurs valeurs. Les effets à
-  bascule (montée et drop, contretemps, kick) gardent leurs réactions à eux.
-  - Sources, de 0 à 1 : `basse` (niveau), `grave` et `aigu` (note de la basse, quand elle est
-    là), `kick`, `caisse` (caisse claire), `charleston` (attaques des aigus) : un coup qui retombe
-    en quelques dixièmes de seconde ; `montee` (tension avant un drop), `drop` (1 au drop, retombe
-    en deux secondes environ), `tempo` (1 sur chaque temps quand le tempo est régulier) ; `stereo`
-    va de -1 (gauche) à 1 (droite).
-  - Cibles, à fond (`quantite` = 1, source à 1) : `rotation` du trajet +90 tr/min, `vitesse` sur le
-    trajet +40 radians/s (382 tr/min), `rayon` +400 %, `taille` des têtes et des traînées +150 %,
-    `teinte` +180°. `quantite` va de -1 à 1 (négatif : dans l'autre sens) ; les modulations d'une
-    même cible s'additionnent ; la vitesse ne devient jamais négative, rayon et taille restent
-    dans des bornes lisibles. Une source ou une cible inconnue (preset
-    d'une version plus récente) ne fait rien.
+- **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
+  couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
+  défaut), même pendant la frappe ; pas en mode sans flashs.
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
-choisie dans *Kick et son › Avancé › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
+choisie dans *Écoute › Avancé › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
 presets ; si elle est débranchée, Essaim écoute la sortie par défaut en attendant son retour) :
 Spotify, navigateur, jeux… sans rien configurer.
 
@@ -154,9 +191,10 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 - **Masquer des captures** (`[rendu] masquer_captures`) : l'essaim reste à l'écran mais
   n'apparaît plus dans les captures, enregistrements et partages d'écran (Windows 10 2004 et plus).
 - **Sans flashs** (`[rendu] sans_flashs`, propre à la machine) : pour les personnes sensibles aux
-  flashs. L'éclat du kick (et des rafales et drops) est à moitié de sa force et au plus trois par
-  seconde, sans halo blanc ; les ondes et les carrés sont plus pâles ; la bordure garde sa
-  luminosité de repos. `"auto"` (par défaut, *Comme Windows* dans les réglages) : seulement quand
+  flashs. Tout éclat (kick, rafale, drop, et tout déclencheur `eclat`, quels que soient sa force et
+  son événement) est à moitié de sa force et au plus trois par seconde, sans halo blanc ; les ondes
+  et les carrés sont plus pâles ; la bordure garde sa luminosité de repos (ses déclencheurs ne font
+  rien). `"auto"` (par défaut, *Comme Windows* dans les réglages) : seulement quand
   les effets d'animation de Windows sont coupés (*Accessibilité › Effets visuels*), relu chaque
   seconde ; `"oui"` : toujours ; `"non"` : jamais.
 - **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton de
@@ -196,14 +234,21 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque. Filtre par
     forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
     montre côte à côte avec la liste de leurs réglages différents.
-  - *02 Réglages* : un sous-onglet par effet (*Orbite*, *Comètes*, *Satellites*, *Couleur*,
-    *Kick et son*, *Musique*, *Souris*, *Fissures*, *Bordure*, *Spectre*, *Modulations*, et *Cet
-    ordinateur* pour les réglages propres au PC), chacun avec ses réglages courants et *+ Avancé*
+  - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
+    *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
+    *Spectre*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
+    *Cet ordinateur* (réglages propres au PC) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
-    est actif (bascule *Actif* en tête du panneau) ; un effet coupé, ou un réglage sans effet
-    (densité du sillage sans sillage…), est estompé mais reste réglable. Dans *Modulations*, une
-    ligne par modulation (source → paramètre, sur qui, quantité) avec une jauge de la source en
-    direct, et des idées à ajouter d'un clic. *Dessiné…*
+    est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un
+    réglage sans effet (densité du sillage sans sillage…), est estompé mais reste réglable. Chaque
+    effet montre ses déclencheurs (*Quand* : un bouton par événement, × pour le retirer, un choix
+    pour en ajouter). *Déclencheurs* : une ligne par déclencheur (quand → action, force ou taille,
+    nombre ; *+* : délai minimal, chance ; *Tester* le joue dans le grand aperçu) ; *Modulations* :
+    une ligne par modulation (source → paramètre, sur qui, quantité, jauge de la source en direct ;
+    *+* : seuil, lissage, à l'envers) ; des idées à ajouter d'un clic. Sous l'aperçu, *Simuler* :
+    une montée suivie du drop (4 s), un kick, une caisse claire, un temps, un changement de piste,
+    pour voir les réactions sans attendre la musique ; tant qu'un morceau joue, l'aperçu suit le
+    vrai son, même entre deux coups. *Dessiné…*
     ouvre une toile où tracer le trajet d'un geste. Un clic sur l'aperçu y montre l'effet du
     clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
     `Images\Essaim` et le montre dans l'Explorateur.

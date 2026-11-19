@@ -29,7 +29,10 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Bordure** (`bordure.rs`, section `[bordure]`) : `DwmSetWindowAttribute(DWMWA_BORDER_COLOR)`
   sur la fenêtre au premier plan, lue par `GetForegroundWindow` à chaque image (pas de hook).
   Couleur = tête de l'essaim (teinte Prisme ou cycle propre) à la luminosité `repos` (0,5) ; sur
-  un kick, montée immédiate vers la couleur pleine (`intensite`, 1) puis retombée en 0,35 s.
+  un déclencheur `bordure` (au kick par défaut), montée immédiate vers la couleur pleine (sa
+  `force`, 1) puis retombée en 0,35 s. La bordure écoute le son elle-même (`render::Ecoute`,
+  `Border::reagir`, avec délai et chance) : elle s'illumine aussi pendant la frappe, quand
+  l'essaim est masqué.
   Une seule fenêtre colorée : l'ancienne retrouve la couleur du système au changement de premier
   plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
   notée dans `bordure.hwnd` pour le cas où Essaim est tué ; ce témoin n'est réécrit que pour une
@@ -55,8 +58,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   retard borné à 30 px × (1 + 5 × inertie) ; à 0, l'ancien suivi (lissage à 14/s).
 - **Sans flashs** (`[rendu] sans_flashs`) : `auto` lit `SPI_GETCLIENTAREAANIMATION` chaque seconde
   (`win::sans_flashs`). L'éclat ne remonte qu'à 0,5 et au plus toutes les 1/3 s (`Swarm::eclater`),
-  sans halo blanc ; ondes, carrés et implosions à 45 % ; bordure sans illumination
-  (`bordure::sans_flashs`, `intensite` = 0).
+  sans halo blanc, quel que soit le déclencheur (toutes les actions `eclat`, `explosion`,
+  `rafale` passent par là) ; ondes, carrés et implosions à 45 % ; bordure sans illumination (ses
+  déclencheurs ne font rien).
 - **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
   (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
@@ -105,7 +109,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 = hooks
 d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
 (`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
-bornées ; par exemple `bordure`/`intensite`), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
+bornées ; par exemple `bordure`/`repos`), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
+Clés d'avant les déclencheurs, encore lues et écrites par Horizon : `orbite.vitesse_basse` et
+`orbite.eloignement_grave` (les modulations de base basse → vitesse et grave → rayon, calculées à
+la publication, réécrites, ajoutées ou retirées par `set_config`) et `fissures.actives` (le
+déclencheur clic → fissure) ; `ipc::config_publiee`, `ALIAS`.
 Toute connexion avec un en-tête `Origin` est refusée (pages web, mais aussi applis web locales :
 Tauri, Electron) ; 8 clients au plus, 3 s pour la poignée de main, messages de 64 Ko au plus,
 client fermé après 60 s sans message. `set_config` refuse les sections `mise_a_jour`,
@@ -154,7 +162,7 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   sont réguliers (8 au moins, 80 % sur la grille, écart type sous 4 % de la période, 60 % des
   temps marqués) et après 3 estimations concordantes ; gardé pendant un break tant que la
   musique joue (30 s au plus), oublié après 3 s de silence. Relais : tempo connu, musique, aucun
-  kick depuis 2 s → `pulsation_tempo` (éclat 0,35 × (1 − phase)⁴).
+  kick depuis 2 s → événement `break` sur chaque temps (par défaut : éclat de force 0,35).
 - **Caisse claire** (`src/audio.rs`, `Caisse`, sans FFT) : deux passe-bande en série centrés sur
   2 kHz (bande 1–4 kHz), enveloppe rapide (3 ms) contre lente (100 ms). Attaque : rapide > 2,5 ×
   lente, > 0,004, et > 0,4 × l'enveloppe rapide de la bande 8–12 kHz (le charleston et les cymbales,
@@ -175,12 +183,14 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   sans montée ni drop, montée (roulement de 4 à 16 caisses par seconde) puis un seul drop, drop
   d'énergie après un passage 16 dB plus bas, caisses claires trouvées sans celles des kicks ; essai
   réel `cargo test --release musique_reelle -- --ignored --nocapture` (un morceau joué pendant 24 s).
-  Calculé seulement si `[musique] montee` ou `caisse_claire` (`AudioShared::set_musique`).
+  Calculé seulement si une modulation (sources caisse, montée, drop) ou un déclencheur (caisse,
+  drop) l'écoute (`Config::analyse_musicale`, `AudioShared::set_musique`).
 - **Stéréo** : la capture d'`audio-commun` remet après chaque paquet le niveau efficace de chaque
   canal (`Sink::stereo`, depuis le commit qui suit la v0.2.0). Équilibre = (D − G) / (D + G), lissé
   sur 0,25 s de son audible ; les paquets muets (blancs entre deux coups) ne le changent pas, et il
   revient au centre après 0,5 s de silence. Essai réel : groove joué tout à droite → +1,00.
-- **Contretemps** (`render.rs`) : la phase du tempo des kicks (`pulsation`) qui passe 0,5.
+- **Temps, contretemps** (`render::Ecoute`) : la phase du tempo des kicks (`pulsation`) qui
+  repasse par 0 (temps), ou passe 0,5 (contretemps).
 - **Sortie écoutée** : `capture::start_sur` d'`audio-commun` (sortie par défaut ou identifiant
   Windows) ; si la sortie choisie disparaît, repli sur la sortie par défaut, et retour sur elle
   dès qu'elle revient (vérification toutes les 2 s).
@@ -200,23 +210,47 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
+- **Déclencheurs** (`[declencheurs]`, `render.rs`) : `Ecoute::lire` donne les événements du son
+  depuis l'image précédente (`Coups` : kicks, caisses claires, drops, attaques des aigus, au plus 4
+  chacun ; temps, break, contretemps) ; `Swarm::update` les passe à `declencher` dans un ordre
+  fixe (kicks, retombée de l'éclat, temps et break, caisse claire, drop, contretemps, aigus), et
+  la boucle principale passe les événements de la souris et du morceau (`Swarm::evenement` :
+  clic, clic droit, piste). Chaque déclencheur de l'événement agit dans l'ordre de la liste, après
+  son délai minimal ; sa chance n'est tirée que si elle est sous 1 (les presets d'avant gardent
+  ainsi la même suite de tirages : satellites et particules identiques, essai
+  `presets_comme_avant`). `agir` fait l'action ; une fissure est demandée à la boucle principale
+  (`Swarm::fissures`), la bordure suit ses déclencheurs elle-même.
 - **Modulations** (`modulation.rs`) : `Sources` tient les enveloppes des coups (kick, caisse
-  claire, charleston : 1 au coup, retombée de 7, 8 et 10 par seconde ; drop : 0,9 par seconde) et
-  suit la montée ; `effets` additionne les modulations par cible pour les comètes et pour les
-  satellites (`Effet` : tours/min de rotation et radians/s de vitesse ajoutés, facteurs du rayon
-  et de la taille, degrés de teinte), lissés ~50 ms dans `Swarm::update`. La basse qui accélère
-  et la note grave qui éloigne l'orbite sont les deux modulations par défaut
-  (`config::reactions_de_base`) : `Swarm::update` ne garde, en propre, que la vitesse du trajet,
-  la montée et le contretemps. Les anciennes clés `[orbite] vitesse_basse` et
-  `eloignement_grave` sont converties à la lecture (`config::de_texte`, presets compris) et
-  retirées de `config.toml` au lancement (`config::migrer_fichier`) ; la page fait de même pour
-  un preset de la communauté (`fusion`). Chaque groupe a sa `Pose` (rotation et rayon au
+  claire, charleston, contretemps : 1 au coup, retombée de 7, 8, 10 et 10 par seconde ; drop :
+  0,9 par seconde) et suit la montée. Pour chaque modulation, `visee` donne quantité × source
+  (seuil, à l'envers), lissée à son rythme dans `Swarm::update` (`part_lissage` : constante de
+  temps 0,4 × lissage² s) ; `effets` en fait l'effet sur les comètes et sur les satellites
+  (`Effet` : tours/min de rotation, radians/s de vitesse, degrés de teinte et rayons de décalage
+  additionnés ; accélération, rayon, taille, lueur, traînée et opacité multipliés) et la teinte
+  « sur tout », que la boucle principale passe à `render::set_decalage` (tout ce qui est dessiné
+  la prend, bordure comprise). La vitesse du trajet de chaque groupe est lissée (~100 ms) vers la
+  vitesse de base × son accélération. Chaque groupe a sa `Pose` (rotation, rayon et décalage au
   début et à la fin de l'image) : le trajet des comètes et celui des satellites tournent chacun
   de leur côté (`[orbite] rotation_sur`). Une modulation de la taille élargit la marge de
-  `Swarm::bounds`. L'analyse musicale (caisse claire, montée, drop) tourne aussi quand une
-  modulation l'écoute (`Config::analyse_musicale`).
-- `ui/apercu.js` reproduit `render.rs` jusqu'au détail : ordre de la mise à jour, points
-  intermédiaires (`sous_pas`), sillage, dessin des traînées par morceaux de 4 segments.
+  `Swarm::bounds`.
+- **Réglages d'avant** (`migration.rs`) : les réactions fixes d'Essaim 0.3 et 0.4 (`[musique]`,
+  `[clic]`, `[scintillement]`, `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`,
+  `[audio] pulsation_tempo`, `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`,
+  `[essaim] par_kick_*`) sont lues dans `Ancien` (avec leurs valeurs par défaut d'alors) et
+  deviennent des modulations et des déclencheurs : à la lecture (`config::de_texte`, presets
+  compris), et dans `config.toml` une fois au lancement (`config::migrer_fichier`, commentaires
+  gardés). Sans `[declencheurs]`, les réactions d'avant deviennent les déclencheurs et s'ajoutent
+  aux modulations ; sans `[modulations]` (0.3), la basse aussi. Les réglages par défaut et les
+  presets fournis en sortent (`Ancien::default`, `profils::builtins`). La page fait de même pour
+  un preset de la communauté (`reactionsAvant`, `fusion`). Essai `presets_comme_avant` : chaque
+  preset fourni contre les mesures de l'ancien moteur (`tests/donnees/rendu-presets.json`, même
+  son d'essai) : sens, satellites et particules identiques, distance des têtes à 8 % près par
+  seconde (0,1 % en médiane).
+- `ui/apercu.js` reproduit `render.rs` jusqu'au détail : ordre de la mise à jour (écoute des
+  événements, déclencheurs, modulations lissées une à une, vitesse accélérée par groupe), points
+  intermédiaires (`sous_pas`), sillage, dessin des traînées par morceaux de 4 segments ; seules
+  les fissures y sont plus simples (quelques branches brisées). Vérifié hors navigateur contre le
+  moteur : même sens de rotation et distance des comètes à 5 % près, preset par preset.
 - Réglages (`config.rs`) : écritures atomiques (fichier `.tmp` puis renommage) sous un verrou
   unique partagé par la fenêtre, Horizon et le preset automatique ; un `config.toml` illisible
   n'est jamais écrasé (seul un fichier absent est recréé) ; relecture sur date et taille, forcée
