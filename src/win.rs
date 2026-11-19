@@ -399,6 +399,8 @@ pub const CMD_SUIVANT: usize = 4;
 pub const CMD_PRECEDENT: usize = 5;
 /// Relance Essaim pour passer à la version téléchargée (`maj`).
 pub const CMD_REDEMARRER: usize = 6;
+/// Projecteur « retrouver la souris » (Ctrl+Alt+F).
+pub const CMD_PROJECTEUR: usize = 7;
 /// Presets du menu : `CMD_PRESET + rang` dans `profils::list()`.
 pub const CMD_PRESET: usize = 100;
 const WM_TRAY: u32 = WM_APP + 1;
@@ -429,11 +431,11 @@ fn tray_hwnd() -> HWND {
 }
 
 /// Raccourcis globaux (RegisterHotKey, sans hook) : Ctrl+Alt+→ / ← preset suivant / précédent,
-/// Ctrl+Alt+P pause. Les enregistre ou les retire.
+/// Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Les enregistre ou les retire.
 pub fn raccourcis(actif: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_LEFT, VK_RIGHT};
     let hwnd = tray_hwnd();
-    let touches = [(1, VK_RIGHT.0 as u32), (2, VK_LEFT.0 as u32), (3, b'P' as u32)];
+    let touches = [(1, VK_RIGHT.0 as u32), (2, VK_LEFT.0 as u32), (3, b'P' as u32), (4, b'F' as u32)];
     RACCOURCIS.store(actif, Ordering::Relaxed);
     unsafe {
         for (id, vk) in touches {
@@ -609,6 +611,7 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             let cmd = match wp.0 {
                 1 => CMD_SUIVANT,
                 2 => CMD_PRECEDENT,
+                4 => CMD_PROJECTEUR,
                 _ => CMD_PAUSE,
             };
             COMMAND.with(|c| c.set(cmd));

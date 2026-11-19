@@ -14,10 +14,11 @@
 
 use crate::canvas::{Canvas, Rgb};
 use crate::layer::{union, IRect};
+use windows_numerics::Vector2;
 use std::time::{Duration, Instant};
 use windows::core::Interface;
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U};
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION};
@@ -159,7 +160,12 @@ impl GpuLayer {
             let sprites = &mut self.sprites;
             sprites.rects.clear();
             sprites.colors.clear();
+            sprites.voiles.clear();
             draw(sprites);
+            // voiles (projecteur) d'abord : tout le reste est dessiné par-dessus
+            for v in &sprites.voiles {
+                voile(&dc, v)?;
+            }
             if !sprites.rects.is_empty() {
                 let dc3: ID2D1DeviceContext3 = dc.cast()?;
                 let batch = match &self.batch {
@@ -232,11 +238,51 @@ unsafe fn make_disc(dc: &ID2D1DeviceContext) -> windows::core::Result<ID2D1Bitma
     unsafe { dc.CreateBitmap(D2D_SIZE_U { width: DISC, height: DISC }, Some(data.as_ptr() as *const _), DISC * 4, &props) }
 }
 
+/// Voile percé d'un disque clair (voir `Canvas::voile`), dessiné en dégradé radial Direct2D.
+struct Voile {
+    zone: D2D_RECT_F,
+    x: f32,
+    y: f32,
+    r: f32,
+    flou: f32,
+    rgb: Rgb,
+    alpha: f32,
+}
+
+/// Remplit la zone du voile d'un dégradé radial : transparent dans le disque, la couleur au-delà
+/// du bord adouci (le dégradé se prolonge par sa dernière couleur). Un seul rectangle, rempli
+/// par la carte graphique.
+unsafe fn voile(dc: &ID2D1DeviceContext, v: &Voile) -> windows::core::Result<()> {
+    let ext = v.r.max(0.0) + v.flou.max(1.0);
+    let c = |k: f32| color(v.rgb, v.alpha * k);
+    let stops = [
+        D2D1_GRADIENT_STOP { position: 0.0, color: c(0.0) },
+        D2D1_GRADIENT_STOP { position: v.r.max(0.0) / ext, color: c(0.0) },
+        D2D1_GRADIENT_STOP { position: (v.r.max(0.0) + (ext - v.r.max(0.0)) * 0.5) / ext, color: c(0.4) },
+        D2D1_GRADIENT_STOP { position: 1.0, color: c(1.0) },
+    ];
+    let rt: &ID2D1RenderTarget = dc;
+    unsafe {
+        let coll = rt.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+        let props = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+            center: Vector2 { X: v.x, Y: v.y },
+            gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 },
+            radiusX: ext,
+            radiusY: ext,
+        };
+        let brush = rt.CreateRadialGradientBrush(&props, None, &coll)?;
+        rt.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+        rt.FillRectangle(&v.zone, &brush);
+    }
+    Ok(())
+}
+
 /// Accumule des pastilles (rectangle écran + teinte) ; dessinées en un seul lot à la fin.
 #[derive(Default)]
 struct SpriteCanvas {
     rects: Vec<D2D_RECT_F>,
     colors: Vec<D2D1_COLOR_F>,
+    voiles: Vec<Voile>,
 }
 
 impl SpriteCanvas {
@@ -292,6 +338,13 @@ impl Canvas for SpriteCanvas {
         for i in 0..n {
             let t = i as f32 / n as f32 * std::f32::consts::TAU;
             self.dot(x + t.cos() * r, y + t.sin() * r, width * 0.5, c);
+        }
+    }
+
+    fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32) {
+        if alpha > 0.0 && zone.2 > zone.0 && zone.3 > zone.1 {
+            let zone = D2D_RECT_F { left: zone.0, top: zone.1, right: zone.2, bottom: zone.3 };
+            self.voiles.push(Voile { zone, x, y, r, flou, rgb, alpha: alpha.min(1.0) });
         }
     }
 }

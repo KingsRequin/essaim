@@ -1040,6 +1040,9 @@ mod tests {
             fn ring(&mut self, x: f32, y: f32, r: f32, w: f32, c: (u8, u8, u8), al: f32) {
                 self.0.ring(x, y, r, w, c, al);
             }
+            fn voile(&mut self, z: (f32, f32, f32, f32), x: f32, y: f32, r: f32, f: f32, c: (u8, u8, u8), al: f32) {
+                self.0.voile(z, x, y, r, f, c, al);
+            }
         }
         let mut rng = Rng(0x2545_f491_4f6c_dd1d);
         let c = Crack::new(300.0, 200.0, 0.0, 1.5, &mut rng);

@@ -17,6 +17,7 @@ pub struct Config {
     pub scintillement: Scintillement,
     pub clic: Clic,
     pub sillage: Sillage,
+    pub projecteur: Projecteur,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -74,6 +75,22 @@ impl Default for Sillage {
     }
 }
 
+/// Projecteur « retrouver la souris » : l'écran s'assombrit autour d'un disque clair centré sur
+/// le pointeur, qui se resserre puis s'efface. Déclenché en secouant la souris ou par Ctrl+Alt+F.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Projecteur {
+    pub actif: bool,
+    /// Durée de l'effet (s).
+    pub duree: f32,
+}
+
+impl Default for Projecteur {
+    fn default() -> Self {
+        Self { actif: true, duree: 1.2 }
+    }
+}
+
 /// Preset choisi tout seul selon l'application au premier plan ou l'heure.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -102,7 +119,7 @@ pub struct Horaire {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Raccourcis {
-    /// Ctrl+Alt+→ / ← : preset suivant / précédent ; Ctrl+Alt+P : pause.
+    /// Ctrl+Alt+→ / ← : preset suivant / précédent ; Ctrl+Alt+P : pause ; Ctrl+Alt+F : projecteur.
     pub actif: bool,
 }
 
@@ -425,6 +442,10 @@ taille = 1.0
 actif = false           # poussière derrière la souris quand elle file vite
 densite = 5             # 1 à 10
 
+[projecteur]
+actif = true            # secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur
+duree = 1.2             # durée de l'effet (s)
+
 [audio]
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
@@ -446,7 +467,7 @@ applis = []             # [{ appli = "jeu.exe", preset = "Discret" }]
 horaires = []           # [{ debut = "22:00", fin = "07:00", preset = "Discret" }]
 
 [raccourcis]
-actif = true            # Ctrl+Alt+→ / ← : preset suivant / précédent ; Ctrl+Alt+P : pause
+actif = true            # Ctrl+Alt+→ / ← : preset suivant / précédent ; Ctrl+Alt+P : pause ; Ctrl+Alt+F : projecteur
 
 [bibliotheque]
 depot = "KingsRequin/essaim-presets" # dépôt GitHub des presets partagés (index.json à la racine)
@@ -490,6 +511,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("scintillement", "quantite") => (1.0, 10.0),
         ("clic", "taille") => (0.3, 3.0),
         ("sillage", "densite") => (1.0, 10.0),
+        ("projecteur", "duree") => (0.3, 5.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -858,6 +880,29 @@ mod tests {
         assert!((c.essaim.duree - 2.8).abs() < 1e-6);
         assert!(c.bordure.active);
         assert!((c.bordure.repos - super::Bordure::default().repos).abs() < 1e-6);
+    }
+
+    #[test]
+    fn projecteur_lu_et_borne() {
+        // fichier par défaut : mêmes valeurs que les réglages par défaut
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        let d = super::Config::default();
+        assert!(c.projecteur.actif);
+        assert_eq!(c.projecteur.duree, d.projecteur.duree);
+        // valeurs absurdes ramenées dans leurs bornes
+        let texte = "[projecteur]\nduree = 99";
+        let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
+        assert_eq!(c.projecteur.duree, 5.0);
+        let c = toml::from_str::<super::Config>("[projecteur]\nduree = 0").unwrap().clamped();
+        assert_eq!(c.projecteur.duree, 0.3);
+        // écriture depuis la fenêtre : refusée hors bornes, acceptée dedans
+        let p = std::env::temp_dir().join(format!("essaim-test-effets-{}.toml", std::process::id()));
+        std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        assert!(super::set_value_in(&p, "projecteur", "duree", &serde_json::json!(0.1)).is_err());
+        super::set_value_in(&p, "projecteur", "actif", &serde_json::json!(false)).unwrap();
+        let c = super::Config::read(&p).unwrap();
+        assert!(!c.projecteur.actif);
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

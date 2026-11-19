@@ -144,7 +144,9 @@ const FORMES_REGLAGE = [...FORMES, ["trace", "Dessiné…"]];
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Dessiné" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
-const SECTIONS_PRESET = ["orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "audio", "bordure", "souris"];
+const SECTIONS_PRESET = [
+  "orbite", "essaim", "couleur", "eclat", "fissures", "scintillement", "clic", "sillage", "projecteur", "audio", "bordure", "souris",
+];
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
@@ -627,11 +629,14 @@ const IMPACT = {
   "bordure.intensite": [1, "estime"], "bordure.repos": [1, "estime"],
   "rendu.cadence": [7, "estime"], "rendu.cadence_repos": [2, "estime"], "rendu.carte_graphique": [10], "rendu.veille_apres": [1, "estime"],
   "scintillement.actif": [1, "estime"], "scintillement.quantite": [1, "estime"], "clic.taille": [1, "estime"], "sillage.densite": [1, "estime"],
+  // banc `mesure_effets` (carte graphique, 144 images/s)
+  "projecteur.actif": [1], "projecteur.duree": [1, "estime"],
 };
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
   "rendu.cadence": "Multiplie le coût de tout le reste : 240 images/s coûtent huit fois plus que 30.",
   "rendu.carte_graphique": "Mesuré : 0,35 ms par image avec la carte graphique, 1,09 ms avec le processeur.",
+  "projecteur.actif": "Rien hors de l'effet ; pendant l'effet, tout l'écran est redessiné : +0,13 ms par image avec la carte graphique, +9 ms avec le processeur.",
 };
 
 // Jauge d'impact : dix cases, et son texte (score, précision) dans un élément lu par les lecteurs
@@ -668,6 +673,7 @@ const SI = {
   scintillement: (r) => r.audio.actif && r.scintillement.actif,
   clic: (r) => r.clic.onde || r.clic.eclats,
   sillage: (r) => r.sillage.actif,
+  projecteur: (r) => !!(r.projecteur && r.projecteur.actif),
 };
 
 // Réglages courants, dans l'ordre de la page ; `titre` ouvre une partie, `special` est une
@@ -715,6 +721,7 @@ const AVANCES = [
   { libelle: "Étincelles par attaque des aigus", section: "scintillement", cle: "quantite", si: SI.scintillement, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
   { libelle: "Taille de l'onde et des éclats", section: "clic", cle: "taille", si: SI.clic, min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
   { libelle: "Densité du sillage", section: "sillage", cle: "densite", si: SI.sillage, min: 1, max: 10, pas: 1, aff: (v) => String(Math.round(v)) },
+  { libelle: "Durée du projecteur", section: "projecteur", cle: "duree", si: SI.projecteur, min: 0.3, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
   { groupe: "Son" },
   { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", si: SI.son, min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
   { groupe: "Cet ordinateur (hors presets)" },
@@ -860,11 +867,14 @@ function construireReglages() {
     } else if (def.special === "trajet-satellites") {
       ligneLarge("Trajet des satellites", "essaim.forme", choixForme("essaim", "forme", FORMES_SATELLITES));
     } else if (def.special === "effets-plus") {
+      const projecteur = bascule("Projecteur (secouer la souris)", "projecteur", "actif");
+      projecteur.title = "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver";
       ligneLarge("Effets en plus", "scintillement.actif", [
         bascule("Étincelles sur les aigus", "scintillement", "actif"),
         bascule("Onde au clic", "clic", "onde"),
         bascule("Éclats au clic", "clic", "eclats"),
         bascule("Sillage de la souris", "sillage", "actif"),
+        projecteur,
       ]);
     } else if (def.special === "couleur") {
       teintes = TEINTES.map((h) => {
@@ -1278,6 +1288,7 @@ function libelleReglage(section, cle) {
     "orbite.forme": "Trajet des comètes", "essaim.forme": "Trajet des satellites", "couleur.application": "Couleur de l'application",
     "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique", "scintillement.actif": "Étincelles sur les aigus",
     "clic.onde": "Onde au clic", "clic.eclats": "Éclats au clic", "sillage.actif": "Sillage de la souris", "souris.jeu": "Curseurs",
+    "projecteur.actif": "Projecteur (secouer la souris)",
     "couleur.synchro_prisme": "Synchro Prisme",
   };
   return [noms[section + "." + cle] || section + "." + cle];

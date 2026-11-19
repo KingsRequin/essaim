@@ -18,6 +18,7 @@ mod bordure;
 mod canvas;
 mod charge;
 mod config;
+mod effets;
 mod gpu;
 mod ipc;
 mod layer;
@@ -290,6 +291,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut backend = backend::Backend::new(conf.cfg.rendu.carte_graphique);
     let mut cracks: Vec<Crack> = Vec::new();
     let mut swarm = Swarm::new();
+    let mut effets = effets::Effets::new();
     let mut rng = Rng::seeded();
     let mut border = bordure::Border::default();
 
@@ -332,6 +334,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
                 log::info!("{}", if user_paused { "pause" } else { "reprise" });
             }
             win::CMD_CONFIG => reglages::open(shared.clone()),
+            win::CMD_PROJECTEUR => effets.demander_projecteur(),
             c @ (win::CMD_SUIVANT | win::CMD_PRECEDENT) => {
                 let pas = if c == win::CMD_SUIVANT { 1 } else { -1 };
                 if let Some(nom) = profils::voisin(&conf.cfg, pas) {
@@ -536,6 +539,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
 
         // simulation ; teinte qui glisse avec la musique, lissée (~150 ms)
         swarm.avance(t, dt, cursor, au, cfg, scale);
+        effets.avance(t, cursor, scale, swarm.env, cfg, &monitors);
         let d = render::decalage();
         render::set_decalage(d + (render::decalage_vise(&au) - d) * (dt * 6.0).min(1.0));
         // teinte imposée : celle de l'application au premier plan, sinon celle de l'éclairage
@@ -571,11 +575,14 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         // dessin : sur chaque écran que l'essaim ou une fissure touche
         let (x0, y0, x1, y1) = swarm.bounds(cursor, scale, cfg.eclat.taille);
         let swarm_rect = (x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
-        let crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
+        // projecteur : tout l'écran du pointeur, le temps de l'effet seulement
+        let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
+        crack_rects.extend(effets.rect_ecran());
         let rgb = render::prisme(cfg, t, 1.0);
         border.tick(true, &cfg.bordure, rgb, au.kicks, now);
         let env = swarm.env;
         let dessiner = |cv: &mut dyn canvas::Canvas, here: bool| {
+            effets.dessiner_voile(cv, cfg, t, scale);
             for c in &cracks {
                 let age = t - c.born;
                 // éclat coloré au début et sur les kicks, fondu sur la dernière seconde
