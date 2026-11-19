@@ -163,8 +163,8 @@ struct Kick {
     /// Analyse musicale (caisse claire, montée, drop), seulement si un effet la demande.
     musique: Option<Musique>,
     fs: u32,
-    /// Équilibre gauche-droite lissé, et durée du dernier paquet (s) pour le lissage.
-    balance: f32,
+    /// Équilibre gauche-droite, et durée du dernier paquet (s) pour le lissage.
+    balance: Balance,
     duree_paquet: f32,
     /// Compteurs (kicks, aigus) déjà publiés à l'ouverture du flux : l'analyse rouverte repart
     /// de 0, les compteurs publiés continuent (sinon l'affichage verrait un saut, donc de faux
@@ -184,7 +184,7 @@ impl Kick {
             bandes: None,
             musique: None,
             fs: 48000,
-            balance: 0.0,
+            balance: Balance::default(),
             duree_paquet: 0.01,
             base: (0, 0),
             propre: Vec::new(),
@@ -526,8 +526,8 @@ impl Sink for Kick {
         self.publier_aigus();
         let kick = self.instant_kick();
         ecouter_musique(&self.shared, &mut self.musique, self.fs, None, frames, kick);
-        self.balance = 0.0;
-        self.shared.balance.store(0f32.to_bits(), Ordering::Relaxed);
+        self.balance.silence(frames as f32 / self.fs.max(1) as f32);
+        self.shared.balance.store(self.balance.valeur.to_bits(), Ordering::Relaxed);
         if let Some(b) = self.bandes.as_mut().filter(|b| b.actives()) {
             b.push_silence(frames);
             self.publier_bandes();
@@ -552,19 +552,42 @@ impl Sink for Kick {
     }
 
     fn stereo(&mut self, gauche: f32, droite: f32) {
-        self.balance = lisser_balance(self.balance, gauche, droite, self.duree_paquet);
-        self.shared.balance.store(self.balance.to_bits(), Ordering::Relaxed);
+        self.balance.paquet(gauche, droite, self.duree_paquet);
+        self.shared.balance.store(self.balance.valeur.to_bits(), Ordering::Relaxed);
     }
 }
 
-/// Équilibre gauche-droite lissé (~0,25 s) après un paquet de `duree` secondes aux niveaux
-/// `gauche` et `droite` : −1 tout à gauche, 1 tout à droite. Un paquet presque muet tire vers le
-/// centre.
-fn lisser_balance(avant: f32, gauche: f32, droite: f32, duree: f32) -> f32 {
-    let somme = gauche + droite;
-    let vise = if somme.is_finite() && somme > AUDIBLE { ((droite - gauche) / somme).clamp(-1.0, 1.0) } else { 0.0 };
-    let k = 1.0 - (-duree.max(0.0) / 0.25).exp();
-    fini(avant + (vise - avant) * k).clamp(-1.0, 1.0)
+/// Équilibre gauche-droite : −1 tout à gauche, 0 au centre, 1 tout à droite, lissé sur ~0,25 s.
+/// Les paquets presque muets (les blancs entre deux coups) ne le changent pas ; après 0,5 s de
+/// silence, il revient doucement au centre.
+#[derive(Default)]
+struct Balance {
+    valeur: f32,
+    /// Durée passée sans son (s).
+    muet: f32,
+}
+
+impl Balance {
+    /// Un paquet de `duree` secondes aux niveaux efficaces `gauche` et `droite`.
+    fn paquet(&mut self, gauche: f32, droite: f32, duree: f32) {
+        let somme = gauche + droite;
+        if somme.is_finite() && somme > AUDIBLE {
+            self.muet = 0.0;
+            let vise = ((droite - gauche) / somme).clamp(-1.0, 1.0);
+            self.valeur += (vise - self.valeur) * (1.0 - (-duree.max(0.0) / 0.25).exp());
+        } else {
+            self.silence(duree);
+        }
+        self.valeur = fini(self.valeur).clamp(-1.0, 1.0);
+    }
+
+    /// `duree` secondes de silence.
+    fn silence(&mut self, duree: f32) {
+        self.muet += duree.max(0.0);
+        if self.muet >= 0.5 {
+            self.valeur = fini(self.valeur * (-duree.max(0.0) / 0.5).exp());
+        }
+    }
 }
 
 /// Analyse musicale de `n` échantillons (`mono`, ou du silence) quand un effet la demande ;
@@ -884,7 +907,7 @@ impl Montee {
 
 #[cfg(test)]
 mod tests {
-    use super::{assainir, lisser_balance, Aigus, AudioShared, Bandes, Kick, BANDES_MAX};
+    use super::{assainir, Aigus, AudioShared, Balance, Bandes, Kick, BANDES_MAX};
     use audio_commun::capture::Sink;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -1020,6 +1043,36 @@ mod tests {
         assert!(v.tension < 0.3, "tension après le drop : {}", v.tension);
     }
 
+    /// Essai réel sur la sortie son par défaut : jouer un morceau pendant ces 24 s
+    /// (`cargo test --release musique_reelle -- --ignored --nocapture`). Note chaque seconde
+    /// kicks, caisses claires, drops, tension et équilibre gauche-droite.
+    #[test]
+    #[ignore]
+    fn musique_reelle() {
+        let shared = Arc::new(AudioShared::default());
+        shared.set_musique(true);
+        let _capture = super::start(shared.clone(), "").expect("capture");
+        let mut tension_max = 0f32;
+        for s in 0..240 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let v = shared.view();
+            tension_max = tension_max.max(v.tension);
+            if s % 10 == 9 {
+                println!(
+                    "{:>2} s : kicks {:>3}, caisses {:>3}, drops {}, tension {:.2} (max {:.2}), balance {:+.2}",
+                    s / 10 + 1,
+                    v.kicks,
+                    v.caisses,
+                    v.drops,
+                    v.tension,
+                    tension_max,
+                    v.balance
+                );
+                tension_max = 0.0;
+            }
+        }
+    }
+
     #[test]
     fn drop_d_energie_apres_un_passage_calme() {
         // 12 s de groove, 3 s de passage calme (le même, 16 dB plus bas), puis le groove revient
@@ -1038,21 +1091,32 @@ mod tests {
 
     #[test]
     fn balance_suit_le_cote_le_plus_fort() {
-        let mut b = 0.0;
+        let mut b = Balance::default();
+        // coups tout à droite séparés de blancs (paquets muets) : l'équilibre va à droite (le
+        // lissage ne compte que le temps où le son s'entend)
+        for i in 0..500 {
+            if i % 5 == 0 {
+                b.paquet(0.0, 0.3, 0.01);
+            } else {
+                b.paquet(0.0, 0.0, 0.01);
+            }
+        }
+        assert!(b.valeur > 0.85, "tout à droite : {}", b.valeur);
         for _ in 0..100 {
-            b = lisser_balance(b, 0.0, 0.3, 0.01);
+            b.paquet(0.3, 0.1, 0.01);
         }
-        assert!(b > 0.95, "tout à droite : {b}");
-        for _ in 0..100 {
-            b = lisser_balance(b, 0.3, 0.1, 0.01);
+        assert!((b.valeur + 0.5).abs() < 0.05, "plutôt à gauche : {}", b.valeur);
+        // silence : rien pendant 0,5 s, puis retour au centre
+        for _ in 0..40 {
+            b.silence(0.01);
         }
-        assert!((b + 0.5).abs() < 0.05, "plutôt à gauche : {b}");
-        // presque muet ou abîmé : retour au centre
-        for _ in 0..200 {
-            b = lisser_balance(b, 0.0001, 0.0, 0.01);
+        assert!((b.valeur + 0.5).abs() < 0.05, "{}", b.valeur);
+        for _ in 0..300 {
+            b.silence(0.01);
         }
-        assert!(b.abs() < 0.01, "{b}");
-        assert!(lisser_balance(0.2, f32::NAN, 0.1, 0.01).is_finite());
+        assert!(b.valeur.abs() < 0.01, "{}", b.valeur);
+        b.paquet(f32::NAN, 0.1, 0.01);
+        assert!(b.valeur.is_finite());
     }
 
     #[test]

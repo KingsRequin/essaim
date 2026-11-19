@@ -92,7 +92,7 @@ pub fn couleur_fond(f: Fond) -> (u8, u8, u8) {
 
 /// Échelle de l'essaim pour une zone de dessin `l` × `h` : il y tient, lueurs comprises.
 fn echelle(l: i32, h: i32) -> f32 {
-    (l.min(h) as f32 / 240.0).clamp(0.4, 6.0)
+    (l.min(h) as f32 / 205.0).clamp(0.4, 8.0)
 }
 
 fn run(son: Arc<AudioShared>) -> windows::core::Result<()> {
@@ -230,13 +230,17 @@ mod tests {
             let au = crate::audio::AudioView { kicks: i / 15, bass: 0.8, pitch: 35.0, ..Default::default() };
             s.avance(i as f64 / 60.0, 1.0 / 60.0, centre, au, &cfg, scale);
         }
-        let (x0, y0, x1, y1) = s.bounds(centre, scale, cfg.eclat.taille);
-        assert!(x0 > 0.0 && y0 > 0.0 && x1 < TAILLE as f32 && y1 < TAILLE as f32, "{x0} {y0} {x1} {y1}");
         let mut pm = Pixmap::new(TAILLE as u32, TAILLE as u32).unwrap();
         pm.fill(Color::from_rgba8(0, 255, 0, 255));
         s.draw(&mut PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 1.0, &cfg, scale, centre);
-        let coin = &pm.data()[..4];
-        assert_eq!(coin, [0, 255, 0, 255]);
+        // bande de 4 px le long des bords : rien que le fond
+        let n = TAILLE as usize;
+        let fond = |x: usize, y: usize| pm.data()[(y * n + x) * 4..(y * n + x) * 4 + 4] == [0, 255, 0, 255];
+        for i in 0..n {
+            for j in 0..4 {
+                assert!(fond(i, j) && fond(i, n - 1 - j) && fond(j, i) && fond(n - 1 - j, i), "dessin au bord ({i}, {j})");
+            }
+        }
         assert!(pm.data().chunks_exact(4).any(|p| p != [0, 255, 0, 255]), "rien de dessiné");
     }
 }
