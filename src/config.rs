@@ -26,6 +26,7 @@ pub struct Config {
     pub bibliotheque: Bibliotheque,
     pub mise_a_jour: MiseAJour,
     pub musique: Musique,
+    pub pause: Pause,
 }
 
 /// Réactions au morceau en cours (API média de Windows, `media.rs`).
@@ -155,6 +156,34 @@ impl Default for MiseAJour {
     }
 }
 
+/// Pauses automatiques (propres à la machine, hors presets) : `pauses.rs`.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Pause {
+    /// Pause quand Windows ne veut pas être dérangé (jeu ou appli en plein écran, présentation).
+    pub ne_pas_deranger: bool,
+    /// Sur batterie ou économiseur de batterie actif.
+    pub batterie: ModeBatterie,
+    /// Exécutables qui mettent Essaim en pause quand ils sont au premier plan.
+    pub applis: Vec<String>,
+}
+
+impl Default for Pause {
+    fn default() -> Self {
+        Self { ne_pas_deranger: true, batterie: ModeBatterie::Reduire, applis: Vec::new() }
+    }
+}
+
+/// Que faire sur batterie : rien, réduire la cadence (30 images/s au plus) ou se mettre en pause.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModeBatterie {
+    Rien,
+    #[default]
+    Reduire,
+    Pause,
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Bordure {
@@ -184,11 +213,15 @@ pub struct Rendu {
     /// Veille profonde (plus aucun dessin) après ce nombre de secondes sans mouvement de souris,
     /// son ni clic ; 0 = jamais.
     pub veille_apres: u32,
+    /// Calques exclus des captures d'écran et des streams (`WDA_EXCLUDEFROMCAPTURE`).
+    pub masquer_captures: bool,
+    /// Cadence réduite par paliers quand une image coûte cher à calculer (`adaptatif.rs`).
+    pub adaptatif: bool,
 }
 
 impl Default for Rendu {
     fn default() -> Self {
-        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60 }
+        Self { cadence: 0, carte_graphique: true, cadence_repos: 30, veille_apres: 60, masquer_captures: false, adaptatif: true }
     }
 }
 
@@ -457,6 +490,8 @@ cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran
 carte_graphique = true  # dessin par la carte graphique ; false = par le processeur
 cadence_repos = 30      # images par seconde quand la souris est immobile et sans musique ; 0 = jamais
 veille_apres = 60       # plus rien n'est dessiné après ces secondes sans souris, son ni clic ; 0 = jamais
+masquer_captures = false # invisible des captures d'écran et des streams (OBS, Discord, Teams…)
+adaptatif = true        # cadence réduite par paliers (120, 60, 30) quand une image coûte cher à calculer
 
 [souris]
 jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas y toucher)
@@ -475,6 +510,11 @@ depot = "KingsRequin/essaim-presets" # dépôt GitHub des presets partagés (ind
 
 [mise_a_jour]
 auto = true             # cherche les nouvelles versions sur GitHub, les télécharge et prévient
+
+[pause]
+ne_pas_deranger = true  # pause quand Windows ne veut pas être dérangé (plein écran, présentation)
+batterie = "reduire"    # sur batterie : "rien", "reduire" (30 images/s au plus) ou "pause"
+applis = []             # pause quand l'une d'elles est au premier plan : ["obs64.exe", "zoom.exe"]
 
 [bordure]
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim
@@ -880,6 +920,36 @@ mod tests {
         assert!((c.essaim.duree - 2.8).abs() < 1e-6);
         assert!(c.bordure.active);
         assert!((c.bordure.repos - super::Bordure::default().repos).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reglages_de_la_machine() {
+        // fichier par défaut : mêmes valeurs que `Default`
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        let d = super::Config::default();
+        assert!(!c.rendu.masquer_captures && !d.rendu.masquer_captures);
+        assert!(c.rendu.adaptatif && d.rendu.adaptatif);
+        assert!(c.pause.ne_pas_deranger && d.pause.ne_pas_deranger);
+        assert_eq!((c.pause.batterie, d.pause.batterie), (super::ModeBatterie::Reduire, super::ModeBatterie::Reduire));
+        assert!(c.pause.applis.is_empty() && d.pause.applis.is_empty());
+        // hors presets
+        for (s, k) in [("rendu", "masquer_captures"), ("rendu", "adaptatif"), ("pause", "ne_pas_deranger"), ("pause", "batterie"), ("pause", "applis")] {
+            assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
+        }
+        // écriture : valeur connue, inconnue refusée, liste d'applications
+        let d = dossier("machine");
+        let p = d.join("config.toml");
+        std::fs::write(&p, super::DEFAULT_FILE).unwrap();
+        super::set_value_in(&p, "pause", "batterie", &serde_json::json!("pause")).unwrap();
+        assert!(super::set_value_in(&p, "pause", "batterie", &serde_json::json!("parfois")).is_err());
+        super::set_value_in(&p, "pause", "applis", &serde_json::json!(["obs64.exe", "zoom.exe"])).unwrap();
+        assert!(super::set_value_in(&p, "pause", "applis", &serde_json::json!([3])).is_err());
+        super::set_value_in(&p, "rendu", "masquer_captures", &serde_json::json!(true)).unwrap();
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!(c.pause.batterie, super::ModeBatterie::Pause);
+        assert_eq!(c.pause.applis, ["obs64.exe", "zoom.exe"]);
+        assert!(c.rendu.masquer_captures);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

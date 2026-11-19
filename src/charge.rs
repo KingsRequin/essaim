@@ -2,12 +2,14 @@
 //! la boucle d'affichage et lue par la fenêtre des réglages.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::Mutex;
 
 static MS: AtomicU32 = AtomicU32::new(0);
 static IPS: AtomicU32 = AtomicU32::new(0);
 static PAUSE: AtomicBool = AtomicBool::new(false);
 static CAPTURE: AtomicU8 = AtomicU8::new(0);
 static VEILLE: AtomicBool = AtomicBool::new(false);
+static RAISON: Mutex<String> = Mutex::new(String::new());
 
 /// Pause demandée par l'utilisateur (menu, Horizon, fenêtre des réglages).
 pub fn publier_pause(p: bool) {
@@ -38,6 +40,18 @@ pub fn publier_veille(v: bool) {
 
 pub fn veille() -> bool {
     VEILLE.load(Ordering::Relaxed)
+}
+
+/// Ce qui retient l'essaim, en clair (« Plein écran », « Ne pas déranger », « Batterie : 30 i/s »…) ;
+/// vide si rien (`pauses::raison`).
+pub fn publier_raison(r: &str) {
+    if let Ok(mut x) = RAISON.lock() {
+        r.clone_into(&mut x);
+    }
+}
+
+pub fn raison() -> String {
+    RAISON.lock().map(|r| r.clone()).unwrap_or_default()
 }
 
 /// Temps de calcul moyen d'une image (ms, sans l'attente de l'écran) et images par seconde.

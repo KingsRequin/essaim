@@ -135,6 +135,16 @@
         <label><span class="t-label">Preset</span><select class="choix" id="horaire-preset"></select></label>
         <button class="puce" type="submit">Ajouter</button>
       </form>
+      <div id="bloc-pauses">
+        <div class="barre-titre haut-5"><span class="t-titre">Pause selon l'application</span><span class="t-label">cet ordinateur</span></div>
+        <p class="note haut-2">Essaim se met en pause tant que l'une de ces applications est au premier plan (montage, visio, jeu…), et reprend dès que tu en sors.</p>
+        <div class="regles haut-2" id="pauses-applis"></div>
+        <form class="ajout-regle" id="ajout-pause">
+          <label><span class="t-label">Application</span><input class="champ petit" id="pause-nom" list="applis-ouvertes" placeholder="obs64.exe" autocomplete="off" spellcheck="false"></label>
+          <button class="puce" type="submit">Ajouter</button>
+          <button class="puce" type="button" id="pause-recente" hidden></button>
+        </form>
+      </div>
     </div>
   </section>
 

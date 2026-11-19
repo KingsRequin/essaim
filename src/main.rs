@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod adaptatif;
 mod appli;
 mod audio;
 mod auto;
@@ -23,6 +24,7 @@ mod ipc;
 mod layer;
 mod maj;
 mod media;
+mod pauses;
 mod prisme;
 mod profils;
 mod reglages;
@@ -292,10 +294,15 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
     let mut published: Option<(bool, bool, bool, bool, bool, u32)> = None;
     // un calque immobile par écran visité ; les fissures y sont retracées à chaque image
     let mut backend = backend::Backend::new(conf.cfg.rendu.carte_graphique);
+    win::masquer_captures(conf.cfg.rendu.masquer_captures);
     let mut cracks: Vec<Crack> = Vec::new();
     let mut swarm = Swarm::new();
     let mut rng = Rng::seeded();
     let mut border = bordure::Border::default();
+    // pauses automatiques (ne pas déranger, batterie, applications) et raison publiée
+    let mut pauses = pauses::Pauses::default();
+    let mut raison_publiee = String::new();
+    let mut adaptatif = adaptatif::Adaptatif::default();
 
     let start = Instant::now();
     let mut last = start;
@@ -374,7 +381,16 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         let t = (now - start).as_secs_f64();
         if now - charge_depuis >= Duration::from_secs(1) {
             let ms = charge_busy.as_secs_f32() * 1000.0 / charge_frames.max(1) as f32;
-            charge::publier(ms, charge_frames as f32 / (now - charge_depuis).as_secs_f32());
+            let ips = charge_frames as f32 / (now - charge_depuis).as_secs_f32();
+            charge::publier(ms, ips);
+            // qualité adaptative : cadence plafonnée par paliers quand une image coûte cher
+            let change = if conf.cfg.rendu.adaptatif { adaptatif.mesure(ms, ips) } else { adaptatif.lever() };
+            if change {
+                match adaptatif.plafond() {
+                    0 => log::info!("qualité adaptative : plus de plafond de cadence"),
+                    p => log::info!("qualité adaptative : cadence plafonnée à {p} images/s (calcul moyen {ms:.2} ms par image)"),
+                }
+            }
             (charge_busy, charge_frames, charge_depuis) = (Duration::ZERO, 0, now);
         }
 
@@ -402,14 +418,23 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             shared.set_sensitivity(conf.cfg.audio.sensibilite_kick);
             shared.set_min_gap(conf.cfg.audio.delai_kick);
             maj::regler(conf.cfg.mise_a_jour.auto);
+            win::masquer_captures(conf.cfg.rendu.masquer_captures);
+        }
+        // pause automatique : traitée comme le plein écran (rien dessiné, son coupé, bordure rendue)
+        let retenue = pauses.tick(&conf.cfg.pause, now);
+        let retrait = fs_paused || retenue.pause.is_some();
+        let raison = pauses::raison(user_paused, fs_paused, retenue.pause.as_deref(), retenue.plafond, adaptatif.plafond());
+        if raison != raison_publiee {
+            charge::publier_raison(&raison);
+            raison_publiee = raison;
         }
         // son : coupé en pause et en plein écran (sauf fenêtre des réglages ouverte, qui le montre)
-        let son_voulu = conf.cfg.audio.actif && (!(user_paused || fs_paused) || reglages_ouverts());
+        let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts());
         son.regler(son_voulu, &shared, now);
         automatique.tick(&conf.cfg, now);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
-        let fields = (user_paused, fs_paused, !user_paused && !fs_paused, backend.is_gpu(), prisme.connected(), conf_gen);
+        let fields = (user_paused, fs_paused, !user_paused && !retrait, backend.is_gpu(), prisme.connected(), conf_gen);
         if published != Some(fields) {
             ipc_state.publish(serde_json::json!({
                 "paused": user_paused,
@@ -422,7 +447,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             published = Some(fields);
         }
         // icône : grisée en pause, infobulle avec le preset en place, l'état et le morceau
-        let montre = (user_paused, fs_paused || profond, conf_gen, media::version());
+        let montre = (user_paused, retrait || profond, conf_gen, media::version());
         if icone != Some(montre) {
             if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
                 let nom = profils::list().into_iter().find(|p| profils::same(&p.cfg, cfg)).map(|p| p.name);
@@ -433,7 +458,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             icone = Some(montre);
         }
 
-        let active = !user_paused && !fs_paused;
+        let active = !user_paused && !retrait;
         let state = match &cur {
             _ if !active => "en pause",
             None => "position du curseur illisible",
@@ -529,6 +554,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
             (true, c) => c.min(cfg.rendu.cadence_repos),
             (false, c) => c,
         };
+        let cadence = pauses::plafonner(pauses::plafonner(cadence, retenue.plafond), adaptatif.plafond());
         // cadence choisie : attente jusqu'à l'image suivante, par tranches courtes pour que les
         // clics restent lus (un clic de 60 ms doit être vu)
         if cadence > 0 {

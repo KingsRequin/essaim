@@ -27,6 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 // Fenêtre superposée : transparente aux clics, toujours devant, hors barre des tâches.
 
 static OVERLAY_CLASS: Once = Once::new();
+const CLASSE_CALQUE: PCWSTR = w!("EssaimOverlay");
 
 extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_NCHITTEST {
@@ -60,7 +61,7 @@ pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows:
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 lpfnWndProc: Some(overlay_proc),
                 hInstance: hinst.into(),
-                lpszClassName: w!("EssaimOverlay"),
+                lpszClassName: CLASSE_CALQUE,
                 ..Default::default()
             };
             RegisterClassExW(&wc);
@@ -71,7 +72,7 @@ pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows:
         }
         let hwnd = CreateWindowExW(
             ex,
-            w!("EssaimOverlay"),
+            CLASSE_CALQUE,
             w!("Essaim"),
             WS_POPUP,
             rect.0,
@@ -87,6 +88,9 @@ pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows:
         // l'écran) pour une appli plein écran : la barre des tâches masquée automatiquement perd
         // son « toujours devant » et ressort derrière les fenêtres.
         SetPropW(hwnd, w!("NonRudeHWND"), Some(windows::Win32::Foundation::HANDLE(std::ptr::without_provenance_mut(1))))?;
+        if MASQUER_CAPTURES.load(Ordering::Relaxed) {
+            exclure_des_captures(hwnd, true);
+        }
         if composition {
             // une fenêtre « layered » n'est montrée qu'avec des attributs ; l'opacité globale
             // reste pleine, la transparence vient du contenu DirectComposition
@@ -101,6 +105,37 @@ pub fn destroy_window(hwnd: HWND) {
     unsafe {
         let _ = DestroyWindow(hwnd);
     }
+}
+
+/// Calques exclus des captures d'écran et des streams (`[rendu] masquer_captures`).
+static MASQUER_CAPTURES: AtomicBool = AtomicBool::new(false);
+
+fn exclure_des_captures(hwnd: HWND, oui: bool) {
+    let affinite = if oui { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+    if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinite) } {
+        log::warn!("calque : exclusion des captures impossible ({e})");
+    }
+}
+
+/// Exclut les calques des captures d'écran et des streams (`WDA_EXCLUDEFROMCAPTURE`, Windows 10
+/// 2004 et plus), ou les y remet : les calques existants tout de suite, les suivants à leur
+/// création. Fil principal (celui qui crée les calques).
+pub fn masquer_captures(oui: bool) {
+    if MASQUER_CAPTURES.swap(oui, Ordering::Relaxed) == oui {
+        return;
+    }
+    unsafe extern "system" fn chaque(h: HWND, l: LPARAM) -> windows::core::BOOL {
+        let mut classe = [0u16; 32];
+        let n = unsafe { GetClassNameW(h, &mut classe) } as usize;
+        if classe[..n] == *unsafe { CLASSE_CALQUE.as_wide() } {
+            exclure_des_captures(h, l.0 != 0);
+        }
+        true.into()
+    }
+    unsafe {
+        let _ = EnumThreadWindows(windows::Win32::System::Threading::GetCurrentThreadId(), Some(chaque), LPARAM(oui as isize));
+    }
+    log::info!("{}", if oui { "calques masqués des captures et des streams" } else { "calques de nouveau visibles des captures" });
 }
 
 impl Surface {
@@ -414,6 +449,8 @@ thread_local! {
     /// Infobulle de l'icône.
     static TIP: RefCell<String> = const { RefCell::new(String::new()) };
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
+    /// Alimentation changée (secteur, batterie, économiseur) : `WM_POWERBROADCAST`.
+    static POWER_CHANGED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Raccourcis clavier enregistrés (le menu les affiche alors à côté des entrées).
@@ -485,6 +522,11 @@ pub fn take_display_changed() -> bool {
         ECHELLES.with(|e| *e.borrow_mut() = (Vec::new(), None));
     }
     changed
+}
+
+/// Vrai une fois après un changement d'alimentation signalé par Windows (fil principal).
+pub fn take_power_changed() -> bool {
+    POWER_CHANGED.with(|p| p.replace(false))
 }
 
 /// Commande choisie dans le menu depuis le dernier appel (0 = aucune).
@@ -616,6 +658,9 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED || (msg == WM_SETTINGCHANGE && wp.0 == SPI_SETWORKAREA.0 as usize) {
             DISPLAY_CHANGED.with(|d| d.set(true));
+        }
+        if msg == WM_POWERBROADCAST && wp.0 == PBT_APMPOWERSTATUSCHANGE as usize {
+            POWER_CHANGED.with(|p| p.set(true));
         }
         if msg == WM_ENDSESSION {
             // la session se ferme vraiment (wParam ≠ 0) : le processus peut être arrêté à tout

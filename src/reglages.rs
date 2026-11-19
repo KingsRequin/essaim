@@ -74,8 +74,10 @@ const FICHIERS: [(&str, &str, &[u8]); 5] = [
     ("polices/Archivo.ttf", "font/ttf", include_bytes!("../ui/polices/Archivo.ttf")),
 ];
 
-/// La page ne charge que ses propres fichiers ; seul l'index de la bibliothèque vient d'ailleurs.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; \
+/// La page ne charge que ses propres fichiers ; seuls l'index de la bibliothèque et les images
+/// d'aperçu de ses presets viennent d'ailleurs.
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; \
+                   img-src 'self' data: https://raw.githubusercontent.com; \
                    connect-src https://raw.githubusercontent.com";
 
 fn servir(req: wry::http::Request<Vec<u8>>) -> wry::http::Response<Cow<'static, [u8]>> {
@@ -403,7 +405,7 @@ impl Fenetre {
                 }
                 self.etat();
             }
-            Demande::Applis => self.envoyer(&json!({ "type": "applis", "applis": crate::appli::applis_ouvertes() })),
+            Demande::Applis => self.envoyer(&json!({ "type": "applis", "applis": crate::appli::applis_ouvertes(), "recente": crate::pauses::recente() })),
             Demande::EnregistrerGif { nom, donnees } => match enregistrer_gif(&nom, &donnees) {
                 Ok(f) => {
                     montrer_dans_l_explorateur(&f);
@@ -499,6 +501,7 @@ impl Fenetre {
                 "morceau": crate::media::json(),
                 "lecture": crate::media::en_lecture(),
                 "pistes": crate::media::pistes(),
+                "raison": crate::charge::raison(),
             }));
             if dates() != self.dates {
                 self.etat();
