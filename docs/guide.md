@@ -13,6 +13,20 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 - **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
 - **Aigus** (charleston, cymbales) : chaque attaque fait jaillir des étincelles des têtes
   (`[scintillement]`, passe-haut à 5 kHz, enveloppes rapide et lente).
+- **Caisse claire** (`[musique] caisse_claire`, actif par défaut) : sur chaque caisse claire ou
+  clap, un carré posé sur la pointe s'ouvre sous le pointeur (0,3 s). Le charleston et le clic
+  d'attaque des kicks ne comptent pas ; une caisse claire jouée avec un kick (claps de la house),
+  si.
+- **Montée et drop** (`[musique] montee`, actif par défaut) : pendant une montée (roulement de
+  caisse claire bien plus serré que d'habitude, son qui s'éclaircit), l'essaim se resserre (jusqu'à
+  −45 %) et tourne plus vite (jusqu'à +120 %). Au drop (le premier kick après la montée, ou le
+  retour brutal de l'énergie après un passage calme ; au plus un toutes les 8 s), il explose :
+  éclat, satellites en double, grande onde et gerbe d'étincelles depuis le centre.
+- **Contretemps** (`[musique] contretemps`) : quand le tempo des kicks est connu, les têtes
+  grossissent un instant au milieu de chaque temps, et les orbites s'écartent un peu.
+- **Stéréo** (`[musique] stereo`, 0 à 1, 0 par défaut) : l'essaim penche vers le côté qui joue le
+  plus fort, jusqu'à 1,6 fois le rayon de l'orbite. Les blancs entre deux coups ne le ramènent pas
+  au centre ; un vrai silence (0,5 s), si.
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
   moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
   losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
@@ -32,6 +46,13 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
   sans morceau, on retombe sur eux, dans cet ordre. Avec `[couleur] musique`, la teinte glisse en
   plus avec la basse et la brillance du son.
+- **Palette** (`[couleur] palette`, 1 à 3 teintes) : les comètes et les satellites se partagent
+  plusieurs teintes, chacune décalée de `ecart_palette` degrés (120 : trois teintes à égale
+  distance) de la teinte de base, qu'elle soit fixe, qui défile ou imposée (application, pochette…).
+  Un satellite garde sa teinte toute sa vie.
+- **Constellation** (`[essaim] constellation`) : de fines lignes relient les têtes (satellites et
+  comètes) plus proches que 1,1 fois le rayon de l'orbite, d'autant plus vives qu'elles sont
+  proches (160 lignes au plus).
 - **Changement de piste** (`[musique] rafale_piste`, actif par défaut) : quand le titre change
   pendant la lecture, une rafale (éclat, satellites en double, grande onde) ; rien au lancement
   ni sur une pause.
@@ -41,8 +62,18 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   chaque temps (`[audio] pulsation_tempo`, bascule *Pulser au tempo pendant les breaks*).
 - **Clics** : une onde de choc (`[clic] onde`) et, au choix, des éclats (`eclats`), en plus des
   fissures. C'est le bouton principal qui compte, même quand les boutons sont inversés (gauchers).
+  Au clic droit (`[clic] droit`, actif par défaut ; le bouton secondaire), un anneau se referme sur
+  le point du clic et douze étincelles y sont aspirées. Dans le grand aperçu des réglages, un clic
+  droit le montre.
 - **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`) ; on
   le voit aussi dans le grand aperçu des réglages quand la souris y file.
+- **Inertie** (`[orbite] inertie`, 0 à 1, 0 par défaut) : le centre de l'orbite suit le pointeur
+  comme au bout d'un ressort : il traîne derrière la souris quand elle file (jusqu'à six fois plus
+  loin qu'à 0), la dépasse un peu à l'arrêt, puis revient sur elle.
+- **Rebonds** (`[scintillement] rebonds`, actif par défaut) : les étincelles (aigus, éclats, drop,
+  clic droit) et la poussière du sillage rebondissent sur les bords de la fenêtre au premier plan,
+  dedans comme dehors, en perdant un peu de vitesse. Ni le bureau, ni la barre des tâches, ni une
+  fenêtre réduite ou en plein écran.
 - **Projecteur** (`[projecteur]`, actif par défaut) : secouer la souris (quelques allers-retours
   rapides de gauche à droite) ou Ctrl+Alt+F assombrit l'écran du pointeur autour d'un disque clair
   qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les kicks.
@@ -52,7 +83,7 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
   (`rayon`, `hauteur`).
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
-  s'illumine sur chaque kick (Windows 11).
+  s'illumine sur chaque kick (Windows 11), sauf en mode sans flashs.
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
 choisie dans *Avancé › Son › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
@@ -78,8 +109,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 ## Utilisation
 
 - Icône de notification : un clic (ou double-clic) ouvre les réglages ; clic droit, le menu :
-  *Mettre en pause*, *Réglages…*, *Preset suivant* / *précédent*, *Presets* (celui en place
-  coché), *Quitter*, avec leurs raccourcis quand ils sont actifs. L'infobulle donne le preset en
+  *Mettre en pause*, *Réglages…*, *Fenêtre pour le stream*, *Presets* (celui en place coché),
+  *Preset suivant* / *précédent*, *Quitter*, avec leurs raccourcis quand ils sont actifs. L'infobulle donne le preset en
   place et l'état (pause, veille) ; l'icône est grisée en pause.
 - **Veille** : souris immobile, ni son ni clic depuis `[rendu] veille_apres` secondes (60 ;
   0 = jamais) : l'essaim s'efface, puis plus rien n'est dessiné jusqu'au prochain mouvement, son
@@ -98,14 +129,40 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   le calcul redevient léger.
 - **Masquer des captures** (`[rendu] masquer_captures`) : l'essaim reste à l'écran mais
   n'apparaît plus dans les captures, enregistrements et partages d'écran (Windows 10 2004 et plus).
+- **Sans flashs** (`[rendu] sans_flashs`, propre à la machine) : pour les personnes sensibles aux
+  flashs. L'éclat du kick (et des rafales et drops) est à moitié de sa force et au plus trois par
+  seconde, sans halo blanc ; les ondes et les carrés sont plus pâles ; la bordure garde sa
+  luminosité de repos. `"auto"` (par défaut, *Comme Windows* dans les réglages) : seulement quand
+  les effets d'animation de Windows sont coupés (*Accessibilité › Effets visuels*), relu chaque
+  seconde ; `"oui"` : toujours ; `"non"` : jamais.
+- **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton des
+  réglages avancés, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
+  sur un fond uni (`[stream] fond` : `"vert"` par défaut, `"bleu"`, `"magenta"` ou `"noir"` ; propre
+  à la machine). Dans OBS : *Capture de fenêtre* sur « Essaim — stream », puis un filtre
+  *Incrustation chromatique* (ou, sur fond noir, un mode de fusion *Écran*). Elle suit le son et les
+  réglages, pas le pointeur, et continue quand l'essaim du pointeur est en pause, en plein écran ou
+  masqué par la frappe (le son reste écouté tant qu'elle est ouverte). Elle reste capturable même
+  avec *Masquer des captures*. L'essaim y grandit avec la fenêtre.
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier.
-- **Preset automatique** (`[automatique]`) : un preset par application au premier plan (nom de
-  l'exécutable, prioritaire) ou par plage horaire (qui peut passer minuit). Quand plus aucune
-  règle ne s'applique, les réglages d'avant reviennent, sauf ceux retouchés pendant la règle, qui
-  sont gardés (curseurs compris). Renommer ou supprimer un preset met à jour ou retire les règles
-  qui le citent. Les fenêtres d'Essaim ne comptent pas.
+- **Preset automatique** (`[automatique]`) : des règles « si … alors … » (`regles`,
+  prioritaires), puis un preset par application au premier plan (nom de l'exécutable), puis par
+  plage horaire (qui peut passer minuit). Quand plus aucune règle ne s'applique, les réglages
+  d'avant reviennent, sauf ceux retouchés pendant la règle, qui sont gardés (curseurs compris).
+  Renommer ou supprimer un preset met à jour ou retire les règles qui le citent. Les fenêtres
+  d'Essaim ne comptent pas.
+  - Une règle : `{ si = "artiste = Skrillex", alors = "Delta" }`. Clés : `artiste` et `titre` (du
+    morceau qui joue, pas en pause), `appli` (exécutable au premier plan, `.exe` facultatif), `bpm`
+    (tempo des kicks, quand il est stable), `heure` (« HH:MM »). Opérateurs : `=`, `!=`, `~`
+    (contient), et pour `bpm` et `heure` `<`, `>`, `<=`, `>=`. Plusieurs conditions : « et »
+    (`bpm > 140 et heure >= 22:00`). Majuscules ignorées ; une valeur peut être entre guillemets
+    (`artiste = "Simon et Garfunkel"`).
+  - `artiste =` reconnaît aussi un des artistes d'un champ « A, B & C feat. D » ; `bpm =` est vrai
+    à 2 BPM près. Une donnée absente (rien ne joue, tempo inconnu) rend la condition fausse.
+  - La première règle vraie l'emporte. Un changement dû à la musique (artiste, titre, tempo)
+    attend qu'elle soit stable 2 s : un tempo qui hésite autour d'un seuil ne fait pas clignoter
+    les presets. Une règle illisible est ignorée et notée au journal.
 - **Fenêtre des réglages** (`essaim.exe --reglages`, *Réglages…*, ou « Essaim - réglages » dans
   le menu Démarrer). Elle est claire ou sombre selon le thème des applications de Windows.
   - *01 Presets* : la grille des presets, chacun animé comme l'essaim autour du pointeur et au
@@ -120,7 +177,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     ouvre une toile où tracer le trajet d'un geste. Un clic sur l'aperçu y montre l'effet du
     clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
     `Images\Essaim` et le montre dans l'Explorateur.
-  - *04 Auto* : les règles du preset automatique et les raccourcis.
+  - *04 Auto* : les règles du preset automatique (*Si … alors …*, avec le bouton *Artiste en
+    cours* qui remplit la condition pour le morceau qui joue ; par application ; par heure), les
+    pauses par application et les raccourcis.
   - Au premier lancement, un accueil en trois étapes (à revoir depuis *Avancé*).
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
@@ -149,12 +208,17 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*, *Delta*, *Ruche*,
-    *Huit*, *Pollen*, *Losange*, *Spirale*, chacun refaisable à la main dans les réglages. Les
-    presets ne touchent pas à `[rendu]` (propre à la machine) ni à l'option des curseurs.
+  - Préréglages fournis (21) : *Défaut*, *Discret*, *Intense*, *Point seul*, *Pollen*, *Spirale* ;
+    un par forme du trajet : *Delta* (triangle), *Ruche* (hexagone), *Huit*, *Losange*, *Ellipse*,
+    *Carré*, *Pentagone*, *Étoile*, *Fleur*, *Trèfle*, *Cœur*, *Lissajous*, *Astroïde* ; et
+    *Constellation* (lignes entre les satellites, deux teintes) et *Festival* (contretemps, stéréo,
+    inertie, palette de trois teintes). Chacun est refaisable à la main dans les réglages. Les
+    presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine) ni à l'option des
+    curseurs.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
-- `essaim.exe --quitter` ferme l'instance en cours.
+- `essaim.exe --quitter` ferme l'instance en cours ; `essaim.exe --stream` ouvre la fenêtre pour
+  le stream (celle de l'instance en cours s'il y en a une).
 - `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été
   tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
   lancement suivant aussi).

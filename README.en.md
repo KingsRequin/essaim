@@ -9,7 +9,7 @@ music.**
 
 An overlay for Windows that listens to what your PC plays (Spotify, browser, games…): every kick
 reverses the rotation and releases satellites, the bass speeds up and widens the orbits, cymbals
-throw sparks.
+throw sparks, and on the drop, everything bursts.
 
 [![MIT license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 ![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?style=flat-square&logo=windows)
@@ -31,36 +31,92 @@ throw sparks.
 
 - **It really listens.** Kicks are recognized by a small model trained on real tracks
   (electronic, dubstep, rap, rock…), about 25 ms after they hit: the swarm lands on the beat, not
-  after it. Nothing to plug in: Essaim listens to what Windows plays.
+  after it. It also hears the snare, the build-up before a drop, the tempo and which side is
+  playing. Nothing to plug in: Essaim listens to what Windows plays.
 - **Your pointer stays yours.** It is the real Windows cursor, with no lag; Essaim only draws
   around it, in a click-through layer.
-- **Light.** Drawn by the GPU: 0.35 ms per frame on the benchmark, about 3% of one CPU core in
+- **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
-- **Your way.** 14 path shapes, or your own drawn by hand; presets animated live; every setting
-  applied instantly, with its cost shown.
+- **Your way.** 14 path shapes, or your own drawn by hand; 21 bundled presets, animated live;
+  "if the artist is… then this preset" rules; every setting applied instantly, with its cost
+  shown.
 
 ## Features
 
 <table>
 <tr>
 <td width="33%" valign="top"><img src="docs/images/kick.gif" alt="Intense preset pulsing on the kicks"></td>
-<td width="33%" valign="top"><img src="docs/images/trace.gif" alt="Comets on a hand-drawn clover path"></td>
+<td width="33%" valign="top"><img src="docs/images/drop.gif" alt="Festival preset: the swarm tightens during a build-up, then bursts on the drop"></td>
 <td width="33%" valign="top"><img src="docs/images/clic.gif" alt="Shockwave and shards on click"></td>
 </tr>
 <tr>
 <td valign="top"><b>It follows the music</b>: the kick reverses the rotation and adds satellites,
-the bass speeds it up, a low note widens the orbits, the highs sparkle.</td>
+the bass speeds it up, a low note widens the orbits, the snare opens a square.</td>
+<td valign="top"><b>Build-up and drop</b>: during the build-up the swarm tightens and speeds up;
+on the drop it bursts into a big wave and a spray of sparks.</td>
+<td valign="top"><b>It reacts to clicks</b>: shockwave, shards and cracks that close again; on
+right-click, a wave that closes in.</td>
+</tr>
+<tr>
+<td valign="top"><img src="docs/images/trace.gif" alt="Comets on a hand-drawn clover path"></td>
+<td valign="top"><img src="docs/images/constellation.gif" alt="Constellation preset: satellites linked by thin lines, two-hue palette"></td>
+<td valign="top"><img src="docs/images/stream.png" alt="Stream window: the swarm during a drop, on a green background"></td>
+</tr>
+<tr>
 <td valign="top"><b>Your own path</b>: draw a loop with the mouse and the comets travel it at
 constant speed. Or pick one of 14 shapes, which can spin on themselves.</td>
-<td valign="top"><b>It reacts to clicks</b>: shockwave, shards and cracks that close again. And
-a dust trail when the mouse moves fast.</td>
+<td valign="top"><b>Constellation and palette</b>: thin lines link nearby satellites; comets and
+satellites share up to three hues.</td>
+<td valign="top"><b>Stream window</b>: the swarm in the middle, on a solid background to key out
+in OBS; it follows your music like the swarm around the pointer.</td>
 </tr>
 </table>
 
-**The settings window.** A grid of presets, each animated live with your music: one click
-applies it. Save your own, compare two side by side, filter by shape.
+### The music
 
-<img src="docs/images/presets.png" alt="Presets tab: ten bundled presets, animated" width="100%">
+| | |
+|---|---|
+| 🥁 **Kick** | Reverses the rotation, adds satellites, flash under the pointer |
+| 🔊 **Bass** | Speeds up the rotation; the lower the note, the wider the orbits |
+| ✨ **Highs** | Hi-hats and cymbals throw sparks |
+| 🟦 **Snare** | A glowing square opens under the pointer on every snare or clap |
+| 🚀 **Build-up and drop** | The swarm tightens and speeds up during the build-up, then bursts on the drop |
+| ⏱️ **Tempo** | The swarm keeps pulsing through breaks without a kick drum; optionally, the heads pulse on the off-beats |
+| 🎧 **Stereo** | Optionally, the swarm leans towards the louder side |
+| 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
+
+### The mouse and the screen
+
+| | |
+|---|---|
+| 🖱️ **Clicks** | Shockwave, shards, cracks; on right-click, a wave that closes in |
+| 💨 **Movement** | A dust trail when the mouse moves fast; optionally, the swarm lags behind it like on a spring |
+| 🪟 **Active window** | Its border takes the swarm's color and lights up on every kick; sparks bounce off its edges |
+| 🎨 **Colors** | Fixed or cycling hue, a palette of two or three hues, color of the foreground app, of the website open, of the album art, or drifting with the music |
+| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer; optional crosshair and spectrum ring |
+
+### On its own, and out of the way
+
+| | |
+|---|---|
+| 🤖 **If … then …** | Rules pick the preset: `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*…; or by foreground app, or time of day |
+| 🌙 **Stays out of the way** | Pauses for full-screen apps, presentations, on battery or in front of chosen apps; lowers its frame rate when the PC struggles; can be hidden from screenshots and streams |
+| 🫶 **No flashes** | For people sensitive to flashing: softer flashes, three per second at most, a border that no longer blinks (automatic when Windows reduces animations) |
+| 📺 **Stream window** | The swarm in the middle of a window on a solid background, to add in OBS |
+| 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | A Horizon widget pauses and tunes Essaim from the bar |
+
+**Also:** global hotkeys (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> next preset,
+<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd> pause), presets in the tray menu, GIF export of the
+preview, *Surprends-moi* (random settings), light or dark theme like Windows, sleep while you're
+away, automatic updates (downloaded, verified, applied on restart). The **Dotter** cursor scheme
+(a simple dot) is included.
+
+## The settings window
+
+**Presets.** A grid of 21 bundled presets (one per shape, and a few more), each animated live with
+your music: one click applies it. Save your own, compare two side by side, filter by shape.
+
+<img src="docs/images/presets.png" alt="Presets tab: the 21 bundled presets, animated" width="100%">
 
 <table>
 <tr>
@@ -75,25 +131,7 @@ preset can carry its own.</td>
 </tr>
 </table>
 
-| | |
-|---|---|
-| 🥁 **Kick** | Reverses the rotation, adds satellites, flash under the pointer |
-| 🔊 **Bass** | Speeds up the rotation; the lower the note, the wider the orbits |
-| ✨ **Highs** | Hi-hats and cymbals throw sparks |
-| 🎨 **Color** | Fixed or cycling hue, color of the foreground app, of the website open in the browser, or drifting with the music |
-| 🪟 **Border** | The active window's border takes the swarm's color and lights up on every kick |
-| 🖱️ **Clicks** | Shockwave, shards, cracks |
-| 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
-| 🥁 **Tempo** | The kick tempo is tracked: the swarm keeps pulsing through breaks without a kick drum |
-| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer; optional crosshair and spectrum ring |
-| 🌙 **Stays out of the way** | Pauses for full-screen apps, presentations, on battery or in front of chosen apps; lowers its frame rate when the PC struggles; can be hidden from screenshots and streams |
-| 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | A Horizon widget pauses and tunes Essaim from the bar |
-
-**Also:** automatic preset by foreground app or time of day, global hotkeys
-(<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> next preset, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
-pause), presets in the tray menu, GIF export of the preview, *Surprends-moi* (random settings),
-light or dark theme like Windows, sleep while you're away, automatic updates (downloaded, verified, applied on restart).
-The **Dotter** cursor scheme (a simple dot) is included.
+**Auto**: the rules that pick the preset by track, tempo, app or time of day, and the hotkeys.
 
 ## Install
 
@@ -132,7 +170,7 @@ Uninstall: `scripts\uninstall.ps1` (your settings are kept).
 <details>
 <summary><b>Does it slow down my PC or my games?</b></summary>
 
-With the GPU, a frame costs 0.35 ms on the benchmark; in use, about 3% of one CPU core. When a
+With the GPU, a frame costs 0.31 ms on the benchmark; in use, about 3% of one CPU core. When a
 window goes fullscreen (game, video), everything stops; at rest (mouse still, no music), the
 frame rate drops. The settings window shows the power in use, measured live.
 </details>
@@ -160,6 +198,34 @@ for the preset library and updates.
 
 Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
 in *Réglages › Avancé › Son › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
+</details>
+
+<details>
+<summary><b>The flashes bother me (photosensitivity).</b></summary>
+
+*Réglages › Avancé › Sans flashs*: *Toujours*. Kick flashes are softened and limited to three per
+second, with no white halo, and the window border no longer blinks. By default (*Comme Windows*),
+this mode turns on by itself when animation effects are off in Windows (*Accessibility › Visual
+effects*).
+</details>
+
+<details>
+<summary><b>How do I show the swarm in OBS?</b></summary>
+
+Tray icon → *Fenêtre pour le stream* (or `essaim.exe --stream`). The swarm dances in the middle,
+on a solid background (green by default, selectable in the advanced settings). In OBS: *Window
+Capture* on « Essaim — stream », then a *Chroma Key* filter to remove the background. It stays
+capturable even when the swarm around the pointer is hidden from captures.
+</details>
+
+<details>
+<summary><b>How do I switch presets by artist or tempo?</b></summary>
+
+*04 Auto* tab, *Si … alors …* section: write a condition (`artiste = Skrillex`, `titre ~ remix`,
+`bpm > 140`, `appli = obs64.exe`, `heure >= 22:00`, or several joined by « et ») and pick the
+preset. The *Artiste en cours* button fills in the condition for the track that is playing. Tick
+*Choisir le preset automatiquement*: when no rule applies anymore, your previous settings come
+back.
 </details>
 
 <details>

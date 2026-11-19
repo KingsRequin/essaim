@@ -44,7 +44,19 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   `DWMWA_EXTENDED_FRAME_BOUNDS`) sans être agrandie ni avoir de barre de titre ou de bord de
   redimensionnement : une fenêtre agrandie, barre des tâches masquée, ne compte pas. En pause et
   en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
-- **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
+- **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global), bouton principal et
+  bouton secondaire (clic droit) ; boutons inversés (`SM_SWAPBUTTON`) : le principal est le droit.
+- **Rebonds** : cadre affiché de la fenêtre au premier plan (`DWMWA_EXTENDED_FRAME_BOUNDS`, relu
+  toutes les 250 ms avec le plein écran ; ni bureau, ni barre des tâches, ni fenêtre réduite, en
+  plein écran ou d'Essaim). Une étincelle ou un grain de poussière qui traverse un bord entre deux
+  pas est réfléchi (vitesse × 0,7).
+- **Inertie** (`[orbite] inertie`) : le centre de l'orbite est un ressort amorti vers le pointeur
+  (pulsation 14 → 4,9 rad/s, amortissement 0,45, Euler semi-implicite, stable aux pas de 0,05 s),
+  retard borné à 30 px × (1 + 5 × inertie) ; à 0, l'ancien suivi (lissage à 14/s).
+- **Sans flashs** (`[rendu] sans_flashs`) : `auto` lit `SPI_GETCLIENTAREAANIMATION` chaque seconde
+  (`win::sans_flashs`). L'éclat ne remonte qu'à 0,5 et au plus toutes les 1/3 s (`Swarm::eclater`),
+  sans halo blanc ; ondes, carrés et implosions à 45 % ; bordure sans illumination
+  (`bordure::sans_flashs`, `intensite` = 0).
 - **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
   (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
@@ -67,6 +79,12 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   rien sont sautés), < 1,5 ms dix secondes → palier précédent.
 - **Masquer des captures** : `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` sur chaque
   calque (`win::masquer_captures`). Les essais par capture `BitBlt` ne voient alors plus l'essaim.
+- **Fenêtre pour le stream** (`stream.rs`) : fenêtre ordinaire (classe `EssaimStream`), son
+  propre fil, son propre `Swarm` et ses `Effets`, dessinés au processeur (tiny-skia) au centre d'une
+  image de la taille de la zone cliente (échelle = petit côté / 205), sur fond uni, puis envoyés
+  par `SetDIBitsToDevice` à chaque rafraîchissement (`DwmFlush`). Elle relit `config.toml` chaque
+  seconde (`config::Watched`) et lit le son par le même `AudioShared` ; la capture du son continue
+  tant qu'elle est ouverte. Pas de `WDA_EXCLUDEFROMCAPTURE` : elle reste capturable.
 - **Projecteur, réticule, spectre** (`effets.rs`) : le réticule et le spectre s'ajoutent à la
   zone de l'essaim ; le projecteur ajoute l'écran entier du pointeur aux zones à redessiner, le
   temps de l'effet seulement (voile : dégradé radial Direct2D, ou remplissage ligne par ligne sur
@@ -97,7 +115,8 @@ en direct dans son panneau).
 
 Banc d'essai `cargo test --release mesure_moteurs -- --ignored --nocapture` (essaim plein,
 simulation comprise) : **0,35 ms par image** avec la carte graphique, 1,09 ms avec le
-processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le coût de tiny-skia
+processeur ; 0,31 ms et 1,10 ms le 2026-11-19, après les effets de la musique (caisse claire,
+montée et drop, palette, rebonds…). Pistes écartées après mesure : compilation AVX2 (aucun gain, le coût de tiny-skia
 est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
 (pas de gain, bugs connus). Banc `mesure_fissures` (2026-11-19) : 12 fissures sur processeur,
 2,7 → 1,1 ms par image depuis que leurs passes fixes sont précalculées. Effets (banc
@@ -134,6 +153,32 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   temps marqués) et après 3 estimations concordantes ; gardé pendant un break tant que la
   musique joue (30 s au plus), oublié après 3 s de silence. Relais : tempo connu, musique, aucun
   kick depuis 2 s → `pulsation_tempo` (éclat 0,35 × (1 − phase)⁴).
+- **Caisse claire** (`src/audio.rs`, `Caisse`, sans FFT) : deux passe-bande en série centrés sur
+  2 kHz (bande 1–4 kHz), enveloppe rapide (3 ms) contre lente (100 ms). Attaque : rapide > 2,5 ×
+  lente, > 0,004, et > 0,4 × l'enveloppe rapide de la bande 8–12 kHz (le charleston et les cymbales,
+  presque tout dans l'aigu, sont écartés). Elle n'est comptée que si elle tient 25 ms plus tard
+  (encore 30 % de son pic) : le clic d'attaque d'un kick s'éteint en quelques millisecondes, le bruit
+  d'une caisse claire non ; une caisse claire jouée avec un kick compte donc. 50 ms au moins entre
+  deux. Limite connue : un kick très distordu (hardstyle), riche et tenu dans les médiums, peut
+  compter aussi.
+- **Montée et drop** (`Montee`) : tension = 0,75 × accélération + 0,45 × éclaircie, bornée à 1,
+  lissée (montée 0,6 s, retombée 1,5 s). Accélération : caisses claires par seconde sur ~1 s face à
+  celles sur ~12 s (au moins 1,5), écart / 5. Éclaircie : brillance (bande 8–12 kHz face au son
+  entier, en dB : −40 dB → 0) sur 0,5 s face à 8 s, écart / 0,12. Drop : premier kick après au moins
+  1,2 s sans kick quand la tension a dépassé 0,45, ou retour de l'énergie (niveau sur 0,5 s face au
+  niveau sur 12 s, comme `spectre` : intensité < 0,32 puis > 0,66 dans les 4 s), au plus un toutes
+  les 8 s ; la tension retombe alors à 0. Puissance lissée sur 85 ms ; niveau long = moyenne de tout
+  ce qui a été entendu pendant les 12 premières secondes (une moyenne glissante partie d'un mauvais
+  début dérivait de 2,5 dB) ; silence = 250 ms sous −60 dBFS. Tests synthétiques : groove régulier
+  sans montée ni drop, montée (roulement de 4 à 16 caisses par seconde) puis un seul drop, drop
+  d'énergie après un passage 16 dB plus bas, caisses claires trouvées sans celles des kicks ; essai
+  réel `cargo test --release musique_reelle -- --ignored --nocapture` (un morceau joué pendant 24 s).
+  Calculé seulement si `[musique] montee` ou `caisse_claire` (`AudioShared::set_musique`).
+- **Stéréo** : la capture d'`audio-commun` remet après chaque paquet le niveau efficace de chaque
+  canal (`Sink::stereo`, depuis le commit qui suit la v0.2.0). Équilibre = (D − G) / (D + G), lissé
+  sur 0,25 s de son audible ; les paquets muets (blancs entre deux coups) ne le changent pas, et il
+  revient au centre après 0,5 s de silence. Essai réel : groove joué tout à droite → +1,00.
+- **Contretemps** (`render.rs`) : la phase du tempo des kicks (`pulsation`) qui passe 0,5.
 - **Sortie écoutée** : `capture::start_sur` d'`audio-commun` (sortie par défaut ou identifiant
   Windows) ; si la sortie choisie disparaît, repli sur la sortie par défaut, et retour sur elle
   dès qu'elle revient (vérification toutes les 2 s).

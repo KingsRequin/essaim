@@ -9,7 +9,7 @@ musique.**
 
 Une surcouche pour Windows qui écoute le son du PC (Spotify, navigateur, jeux…) : chaque kick
 inverse la rotation et lâche des satellites, la basse accélère et éloigne les orbites, les
-cymbales font jaillir des étincelles.
+cymbales font jaillir des étincelles, et au drop, tout explose.
 
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-blue?style=flat-square)](LICENSE)
 ![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?style=flat-square&logo=windows)
@@ -29,36 +29,96 @@ cymbales font jaillir des étincelles.
 
 - **Il écoute vraiment la musique.** Le kick est reconnu par un petit modèle appris sur de vrais
   morceaux (électro, dubstep, rap, rock…), en 25 ms environ : l'essaim tombe sur le temps, pas
-  après. Rien à brancher : Essaim écoute ce que joue Windows.
+  après. Il entend aussi la caisse claire, la montée avant un drop, le tempo et le côté qui joue.
+  Rien à brancher : Essaim écoute ce que joue Windows.
 - **Ton pointeur reste le tien.** C'est le vrai curseur de Windows, sans aucun retard ; Essaim
   dessine seulement autour, dans un calque transparent aux clics.
-- **Léger.** Dessiné par la carte graphique : 0,35 ms de calcul par image au banc d'essai, environ
+- **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
-- **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; des presets animés en
-  direct ; chaque réglage appliqué tout de suite, avec son coût affiché.
+- **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; 21 presets fournis, animés en
+  direct ; des règles « si l'artiste est… alors tel preset » ; chaque réglage appliqué tout de
+  suite, avec son coût affiché.
 
 ## Fonctions
 
 <table>
 <tr>
 <td width="33%" valign="top"><img src="docs/images/kick.gif" alt="Preset Intense qui pulse sur les kicks"></td>
-<td width="33%" valign="top"><img src="docs/images/trace.gif" alt="Comètes sur un trajet en trèfle dessiné à la main"></td>
+<td width="33%" valign="top"><img src="docs/images/drop.gif" alt="Preset Festival : l'essaim se resserre pendant une montée, puis explose au drop"></td>
 <td width="33%" valign="top"><img src="docs/images/clic.gif" alt="Onde de choc et éclats au clic"></td>
 </tr>
 <tr>
 <td valign="top"><b>Il suit la musique</b> : le kick inverse la rotation et ajoute des
-satellites, la basse accélère, une note grave éloigne les orbites, les aigus scintillent.</td>
+satellites, la basse accélère, une note grave éloigne les orbites, la caisse claire ouvre un
+carré.</td>
+<td valign="top"><b>Montée et drop</b> : pendant la montée, l'essaim se resserre et accélère ; au
+drop, il explose en une grande onde et une gerbe d'étincelles.</td>
+<td valign="top"><b>Il réagit aux clics</b> : onde de choc, éclats et fissures qui se referment ;
+au clic droit, une onde qui se referme.</td>
+</tr>
+<tr>
+<td valign="top"><img src="docs/images/trace.gif" alt="Comètes sur un trajet en trèfle dessiné à la main"></td>
+<td valign="top"><img src="docs/images/constellation.gif" alt="Preset Constellation : satellites reliés par de fines lignes, palette de deux teintes"></td>
+<td valign="top"><img src="docs/images/stream.png" alt="Fenêtre pour le stream : l'essaim au moment d'un drop, sur fond vert"></td>
+</tr>
+<tr>
 <td valign="top"><b>Ton propre trajet</b> : trace une boucle à la souris, les comètes la
 parcourent à vitesse constante. Ou choisis parmi 14 formes, qui peuvent tourner sur elles-mêmes.</td>
-<td valign="top"><b>Il réagit aux clics</b> : onde de choc, éclats et fissures qui se
-referment. Et un sillage de poussière quand la souris file.</td>
+<td valign="top"><b>Constellation et palette</b> : de fines lignes relient les satellites proches ;
+comètes et satellites se partagent jusqu'à trois teintes.</td>
+<td valign="top"><b>Fenêtre pour le stream</b> : l'essaim au centre, sur un fond uni à retirer
+dans OBS ; elle suit ta musique comme l'essaim du pointeur.</td>
 </tr>
 </table>
 
-**La fenêtre des réglages.** Une grille de presets, chacun animé en direct avec ta musique : un
-clic l'applique. Enregistre les tiens, compare-en deux côte à côte, filtre par forme.
+### La musique
 
-<img src="docs/images/presets.png" alt="Onglet Presets : dix presets fournis, animés" width="100%">
+| | |
+|---|---|
+| 🥁 **Kick** | Inverse le sens de rotation, ajoute des satellites, éclat sous le pointeur |
+| 🔊 **Basse** | Accélère la rotation ; plus la note est grave, plus les orbites s'éloignent |
+| ✨ **Aigus** | Charleston et cymbales font jaillir des étincelles |
+| 🟦 **Caisse claire** | Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire ou clap |
+| 🚀 **Montée et drop** | L'essaim se resserre et accélère pendant la montée, puis explose au drop |
+| ⏱️ **Tempo** | L'essaim continue de pulser pendant les breaks sans grosse caisse ; en option, les têtes pulsent sur les contretemps |
+| 🎧 **Stéréo** | En option, l'essaim penche vers le côté qui joue le plus fort |
+| 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
+
+### La souris et l'écran
+
+| | |
+|---|---|
+| 🖱️ **Clics** | Onde de choc, éclats, fissures ; au clic droit, une onde qui se referme |
+| 💨 **Mouvement** | Sillage de poussière quand la souris file ; en option, l'essaim traîne derrière elle comme sur un ressort |
+| 🪟 **Fenêtre active** | Sa bordure prend la couleur de l'essaim et s'illumine sur chaque kick ; les étincelles rebondissent sur ses bords |
+| 🎨 **Couleurs** | Teinte fixe ou qui défile, palette de deux ou trois teintes, couleur de l'appli au premier plan, du site ouvert, de la pochette, ou qui glisse avec la musique |
+| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur ; en option, réticule et anneau de spectre |
+
+### Tout seul, et discret
+
+| | |
+|---|---|
+| 🤖 **Si … alors …** | Des règles choisissent le preset : `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*… ; ou selon l'appli au premier plan, ou l'heure |
+| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
+| 🫶 **Sans flashs** | Pour les personnes sensibles aux flashs : éclats adoucis, trois par seconde au plus, bordure qui ne clignote plus (tout seul si Windows réduit les animations) |
+| 📺 **Fenêtre pour le stream** | L'essaim au centre d'une fenêtre sur fond uni, à ajouter dans OBS |
+| 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un widget d'Horizon met Essaim en pause et le règle depuis la barre |
+
+**Et aussi :** raccourcis globaux (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> preset suivant,
+<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd> pause), presets dans le menu de l'icône, export de
+l'aperçu en GIF, *Surprends-moi*, thème clair ou sombre comme Windows, veille quand on s'absente,
+mises à jour automatiques (téléchargées, vérifiées, appliquées au redémarrage). Le jeu de curseurs
+**Dotter** (un simple point) est fourni.
+
+Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
+
+## La fenêtre des réglages
+
+**Les presets.** Une grille de 21 presets fournis (un par forme, et quelques autres), chacun animé
+en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
+filtre par forme.
+
+<img src="docs/images/presets.png" alt="Onglet Presets : les 21 presets fournis, animés" width="100%">
 
 <table>
 <tr>
@@ -73,27 +133,8 @@ Un preset peut emporter le sien.</td>
 </tr>
 </table>
 
-| | |
-|---|---|
-| 🥁 **Kick** | Inverse le sens de rotation, ajoute des satellites, éclat sous le pointeur |
-| 🔊 **Basse** | Accélère la rotation ; plus la note est grave, plus les orbites s'éloignent |
-| ✨ **Aigus** | Charleston et cymbales font jaillir des étincelles |
-| 🎨 **Couleur** | Teinte fixe ou qui défile, couleur de l'appli au premier plan, du site ouvert dans le navigateur, ou qui glisse avec la musique |
-| 🪟 **Bordure** | La bordure de la fenêtre active prend la couleur de l'essaim et s'illumine sur chaque kick |
-| 🖱️ **Clics** | Onde de choc, éclats, fissures |
-| 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
-| 🥁 **Tempo** | Le tempo des kicks est suivi : l'essaim continue de pulser pendant les breaks sans grosse caisse |
-| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur ; en option, réticule et anneau de spectre |
-| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
-| 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un widget d'Horizon met Essaim en pause et le règle depuis la barre |
-
-**Et aussi :** preset automatique selon l'appli au premier plan ou l'heure, raccourcis globaux
-(<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> preset suivant, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
-pause), presets dans le menu de l'icône, export de l'aperçu en GIF, *Surprends-moi*, thème clair
-ou sombre comme Windows, veille quand on s'absente, mises à jour automatiques (téléchargées, vérifiées, appliquées au
-redémarrage). Le jeu de curseurs **Dotter** (un simple point) est fourni.
-
-Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
+**Auto** : les règles qui choisissent le preset selon le morceau, le tempo, l'application ou
+l'heure, et les raccourcis clavier.
 
 ## Installation
 
@@ -133,7 +174,7 @@ Désinstaller : `scripts\uninstall.ps1` (tes réglages sont gardés).
 <details>
 <summary><b>Est-ce que ça ralentit mon PC ou mes jeux ?</b></summary>
 
-Avec la carte graphique, une image coûte 0,35 ms de calcul au banc d'essai ; en usage, environ
+Avec la carte graphique, une image coûte 0,31 ms de calcul au banc d'essai ; en usage, environ
 3 % d'un cœur du processeur. Quand une fenêtre passe en plein écran (jeu, vidéo), tout s'arrête ; au repos (souris
 immobile, pas de musique), la cadence baisse. La fenêtre des réglages affiche la puissance
 utilisée, mesurée en direct.
@@ -163,6 +204,34 @@ se connecte qu'à GitHub, pour la bibliothèque de presets et les mises à jour.
 Essaim écoute la sortie audio *par défaut* de Windows. Si ta musique passe par une autre sortie,
 choisis-la dans *Réglages › Avancé › Son › Sortie son écoutée*. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
 basse, note).
+</details>
+
+<details>
+<summary><b>Les éclats me gênent (photosensibilité).</b></summary>
+
+*Réglages › Avancé › Sans flashs* : *Toujours*. Les éclats du kick sont adoucis et limités à trois
+par seconde, sans halo blanc, et la bordure de la fenêtre ne clignote plus. Par défaut (*Comme
+Windows*), ce mode s'active tout seul quand les effets d'animation sont coupés dans Windows
+(*Accessibilité › Effets visuels*).
+</details>
+
+<details>
+<summary><b>Comment montrer l'essaim dans OBS ?</b></summary>
+
+Icône d'Essaim → *Fenêtre pour le stream* (ou `essaim.exe --stream`). L'essaim y danse au centre,
+sur un fond uni (vert par défaut, au choix dans les réglages avancés). Dans OBS : *Capture de
+fenêtre* sur « Essaim — stream », puis un filtre *Incrustation chromatique* pour retirer le fond.
+Elle reste capturable même si l'essaim autour du pointeur est masqué des captures.
+</details>
+
+<details>
+<summary><b>Comment changer de preset selon l'artiste ou le tempo ?</b></summary>
+
+Onglet *04 Auto*, partie *Si … alors …* : écris une condition (`artiste = Skrillex`,
+`titre ~ remix`, `bpm > 140`, `appli = obs64.exe`, `heure >= 22:00`, ou plusieurs jointes par
+« et ») et choisis le preset. Le bouton *Artiste en cours* remplit la condition pour le morceau
+qui joue. Coche *Choisir le preset automatiquement* : quand plus aucune règle ne s'applique, tes
+réglages d'avant reviennent.
 </details>
 
 <details>
