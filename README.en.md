@@ -88,7 +88,7 @@ preset can carry its own.</td>
 **Also:** automatic preset by foreground app or time of day, global hotkeys
 (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> next preset, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
 pause), presets in the tray menu, GIF export of the preview, *Surprends-moi* (random settings),
-light or dark theme like Windows, automatic updates (downloaded, verified, applied on restart).
+light or dark theme like Windows, sleep while you're away, automatic updates (downloaded, verified, applied on restart).
 The **Dotter** cursor scheme (a simple dot) is included.
 
 ## Install

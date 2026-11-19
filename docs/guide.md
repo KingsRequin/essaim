@@ -27,10 +27,11 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
   mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
   précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
-  RGB. Avec `[couleur] musique`, la teinte glisse en plus avec la basse et la brillance du son.
+  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`). Avec `[couleur] musique`, la teinte glisse en plus avec la basse et la brillance du son.
 - **Clics** : une onde de choc (`[clic] onde`) et, au choix, des éclats (`eclats`), en plus des
-  fissures.
-- **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`).
+  fissures. C'est le bouton principal qui compte, même quand les boutons sont inversés (gauchers).
+- **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`) ; on
+  le voit aussi dans le grand aperçu des réglages quand la souris y file.
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11).
 
@@ -55,14 +56,22 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 
 ## Utilisation
 
-- Icône de notification : *Mettre en pause*, *Réglages…*, *Presets* (celui en place coché),
-  *Quitter*.
+- Icône de notification : un clic (ou double-clic) ouvre les réglages ; clic droit, le menu :
+  *Mettre en pause*, *Réglages…*, *Preset suivant* / *précédent*, *Presets* (celui en place
+  coché), *Quitter*, avec leurs raccourcis quand ils sont actifs. L'infobulle donne le preset en
+  place et l'état (pause, veille) ; l'icône est grisée en pause.
+- **Veille** : souris immobile, ni son ni clic depuis `[rendu] veille_apres` secondes (60 ;
+  0 = jamais) : l'essaim s'efface, puis plus rien n'est dessiné jusqu'au prochain mouvement, son
+  ou clic. En pause et en plein écran, la capture du son s'arrête aussi (sauf si la fenêtre des
+  réglages est ouverte).
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier.
 - **Preset automatique** (`[automatique]`) : un preset par application au premier plan (nom de
   l'exécutable, prioritaire) ou par plage horaire (qui peut passer minuit). Quand plus aucune
-  règle ne s'applique, les réglages d'avant reviennent. Les fenêtres d'Essaim ne comptent pas.
+  règle ne s'applique, les réglages d'avant reviennent, sauf ceux retouchés pendant la règle, qui
+  sont gardés (curseurs compris). Renommer ou supprimer un preset met à jour ou retire les règles
+  qui le citent. Les fenêtres d'Essaim ne comptent pas.
 - **Fenêtre des réglages** (`essaim.exe --reglages`, *Réglages…*, ou « Essaim - réglages » dans
   le menu Démarrer). Elle est claire ou sombre selon le thème des applications de Windows.
   - *01 Presets* : la grille des presets, chacun animé comme l'essaim autour du pointeur et au
@@ -81,7 +90,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - Au premier lancement, un accueil en trois étapes (à revoir depuis *Avancé*).
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
-    *Aigus* s'allume sur les attaques des aigus.
+    *Aigus* s'allume sur les attaques des aigus. Sous *Pause*, l'état de l'écoute : *Son capté*,
+    *Son coupé* (pause, plein écran, son désactivé) ou *Son : erreur*, et *En veille*.
   - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
     (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
   - Une valeur de réglage se tape au clavier (clic dessus, Entrée) ; double-clic sur une
@@ -94,10 +104,15 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     exporter vers l'Explorateur, supprimer), import d'un fichier `.toml` (bouton ou glisser sur
     la fenêtre). Un preset appliqué s'annule par *Annuler* dans le message ou Ctrl+Z. Le preset
     dont les réglages en cours s'écartent de peu est marqué *modifié* (cadre pointillé).
+    Installer ou importer un preset ne remplace jamais un preset différent du même nom (à la
+    casse près), et les noms réservés de Windows (CON, NUL, COM1…) sont refusés.
   - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Avancé*.
-  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 4 onglets,
-    Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause.
+  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 4 ou flèches
+    (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme
+    une boîte.
+  - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
+    restent à l'arrêt, avec un bouton *Lecture*.
   - Préréglages fournis : *Défaut*, *Discret*, *Intense*, *Point seul*, *Delta*, *Ruche*,
     *Huit*, *Pollen*, *Losange*, *Spirale*, chacun refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]` (propre à la machine) ni à l'option des curseurs.
@@ -142,4 +157,7 @@ Les presets partagés vivent dans un dépôt GitHub public, `[bibliotheque] depo
 `reglages` reprend les sections de `config.toml` (sauf `[rendu]`) ; les clés absentes prennent
 les valeurs du preset *Défaut*. *Installer* copie le preset dans Mes presets. *Publier* (case du
 panneau d'enregistrement) ouvre GitHub sur la création de `presets/<nom>.toml` dans le dépôt :
-GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index.
+GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index. Un
+preset trop long pour l'adresse (plus de 6 000 caractères, par exemple un long trajet dessiné)
+est copié dans le presse-papiers : il suffit de le coller dans la page qui s'ouvre. Une entrée de
+l'index mal formée (section qui n'est pas une table) est ignorée.

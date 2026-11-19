@@ -86,7 +86,7 @@ Un preset peut emporter le sien.</td>
 **Et aussi :** preset automatique selon l'appli au premier plan ou l'heure, raccourcis globaux
 (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> preset suivant, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd>
 pause), presets dans le menu de l'icône, export de l'aperçu en GIF, *Surprends-moi*, thème clair
-ou sombre comme Windows, mises à jour automatiques (téléchargées, vérifiées, appliquées au
+ou sombre comme Windows, veille quand on s'absente, mises à jour automatiques (téléchargées, vérifiées, appliquées au
 redémarrage). Le jeu de curseurs **Dotter** (un simple point) est fourni.
 
 Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).

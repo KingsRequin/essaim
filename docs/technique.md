@@ -19,20 +19,31 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
     modifiée. Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
   Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
-  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`.
+  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Avec une cadence plafonnée, la
+  boucle attend l'image suivante sur une minuterie haute résolution
+  (`CreateWaitableTimerExW` + `MsgWaitForMultipleObjects`, réveil au moins toutes les 30 ms pour
+  lire les clics) au lieu de se réveiller à chaque rafraîchissement. Au-delà de 0,05 s entre
+  deux images, la simulation avance en plusieurs pas (pointeur interpolé, 0,25 s rattrapées au
+  plus). Sur processeur, les deux passes fixes d'une fissure sont tracées une fois dans une image
+  recopiée ensuite.
 - **Bordure** (`bordure.rs`, section `[bordure]`) : `DwmSetWindowAttribute(DWMWA_BORDER_COLOR)`
   sur la fenêtre au premier plan, lue par `GetForegroundWindow` à chaque image (pas de hook).
   Couleur = tête de l'essaim (teinte Prisme ou cycle propre) à la luminosité `repos` (0,5) ; sur
   un kick, montée immédiate vers la couleur pleine (`intensite`, 1) puis retombée en 0,35 s.
   Une seule fenêtre colorée : l'ancienne retrouve la couleur du système au changement de premier
   plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
-  notée dans `bordure.hwnd` pour le cas où Essaim est tué). Ignorées : fenêtres sans cadre, outils
+  notée dans `bordure.hwnd` pour le cas où Essaim est tué ; ce témoin n'est réécrit que pour une
+  nouvelle fenêtre colorée, et le hook de plantage ne rend la bordure que si c'est le fil
+  principal qui plante). Ignorées : fenêtres sans cadre, outils
   (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, fenêtres d'Essaim, plein écran. Couleur
   quantifiée, envoyée seulement si elle change (60 fois par seconde au plus) ; une fenêtre qui
   refuse (appli administrateur) est notée une fois au journal. Essai réel :
   `cargo test --release bordure_reelle -- --ignored --nocapture` avec un Bloc-notes ouvert.
 - **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
-  d'origine revient.
+  d'origine revient. Compte comme plein écran une fenêtre qui couvre l'écran (cadre lu par
+  `DWMWA_EXTENDED_FRAME_BOUNDS`) sans être agrandie ni avoir de barre de titre ou de bord de
+  redimensionnement : une fenêtre agrandie, barre des tâches masquée, ne compte pas. En pause et
+  en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global).
 - **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
@@ -42,6 +53,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   attaques doivent être séparées d'au moins `[audio] delai_kick` (0,1 s ; la double pédale du metal
   descend vers 0,08 s).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
+  **Veille** : rien de neuf depuis `[rendu] veille_apres` (60 s) → fondu de 1 s, puis plus aucun
+  dessin ; souris, son et clics restent lus toutes les 40 ms (réveil en 0,25 s au plus).
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
   tard, puis toutes les 30 s.
 
@@ -60,7 +73,8 @@ Banc d'essai `cargo test --release mesure_moteurs -- --ignored --nocapture` (ess
 simulation comprise) : **0,35 ms par image** avec la carte graphique, 1,09 ms avec le
 processeur. Pistes écartées après mesure : compilation AVX2 (aucun gain, le coût de tiny-skia
 est dans la préparation des tracés), horloge du compositeur `DCompositionWaitForCompositorClock`
-(pas de gain, bugs connus).
+(pas de gain, bugs connus). Banc `mesure_fissures` (2026-11-19) : 12 fissures sur processeur,
+2,7 → 1,1 ms par image depuis que leurs passes fixes sont précalculées.
 
 ## Analyse du son (audio-commun, `src/kick.rs`)
 
@@ -80,6 +94,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   morceau (plage de 20 dB).
 - **Hauteur** : autocorrélation du grave sous-échantillonné à ~1 kHz, 25–83 Hz, mise à jour hors
   des kicks.
+- **Côté Essaim** (`src/audio.rs`) : échantillons non finis remis à 0 avant tout filtre ;
+  compteurs de kicks et d'aigus monotones (une réouverture du flux ne crée pas de faux kicks) ;
+  brillance qui retombe en silence ; si la capture ne démarre pas, Essaim continue sans son et
+  réessaie toutes les 30 s.
 - Limites connues : une note de basse tenue ou une voix grave qui démarre sèchement peut encore
   compter comme un kick (la distinguer demanderait d'écouter plus de 30 ms) ; sur la batterie
   acoustique très propre, l'ancien détecteur faisait un peu mieux (F1 0,93 contre 0,84).
@@ -92,6 +110,13 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
+- `ui/apercu.js` reproduit `render.rs` jusqu'au détail : ordre de la mise à jour, points
+  intermédiaires (`sous_pas`), sillage, dessin des traînées par morceaux de 4 segments.
+- Réglages (`config.rs`) : écritures atomiques (fichier `.tmp` puis renommage) sous un verrou
+  unique partagé par la fenêtre, Horizon et le preset automatique ; un `config.toml` illisible
+  n'est jamais écrasé (seul un fichier absent est recréé) ; relecture sur date et taille, forcée
+  après chaque écriture de l'appli. Fenêtre réduite : vue cachée et envoi du son arrêté. Le
+  message `charge` porte aussi `capture` (`active`, `coupee`, `erreur`) et `veille`.
 
 ## Mises à jour et publication
 
