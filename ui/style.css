@@ -124,7 +124,7 @@ button, input { font-family: inherit; color: inherit; }
 .sonde .kick { display: flex; align-items: center; gap: var(--esp-2); }
 .sonde .temoin { width: 14px; height: 14px; border: var(--trait-controle) solid var(--encre-2); }
 .sonde .temoin.coup { animation: coup var(--battement) ease-out; }
-.sonde .tempo { color: var(--encre-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sonde .tempo { color: var(--encre-2); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 5.6em; }
 @keyframes coup { 0% { background: var(--signal); border-color: var(--signal); } 100% { background: transparent; } }
 .sonde .temoins { display: flex; flex-direction: column; gap: 5px; }
 .sonde .mesures { display: grid; grid-template-columns: auto var(--largeur-jauge) auto; gap: 5px var(--esp-2); align-items: center; }
@@ -132,7 +132,7 @@ button, input { font-family: inherit; color: inherit; }
 .sonde .jauge { position: relative; height: 6px; background: var(--survol); }
 .sonde .jauge > span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--encre); }
 .sonde .jauge.note > span { width: 4px; background: var(--signal); }
-.sonde .detail { font-size: var(--texte-mini); font-weight: 600; color: var(--encre-2); white-space: nowrap; }
+.sonde .detail { font-size: var(--texte-mini); font-weight: 600; color: var(--encre-2); white-space: nowrap; width: 8.6em; font-variant-numeric: tabular-nums; }
 .sonde.silence .jauge > span { visibility: hidden; }
 
 .vue { flex-grow: 1; min-height: 0; display: flex; gap: var(--esp-6); padding: var(--esp-5) var(--esp-6) var(--esp-4); }
@@ -213,7 +213,7 @@ button, input { font-family: inherit; color: inherit; }
 .scene { background: var(--scene); box-shadow: inset 0 0 0 1px var(--scene-bord); display: block; width: 100%; }
 
 /* Réglage : libellé, glissière, valeur en grands chiffres. */
-.reglages { display: grid; grid-template-columns: 150px minmax(0, 1fr) 100px; border-top: var(--trait-epais) solid var(--encre); }
+.reglages { display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(120px, max-content); border-top: var(--trait-epais) solid var(--encre); }
 .reglages > * { border-bottom: var(--trait-fin) solid var(--filet); min-height: 62px; display: flex; align-items: center; }
 .reglages > .large { grid-column: span 2; padding: var(--esp-3) 0; flex-wrap: wrap; gap: 6px; }
 .reglages > .glissiere { padding-right: var(--esp-5); }
@@ -235,10 +235,12 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 
 /* Valeur d'un réglage : se tape au clavier (clic dessus). */
 .valeur-saisie {
-  width: 100%; background: transparent; border: 0; outline: 0; text-align: right; padding: 0 0 2px;
+  width: 100%; background: transparent; border: 0; outline: 0; text-align: right; padding: 0 6px 2px 0;
   border-bottom: var(--trait-controle) solid transparent; cursor: text;
   -webkit-user-select: text; user-select: text;
 }
+/* grands chiffres : le champ prend la largeur de son texte (« 3,0 s », « 330 % ») */
+.reglages .valeur-saisie { field-sizing: content; min-width: 100px; }
 .valeur-saisie:hover { border-bottom-color: var(--bord-controle); }
 .valeur-saisie:focus { border-bottom-color: var(--signal); }
 .avance .valeur-saisie { width: 96px; font-size: 12.5px; font-weight: 900; font-variant-numeric: tabular-nums; }
@@ -429,6 +431,7 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .pousse-bas { margin-top: auto; }
 .colonne.moyenne { width: var(--colonne-moyenne); }
 .colonne.large { width: var(--colonne-large); }
+.actions-colonne { position: sticky; bottom: 0; background: var(--fond); padding: var(--esp-3) 0 2px; border-top: var(--trait-fin) solid var(--filet); }
 .scene.carree { aspect-ratio: 1; flex-shrink: 0; }
 .groupe-puces.aere { gap: var(--esp-3); align-items: center; }
 /* texte lu seulement par les lecteurs d'écran */
@@ -456,6 +459,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   font-size: 15px; font-weight: 800; font-stretch: 105%; text-transform: uppercase; letter-spacing: 0.03em; color: var(--encre-2);
 }
 .sous-onglet:hover { background: var(--survol); color: var(--encre); }
+.sous-onglets .famille { padding: var(--esp-4) var(--esp-3) var(--esp-1); border-bottom: var(--trait-fin) solid var(--filet); }
+.sous-onglets .famille:first-child { padding-top: var(--esp-2); }
 .sous-onglet[aria-selected="true"] { color: var(--encre); box-shadow: inset var(--trait-souligne) 0 0 0 var(--signal); }
 .sous-onglet .voyant { width: 8px; height: 8px; flex-shrink: 0; border: 1.5px solid currentColor; }
 .sous-onglet .voyant.allume { background: var(--signal); border-color: var(--signal); }
@@ -478,32 +483,45 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 /* Modulations : source → paramètre, sur qui, quantité, jauge de la source en direct. */
 .modulations { display: flex; flex-direction: column; gap: var(--esp-4); }
 .liste-modulations { border-top: var(--trait-fin) solid var(--filet); }
-.modulation {
-  display: grid; align-items: center; gap: var(--esp-3); padding: 10px 0; border-bottom: var(--trait-fin) solid var(--filet);
-  grid-template-columns: minmax(120px, 1.1fr) 14px minmax(120px, 1.1fr) auto minmax(96px, 0.8fr) minmax(110px, 1.4fr) 84px 56px auto;
+.modulation, .declencheur {
+  display: grid; align-items: center; gap: var(--esp-2) var(--esp-3); padding: 10px 0; border-bottom: var(--trait-fin) solid var(--filet);
 }
-.modulation .choix { min-width: 0; width: 100%; }
-.modulation .fleche { color: var(--signal-texte); font-weight: 900; }
+/* modulation : source → paramètre, sur qui, +, retirer ; quantité, valeur, jauge ; options */
+.modulation { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) auto minmax(0, 0.9fr) auto auto; }
+.modulation > input[type="range"] { grid-row: 2; grid-column: 1 / 4; }
+.modulation > .valeur-mod { grid-row: 2; grid-column: 4 / 6; text-align: left; }
+.modulation > .jauge-mod { grid-row: 2; grid-column: 6 / 8; }
+.modulation > .plus-options { grid-row: 1; grid-column: 6; }
+.modulation > .puce:last-of-type { grid-row: 1; grid-column: 7; }
+/* déclencheur : quand → action, impact, tester, +, retirer ; force, nombre ; options */
+.declencheur { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) auto auto auto auto; }
+.declencheur > .reglages-ligne { grid-row: 2; grid-column: 1 / -1; }
+.modulation > .options-ligne, .declencheur > .options-ligne { grid-column: 1 / -1; }
+.modulation .choix, .declencheur .choix { min-width: 0; width: 100%; }
+.modulation .fleche, .declencheur .fleche { color: var(--signal-texte); font-weight: 900; }
+.declencheur .impact { margin-top: 0; }
+.reglages-ligne, .options-ligne { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2) var(--esp-5); }
+.reglages-ligne:empty { display: none; }
+.options-ligne { padding: var(--esp-2) var(--esp-3); background: var(--survol); }
+.option-ligne { display: inline-flex; align-items: center; gap: var(--esp-2); }
+.option-ligne input[type="range"] { width: 140px; }
+.champ.nombre { width: 56px; font-size: 15px; font-weight: 800; padding: 0 0 2px; border-bottom-width: var(--trait-controle); }
 .valeur-mod { font-size: 13px; font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .jauge-mod { position: relative; height: 6px; background: var(--survol); }
 .jauge-mod > span { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--signal); }
 .vide-mod { padding: var(--esp-3) 0; }
 .modulations .groupe-puces > .t-label { flex-basis: 100%; }
-/* fenêtre étroite : sur deux lignes (source → paramètre, sur, retirer ; quantité, valeur, jauge) */
-@media (max-width: 1500px) {
-  .modulation { grid-template-columns: minmax(110px, 1fr) 14px minmax(110px, 1fr) auto minmax(90px, 0.8fr) auto; row-gap: var(--esp-2); }
-  .modulation > .puce { grid-row: 1; grid-column: 6; }
-  .modulation input[type="range"] { grid-row: 2; grid-column: 1 / 4; }
-  .modulation .valeur-mod { grid-row: 2; grid-column: 4; }
-  .modulation .jauge-mod { grid-row: 2; grid-column: 5 / 7; }
-}
+/* « Quand » d'un effet : un bouton par déclencheur (×), le choix pour en ajouter */
+.quand { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.puce.evenement .croix { margin-left: 2px; color: var(--signal-texte); font-weight: 900; }
+.choix.petit { min-width: 0; font-size: 13px; }
 
 /* Comparaison : liste des écarts sur toute la largeur. */
 .comparaison .pleine { grid-column: 1 / -1; }
 .regle.ecart { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 24px minmax(0, 1fr); }
 
 /* En-tête : état de l'écoute du son et veille, sous le bouton Pause. */
-.etat-essaim { align-items: flex-start; }
+.etat-essaim { align-items: flex-start; width: max(8.5em, calc(var(--largeur-jauge) * 2)); }
 #etat-essaim { display: flex; flex-direction: column; white-space: nowrap; }
 #etat-essaim[data-etat="erreur"] { color: var(--signal-texte); }
 /* Morceau en cours (API média de Windows) : discret, tronqué. */

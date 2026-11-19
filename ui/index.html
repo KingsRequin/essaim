@@ -88,6 +88,16 @@
         <span class="t-petit">Aperçu en direct, calculé comme l'essaim autour de ton pointeur (un clic : l'effet du clic ; la souris qui file : le sillage).</span>
         <button class="puce debut" data-lecture aria-pressed="false" title="Windows demande moins d'animations : les grands aperçus sont à l'arrêt" hidden>Lecture</button>
       </div>
+      <div class="pile serree">
+        <span class="t-label" id="libelle-simuler">Simuler dans l'aperçu</span>
+        <div class="groupe-puces" role="group" aria-labelledby="libelle-simuler">
+          <button class="puce petite" id="simuler-montee" title="Quatre secondes : une montée (roulement de caisse claire, tension), puis le drop">Montée et drop</button>
+          <button class="puce petite" data-simuler="kick">Kick</button>
+          <button class="puce petite" data-simuler="caisse">Caisse claire</button>
+          <button class="puce petite" data-simuler="temps">Temps</button>
+          <button class="puce petite" data-simuler="piste">Piste</button>
+        </div>
+      </div>
       <div class="puissance" id="puissance" data-niveau="faible">
         <div class="ligne-haut"><span class="t-label">Puissance utilisée</span><span class="niveau" id="puissance-niveau">—</span></div>
         <div class="barre"><span id="puissance-barre"></span></div>
@@ -100,7 +110,7 @@
         </div>
       </div>
       <div class="ressort"></div>
-      <div class="groupe-puces aere">
+      <div class="groupe-puces aere actions-colonne">
         <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
         <button class="puce" id="surprise" title="Des réglages tirés au hasard (Ctrl+Z pour revenir)">Surprends-moi</button>
         <button class="puce" id="exporter-gif" title="Trois secondes de l'aperçu, en GIF, dans Images\Essaim">Exporter en GIF</button>

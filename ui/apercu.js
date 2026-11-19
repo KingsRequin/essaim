@@ -1,14 +1,12 @@
 // Aperçu d'un preset : le même calcul que l'essaim autour du pointeur (src/render.rs et
-// src/modulation.rs), dessiné
-// dans un canevas. Kick : inverse le sens et ajoute des satellites ; basse : vitesse ; note
-// grave : orbites plus larges. Le pointeur est au centre. Toute formule de render.rs (Swarm::update,
+// src/modulation.rs), dessiné dans un canevas. Les événements du son (kick, caisse claire, drop…)
+// et de la souris font agir les déclencheurs ; les modulations font varier rotation, vitesse,
+// rayon… Le pointeur est au centre. Toute formule de render.rs (Swarm::update, agir,
 // Swarm::draw, draw_trail…) est reprise ici telle quelle : la modifier là oblige à la reporter ici.
 "use strict";
 
 const TAU = Math.PI * 2;
 const SAT_R_MAX = 1.9;
-// Éclat de la pulsation au tempo pendant un break sans kick (FORCE_PULSATION de render.rs).
-const FORCE_PULSATION = 0.35;
 const SAT_TRAINEE = 0.25;
 const PAS_TRAINEE = 1 / 90;
 // Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points),
@@ -34,37 +32,88 @@ const SPECTRE_BARRE_MIN = 1.5;
 const SPECTRE_MONTEE = 30;
 const SPECTRE_DESCENTE = 8;
 const BANDES_MAX = 32;
-// Modulations : comme src/modulation.rs (effet à fond de chaque cible : tr/min, radians/s,
-// parts du rayon et de la taille, degrés ; retombée des coups : kick, caisse claire, charleston,
-// drop ; suivi de la montée). La basse qui accélère et la note grave qui éloigne l'orbite sont
-// deux modulations, présentes par défaut.
-const MODULATION = { rotation: 90, vitesse: 40, rayon: 4, taille: 1.5, teinte: 180 };
-const RETOMBEE = [7, 8, 10, 0.9];
+// Modulations : comme src/modulation.rs (effet à fond de chaque cible, retombée des coups :
+// kick, caisse claire, charleston, drop, contretemps ; suivi de la montée ; lissage par défaut).
+const MODULATION = {
+  rotation: 90, vitesse: 40, acceleration: 2, rayon: 4, taille: 1.5, teinte: 180, decalage: 1.6, luminosite: 2, trainee: 3, opacite: 1,
+};
+const RETOMBEE = [7, 8, 10, 0.9, 10];
 const SUIVI_MONTEE = 6;
-const effetNeutre = () => ({ rotation: 0, vitesse: 0, rayon: 1, taille: 1, teinte: 0 });
+const LISSAGE = 0.35;
+const ADDITIONNEES = new Set(["rotation", "vitesse", "teinte", "decalage"]);
+const effetNeutre = () => ({ rotation: 0, vitesse: 0, teinte: 0, decalage: 0, acceleration: 1, rayon: 1, taille: 1, luminosite: 1, trainee: 1, opacite: 1 });
 const finiOu = (v, d) => (Number.isFinite(v) ? v : d);
 
-// Effets des modulations sur les comètes ([0]) et les satellites ([1]), comme
-// modulation::effets ; `valeur(source)` donne la valeur de chaque source.
-function effetsModulations(liste, valeur) {
-  const somme = [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]];
-  const cibles = ["rotation", "vitesse", "rayon", "taille", "teinte"];
-  for (const m of Array.isArray(liste) ? liste : []) {
-    const i = cibles.indexOf(m && m.cible);
-    if (i < 0) continue;
-    const q = Math.max(-1, Math.min(1, finiOu(+m.quantite, 0)));
-    const v = q * valeur(m.source);
+// Valeur visée d'une modulation (comme modulation::visee) : quantité × source, la source à
+// l'envers si demandé, rien sous le seuil.
+function visee(m, source) {
+  const stereo = m.source === "stereo";
+  let signe = stereo ? Math.sign(source) : 1;
+  let v = stereo ? Math.abs(source) : Math.max(0, source);
+  if (m.inverser && !stereo) v = 1 - Math.min(1, v);
+  if (m.inverser && stereo) signe = -signe;
+  const s = Math.min(0.95, Math.max(0, m.seuil || 0));
+  v = Math.max(0, (v - s) / (1 - s));
+  const q = Math.max(-1, Math.min(1, finiOu(+m.quantite, 0)));
+  return finiOu(q * v * signe, 0);
+}
+
+// Part du chemin vers la valeur visée en dt secondes (comme modulation::part_lissage).
+function partLissage(lissage, dt) {
+  const tau = 0.4 * Math.min(1, Math.max(0, finiOu(+lissage, LISSAGE))) ** 2;
+  return tau < 1e-4 ? 1 : 1 - Math.exp(-dt / tau);
+}
+
+// Effets des modulations (comme modulation::effets) : sur les comètes et les satellites
+// (`groupes`), et teinte de tout ce qui est dessiné (`teinte`, la teinte « sur tout »).
+function effetsModulations(liste, valeurs) {
+  const r = { groupes: [effetNeutre(), effetNeutre()], teinte: 0 };
+  (Array.isArray(liste) ? liste : []).forEach((m, i) => {
+    const v = valeurs[i];
+    if (!Number.isFinite(v) || !(m.cible in MODULATION)) return;
     const sur = m.sur || "tout";
-    if (sur !== "satellites") somme[0][i] += v;
-    if (sur !== "cometes") somme[1][i] += v;
+    if (m.cible === "teinte" && sur === "tout") { r.teinte += v * MODULATION.teinte; return; }
+    r.groupes.forEach((e, g) => {
+      if ((g === 1 && sur === "cometes") || (g === 0 && sur === "satellites")) return;
+      if (ADDITIONNEES.has(m.cible)) e[m.cible] += v * MODULATION[m.cible];
+      else e[m.cible] *= Math.max(0, 1 + v * MODULATION[m.cible]);
+    });
+  });
+  const borne = (x, a, b) => Math.min(b, Math.max(a, x));
+  for (const e of r.groupes) {
+    e.acceleration = borne(e.acceleration, 0, 5);
+    e.rayon = borne(e.rayon, 0.1, 5);
+    e.taille = borne(e.taille, 0, 4);
+    e.luminosite = borne(e.luminosite, 0, 4);
+    e.trainee = borne(e.trainee, 0.1, 5);
+    e.opacite = borne(e.opacite, 0, 1);
   }
-  return somme.map((s) => ({
-    rotation: s[0] * MODULATION.rotation,
-    vitesse: s[1] * MODULATION.vitesse,
-    rayon: Math.min(5, Math.max(0.1, 1 + s[2] * MODULATION.rayon)),
-    taille: Math.min(4, Math.max(0, 1 + s[3] * MODULATION.taille)),
-    teinte: s[4] * MODULATION.teinte,
-  }));
+  return r;
+}
+
+// Événements du son depuis la lecture précédente (comme render::Ecoute) : kicks, caisses
+// claires, drops, attaques des aigus (4 au plus chacun), temps (pendant un break ou non) et
+// contretemps quand le tempo est régulier.
+class Ecoute {
+  constructor() { this.vus = {}; this.phase = null; }
+  lire(son) {
+    const lu = (nom) => {
+      const n = son[nom] || 0, avant = this.vus[nom];
+      this.vus[nom] = n;
+      if (avant === undefined) return 0;
+      const d = (n - avant) >>> 0;
+      return d > 0x7fffffff ? 0 : Math.min(4, d);
+    };
+    const kicks = lu("kicks"), caisses = lu("caisses"), drops = lu("drops"), aigus = lu("aigus");
+    const phase = son.bpm ? son.phase || 0 : null;
+    let temps = false, contretemps = false;
+    if (phase !== null && this.phase !== null) {
+      temps = phase < this.phase - 0.5;
+      contretemps = this.phase < 0.5 && phase >= 0.5 && phase - this.phase < 0.4;
+    }
+    this.phase = phase;
+    return { kicks, caisses, drops, aigus, temps, pause: !!son.relais, contretemps };
+  }
 }
 
 function hsl(h, s, l) {
@@ -74,13 +123,13 @@ function hsl(h, s, l) {
 }
 
 // Teinte : k = 0 en queue de traînée, 1 en tête (comme render::prisme). `imposee` : teinte de
-// l'application au premier plan ou de l'éclairage, quand le preset la suit ; `decalage` :
-// glissement musical ; `j` : teinte de la palette (comme render::prisme_palette) ; `plus` :
-// degrés ajoutés par une modulation de la teinte.
+// l'application au premier plan ou de l'éclairage, quand le preset la suit ; `decalage` : teinte
+// ajoutée à tout ce qui est dessiné (modulations « sur tout ») ; `j` : teinte de la palette (comme
+// render::prisme_palette) ; `plus` : degrés ajoutés par une modulation de la teinte d'un groupe.
 function prisme(c, t, k, imposee, decalage = 0, j = 0, plus = 0) {
   const n = Math.min(3, Math.max(1, Math.round(c.palette || 1)));
   const palette = (j % n) * (c.ecart_palette ?? 120);
-  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0) + palette + finiOu(plus, 0);
+  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + finiOu(decalage, 0) + palette + finiOu(plus, 0);
   const queue = base + c.ecart_teinte;
   let dh = base - queue;
   if (dh > 180) dh -= 360;
@@ -202,16 +251,22 @@ class Apercu {
     this.ctx = canvas.getContext("2d");
     this.reglages = null;
     this.dir = 1;
-    this.spd = 3.5;
-    this.far = 1;
+    // vitesse du trajet des comètes et de celui des satellites, lissée (render::Swarm::spd)
+    this.spd = [3.5, 3.5];
     this.angles = [];
     this.rot = 0;
     this.rotSats = 0;
-    // modulations : enveloppes des coups et montée suivie (modulation::Sources), effets lissés
-    // sur les comètes et les satellites, à cette image et à la précédente
-    this.sources = { kick: 0, caisse: 0, charleston: 0, drop: 0, montee: 0 };
+    // modulations : enveloppes des coups et montée suivie (modulation::Sources), valeur lissée de
+    // chaque modulation, effets sur les comètes et les satellites à cette image et à la
+    // précédente, teinte de tout ce qui est dessiné
+    this.sources = { kick: 0, caisse: 0, charleston: 0, drop: 0, contretemps: 0, montee: 0 };
+    this.valeurs = [];
     this.mods = [effetNeutre(), effetNeutre()];
     this.modsAvant = [effetNeutre(), effetNeutre()];
+    this.teinte = 0;
+    // déclencheurs : dernier déclenchement de chacun (délai minimal)
+    this.derniers = [];
+    this.ecoute = new Ecoute();
     this.sonVu = null;
     this.grave = 0;
     this.presence = 0;
@@ -223,16 +278,8 @@ class Apercu {
     this.teinteImposee = null;
     this.curseur = null;
     this.particules = [];
-    this.aigusVus = null;
-    this.decalage = 0;
-    this.kicksVus = null;
-    // caisses claires et drops vus, montée suivie, contretemps, décalage stéréo du centre
-    this.caissesVues = null;
-    this.dropsVus = null;
-    this.tension = 0;
-    this.contre = 0;
-    this.phaseAvant = null;
-    this.penche = 0;
+    // fissures (l'aperçu les dessine, plus simplement que render::Crack)
+    this.fissures = [];
     this.prochaineCouleur = 0;
     // souris sur le canevas (pixels du canevas), pour le sillage
     this.pointeur = null;
@@ -261,8 +308,9 @@ class Apercu {
     const o = this.reglages.orbite;
     // une modulation du rayon (note grave…) élargit l'orbite : 70 % de la plus grande qu'elle
     // permet tient aussi
-    const liste = (this.reglages.modulations || {}).liste;
-    const rayonMax = effetsModulations(liste, () => 1).concat(effetsModulations(liste, () => -1)).reduce((m, e) => Math.max(m, e.rayon), 1);
+    const liste = (this.reglages.modulations || {}).liste || [];
+    const fond = (v) => effetsModulations(liste, liste.map((m) => visee(m, v)));
+    const rayonMax = fond(1).groupes.concat(fond(-1).groupes).reduce((m, e) => Math.max(m, e.rayon), 1);
     const portee = o.rayon * Math.max(SAT_R_MAX, anneau(o.anneaux - 1)[0]) * 1.3 * (1 + (rayonMax - 1) * 0.7) + 6;
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
   }
@@ -280,14 +328,13 @@ class Apercu {
   }
 
   // Les vignettes avancent par pas de 1/30 s : découpés en pas de 1/90 s au plus (une image du
-  // vrai essaim), avec dans chacun les points intermédiaires de render.rs.
+  // vrai essaim), avec dans chacun les points intermédiaires de render.rs. Les compteurs ne
+  // changent pas d'un pas à l'autre : les événements ne comptent qu'une fois.
   avancer(dt, son) {
     if (!this.reglages) return;
     this.sillage(dt);
     const n = Math.max(1, Math.ceil(dt / PAS_TRAINEE));
-    for (let i = 0; i < n; i++) {
-      this.pas(dt / n, i === 0 ? son : { ...son, kicks: this.kicksVus ?? son.kicks, caisses: this.caissesVues ?? son.caisses, drops: this.dropsVus ?? son.drops });
-    }
+    for (let i = 0; i < n; i++) this.pas(dt / n, son);
     this.spectre(dt, son);
   }
 
@@ -333,132 +380,81 @@ class Apercu {
 
   // Une image du vrai essaim (Swarm::update), dans le même ordre ; le pointeur est au centre.
   pas(dt, son) {
-    const c = this.reglages, e = c.essaim, o = c.orbite, m = c.musique || {};
+    const c = this.reglages, e = c.essaim, o = c.orbite;
     this.t += dt;
     const t = this.t;
     const S = this.echelle || 1;
-    // centre de l'orbite : penche vers le côté qui joue le plus fort (le pointeur reste au centre)
-    const penche = Math.max(-1, Math.min(1, son.balance || 0)) * Math.max(0, Math.min(1, m.stereo || 0)) * o.rayon * 1.6 * S;
-    this.penche += (penche - this.penche) * (1 - Math.exp(-dt * 14));
-    const cx = this.canvas.width / 2 + this.penche, cy = this.canvas.height / 2;
-    const far0 = this.far;
-    // kicks : sens inversé + satellites
-    if (this.kicksVus === null) this.kicksVus = son.kicks;
-    const nouveaux = Math.min(4, (son.kicks - this.kicksVus) >>> 0);
-    this.kicksVus = son.kicks;
-    for (let i = 0; i < nouveaux; i++) {
-      if (o.inverse_au_kick !== false) this.dir = -this.dir;
-      this.env = 1;
-      const bas = Math.min(e.par_kick_min, e.par_kick_max), haut = Math.max(e.par_kick_min, e.par_kick_max);
-      this.ajouterSatellites(Math.floor(entre(bas, haut + 0.999)), t, e.maximum);
-    }
+    const cx = this.canvas.width / 2, cy = this.canvas.height / 2, p = [cx, cy];
+    // événements du son : chacun fait agir ses déclencheurs, dans l'ordre de render.rs
+    const coups = this.ecoute.lire(son);
+    for (let i = 0; i < coups.kicks; i++) this.declencher("kick", p, t);
     this.env *= Math.exp(-dt * 9);
-    // relais du tempo (break sans kick) : l'éclat pulse doucement sur chaque temps (comme
-    // pulsation_tempo de render.rs)
-    if (son.relais && c.audio && c.audio.pulsation_tempo !== false) {
-      this.env = Math.max(this.env, FORCE_PULSATION * Math.pow(1 - Math.min(1, Math.max(0, son.phase || 0)), 4));
+    if (coups.temps) {
+      this.declencher("temps", p, t);
+      if (coups.pause) this.declencher("break", p, t);
     }
-    // caisse claire : un carré s'ouvre sous le pointeur
-    if (this.caissesVues === null) this.caissesVues = son.caisses || 0;
-    const caisses = Math.min(4, ((son.caisses || 0) - this.caissesVues) >>> 0);
-    this.caissesVues = son.caisses || 0;
-    const px = this.canvas.width / 2, py = this.canvas.height / 2;
-    if (m.caisse_claire && caisses > 0) {
-      this.particules.push({ x: px, y: py, vx: 0, vy: 0, ne: t, vie: CARRE_CAISSE[1], taille: CARRE_CAISSE[0] * S, genre: "carre" });
-    }
-    // montée suivie en douceur ; drop : l'essaim explose
-    if (this.dropsVus === null) this.dropsVus = son.drops || 0;
-    const drops = Math.min(4, ((son.drops || 0) - this.dropsVus) >>> 0);
-    this.dropsVus = son.drops || 0;
-    const tensionVisee = m.montee ? Math.max(0, Math.min(1, son.tension || 0)) : 0;
-    this.tension += (tensionVisee - this.tension) * Math.min(1, dt * 6);
-    if (m.montee && drops > 0) this.exploser(px, py, cx, cy, t);
-    // contretemps (milieu du temps, tempo connu) : les têtes pulsent
-    this.contre *= Math.exp(-dt * 10);
-    const phase = son.bpm ? son.phase || 0 : null;
-    if (m.contretemps && phase !== null && this.phaseAvant !== null && this.phaseAvant < 0.5 && phase >= 0.5 && phase - this.phaseAvant < 0.4) this.contre = 1;
-    this.phaseAvant = phase;
-    // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
-    if (this.aigusVus === null) this.aigusVus = son.aigus || 0;
-    const aigus = Math.min(4, ((son.aigus || 0) - this.aigusVus) >>> 0);
-    this.aigusVus = son.aigus || 0;
-    const sc = c.scintillement;
-    if (sc && sc.actif && aigus > 0) {
-      const tetes = this.trainees.concat(this.sats.map((x) => x.trainee), this.fixes.map((x) => x.trainee)).map((tr) => tr[tr.length - 1]).filter(Boolean);
-      const quantite = Math.round(Math.min(10, Math.max(1, sc.quantite)));
-      for (let n = 0; n < Math.min(aigus * quantite, MAX_PARTICULES); n++) {
-        let x, y;
-        if (tetes.length) {
-          [, x, y] = tetes[Math.floor(Math.random() * tetes.length) % tetes.length];
-        } else {
-          const a = entre(0, TAU);
-          x = cx + Math.cos(a) * o.rayon * S;
-          y = cy + Math.sin(a) * o.rayon * S;
-        }
-        const a = entre(0, TAU), v = entre(30, 90) * S;
-        const vie = entre(0.3, 0.55), taille = entre(1.1, 2.1) * S;
-        this.particules.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie, taille, genre: "etincelle" });
-      }
-    }
+    if (coups.caisses > 0) this.declencher("caisse", p, t);
+    if (coups.drops > 0) this.declencher("drop", p, t);
+    if (coups.contretemps) this.declencher("contretemps", p, t);
+    for (let i = 0; i < coups.aigus; i++) this.declencher("charleston", p, t);
     // particules : avancent en ralentissant, puis s'éteignent (les plus vieilles en trop s'en vont)
     const frein = Math.exp(-dt * 3);
     for (const q of this.particules) { q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= frein; q.vy *= frein; }
     this.particules = this.particules.filter((q) => t - q.ne < q.vie);
     if (this.particules.length > MAX_PARTICULES) this.particules.splice(0, this.particules.length - MAX_PARTICULES);
-    // basse : vitesse ; note grave : éloignement
+    const vieFissure = Math.max(0.2, (c.fissures || {}).duree || 3);
+    this.fissures = this.fissures.filter((f) => t - f.ne <= vieFissure);
+    // note de la basse ; ce que la basse, la note grave, la montée… changent passe par les
+    // modulations
     if (son.hauteur > 0) this.hauteur += (son.hauteur - this.hauteur) * Math.min(dt * 25, 1);
     const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
-    // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant. La
-    // basse (vitesse) et la note grave (rayon) agissent par les modulations, plus bas.
-    const tension = Math.max(0, Math.min(1, this.tension));
-    const accel = 1 + 1.2 * tension;
-    this.spd += (o.vitesse_base * accel - this.spd) * Math.min(dt * 10, 1);
     const presence = Math.max(0, Math.min(1, son.basse * 2.5));
-    const loin = (1 - 0.45 * tension) * (1 + 0.06 * this.contre);
-    this.far += (loin - this.far) * Math.min(dt * 16, 1);
-    // modulations : sources du moment, effets lissés (~50 ms) sur les comètes et les satellites
-    this.avancerSources(dt, [nouveaux, caisses, aigus, drops], son.tension || 0);
+    // modulations : valeur visée de chacune (source, seuil, à l'envers), lissée à son rythme
+    this.avancerSources(dt, [coups.kicks, coups.caisses, coups.aigus, coups.drops, coups.contretemps ? 1 : 0], son.tension || 0);
     this.sonVu = son;
     this.grave = grave;
     this.presence = presence;
-    const viseMods = effetsModulations((c.modulations || {}).liste, (src) => this.valeurSource(src));
-    this.modsAvant = this.mods.map((m) => ({ ...m }));
-    const km = Math.min(1, dt * 20);
-    this.mods = this.mods.map((m, g) => {
-      const r = {};
-      for (const cle of Object.keys(m)) r[cle] = m[cle] + (viseMods[g][cle] - m[cle]) * km;
-      return Object.values(r).every(Number.isFinite) ? r : effetNeutre();
+    const liste = (c.modulations || {}).liste || [];
+    this.valeurs.length = liste.length;
+    liste.forEach((m, i) => {
+      const vise = visee(m, this.valeurSource(m.source));
+      this.valeurs[i] = finiOu((this.valeurs[i] || 0) + (vise - (this.valeurs[i] || 0)) * partLissage(m.lissage ?? LISSAGE, dt), 0);
     });
+    const effets = effetsModulations(liste, this.valeurs);
+    this.modsAvant = this.mods;
+    this.mods = effets.groupes;
+    this.teinte = effets.teinte;
+    // vitesse du trajet de chaque groupe, accélérée (montée…), lissée
+    this.spd = this.spd.map((v, g) => finiOu(v + (o.vitesse_base * this.mods[g].acceleration - v) * Math.min(dt * 10, 1), o.vitesse_base));
     // comètes : `nombre` par anneau, réparties sur le trajet
     const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
     while (this.angles.length < nAnneaux) this.angles.push(0);
     this.angles.length = nAnneaux;
     while (this.trainees.length < nAnneaux * nombre) this.trainees.push([]);
     this.trainees.length = nAnneaux * nombre;
-    const vie = Math.max(0.01, o.trainee);
-    // position sur le trajet à la fraction `f` de l'image (rayon et rotation interpolés) : les
-    // points intermédiaires suivent la vraie forme, coins compris
-    // rotation du trajet (`rotation_sur` : comètes, satellites ou tout) et modulations : une pose
-    // par groupe (rotation et rayon au début et à la fin de l'image), comme render::Pose
-    const rayon = o.rayon * S * this.far, rayon0 = o.rayon * S * far0;
+    const vie = Math.max(0.01, o.trainee) * this.mods[0].trainee;
+    // une pose par groupe (render::Pose) : rotation du trajet, rayon et décalage au début et à la
+    // fin de l'image ; les points intermédiaires suivent la vraie forme, coins compris
+    const rayon = o.rayon * S;
     const sur = o.rotation_sur || "tout";
     const pose = (g, rot) => {
       const base = (g === 1 ? sur !== "cometes" : sur !== "satellites") ? o.rotation || 0 : 0;
       const drot = finiOu((((base + this.mods[g].rotation) * TAU) / 60) * dt, 0);
-      return { rot0: finiOu(rot, 0), drot, rayon0: rayon0 * this.modsAvant[g].rayon, rayon: rayon * this.mods[g].rayon };
+      return {
+        rot0: finiOu(rot, 0), drot, rayon0: rayon * this.modsAvant[g].rayon, rayon: rayon * this.mods[g].rayon,
+        dx0: this.modsAvant[g].decalage * rayon, dx: this.mods[g].decalage * rayon,
+      };
     };
     const poses = [pose(0, this.rot), pose(1, this.rotSats)];
     this.rot = reste(poses[0].rot0 + poses[0].drot, TAU);
     this.rotSats = reste(poses[1].rot0 + poses[1].drot, TAU);
-    const point = (p, forme, a, rel, f) => {
+    const point = (q, forme, a, rel, f) => {
       const [x, y] = chemin(forme, a, o.trace);
-      const th = p.rot0 + p.drot * f, cos = Math.cos(th), sin = Math.sin(th);
-      const rr = (p.rayon0 + (p.rayon - p.rayon0) * f) * rel;
-      return [cx + (x * cos - y * sin) * rr, cy + (x * sin + y * cos) * rr];
+      const th = q.rot0 + q.drot * f, cos = Math.cos(th), sin = Math.sin(th);
+      const rr = (q.rayon0 + (q.rayon - q.rayon0) * f) * rel;
+      return [cx + q.dx0 + (q.dx - q.dx0) * f + (x * cos - y * sin) * rr, cy + (x * sin + y * cos) * rr];
     };
-    // vitesse : celle du trajet plus celle des modulations (accélérée par la montée), jamais négative
-    const vitesse = (g) => this.dir * Math.max(0, this.spd + this.mods[g].vitesse * accel);
-    const wCometes = vitesse(0), wSats = vitesse(1);
+    const wCometes = this.dir * this.vitesse(0), wSats = this.dir * this.vitesse(1);
     // les écarts de render.rs sont en pixels d'écran : ici, à l'échelle de l'aperçu
     const finCometes = [FINESSE_COMETES[0], FINESSE_COMETES[1] * S], finSats = [FINESSE_SATELLITES[0], FINESSE_SATELLITES[1] * S];
     for (let k = 0; k < nAnneaux; k++) {
@@ -485,25 +481,28 @@ class Apercu {
     }
     // satellites : sur le trajet des comètes, ou le leur, à des distances variées
     const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
+    const vieSats = SAT_TRAINEE * this.mods[1].trainee;
     for (const s of this.sats.concat(this.fixes)) {
       const a0 = s.a, da = wSats * s.mul * dt;
       s.a = reste(a0 + da, TAU);
       const n = sousPas(da, poses[1].rayon * s.r * 1.2, finSats);
       for (let j = 1; j <= n; j++) {
         const f = j / n, [x, y] = point(poses[1], forme, a0 + da * f, s.r, f);
-        pousser(s.trainee, t - dt * (1 - f), x, y, SAT_TRAINEE, finSats[1]);
+        pousser(s.trainee, t - dt * (1 - f), x, y, vieSats, finSats[1]);
       }
     }
-    // glissement de teinte avec la musique (render::decalage_vise, lissé comme dans main.rs)
-    const vise = 160 * (0.6 * Math.max(0, Math.min(1, son.basse)) + 0.4 * Math.max(0, Math.min(1, son.brillance || 0)));
-    this.decalage += (vise - this.decalage) * Math.min(dt * 6, 1);
   }
 
-  // Enveloppes des coups (`coups` : nouveaux kicks, caisses claires, attaques des aigus, drops)
-  // et montée suivie, comme modulation::Sources::avancer.
+  // Vitesse sur le trajet du groupe g, sans le sens (comme Swarm::vitesse).
+  vitesse(g) {
+    return Math.max(0, this.spd[g] + this.mods[g].vitesse * this.mods[g].acceleration);
+  }
+
+  // Enveloppes des coups (`coups` : nouveaux kicks, caisses claires, attaques des aigus, drops,
+  // contretemps) et montée suivie, comme modulation::Sources::avancer.
   avancerSources(dt, coups, tension) {
     const s = this.sources;
-    ["kick", "caisse", "charleston", "drop"].forEach((nom, i) => {
+    ["kick", "caisse", "charleston", "drop", "contretemps"].forEach((nom, i) => {
       s[nom] = coups[i] > 0 ? 1 : finiOu(s[nom] * Math.exp(-dt * RETOMBEE[i]), 0);
     });
     const vise = Math.max(0, Math.min(1, finiOu(tension, 0)));
@@ -518,62 +517,122 @@ class Apercu {
       basse: Math.max(0, Math.min(1, son.basse || 0)),
       grave: this.grave * this.presence,
       aigu: (1 - this.grave) * this.presence,
-      kick: s.kick, caisse: s.caisse, charleston: s.charleston, montee: s.montee, drop: s.drop,
+      kick: s.kick, caisse: s.caisse, charleston: s.charleston, montee: s.montee, drop: s.drop, contretemps: s.contretemps,
+      brillance: Math.max(0, Math.min(1, son.brillance || 0)),
       stereo: Math.max(-1, Math.min(1, son.balance || 0)),
       tempo: son.bpm ? 0.5 + 0.5 * Math.cos(TAU * (son.phase || 0)) : 0,
     }[source];
     return finiOu(v, 0);
   }
 
-  // Effets d'un clic au centre (onde de choc, éclats), comme Swarm::clic.
-  clic() {
-    if (!this.reglages || !this.reglages.clic) return;
-    const k = this.reglages.clic, S = this.echelle || 1, t = this.t;
-    const cx = this.canvas.width / 2, cy = this.canvas.height / 2, taille = Math.min(3, Math.max(0.3, k.taille));
-    if (k.onde) this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: 0.55, taille: 46 * taille * S, genre: "onde" });
-    if (k.eclats) {
-      for (let i = 0; i < 16; i++) {
-        const a = entre(0, TAU), v = entre(160, 380) * taille * S;
-        this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.45, 0.8), taille: entre(1.2, 2.4) * S, genre: "etincelle" });
-      }
-    }
-  }
-
-  // Clic droit au centre, comme Swarm::clic_droit : un anneau qui se referme et des étincelles
-  // aspirées vers le pointeur.
-  clicDroit() {
-    if (!this.reglages || !this.reglages.clic || this.reglages.clic.droit === false) return;
-    const S = this.echelle || 1, t = this.t, cx = this.canvas.width / 2, cy = this.canvas.height / 2;
-    const r = 52 * Math.min(3, Math.max(0.3, this.reglages.clic.taille)) * S;
-    this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: 0.45, taille: r, genre: "implosion" });
-    for (let i = 0; i < 12; i++) {
-      const a = (i * TAU) / 12 + entre(-0.2, 0.2), cos = Math.cos(a), sin = Math.sin(a), v = entre(2.2, 3) * r;
-      this.particules.push({ x: cx + cos * r, y: cy + sin * r, vx: -cos * v, vy: -sin * v, ne: t, vie: 0.4, taille: entre(1, 1.8) * S, genre: "etincelle" });
-    }
-  }
-
-  // Rafale d'un changement de piste au centre, comme Swarm::rafale : l'éclat d'un kick, deux fois
-  // les satellites d'un kick fort (dans la limite du maximum) et une grande onde.
-  rafale() {
+  // Un événement de la souris ou du morceau (clic, clic droit, piste), au centre : ses
+  // déclencheurs agissent tout de suite (comme Swarm::evenement).
+  evenement(nom) {
     if (!this.reglages) return;
-    const e = this.reglages.essaim, S = this.echelle || 1, t = this.t;
-    const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
-    this.env = 1;
-    this.ajouterSatellites(2 * Math.max(2, e.par_kick_min, e.par_kick_max), t, e.maximum);
-    this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: ONDE_PISTE[1], taille: ONDE_PISTE[0] * S, genre: "onde" });
+    this.declencher(nom, [this.canvas.width / 2, this.canvas.height / 2], this.t);
   }
 
-  // Drop, comme Swarm::exploser : l'éclat d'un kick, deux fois les satellites d'un kick fort, une
-  // grande onde sous le pointeur (px, py) et des étincelles projetées depuis le centre de l'orbite.
-  exploser(px, py, cx, cy, t) {
-    const e = this.reglages.essaim, S = this.echelle || 1;
-    this.env = 1;
-    this.ajouterSatellites(2 * Math.max(2, e.par_kick_min, e.par_kick_max), t, e.maximum);
-    this.particules.push({ x: px, y: py, vx: 0, vy: 0, ne: t, vie: ONDE_DROP[1], taille: ONDE_DROP[0] * S, genre: "onde" });
-    for (let i = 0; i < ETINCELLES_DROP; i++) {
-      const a = (i * TAU) / ETINCELLES_DROP + entre(-0.1, 0.1), v = entre(220, 420) * S;
-      this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.5, 0.9), taille: entre(1.2, 2.2) * S, genre: "etincelle" });
+  // Joue un déclencheur tout de suite, au centre (bouton « Tester » des réglages).
+  tester(d) {
+    if (!this.reglages) return;
+    this.agir(d, [this.canvas.width / 2, this.canvas.height / 2], this.t);
+  }
+
+  // Les déclencheurs de `nom`, dans l'ordre de la liste, chacun après son délai et avec sa
+  // chance (comme Swarm::declencher).
+  declencher(nom, p, t) {
+    const liste = (this.reglages.declencheurs || {}).liste || [];
+    if (this.derniers.length !== liste.length) this.derniers = liste.map(() => -Infinity);
+    liste.forEach((d, i) => {
+      if (d.quand !== nom || ((d.delai || 0) > 0 && t - this.derniers[i] < d.delai)) return;
+      if ((d.probabilite ?? 1) < 1 && Math.random() >= d.probabilite) return;
+      this.derniers[i] = t;
+      this.agir(d, p, t);
+    });
+  }
+
+  // Une action (comme Swarm::agir) ; la bordure n'a pas d'aperçu.
+  agir(d, [x, y], t) {
+    const c = this.reglages, S = this.echelle || 1;
+    const force = Math.min(3, Math.max(0, finiOu(d.force ?? 1, 1)));
+    const taille = Math.min(3, Math.max(0.3, (c.particules || {}).taille || 1)) * force;
+    const lo = Math.min(d.nombre ?? 3, d.nombre_max ?? 3), hi = Math.max(d.nombre ?? 3, d.nombre_max ?? 3);
+    const nombre = () => (lo === hi ? lo : Math.floor(entre(lo, hi + 0.999)));
+    const maximum = c.essaim.maximum;
+    switch (d.faire) {
+      case "eclat": this.eclater(Math.min(1, force)); break;
+      case "satellites": this.ajouterSatellites(Math.floor(entre(lo, hi + 0.999)), t, maximum); break;
+      case "inversion": this.dir = -this.dir; break;
+      case "onde": this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: 0.55, taille: 46 * taille * S, genre: "onde" }); break;
+      case "eclats":
+        for (let i = 0; i < 16; i++) {
+          const a = entre(0, TAU), v = entre(160, 380) * taille * S;
+          this.particules.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.45, 0.8), taille: entre(1.2, 2.4) * S, genre: "etincelle" });
+        }
+        break;
+      case "fissure": {
+        // une fissure simple : quelques branches brisées depuis le point (render::Crack est plus fin)
+        const branches = [], long = 7 * Math.max(0.2, (c.fissures || {}).taille || 1.4) * force * S;
+        for (let b = 0; b < 5; b++) {
+          let a = entre(0, TAU), px = x, py = y;
+          const pts = [[px, py]];
+          for (let k = 0; k < 6; k++) { a += entre(-0.5, 0.5); px += Math.cos(a) * long; py += Math.sin(a) * long; pts.push([px, py]); }
+          branches.push(pts);
+        }
+        this.fissures.push({ ne: t, branches });
+        break;
+      }
+      case "implosion": {
+        const r = 52 * taille * S;
+        this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: 0.45, taille: r, genre: "implosion" });
+        for (let i = 0; i < 12; i++) {
+          const a = (i * TAU) / 12 + entre(-0.2, 0.2), cos = Math.cos(a), sin = Math.sin(a), v = entre(2.2, 3) * r;
+          this.particules.push({ x: x + cos * r, y: y + sin * r, vx: -cos * v, vy: -sin * v, ne: t, vie: 0.4, taille: entre(1, 1.8) * S, genre: "etincelle" });
+        }
+        break;
+      }
+      case "carre": this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: CARRE_CAISSE[1], taille: CARRE_CAISSE[0] * force * S, genre: "carre" }); break;
+      case "etincelles": {
+        // près des têtes (ou sur l'orbite s'il n'y en a pas)
+        const n = nombre();
+        const tetes = this.trainees.concat(this.sats.map((q) => q.trainee), this.fixes.map((q) => q.trainee)).map((tr) => tr[tr.length - 1]).filter(Boolean);
+        for (let k = 0; k < Math.min(n, MAX_PARTICULES); k++) {
+          let px, py;
+          if (tetes.length) {
+            [, px, py] = tetes[Math.floor(Math.random() * tetes.length) % tetes.length];
+          } else {
+            const a = entre(0, TAU);
+            px = x + Math.cos(a) * c.orbite.rayon * S;
+            py = y + Math.sin(a) * c.orbite.rayon * S;
+          }
+          const a = entre(0, TAU), v = entre(30, 90) * S * Math.max(0.2, force);
+          this.particules.push({ x: px, y: py, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.3, 0.55), taille: entre(1.1, 2.1) * S, genre: "etincelle" });
+        }
+        break;
+      }
+      case "explosion": {
+        // l'éclat d'un kick, des satellites, une grande onde et une gerbe d'étincelles
+        this.eclater(1);
+        this.ajouterSatellites(nombre(), t, maximum);
+        this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: ONDE_DROP[1], taille: ONDE_DROP[0] * force * S, genre: "onde" });
+        for (let i = 0; i < ETINCELLES_DROP; i++) {
+          const a = (i * TAU) / ETINCELLES_DROP + entre(-0.1, 0.1), v = entre(220, 420) * S;
+          this.particules.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.5, 0.9), taille: entre(1.2, 2.2) * S, genre: "etincelle" });
+        }
+        break;
+      }
+      case "rafale":
+        this.eclater(1);
+        this.ajouterSatellites(nombre(), t, maximum);
+        this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: ONDE_PISTE[1], taille: ONDE_PISTE[0] * force * S, genre: "onde" });
+        break;
+      default: break;
     }
+  }
+
+  // Éclat de force `force` (comme Swarm::eclater ; l'aperçu n'a pas le mode sans flashs).
+  eclater(force) {
+    if (force > 0) this.env = Math.max(this.env, force);
   }
 
   // Dessin, dans l'ordre de Swarm::draw ; le pointeur (absent du vrai essaim : c'est celui de
@@ -581,11 +640,11 @@ class Apercu {
   dessiner() {
     if (!this.reglages) return;
     const g = this.ctx, c = this.reglages, t = this.t, S = this.echelle || 1;
-    const couleur = (k) => prisme(c.couleur, t, k, this.teinteImposee, this.decalage);
+    const couleur = (k) => prisme(c.couleur, t, k, this.teinteImposee, this.teinte);
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.lineCap = "round";
     g.lineJoin = "round";
-    const teinte = (k, j, plus = 0) => prisme(c.couleur, t, k, this.teinteImposee, this.decalage, j, plus);
+    const teinte = (k, j, plus = 0) => prisme(c.couleur, t, k, this.teinteImposee, this.teinte, j, plus);
     const ligne = (tr, debut, fin) => {
       g.beginPath();
       g.moveTo(tr[debut][1], tr[debut][2]);
@@ -646,30 +705,43 @@ class Apercu {
         trait(a, b, RETICULE_LARGEUR * S, tete, re.opacite * (0.6 + 0.4 * env));
       }
     }
+    // fissures, sous l'essaim : trait sombre, reflet, lueur colorée au début, fondu sur la fin
+    const vieFissure = Math.max(0.2, (c.fissures || {}).duree || 3);
+    for (const f of this.fissures) {
+      const age = t - f.ne, al = Math.min(1, vieFissure - age), lueurF = Math.max(0, 1 - age / 0.45, this.env * 0.6);
+      for (const [rgb, largeur, a] of [[[20, 20, 28], 2.4 * S, 0.8], [tete, 3.2 * S, 0.5 * lueurF], [[170, 185, 250], 0.9 * S, 0.5]]) {
+        g.strokeStyle = rgba(rgb, a * al);
+        g.lineWidth = largeur;
+        for (const b of f.branches) {
+          g.beginPath();
+          g.moveTo(b[0][0], b[0][1]);
+          for (const q of b.slice(1)) g.lineTo(q[0], q[1]);
+          g.stroke();
+        }
+      }
+    }
     const tetes = [];
-    // contretemps : les têtes grossissent un instant
-    const pulse = 1 + 0.5 * this.contre;
-    // modulations : taille (têtes et traînées) et teinte de chaque groupe
+    // modulations : taille (têtes et traînées), teinte, lueur, traînée et opacité de chaque groupe
     const [mc, ms] = this.mods;
     // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {
-      const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
-      trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
+      const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5) * ms.opacite;
+      trainee(s.trainee, SAT_TRAINEE * ms.trainee, 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
       const p = s.trainee[s.trainee.length - 1];
-      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * pulse * ms.taille, al, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0, ms.teinte) });
+      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * ms.taille, al, lueur: ms.luminosite, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0, ms.teinte) });
     }
     // les comètes (devant : sous le centre de l'orbite, comme vues de biais), chacune dans une
     // teinte de la palette
     if (c.orbite.cometes) {
       this.trainees.forEach((tr, i) => {
-        trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S * mc.taille, 1, true, i, mc.teinte);
+        trainee(tr, Math.max(0.01, c.orbite.trainee) * mc.trainee, 3.5 * S * mc.taille, mc.opacite, true, i, mc.teinte);
         const p = tr[tr.length - 1];
-        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * pulse * mc.taille, al: 1, devant: p[2] > cy, rgb: teinte(1, i, mc.teinte) });
+        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * mc.taille, al: mc.opacite, lueur: mc.luminosite, devant: p[2] > cy, rgb: teinte(1, i, mc.teinte) });
       });
     }
     // constellation : fines lignes entre les têtes proches (comme render::liens), sous les têtes
     if (c.essaim.constellation) {
-      const portee = LIENS_PORTEE * c.orbite.rayon * S * Math.max(0.2, this.far), lien = couleur(0.85);
+      const portee = LIENS_PORTEE * c.orbite.rayon * S * Math.max(0.2, this.mods[0].rayon), lien = couleur(0.85);
       let n = 0;
       g.lineWidth = 1.2 * S;
       for (let i = 0; i < tetes.length && n < LIENS_MAX; i++) {
@@ -686,8 +758,8 @@ class Apercu {
       }
     }
     const dessinerTete = (h) => {
-      disque(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * lueur);
-      disque(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * lueur);
+      disque(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * lueur * h.lueur);
+      disque(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * lueur * h.lueur);
       disque(h.x, h.y, h.s, h.rgb, h.al);
       disque(h.x, h.y, h.s * 0.45, [255, 255, 255], h.al);
     };

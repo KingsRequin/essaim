@@ -58,7 +58,7 @@ window.rendre = async (reglages, cote, n, fps, chauffe, clics, scenario) => {
   for (; t < chauffe; t += 1 / fps) a.avancer(1 / fps, sonA(t));
   const images = [];
   for (let i = 0; i < n; i++, t += 1 / fps) {
-    if ((clics || []).includes(i)) a.clic();
+    if ((clics || []).includes(i)) a.evenement("clic");
     a.avancer(1 / fps, sonA(t));
     a.dessiner();
     images.push(c.toDataURL("image/png"));
