@@ -498,14 +498,17 @@ impl Fenetre {
     fn tick(&mut self, quoi: usize) {
         if quoi == TIMER_SON && !self.reduite {
             let au = self.son.view();
-            let cle = (au.kicks ^ au.aigus.rotate_left(16), au.bass.to_bits() ^ au.phase.to_bits());
+            let compteurs = au.kicks ^ au.aigus.rotate_left(16) ^ au.caisses.rotate_left(8) ^ au.drops.rotate_left(24);
+            let cle = (compteurs, au.bass.to_bits() ^ au.phase.to_bits() ^ au.tension.to_bits().rotate_left(7) ^ au.balance.to_bits().rotate_left(13));
             if cle != self.son_envoye {
                 self.son_envoye = cle;
                 // tempo : `bpm` absent (null) tant qu'il n'est pas stable ; `relais` = break sans
-                // kick, l'essaim pulse alors sur `phase`
+                // kick, l'essaim pulse alors sur `phase` ; caisses claires, drops, montée
+                // (`tension`) et côté qui joue le plus fort (`balance`)
                 self.envoyer(&json!({
                     "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "aigus": au.aigus, "brillance": au.brillance,
                     "teinte": crate::render::sync_hue(), "bpm": au.bpm, "phase": au.phase, "relais": au.relais,
+                    "caisses": au.caisses, "drops": au.drops, "tension": au.tension, "balance": au.balance,
                 }));
             }
         } else if quoi == TIMER_FICHIERS {

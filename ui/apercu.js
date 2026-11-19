@@ -18,6 +18,11 @@ const TRAIL_CHUNK = 4;
 const MAX_PARTICULES = 400;
 // Onde d'un changement de piste : taille (px à 100 %) et durée (s), comme ONDE_PISTE.
 const ONDE_PISTE = [90, 0.8];
+// Caisse claire, drop, constellation : comme CARRE_CAISSE, ONDE_DROP, ETINCELLES_DROP, LIENS_MAX.
+const CARRE_CAISSE = [30, 0.32];
+const ONDE_DROP = [130, 0.9];
+const ETINCELLES_DROP = 28;
+const LIENS_MAX = 160;
 // Réticule et anneau de spectre : comme src/effets.rs.
 const RETICULE_VIDE = 12;
 const RETICULE_LARGEUR = 1.2;
@@ -35,9 +40,11 @@ function hsl(h, s, l) {
 
 // Teinte : k = 0 en queue de traînée, 1 en tête (comme render::prisme). `imposee` : teinte de
 // l'application au premier plan ou de l'éclairage, quand le preset la suit ; `decalage` :
-// glissement musical.
-function prisme(c, t, k, imposee, decalage = 0) {
-  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0);
+// glissement musical ; `j` : teinte de la palette (comme render::prisme_palette).
+function prisme(c, t, k, imposee, decalage = 0, j = 0) {
+  const n = Math.min(3, Math.max(1, Math.round(c.palette || 1)));
+  const palette = (j % n) * (c.ecart_palette ?? 120);
+  const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0) + palette;
   const queue = base + c.ecart_teinte;
   let dh = base - queue;
   if (dh > 180) dh -= 360;
@@ -174,6 +181,14 @@ class Apercu {
     this.aigusVus = null;
     this.decalage = 0;
     this.kicksVus = null;
+    // caisses claires et drops vus, montée suivie, contretemps, décalage stéréo du centre
+    this.caissesVues = null;
+    this.dropsVus = null;
+    this.tension = 0;
+    this.contre = 0;
+    this.phaseAvant = null;
+    this.penche = 0;
+    this.prochaineCouleur = 0;
     // souris sur le canevas (pixels du canevas), pour le sillage
     this.pointeur = null;
     this.pointeurAvant = null;
@@ -221,7 +236,9 @@ class Apercu {
     if (!this.reglages) return;
     this.sillage(dt);
     const n = Math.max(1, Math.ceil(dt / PAS_TRAINEE));
-    for (let i = 0; i < n; i++) this.pas(dt / n, i === 0 ? son : { ...son, kicks: this.kicksVus ?? son.kicks });
+    for (let i = 0; i < n; i++) {
+      this.pas(dt / n, i === 0 ? son : { ...son, kicks: this.kicksVus ?? son.kicks, caisses: this.caissesVues ?? son.caisses, drops: this.dropsVus ?? son.drops });
+    }
     this.spectre(dt, son);
   }
 
@@ -258,12 +275,23 @@ class Apercu {
     }
   }
 
+  // Satellites nés à `t` (comme Swarm::ajouter_satellites), dans la limite du maximum.
+  ajouterSatellites(n, t, maximum) {
+    for (let j = 0; j < n && this.sats.length < maximum; j++) {
+      this.sats.push({ a: entre(0, TAU), r: entre(0.75, SAT_R_MAX), mul: entre(0.7, 1.3), ne: t, trainee: [], couleur: this.prochaineCouleur++ });
+    }
+  }
+
   // Une image du vrai essaim (Swarm::update), dans le même ordre ; le pointeur est au centre.
   pas(dt, son) {
-    const c = this.reglages, e = c.essaim, o = c.orbite;
+    const c = this.reglages, e = c.essaim, o = c.orbite, m = c.musique || {};
     this.t += dt;
     const t = this.t;
-    const cx = this.canvas.width / 2, cy = this.canvas.height / 2, S = this.echelle || 1;
+    const S = this.echelle || 1;
+    // centre de l'orbite : penche vers le côté qui joue le plus fort (le pointeur reste au centre)
+    const penche = Math.max(-1, Math.min(1, son.balance || 0)) * Math.max(0, Math.min(1, m.stereo || 0)) * o.rayon * 1.6 * S;
+    this.penche += (penche - this.penche) * (1 - Math.exp(-dt * 14));
+    const cx = this.canvas.width / 2 + this.penche, cy = this.canvas.height / 2;
     const far0 = this.far;
     // kicks : sens inversé + satellites
     if (this.kicksVus === null) this.kicksVus = son.kicks;
@@ -273,10 +301,7 @@ class Apercu {
       this.dir = -this.dir;
       this.env = 1;
       const bas = Math.min(e.par_kick_min, e.par_kick_max), haut = Math.max(e.par_kick_min, e.par_kick_max);
-      const n = Math.floor(entre(bas, haut + 0.999));
-      for (let j = 0; j < n && this.sats.length < e.maximum; j++) {
-        this.sats.push({ a: entre(0, TAU), r: entre(0.75, SAT_R_MAX), mul: entre(0.7, 1.3), ne: t, trainee: [] });
-      }
+      this.ajouterSatellites(Math.floor(entre(bas, haut + 0.999)), t, e.maximum);
     }
     this.env *= Math.exp(-dt * 9);
     // relais du tempo (break sans kick) : l'éclat pulse doucement sur chaque temps (comme
@@ -284,6 +309,26 @@ class Apercu {
     if (son.relais && c.audio && c.audio.pulsation_tempo !== false) {
       this.env = Math.max(this.env, FORCE_PULSATION * Math.pow(1 - Math.min(1, Math.max(0, son.phase || 0)), 4));
     }
+    // caisse claire : un carré s'ouvre sous le pointeur
+    if (this.caissesVues === null) this.caissesVues = son.caisses || 0;
+    const caisses = Math.min(4, ((son.caisses || 0) - this.caissesVues) >>> 0);
+    this.caissesVues = son.caisses || 0;
+    const px = this.canvas.width / 2, py = this.canvas.height / 2;
+    if (m.caisse_claire && caisses > 0) {
+      this.particules.push({ x: px, y: py, vx: 0, vy: 0, ne: t, vie: CARRE_CAISSE[1], taille: CARRE_CAISSE[0] * S, genre: "carre" });
+    }
+    // montée suivie en douceur ; drop : l'essaim explose
+    if (this.dropsVus === null) this.dropsVus = son.drops || 0;
+    const drops = Math.min(4, ((son.drops || 0) - this.dropsVus) >>> 0);
+    this.dropsVus = son.drops || 0;
+    const tensionVisee = m.montee ? Math.max(0, Math.min(1, son.tension || 0)) : 0;
+    this.tension += (tensionVisee - this.tension) * Math.min(1, dt * 6);
+    if (m.montee && drops > 0) this.exploser(px, py, cx, cy, t);
+    // contretemps (milieu du temps, tempo connu) : les têtes pulsent
+    this.contre *= Math.exp(-dt * 10);
+    const phase = son.bpm ? son.phase || 0 : null;
+    if (m.contretemps && phase !== null && this.phaseAvant !== null && this.phaseAvant < 0.5 && phase >= 0.5 && phase - this.phaseAvant < 0.4) this.contre = 1;
+    this.phaseAvant = phase;
     // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
     if (this.aigusVus === null) this.aigusVus = son.aigus || 0;
     const aigus = Math.min(4, ((son.aigus || 0) - this.aigusVus) >>> 0);
@@ -314,9 +359,12 @@ class Apercu {
     // basse : vitesse ; note grave : éloignement
     if (son.hauteur > 0) this.hauteur += (son.hauteur - this.hauteur) * Math.min(dt * 25, 1);
     const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
-    this.spd += (o.vitesse_base + o.vitesse_basse * son.basse - this.spd) * Math.min(dt * 10, 1);
+    // montée : plus vite et plus serré ; contretemps : les orbites s'écartent un instant
+    const tension = Math.max(0, Math.min(1, this.tension));
+    this.spd += ((o.vitesse_base + o.vitesse_basse * son.basse) * (1 + 1.2 * tension) - this.spd) * Math.min(dt * 10, 1);
     const presence = Math.max(0, Math.min(1, son.basse * 2.5));
-    this.far += (1 + o.eloignement_grave * grave * presence - this.far) * Math.min(dt * 16, 1);
+    const loin = (1 + o.eloignement_grave * grave * presence) * (1 - 0.45 * tension) * (1 + 0.06 * this.contre);
+    this.far += (loin - this.far) * Math.min(dt * 16, 1);
     const w = this.dir * this.spd;
     // comètes : `nombre` par anneau, réparties sur le trajet
     const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
@@ -357,7 +405,7 @@ class Apercu {
     if (this.fixes.length !== e.fixes) {
       this.fixes = Array.from({ length: e.fixes }, (_, j) => {
         const u = (j * 0.618034) % 1;
-        return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [] };
+        return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [], couleur: j };
       });
     }
     // satellites : sur le trajet des comètes, ou le leur, à des distances variées
@@ -390,6 +438,19 @@ class Apercu {
     }
   }
 
+  // Clic droit au centre, comme Swarm::clic_droit : un anneau qui se referme et des étincelles
+  // aspirées vers le pointeur.
+  clicDroit() {
+    if (!this.reglages || !this.reglages.clic || this.reglages.clic.droit === false) return;
+    const S = this.echelle || 1, t = this.t, cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+    const r = 52 * Math.min(3, Math.max(0.3, this.reglages.clic.taille)) * S;
+    this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: 0.45, taille: r, genre: "implosion" });
+    for (let i = 0; i < 12; i++) {
+      const a = (i * TAU) / 12 + entre(-0.2, 0.2), cos = Math.cos(a), sin = Math.sin(a), v = entre(2.2, 3) * r;
+      this.particules.push({ x: cx + cos * r, y: cy + sin * r, vx: -cos * v, vy: -sin * v, ne: t, vie: 0.4, taille: entre(1, 1.8) * S, genre: "etincelle" });
+    }
+  }
+
   // Rafale d'un changement de piste au centre, comme Swarm::rafale : l'éclat d'un kick, deux fois
   // les satellites d'un kick fort (dans la limite du maximum) et une grande onde.
   rafale() {
@@ -397,11 +458,21 @@ class Apercu {
     const e = this.reglages.essaim, S = this.echelle || 1, t = this.t;
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
     this.env = 1;
-    const n = 2 * Math.max(2, e.par_kick_min, e.par_kick_max);
-    for (let j = 0; j < n && this.sats.length < e.maximum; j++) {
-      this.sats.push({ a: entre(0, TAU), r: entre(0.75, SAT_R_MAX), mul: entre(0.7, 1.3), ne: t, trainee: [] });
-    }
+    this.ajouterSatellites(2 * Math.max(2, e.par_kick_min, e.par_kick_max), t, e.maximum);
     this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: ONDE_PISTE[1], taille: ONDE_PISTE[0] * S, genre: "onde" });
+  }
+
+  // Drop, comme Swarm::exploser : l'éclat d'un kick, deux fois les satellites d'un kick fort, une
+  // grande onde sous le pointeur (px, py) et des étincelles projetées depuis le centre de l'orbite.
+  exploser(px, py, cx, cy, t) {
+    const e = this.reglages.essaim, S = this.echelle || 1;
+    this.env = 1;
+    this.ajouterSatellites(2 * Math.max(2, e.par_kick_min, e.par_kick_max), t, e.maximum);
+    this.particules.push({ x: px, y: py, vx: 0, vy: 0, ne: t, vie: ONDE_DROP[1], taille: ONDE_DROP[0] * S, genre: "onde" });
+    for (let i = 0; i < ETINCELLES_DROP; i++) {
+      const a = (i * TAU) / ETINCELLES_DROP + entre(-0.1, 0.1), v = entre(220, 420) * S;
+      this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.5, 0.9), taille: entre(1.2, 2.2) * S, genre: "etincelle" });
+    }
   }
 
   // Dessin, dans l'ordre de Swarm::draw ; le pointeur (absent du vrai essaim : c'est celui de
@@ -413,6 +484,7 @@ class Apercu {
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.lineCap = "round";
     g.lineJoin = "round";
+    const teinte = (k, j) => prisme(c.couleur, t, k, this.teinteImposee, this.decalage, j);
     const ligne = (tr, debut, fin) => {
       g.beginPath();
       g.moveTo(tr[debut][1], tr[debut][2]);
@@ -421,18 +493,18 @@ class Apercu {
     };
     // traînée par morceaux (render::draw_trail) : comètes par TRAIL_CHUNK segments, satellites en
     // deux morceaux ; chaque morceau prend la couleur, l'épaisseur et l'opacité de son milieu
-    const trainee = (tr, vie, largeur, al, halo) => {
+    const trainee = (tr, vie, largeur, al, halo, j) => {
       if (tr.length < 2) return;
       const q = tr.map((p) => Math.max(0, 1 - (t - p[0]) / vie));
       if (halo) {
-        g.strokeStyle = rgba(couleur(0.7), 0.12 * al);
+        g.strokeStyle = rgba(teinte(0.7, j), 0.12 * al);
         g.lineWidth = (0.8 + largeur * 0.7) * 2.6;
         ligne(tr, 0, tr.length - 1);
       }
       const morceau = halo ? TRAIL_CHUNK : Math.max(1, Math.ceil((tr.length - 1) / 2));
       for (let i = 0; i + 1 < tr.length;) {
         const fin = Math.min(i + morceau, tr.length - 1), k = (q[i] + q[fin]) * 0.5;
-        g.strokeStyle = rgba(couleur(k), k * 0.9 * al);
+        g.strokeStyle = rgba(teinte(k, j), k * 0.9 * al);
         g.lineWidth = 0.8 + k * largeur;
         ligne(tr, i, fin);
         i = fin;
@@ -474,25 +546,46 @@ class Apercu {
       }
     }
     const tetes = [];
+    // contretemps : les têtes grossissent un instant
+    const pulse = 1 + 0.5 * this.contre;
     // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {
       const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
-      trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S, al, false);
+      trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S, al, false, s.couleur || 0);
       const p = s.trainee[s.trainee.length - 1];
-      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S, al, devant: p[2] > cy });
+      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * pulse, al, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0) });
     }
-    // les comètes (devant : sous le centre de l'orbite, comme vues de biais)
+    // les comètes (devant : sous le centre de l'orbite, comme vues de biais), chacune dans une
+    // teinte de la palette
     if (c.orbite.cometes) {
-      for (const tr of this.trainees) {
-        trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S, 1, true);
+      this.trainees.forEach((tr, i) => {
+        trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S, 1, true, i);
         const p = tr[tr.length - 1];
-        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S, al: 1, devant: p[2] > cy });
+        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * pulse, al: 1, devant: p[2] > cy, rgb: teinte(1, i) });
+      });
+    }
+    // constellation : fines lignes entre les têtes proches (comme render::liens), sous les têtes
+    if (c.essaim.constellation) {
+      const portee = c.orbite.rayon * S * Math.max(0.2, this.far), lien = couleur(0.85);
+      let n = 0;
+      g.lineWidth = 0.9 * S;
+      for (let i = 0; i < tetes.length && n < LIENS_MAX; i++) {
+        for (let j = i + 1; j < tetes.length && n < LIENS_MAX; j++) {
+          const d = Math.hypot(tetes[i].x - tetes[j].x, tetes[i].y - tetes[j].y);
+          if (d >= portee) continue;
+          n++;
+          g.strokeStyle = rgba(lien, 0.4 * (1 - d / portee) * Math.min(tetes[i].al, tetes[j].al));
+          g.beginPath();
+          g.moveTo(tetes[i].x, tetes[i].y);
+          g.lineTo(tetes[j].x, tetes[j].y);
+          g.stroke();
+        }
       }
     }
     const dessinerTete = (h) => {
-      disque(h.x, h.y, h.s * 2.6, tete, 0.12 * h.al * lueur);
-      disque(h.x, h.y, h.s * 1.6, tete, 0.3 * h.al * lueur);
-      disque(h.x, h.y, h.s, tete, h.al);
+      disque(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * lueur);
+      disque(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * lueur);
+      disque(h.x, h.y, h.s, h.rgb, h.al);
       disque(h.x, h.y, h.s * 0.45, [255, 255, 255], h.al);
     };
     for (const h of tetes) if (!h.devant) dessinerTete(h);
@@ -518,6 +611,25 @@ class Apercu {
         g.stroke();
       } else if (q.genre === "poussiere") {
         disque(q.x, q.y, q.taille * (1 - 0.5 * k), poussiere, 0.7 * (1 - k));
+      } else if (q.genre === "carre") {
+        // carré posé sur la pointe, qui s'ouvre vite puis s'efface
+        const r = q.taille * (0.35 + 0.65 * (1 - (1 - k) ** 2));
+        g.strokeStyle = rgba(tete, 0.8 * (1 - k));
+        g.lineWidth = (2.2 * (1 - k) + 0.8) * S;
+        g.beginPath();
+        g.moveTo(q.x, q.y - r);
+        g.lineTo(q.x + r, q.y);
+        g.lineTo(q.x, q.y + r);
+        g.lineTo(q.x - r, q.y);
+        g.closePath();
+        g.stroke();
+      } else if (q.genre === "implosion") {
+        // anneau qui se referme
+        g.strokeStyle = rgba(tete, 0.8 * (1 - k * k));
+        g.lineWidth = (0.8 + 1.8 * k) * S;
+        g.beginPath();
+        g.arc(q.x, q.y, Math.max(1, q.taille * (1 - k) ** 2), 0, TAU);
+        g.stroke();
       } else {
         disque(q.x, q.y, q.taille * 2.2, tete, 0.25 * (1 - k));
         disque(q.x, q.y, q.taille * (1 - 0.5 * k), [255, 255, 255], 1 - k);
