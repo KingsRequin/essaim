@@ -1,12 +1,19 @@
 // Aperçu d'un preset : le même calcul que l'essaim autour du pointeur (src/render.rs), dessiné
 // dans un canevas. Kick : inverse le sens et ajoute des satellites ; basse : vitesse ; note
-// grave : orbites plus larges. Le pointeur est au centre.
+// grave : orbites plus larges. Le pointeur est au centre. Toute formule de render.rs (Swarm::update,
+// Swarm::draw, draw_trail…) est reprise ici telle quelle : la modifier là oblige à la reporter ici.
 "use strict";
 
 const TAU = Math.PI * 2;
 const SAT_R_MAX = 1.9;
 const SAT_TRAINEE = 0.25;
 const PAS_TRAINEE = 1 / 90;
+// Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points),
+// morceaux de traînée des comètes, particules vivantes au plus : comme render.rs.
+const FINESSE_COMETES = [0.045, 4];
+const FINESSE_SATELLITES = [0.1, 8];
+const TRAIL_CHUNK = 4;
+const MAX_PARTICULES = 400;
 
 function hsl(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
@@ -15,7 +22,8 @@ function hsl(h, s, l) {
 }
 
 // Teinte : k = 0 en queue de traînée, 1 en tête (comme render::prisme). `imposee` : teinte de
-// l'application au premier plan, quand le preset la suit ; `decalage` : glissement musical.
+// l'application au premier plan ou de l'éclairage, quand le preset la suit ; `decalage` :
+// glissement musical.
 function prisme(c, t, k, imposee, decalage = 0) {
   const base = (imposee ?? (((c.teinte || 0) + t * c.vitesse_teinte) % 360 + 360) % 360) + (c.musique ? decalage : 0);
   const queue = base + c.ecart_teinte;
@@ -31,7 +39,7 @@ const traces = new WeakMap();
 function reechantillonner(points) {
   if (!Array.isArray(points) || points.length < 3) return null;
   if (traces.has(points)) return traces.get(points);
-  const p = points.filter((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]));
+  const p = points.filter((q) => Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1])).slice(0, 2000);
   const n = p.length;
   const long = (i) => Math.hypot(p[(i + 1) % n][0] - p[i][0], p[(i + 1) % n][1] - p[i][1]);
   let total = 0;
@@ -97,11 +105,23 @@ function rgba([r, g, b], a) {
   return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
 }
 
-function pousser(tr, t, x, y, vie) {
-  const n = tr.length;
-  if (n >= 2 && t - tr[n - 2][0] < PAS_TRAINEE) tr[n - 1] = [t, x, y];
+const reste = (x, m) => ((x % m) + m) % m;
+const entre = (a, b) => a + Math.random() * (b - a);
+
+// Ajoute la position courante (comme render::push_trail) : le dernier point suit la tête ; un
+// nouveau point fixe n'est ajouté que tous les PAS_TRAINEE ou tous les `ecart` pixels, mesurés
+// depuis l'avant-dernier.
+function pousser(tr, t, x, y, vie, ecart) {
+  const n = tr.length, p = n >= 2 ? tr[n - 2] : null;
+  if (p && t - p[0] < PAS_TRAINEE && (p[1] - x) ** 2 + (p[2] - y) ** 2 < ecart * ecart) tr[n - 1] = [t, x, y];
   else tr.push([t, x, y]);
   while (tr.length && t - tr[0][0] > vie) tr.shift();
+}
+
+// Pas intermédiaires pour un déplacement d'angle `da` sur un rayon de `r` px (comme
+// render::sous_pas) : la traînée reste une courbe quand l'essaim tourne vite.
+function sousPas(da, r, [angle, ecart]) {
+  return Math.min(24, Math.max(1, Math.ceil(Math.max(Math.abs(da) / angle, (Math.abs(da) * r) / ecart))));
 }
 
 class Apercu {
@@ -113,7 +133,8 @@ class Apercu {
     this.spd = 3.5;
     this.far = 1;
     this.angles = [];
-    this.hauteur = 60;
+    this.rot = 0;
+    this.hauteur = 50;
     this.env = 0;
     this.trainees = [];
     this.sats = [];
@@ -124,6 +145,9 @@ class Apercu {
     this.aigusVus = null;
     this.decalage = 0;
     this.kicksVus = null;
+    // souris sur le canevas (pixels du canevas), pour le sillage
+    this.pointeur = null;
+    this.pointeurAvant = null;
     this.t = 0;
   }
 
@@ -146,18 +170,55 @@ class Apercu {
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
   }
 
-  // Les vignettes avancent par pas de 1/30 s : découpés en pas de 1/90 s (celui des traînées
-  // du vrai essaim), sinon les orbites deviennent des polygones.
+  // Souris sur le canevas (coordonnées de la fenêtre), ou `survoler(null)` quand elle en sort.
+  // L'essaim reste au centre ; seul le sillage suit la souris.
+  survoler(clientX, clientY) {
+    if (clientX === null) {
+      this.pointeur = this.pointeurAvant = null;
+      return;
+    }
+    const r = this.canvas.getBoundingClientRect();
+    if (r.width <= 0) return;
+    this.pointeur = [((clientX - r.left) / r.width) * this.canvas.width, ((clientY - r.top) / r.height) * this.canvas.height];
+  }
+
+  // Les vignettes avancent par pas de 1/30 s : découpés en pas de 1/90 s au plus (une image du
+  // vrai essaim), avec dans chacun les points intermédiaires de render.rs.
   avancer(dt, son) {
+    if (!this.reglages) return;
+    this.sillage(dt);
     const n = Math.max(1, Math.ceil(dt / PAS_TRAINEE));
     for (let i = 0; i < n; i++) this.pas(dt / n, i === 0 ? son : { ...son, kicks: this.kicksVus ?? son.kicks });
   }
 
+  // Sillage : poussière le long du trajet de la souris quand elle file vite (comme
+  // Swarm::update), une fois par image ; les grains naissent à la fin de l'image.
+  sillage(dt) {
+    const c = this.reglages, S = this.echelle || 1, cur = this.pointeur, avant = this.pointeurAvant;
+    this.pointeurAvant = cur;
+    if (!c.sillage || !c.sillage.actif || !cur || !avant || !(dt > 0)) return;
+    const dx = cur[0] - avant[0], dy = cur[1] - avant[1], dist = Math.hypot(dx, dy);
+    if (!(dist / Math.max(dt, 1e-3) > 700 * S && dist < 600 * S)) return;
+    const n = Math.min(14, Math.round((Math.min(10, Math.max(1, c.sillage.densite)) * dist) / (60 * S)));
+    for (let i = 0; i < n; i++) {
+      const f = (i + Math.random()) / Math.max(n, 1);
+      const a = entre(0, TAU), v = entre(5, 30) * S;
+      const vie = entre(0.35, 0.7), taille = entre(0.7, 1.7) * S;
+      this.particules.push({
+        x: avant[0] + dx * f, y: avant[1] + dy * f, vx: Math.cos(a) * v - (dx / dt) * 0.05, vy: Math.sin(a) * v - (dy / dt) * 0.05,
+        ne: this.t + dt, vie, taille, genre: "poussiere",
+      });
+    }
+  }
+
+  // Une image du vrai essaim (Swarm::update), dans le même ordre ; le pointeur est au centre.
   pas(dt, son) {
-    if (!this.reglages) return;
     const c = this.reglages, e = c.essaim, o = c.orbite;
     this.t += dt;
     const t = this.t;
+    const cx = this.canvas.width / 2, cy = this.canvas.height / 2, S = this.echelle || 1;
+    const far0 = this.far;
+    // kicks : sens inversé + satellites
     if (this.kicksVus === null) this.kicksVus = son.kicks;
     const nouveaux = Math.min(4, (son.kicks - this.kicksVus) >>> 0);
     this.kicksVus = son.kicks;
@@ -165,71 +226,102 @@ class Apercu {
       this.dir = -this.dir;
       this.env = 1;
       const bas = Math.min(e.par_kick_min, e.par_kick_max), haut = Math.max(e.par_kick_min, e.par_kick_max);
-      const n = Math.floor(bas + Math.random() * (haut - bas + 0.999));
+      const n = Math.floor(entre(bas, haut + 0.999));
       for (let j = 0; j < n && this.sats.length < e.maximum; j++) {
-        this.sats.push({ a: Math.random() * TAU, r: 0.75 + Math.random() * (SAT_R_MAX - 0.75), mul: 0.7 + Math.random() * 0.6, ne: t, trainee: [] });
+        this.sats.push({ a: entre(0, TAU), r: entre(0.75, SAT_R_MAX), mul: entre(0.7, 1.3), ne: t, trainee: [] });
       }
     }
     this.env *= Math.exp(-dt * 9);
-    if (son.hauteur > 0) this.hauteur += (son.hauteur - this.hauteur) * Math.min(dt * 25, 1);
-    const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
-    this.spd += (o.vitesse_base + o.vitesse_basse * son.basse - this.spd) * Math.min(dt * 10, 1);
-    const presence = Math.max(0, Math.min(1, son.basse * 2.5));
-    this.far += (1 + o.eloignement_grave * grave * presence - this.far) * Math.min(dt * 16, 1);
-    const w = this.dir * this.spd;
-    const cx = this.canvas.width / 2, cy = this.canvas.height / 2, S = this.echelle || 1;
-    const r = o.rayon * S * this.far;
-    const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
-    // rotation du trajet lui-même (comme render.rs)
-    this.rot = ((this.rot || 0) + ((o.rotation || 0) * TAU) / 60 * dt) % TAU;
-    const tourne = ([x, y]) => [x * Math.cos(this.rot) - y * Math.sin(this.rot), x * Math.sin(this.rot) + y * Math.cos(this.rot)];
-    while (this.angles.length < nAnneaux) this.angles.push(0);
-    this.angles.length = nAnneaux;
-    while (this.trainees.length < nAnneaux * nombre) this.trainees.push([]);
-    this.trainees.length = nAnneaux * nombre;
-    for (let k = 0; k < nAnneaux; k++) {
-      const [rk, wk] = anneau(k);
-      this.angles[k] = (this.angles[k] + w * wk * dt) % TAU;
-      for (let i = 0; i < nombre; i++) {
-        const [x, y] = tourne(chemin(o.forme, this.angles[k] + (i * TAU) / nombre, o.trace));
-        pousser(this.trainees[k * nombre + i], t, cx + x * r * rk, cy + y * r * rk, Math.max(0.01, o.trainee));
-      }
-    }
-    const duree = Math.max(0.1, e.duree);
-    this.sats = this.sats.filter((s) => t - s.ne < duree);
-    if (this.fixes.length !== e.fixes) {
-      this.fixes = Array.from({ length: e.fixes }, (_, j) => {
-        const u = (j * 0.618034) % 1;
-        return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [] };
-      });
-    }
-    // satellites : sur le trajet des comètes, ou le leur (comme render.rs)
-    const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
-    for (const s of this.sats.concat(this.fixes)) {
-      s.a = (s.a + w * s.mul * dt) % TAU;
-      const rr = o.rayon * S * s.r * this.far;
-      const [x, y] = tourne(chemin(forme, s.a, o.trace));
-      pousser(s.trainee, t, cx + x * rr, cy + y * rr, SAT_TRAINEE);
-    }
-    // glissement de teinte avec la musique (comme render::decalage_vise), lissé
-    const vise = 160 * (0.6 * Math.min(1, son.basse) + 0.4 * Math.min(1, son.brillance || 0));
-    this.decalage += (vise - this.decalage) * Math.min(dt * 6, 1);
-    // aigus : étincelles près des têtes
+    // aigus : étincelles près des têtes (ou sur l'orbite s'il n'y en a pas)
     if (this.aigusVus === null) this.aigusVus = son.aigus || 0;
     const aigus = Math.min(4, ((son.aigus || 0) - this.aigusVus) >>> 0);
     this.aigusVus = son.aigus || 0;
     const sc = c.scintillement;
     if (sc && sc.actif && aigus > 0) {
       const tetes = this.trainees.concat(this.sats.map((x) => x.trainee), this.fixes.map((x) => x.trainee)).map((tr) => tr[tr.length - 1]).filter(Boolean);
-      for (let n = 0; n < aigus * Math.round(Math.min(10, Math.max(1, sc.quantite))); n++) {
-        const h = tetes.length ? tetes[Math.floor(Math.random() * tetes.length)] : [0, cx + r, cy];
-        const a = Math.random() * TAU, v = (30 + Math.random() * 60) * S;
-        this.particules.push({ x: h[1], y: h[2], vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: 0.3 + Math.random() * 0.25, taille: (1.1 + Math.random()) * S, genre: "etincelle" });
+      const quantite = Math.round(Math.min(10, Math.max(1, sc.quantite)));
+      for (let n = 0; n < Math.min(aigus * quantite, MAX_PARTICULES); n++) {
+        let x, y;
+        if (tetes.length) {
+          [, x, y] = tetes[Math.floor(Math.random() * tetes.length) % tetes.length];
+        } else {
+          const a = entre(0, TAU);
+          x = cx + Math.cos(a) * o.rayon * S;
+          y = cy + Math.sin(a) * o.rayon * S;
+        }
+        const a = entre(0, TAU), v = entre(30, 90) * S;
+        const vie = entre(0.3, 0.55), taille = entre(1.1, 2.1) * S;
+        this.particules.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie, taille, genre: "etincelle" });
       }
     }
+    // particules : avancent en ralentissant, puis s'éteignent (les plus vieilles en trop s'en vont)
     const frein = Math.exp(-dt * 3);
     for (const q of this.particules) { q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= frein; q.vy *= frein; }
-    this.particules = this.particules.filter((q) => t - q.ne < q.vie).slice(-400);
+    this.particules = this.particules.filter((q) => t - q.ne < q.vie);
+    if (this.particules.length > MAX_PARTICULES) this.particules.splice(0, this.particules.length - MAX_PARTICULES);
+    // basse : vitesse ; note grave : éloignement
+    if (son.hauteur > 0) this.hauteur += (son.hauteur - this.hauteur) * Math.min(dt * 25, 1);
+    const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
+    this.spd += (o.vitesse_base + o.vitesse_basse * son.basse - this.spd) * Math.min(dt * 10, 1);
+    const presence = Math.max(0, Math.min(1, son.basse * 2.5));
+    this.far += (1 + o.eloignement_grave * grave * presence - this.far) * Math.min(dt * 16, 1);
+    const w = this.dir * this.spd;
+    // comètes : `nombre` par anneau, réparties sur le trajet
+    const nAnneaux = Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
+    while (this.angles.length < nAnneaux) this.angles.push(0);
+    this.angles.length = nAnneaux;
+    while (this.trainees.length < nAnneaux * nombre) this.trainees.push([]);
+    this.trainees.length = nAnneaux * nombre;
+    const vie = Math.max(0.01, o.trainee);
+    // position sur le trajet à la fraction `f` de l'image (rayon et rotation interpolés) : les
+    // points intermédiaires suivent la vraie forme, coins compris
+    const rayon = o.rayon * S * this.far, rayon0 = o.rayon * S * far0;
+    const rot0 = this.rot, drot = (((o.rotation || 0) * TAU) / 60) * dt;
+    this.rot = reste(rot0 + drot, TAU);
+    const point = (forme, a, rel, f) => {
+      const [x, y] = chemin(forme, a, o.trace);
+      const th = rot0 + drot * f, cos = Math.cos(th), sin = Math.sin(th);
+      const rr = (rayon0 + (rayon - rayon0) * f) * rel;
+      return [cx + (x * cos - y * sin) * rr, cy + (x * sin + y * cos) * rr];
+    };
+    // les écarts de render.rs sont en pixels d'écran : ici, à l'échelle de l'aperçu
+    const finCometes = [FINESSE_COMETES[0], FINESSE_COMETES[1] * S], finSats = [FINESSE_SATELLITES[0], FINESSE_SATELLITES[1] * S];
+    for (let k = 0; k < nAnneaux; k++) {
+      const [rk, wk] = anneau(k);
+      const a0 = this.angles[k], da = w * wk * dt;
+      this.angles[k] = reste(a0 + da, TAU);
+      const n = sousPas(da, rayon * rk * 1.2, finCometes);
+      for (let i = 0; i < nombre; i++) {
+        const decale = (i * TAU) / nombre;
+        for (let j = 1; j <= n; j++) {
+          const f = j / n, [x, y] = point(o.forme, a0 + da * f + decale, rk, f);
+          pousser(this.trainees[k * nombre + i], t - dt * (1 - f), x, y, vie, finCometes[1]);
+        }
+      }
+    }
+    const duree = Math.max(0.1, e.duree);
+    this.sats = this.sats.filter((s) => t - s.ne < duree);
+    // satellites permanents : répartis une fois pour toutes (nombre d'or), toujours les mêmes
+    if (this.fixes.length !== e.fixes) {
+      this.fixes = Array.from({ length: e.fixes }, (_, j) => {
+        const u = (j * 0.618034) % 1;
+        return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [] };
+      });
+    }
+    // satellites : sur le trajet des comètes, ou le leur, à des distances variées
+    const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
+    for (const s of this.sats.concat(this.fixes)) {
+      const a0 = s.a, da = w * s.mul * dt;
+      s.a = reste(a0 + da, TAU);
+      const n = sousPas(da, rayon * s.r * 1.2, finSats);
+      for (let j = 1; j <= n; j++) {
+        const f = j / n, [x, y] = point(forme, a0 + da * f, s.r, f);
+        pousser(s.trainee, t - dt * (1 - f), x, y, SAT_TRAINEE, finSats[1]);
+      }
+    }
+    // glissement de teinte avec la musique (render::decalage_vise, lissé comme dans main.rs)
+    const vise = 160 * (0.6 * Math.max(0, Math.min(1, son.basse)) + 0.4 * Math.max(0, Math.min(1, son.brillance || 0)));
+    this.decalage += (vise - this.decalage) * Math.min(dt * 6, 1);
   }
 
   // Effets d'un clic au centre (onde de choc, éclats), comme Swarm::clic.
@@ -240,57 +332,69 @@ class Apercu {
     if (k.onde) this.particules.push({ x: cx, y: cy, vx: 0, vy: 0, ne: t, vie: 0.55, taille: 46 * taille * S, genre: "onde" });
     if (k.eclats) {
       for (let i = 0; i < 16; i++) {
-        const a = Math.random() * TAU, v = (160 + Math.random() * 220) * taille * S;
-        this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: 0.45 + Math.random() * 0.35, taille: (1.2 + Math.random() * 1.2) * S, genre: "etincelle" });
+        const a = entre(0, TAU), v = entre(160, 380) * taille * S;
+        this.particules.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, ne: t, vie: entre(0.45, 0.8), taille: entre(1.2, 2.4) * S, genre: "etincelle" });
       }
     }
   }
 
+  // Dessin, dans l'ordre de Swarm::draw ; le pointeur (absent du vrai essaim : c'est celui de
+  // Windows) est ajouté au centre, par-dessus.
   dessiner() {
     if (!this.reglages) return;
     const g = this.ctx, c = this.reglages, t = this.t, S = this.echelle || 1;
+    const couleur = (k) => prisme(c.couleur, t, k, this.teinteImposee, this.decalage);
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
     g.lineCap = "round";
     g.lineJoin = "round";
+    const ligne = (tr, debut, fin) => {
+      g.beginPath();
+      g.moveTo(tr[debut][1], tr[debut][2]);
+      for (let j = debut + 1; j <= fin; j++) g.lineTo(tr[j][1], tr[j][2]);
+      g.stroke();
+    };
+    // traînée par morceaux (render::draw_trail) : comètes par TRAIL_CHUNK segments, satellites en
+    // deux morceaux ; chaque morceau prend la couleur, l'épaisseur et l'opacité de son milieu
     const trainee = (tr, vie, largeur, al, halo) => {
       if (tr.length < 2) return;
+      const q = tr.map((p) => Math.max(0, 1 - (t - p[0]) / vie));
       if (halo) {
-        g.strokeStyle = rgba(prisme(c.couleur, t, 0.7, this.teinteImposee, this.decalage), 0.12 * al);
+        g.strokeStyle = rgba(couleur(0.7), 0.12 * al);
         g.lineWidth = (0.8 + largeur * 0.7) * 2.6;
-        g.beginPath();
-        tr.forEach(([, x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-        g.stroke();
+        ligne(tr, 0, tr.length - 1);
       }
-      for (let i = 0; i + 1 < tr.length; i++) {
-        const k = Math.max(0, 1 - (t - tr[i + 1][0]) / vie);
-        g.strokeStyle = rgba(prisme(c.couleur, t, k, this.teinteImposee, this.decalage), k * 0.9 * al);
+      const morceau = halo ? TRAIL_CHUNK : Math.max(1, Math.ceil((tr.length - 1) / 2));
+      for (let i = 0; i + 1 < tr.length;) {
+        const fin = Math.min(i + morceau, tr.length - 1), k = (q[i] + q[fin]) * 0.5;
+        g.strokeStyle = rgba(couleur(k), k * 0.9 * al);
         g.lineWidth = 0.8 + k * largeur;
-        g.beginPath();
-        g.moveTo(tr[i][1], tr[i][2]);
-        g.lineTo(tr[i + 1][1], tr[i + 1][2]);
-        g.stroke();
+        ligne(tr, i, fin);
+        i = fin;
       }
     };
-    const disque = (x, y, r, couleur, a) => {
-      g.fillStyle = rgba(couleur, a);
+    const disque = (x, y, r, rgb, a) => {
+      g.fillStyle = rgba(rgb, a);
       g.beginPath();
       g.arc(x, y, Math.max(0.1, r), 0, TAU);
       g.fill();
     };
-    const lueur = 0.4 + 0.6 * this.env, tete = prisme(c.couleur, t, 1, this.teinteImposee, this.decalage), duree = Math.max(0.1, c.essaim.duree);
+    const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+    const lueur = 0.4 + 0.6 * this.env, tete = couleur(1), duree = Math.max(0.1, c.essaim.duree);
     const tetes = [];
+    // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {
       const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5);
       trainee(s.trainee, SAT_TRAINEE, 2.6 * k * S, al, false);
       const p = s.trainee[s.trainee.length - 1];
-      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S, al, devant: p[2] > this.canvas.height / 2 });
+      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S, al, devant: p[2] > cy });
     }
+    // les comètes (devant : sous le centre de l'orbite, comme vues de biais)
     if (c.orbite.cometes) {
-      this.trainees.forEach((tr) => {
+      for (const tr of this.trainees) {
         trainee(tr, Math.max(0.01, c.orbite.trainee), 3.5 * S, 1, true);
         const p = tr[tr.length - 1];
-        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S, al: 1, devant: p[2] > this.canvas.height / 2 });
-      });
+        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S, al: 1, devant: p[2] > cy });
+      }
     }
     const dessinerTete = (h) => {
       disque(h.x, h.y, h.s * 2.6, tete, 0.12 * h.al * lueur);
@@ -298,10 +402,10 @@ class Apercu {
       disque(h.x, h.y, h.s, tete, h.al);
       disque(h.x, h.y, h.s * 0.45, [255, 255, 255], h.al);
     };
-    tetes.filter((h) => !h.devant).forEach(dessinerTete);
-    const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+    for (const h of tetes) if (!h.devant) dessinerTete(h);
+    // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
     const eclat = c.eclat.taille * S;
-    if (this.env > 0.02 && eclat > 0) {
+    if (this.env > 0.02 && c.eclat.taille > 0) {
       disque(cx, cy, eclat * (2 + 2.5 * this.env), [255, 255, 255], 0.35 * this.env);
       g.strokeStyle = rgba(tete, 0.8 * this.env);
       g.lineWidth = 1.5 * S;
@@ -309,7 +413,8 @@ class Apercu {
       g.arc(cx, cy, eclat * (2.5 + 5 * (1 - this.env)), 0, TAU);
       g.stroke();
     }
-    tetes.filter((h) => h.devant).forEach(dessinerTete);
+    // particules : étincelles, ondes de choc, poussière du sillage
+    const poussiere = couleur(0.5);
     for (const q of this.particules) {
       const k = Math.min(1, Math.max(0, (t - q.ne) / q.vie));
       if (q.genre === "onde") {
@@ -318,11 +423,14 @@ class Apercu {
         g.beginPath();
         g.arc(q.x, q.y, Math.max(1, q.taille * (1 - (1 - k) ** 3)), 0, TAU);
         g.stroke();
+      } else if (q.genre === "poussiere") {
+        disque(q.x, q.y, q.taille * (1 - 0.5 * k), poussiere, 0.7 * (1 - k));
       } else {
         disque(q.x, q.y, q.taille * 2.2, tete, 0.25 * (1 - k));
         disque(q.x, q.y, q.taille * (1 - 0.5 * k), [255, 255, 255], 1 - k);
       }
     }
+    for (const h of tetes) if (h.devant) dessinerTete(h);
     // le pointeur, au centre : le curseur Windows du preset (point chaud au centre), sinon un point
     const cur = this.curseur;
     if (cur) {
