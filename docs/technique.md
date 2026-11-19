@@ -200,6 +200,21 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
+- **Modulations** (`modulation.rs`) : `Sources` tient les enveloppes des coups (kick, caisse
+  claire, charleston : 1 au coup, retombée de 7, 8 et 10 par seconde ; drop : 0,9 par seconde) et
+  suit la montée ; `effets` additionne les modulations par cible pour les comètes et pour les
+  satellites (`Effet` : tours/min de rotation et radians/s de vitesse ajoutés, facteurs du rayon
+  et de la taille, degrés de teinte), lissés ~50 ms dans `Swarm::update`. La basse qui accélère
+  et la note grave qui éloigne l'orbite sont les deux modulations par défaut
+  (`config::reactions_de_base`) : `Swarm::update` ne garde, en propre, que la vitesse du trajet,
+  la montée et le contretemps. Les anciennes clés `[orbite] vitesse_basse` et
+  `eloignement_grave` sont converties à la lecture (`config::de_texte`, presets compris) et
+  retirées de `config.toml` au lancement (`config::migrer_fichier`) ; la page fait de même pour
+  un preset de la communauté (`fusion`). Chaque groupe a sa `Pose` (rotation et rayon au
+  début et à la fin de l'image) : le trajet des comètes et celui des satellites tournent chacun
+  de leur côté (`[orbite] rotation_sur`). Une modulation de la taille élargit la marge de
+  `Swarm::bounds`. L'analyse musicale (caisse claire, montée, drop) tourne aussi quand une
+  modulation l'écoute (`Config::analyse_musicale`).
 - `ui/apercu.js` reproduit `render.rs` jusqu'au détail : ordre de la mise à jour, points
   intermédiaires (`sous_pas`), sillage, dessin des traînées par morceaux de 4 segments.
 - Réglages (`config.rs`) : écritures atomiques (fichier `.tmp` puis renommage) sous un verrou

@@ -9,8 +9,9 @@ satellites en orbite, un éclat sous le pointeur à chaque kick, et des fissures
 chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
 
 - **Kick** : inverse le sens de rotation et ajoute 2 à 3 satellites (durée de vie 2,8 s).
-- **Quantité de basse** : accélère la rotation.
-- **Hauteur de la note de basse** : plus elle est grave, plus les orbites s'éloignent.
+- **Quantité de basse** : accélère la rotation ; **hauteur de la note de basse** : plus elle est
+  grave, plus les orbites s'éloignent. Ce sont les deux modulations de base (voir *Modulations*),
+  présentes par défaut : on les règle ou on les retire comme les autres.
 - **Aigus** (charleston, cymbales) : chaque attaque fait jaillir des étincelles des têtes
   (`[scintillement]`, passe-haut à 5 kHz, enveloppes rapide et lente).
 - **Caisse claire** (`[musique] caisse_claire`, actif par défaut) : sur chaque caisse claire ou
@@ -84,9 +85,31 @@ chaque clic. Le pointeur lui-même reste celui de Windows (voir « Curseurs »).
   (`rayon`, `hauteur`).
 - **Bordure** : la bordure de la fenêtre au premier plan prend la couleur de l'essaim et
   s'illumine sur chaque kick (Windows 11), sauf en mode sans flashs.
+- **Rotation du trajet, à qui** (`[orbite] rotation_sur`) : `"tout"` (par défaut), `"cometes"` ou
+  `"satellites"` : seul ce groupe tourne avec le trajet, l'autre garde le sien immobile.
+  `[orbite] inverse_au_kick` (oui par défaut) : chaque kick inverse le sens ; coupé, l'essaim
+  tourne toujours dans le même sens et le kick n'ajoute que ses satellites et son éclat.
+- **Modulations** (`[modulations] liste`, 16 au plus, gardées dans le preset) : chacune fait agir
+  une source du son sur un paramètre, pour les comètes, les satellites ou les deux. Une ligne :
+  `{ source = "drop", cible = "rotation", sur = "satellites", quantite = 0.8 }`. Par défaut, deux
+  modulations de base : `basse` → `vitesse` (0,275, soit +11 radians/s basse à fond) et `grave` →
+  `rayon` (0,325, soit +130 %). Les réglages et presets d'avant (`[orbite] vitesse_basse` et
+  `eloignement_grave`) sont convertis en ces deux modulations, avec leurs valeurs. Les effets à
+  bascule (montée et drop, contretemps, kick) gardent leurs réactions à eux.
+  - Sources, de 0 à 1 : `basse` (niveau), `grave` et `aigu` (note de la basse, quand elle est
+    là), `kick`, `caisse` (caisse claire), `charleston` (attaques des aigus) : un coup qui retombe
+    en quelques dixièmes de seconde ; `montee` (tension avant un drop), `drop` (1 au drop, retombe
+    en deux secondes environ), `tempo` (1 sur chaque temps quand le tempo est régulier) ; `stereo`
+    va de -1 (gauche) à 1 (droite).
+  - Cibles, à fond (`quantite` = 1, source à 1) : `rotation` du trajet +90 tr/min, `vitesse` sur le
+    trajet +40 radians/s (382 tr/min), `rayon` +400 %, `taille` des têtes et des traînées +150 %,
+    `teinte` +180°. `quantite` va de -1 à 1 (négatif : dans l'autre sens) ; les modulations d'une
+    même cible s'additionnent ; la vitesse ne devient jamais négative, rayon et taille restent
+    dans des bornes lisibles. Une source ou une cible inconnue (preset
+    d'une version plus récente) ne fait rien.
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
-choisie dans *Avancé › Son › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
+choisie dans *Kick et son › Avancé › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
 presets ; si elle est débranchée, Essaim écoute la sortie par défaut en attendant son retour) :
 Spotify, navigateur, jeux… sans rien configurer.
 
@@ -136,8 +159,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   luminosité de repos. `"auto"` (par défaut, *Comme Windows* dans les réglages) : seulement quand
   les effets d'animation de Windows sont coupés (*Accessibilité › Effets visuels*), relu chaque
   seconde ; `"oui"` : toujours ; `"non"` : jamais.
-- **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton des
-  réglages avancés, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
+- **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton de
+  *Cet ordinateur* dans les réglages, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
   sur un fond uni (`[stream] fond` : `"vert"` par défaut, `"bleu"`, `"magenta"` ou `"noir"` ; propre
   à la machine). Dans OBS : *Capture de fenêtre* sur « Essaim — stream », puis un filtre
   *Incrustation chromatique* (ou, sur fond noir, un mode de fusion *Écran*). Elle suit le son et les
@@ -173,15 +196,21 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque. Filtre par
     forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
     montre côte à côte avec la liste de leurs réglages différents.
-  - *02 Réglages* : les réglages courants appliqués en direct, *+ Avancé* pour tous les autres.
-    Un réglage dont l'effet est coupé (fissures, bordure, son, comètes…) est masqué. *Dessiné…*
+  - *02 Réglages* : un sous-onglet par effet (*Orbite*, *Comètes*, *Satellites*, *Couleur*,
+    *Kick et son*, *Musique*, *Souris*, *Fissures*, *Bordure*, *Spectre*, *Modulations*, et *Cet
+    ordinateur* pour les réglages propres au PC), chacun avec ses réglages courants et *+ Avancé*
+    pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
+    est actif (bascule *Actif* en tête du panneau) ; un effet coupé, ou un réglage sans effet
+    (densité du sillage sans sillage…), est estompé mais reste réglable. Dans *Modulations*, une
+    ligne par modulation (source → paramètre, sur qui, quantité) avec une jauge de la source en
+    direct, et des idées à ajouter d'un clic. *Dessiné…*
     ouvre une toile où tracer le trajet d'un geste. Un clic sur l'aperçu y montre l'effet du
     clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
     `Images\Essaim` et le montre dans l'Explorateur.
   - *04 Auto* : les règles du preset automatique (*Si … alors …*, avec le bouton *Artiste en
     cours* qui remplit la condition pour le morceau qui joue ; par application ; par heure), les
     pauses par application et les raccourcis.
-  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Avancé*).
+  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Cet ordinateur*).
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
     *Aigus* s'allume sur les attaques des aigus. Sous *Pause*, l'état de l'écoute : *Son capté*,
@@ -203,17 +232,19 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     Installer ou importer un preset ne remplace jamais un preset différent du même nom (à la
     casse près), et les noms réservés de Windows (CON, NUL, COM1…) sont refusés.
   - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
-  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Avancé*.
+  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Cet ordinateur*.
   - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 4 ou flèches
     (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (21) : *Défaut*, *Discret*, *Intense*, *Point seul*, *Pollen*, *Spirale* ;
+  - Préréglages fournis (22) : *Défaut*, *Discret*, *Intense*, *Point seul*, *Pollen*, *Spirale* ;
     un par forme du trajet : *Delta* (triangle), *Ruche* (hexagone), *Huit*, *Losange*, *Ellipse*,
     *Carré*, *Pentagone*, *Étoile*, *Fleur*, *Trèfle*, *Cœur*, *Lissajous*, *Astroïde* ; et
     *Constellation* (lignes entre les satellites, deux teintes) et *Festival* (contretemps, stéréo,
-    inertie, palette de trois teintes). Chacun est refaisable à la main dans les réglages. Les
+    inertie, palette de trois teintes), *Tourbillon* (modulations : le trajet des satellites, seul à
+    tourner, s'emballe au drop, l'orbite s'ouvre sur les graves, les comètes grossissent au kick).
+    Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine) ni à l'option des
     curseurs.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
@@ -239,7 +270,7 @@ version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus
 
 Le dossier de l'exécutable doit être modifiable (c'est le cas de
 `%LOCALAPPDATA%\Programs\Essaim`, pas de `Program Files`). Couper : *Mises à jour automatiques*
-dans les réglages avancés, ou `[mise_a_jour] auto = false`. Les échecs (pas de réseau, fichier
+dans *Cet ordinateur*, ou `[mise_a_jour] auto = false`. Les échecs (pas de réseau, fichier
 refusé) sont notés dans le journal, et Essaim réessaie six heures plus tard.
 
 ## Bibliothèque de presets (GitHub)

@@ -37,9 +37,9 @@ throw sparks, and on the drop, everything bursts.
   around it, in a click-through layer.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
-- **Your way.** 14 path shapes, or your own drawn by hand; 21 bundled presets, animated live;
-  "if the artist is… then this preset" rules; every setting applied instantly, with its cost
-  shown.
+- **Your way.** 14 path shapes, or your own drawn by hand; 22 bundled presets, animated live;
+  modulations to wire any part of the sound to the rotation, speed, radius, size or hue; "if the
+  artist is… then this preset" rules; every setting applied instantly, with its cost shown.
 
 ## Features
 
@@ -77,12 +77,13 @@ in OBS; it follows your music like the swarm around the pointer.</td>
 | | |
 |---|---|
 | 🥁 **Kick** | Reverses the rotation, adds satellites, flash under the pointer |
-| 🔊 **Bass** | Speeds up the rotation; the lower the note, the wider the orbits |
+| 🔊 **Bass** | Speeds up the rotation; the lower the note, the wider the orbits (two default modulations, to tune or remove) |
 | ✨ **Highs** | Hi-hats and cymbals throw sparks |
 | 🟦 **Snare** | A glowing square opens under the pointer on every snare or clap |
 | 🚀 **Build-up and drop** | The swarm tightens and speeds up during the build-up, then bursts on the drop |
 | ⏱️ **Tempo** | The swarm keeps pulsing through breaks without a kick drum; optionally, the heads pulse on the off-beats |
 | 🎧 **Stereo** | Optionally, the swarm leans towards the louder side |
+| 🎛️ **Modulations** | Wire a part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, stereo, tempo) to the path rotation, speed, radius, size or hue, of the comets, the satellites or both: the path spinning up on the drop, the orbit opening on low notes… |
 | 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
 
 ### The mouse and the screen
@@ -113,19 +114,21 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 
 ## The settings window
 
-**Presets.** A grid of 21 bundled presets (one per shape, and a few more), each animated live with
+**Presets.** A grid of 22 bundled presets (one per shape, and a few more), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
 
-<img src="docs/images/presets.png" alt="Presets tab: the 21 bundled presets, animated" width="100%">
+<img src="docs/images/presets.png" alt="Presets tab: the 22 bundled presets, animated" width="100%">
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Settings tab: large preview, shapes, sliders"></td>
+<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Settings tab: large preview, one sub-tab per effect, here the modulations"></td>
 <td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Cursors tab: installed cursor schemes"></td>
 </tr>
 <tr>
-<td valign="top"><b>Settings</b> applied live on a large preview. Next to each one, a 1–10
-score tells its power cost; the power in use is measured live.</td>
+<td valign="top"><b>Settings</b> sorted by effect (orbit, comets, satellites, colour, sound,
+music, mouse, cracks, border, spectrum, modulations), each with its basic and advanced options,
+applied live on a large preview. Next to each one, ten squares tell its power cost; the power in
+use is measured live.</td>
 <td valign="top"><b>Cursors</b>: your Windows cursor schemes, animated, applied in one click. A
 preset can carry its own.</td>
 </tr>
@@ -140,7 +143,7 @@ preset can carry its own.</td>
 install, no administrator rights: the settings window opens on first launch.
 
 - First put the file where it will stay (for example `%LOCALAPPDATA%\Programs\Essaim`), then
-  tick *Démarrer Essaim avec Windows* in the advanced settings.
+  tick *Démarrer Essaim avec Windows* in *Réglages › Cet ordinateur*.
 - Windows may show « Windows protected your PC »: the executable isn't signed. *More info* →
   *Run anyway*.
 - The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
@@ -197,13 +200,13 @@ for the preset library and updates.
 <summary><b>The swarm doesn't react to sound.</b></summary>
 
 Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
-in *Réglages › Avancé › Son › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
+in *Réglages › Kick et son › Avancé › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
 </details>
 
 <details>
 <summary><b>The flashes bother me (photosensitivity).</b></summary>
 
-*Réglages › Avancé › Sans flashs*: *Toujours*. Kick flashes are softened and limited to three per
+*Réglages › Cet ordinateur › Sans flashs*: *Toujours*. Kick flashes are softened and limited to three per
 second, with no white halo, and the window border no longer blinks. By default (*Comme Windows*),
 this mode turns on by itself when animation effects are off in Windows (*Accessibility › Visual
 effects*).
@@ -213,7 +216,7 @@ effects*).
 <summary><b>How do I show the swarm in OBS?</b></summary>
 
 Tray icon → *Fenêtre pour le stream* (or `essaim.exe --stream`). The swarm dances in the middle,
-on a solid background (green by default, selectable in the advanced settings). In OBS: *Window
+on a solid background (green by default, selectable in *Réglages › Cet ordinateur*). In OBS: *Window
 Capture* on « Essaim — stream », then a *Chroma Key* filter to remove the background. It stays
 capturable even when the swarm around the pointer is hidden from captures.
 </details>

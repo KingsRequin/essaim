@@ -35,9 +35,10 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
   dessine seulement autour, dans un calque transparent aux clics.
 - **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
-- **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; 21 presets fournis, animés en
-  direct ; des règles « si l'artiste est… alors tel preset » ; chaque réglage appliqué tout de
-  suite, avec son coût affiché.
+- **À ta façon.** 14 formes de trajet ou le tien, dessiné à la main ; 22 presets fournis, animés en
+  direct ; des modulations pour brancher n'importe quel élément du son sur la rotation, la vitesse,
+  le rayon, la taille ou la teinte ; des règles « si l'artiste est… alors tel preset » ; chaque
+  réglage appliqué tout de suite, avec son coût affiché.
 
 ## Fonctions
 
@@ -76,12 +77,13 @@ dans OBS ; elle suit ta musique comme l'essaim du pointeur.</td>
 | | |
 |---|---|
 | 🥁 **Kick** | Inverse le sens de rotation, ajoute des satellites, éclat sous le pointeur |
-| 🔊 **Basse** | Accélère la rotation ; plus la note est grave, plus les orbites s'éloignent |
+| 🔊 **Basse** | Accélère la rotation ; plus la note est grave, plus les orbites s'éloignent (deux modulations de base, à régler ou retirer) |
 | ✨ **Aigus** | Charleston et cymbales font jaillir des étincelles |
 | 🟦 **Caisse claire** | Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire ou clap |
 | 🚀 **Montée et drop** | L'essaim se resserre et accélère pendant la montée, puis explose au drop |
 | ⏱️ **Tempo** | L'essaim continue de pulser pendant les breaks sans grosse caisse ; en option, les têtes pulsent sur les contretemps |
 | 🎧 **Stéréo** | En option, l'essaim penche vers le côté qui joue le plus fort |
+| 🎛️ **Modulations** | Branche un élément du son (basse, note grave ou aiguë, kick, caisse claire, charleston, montée, drop, stéréo, tempo) sur la rotation du trajet, la vitesse, le rayon, la taille ou la teinte, des comètes, des satellites ou des deux : le trajet qui s'emballe au drop, l'orbite qui s'ouvre sur les graves… |
 | 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
 
 ### La souris et l'écran
@@ -114,20 +116,22 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## La fenêtre des réglages
 
-**Les presets.** Une grille de 21 presets fournis (un par forme, et quelques autres), chacun animé
+**Les presets.** Une grille de 22 presets fournis (un par forme, et quelques autres), chacun animé
 en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
 filtre par forme.
 
-<img src="docs/images/presets.png" alt="Onglet Presets : les 21 presets fournis, animés" width="100%">
+<img src="docs/images/presets.png" alt="Onglet Presets : les 22 presets fournis, animés" width="100%">
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Onglet Réglages : aperçu en grand, formes, glissières"></td>
+<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Onglet Réglages : aperçu en grand, un sous-onglet par effet, ici les modulations"></td>
 <td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Onglet Curseurs : jeux de curseurs installés"></td>
 </tr>
 <tr>
-<td valign="top"><b>Réglages</b> appliqués en direct sur un grand aperçu. À côté de chacun, une
-note de 1 à 10 dit ce qu'il coûte en puissance ; la puissance utilisée est mesurée en direct.</td>
+<td valign="top"><b>Réglages</b> rangés par effet (orbite, comètes, satellites, couleur, son,
+musique, souris, fissures, bordure, spectre, modulations), chacun avec ses options de base et
+avancées, appliqués en direct sur un grand aperçu. À côté de chacun, dix cases disent ce qu'il
+coûte en puissance ; la puissance utilisée est mesurée en direct.</td>
 <td valign="top"><b>Curseurs</b> : tes jeux de curseurs Windows, animés, mis en place d'un clic.
 Un preset peut emporter le sien.</td>
 </tr>
@@ -143,7 +147,7 @@ l'heure, et les raccourcis clavier.
 installer, pas de droits administrateur : la fenêtre des réglages s'ouvre au premier lancement.
 
 - Range d'abord le fichier là où il restera (par exemple `%LOCALAPPDATA%\Programs\Essaim`),
-  puis coche *Démarrer Essaim avec Windows* dans les réglages avancés.
+  puis coche *Démarrer Essaim avec Windows* dans *Réglages › Cet ordinateur*.
 - Windows peut afficher « Windows a protégé votre ordinateur » : l'exécutable n'est pas signé.
   *Informations complémentaires* → *Exécuter quand même*.
 - Le curseur **Dotter** est à côté : `curseur-Dotter.zip` (voir l'étape 3 plus bas).
@@ -202,14 +206,14 @@ se connecte qu'à GitHub, pour la bibliothèque de presets et les mises à jour.
 <summary><b>L'essaim ne réagit pas au son.</b></summary>
 
 Essaim écoute la sortie audio *par défaut* de Windows. Si ta musique passe par une autre sortie,
-choisis-la dans *Réglages › Avancé › Son › Sortie son écoutée*. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
+choisis-la dans *Réglages › Kick et son › Avancé › Sortie son écoutée*. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
 basse, note).
 </details>
 
 <details>
 <summary><b>Les éclats me gênent (photosensibilité).</b></summary>
 
-*Réglages › Avancé › Sans flashs* : *Toujours*. Les éclats du kick sont adoucis et limités à trois
+*Réglages › Cet ordinateur › Sans flashs* : *Toujours*. Les éclats du kick sont adoucis et limités à trois
 par seconde, sans halo blanc, et la bordure de la fenêtre ne clignote plus. Par défaut (*Comme
 Windows*), ce mode s'active tout seul quand les effets d'animation sont coupés dans Windows
 (*Accessibilité › Effets visuels*).
@@ -219,7 +223,7 @@ Windows*), ce mode s'active tout seul quand les effets d'animation sont coupés 
 <summary><b>Comment montrer l'essaim dans OBS ?</b></summary>
 
 Icône d'Essaim → *Fenêtre pour le stream* (ou `essaim.exe --stream`). L'essaim y danse au centre,
-sur un fond uni (vert par défaut, au choix dans les réglages avancés). Dans OBS : *Capture de
+sur un fond uni (vert par défaut, au choix dans *Réglages › Cet ordinateur*). Dans OBS : *Capture de
 fenêtre* sur « Essaim — stream », puis un filtre *Incrustation chromatique* pour retirer le fond.
 Elle reste capturable même si l'essaim autour du pointeur est masqué des captures.
 </details>
