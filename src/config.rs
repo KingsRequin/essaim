@@ -337,6 +337,12 @@ pub struct Audio {
     pub sensibilite_kick: f32,
     /// Délai minimal entre deux kicks (s) : un kick long qui ondule n'est compté qu'une fois.
     pub delai_kick: f32,
+    /// Sans kick depuis 2 s alors qu'un tempo stable était connu (break), l'essaim continue de
+    /// pulser doucement au tempo.
+    pub pulsation_tempo: bool,
+    /// Sortie son écoutée (identifiant Windows) ; vide = sortie par défaut. Propre à la
+    /// machine : hors presets.
+    pub sortie: String,
 }
 
 impl Default for Eclat {
@@ -366,7 +372,7 @@ impl Default for Fissures {
 }
 impl Default for Audio {
     fn default() -> Self {
-        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1 }
+        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1, pulsation_tempo: true, sortie: String::new() }
     }
 }
 
@@ -429,6 +435,8 @@ densite = 5             # 1 à 10
 actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
 delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un kick long compte double
+pulsation_tempo = true  # sans kick depuis 2 s (break), l'essaim continue de pulser au tempo
+sortie = ""             # sortie son écoutée (identifiant Windows) ; "" = sortie par défaut ; hors presets
 
 [rendu]
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul

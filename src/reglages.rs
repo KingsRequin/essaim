@@ -132,13 +132,15 @@ enum Demande {
     Applis,
     /// Enregistre une image GIF (base64) dans les images de l'utilisateur.
     EnregistrerGif { nom: String, donnees: String },
+    /// Sorties son de Windows, pour le choix de la sortie écoutée (`[audio] sortie`).
+    Sorties,
 }
 
 struct Fenetre {
     hwnd: HWND,
     vue: WebView,
     son: Arc<AudioShared>,
-    /// Dernier son envoyé (kicks, basse) : rien n'est renvoyé s'il n'a pas changé.
+    /// Dernier son envoyé (kicks et aigus, basse et phase) : rien n'est renvoyé s'il n'a pas changé.
     son_envoye: (u32, u32),
     /// Dates de `config.toml` et du dossier des presets au dernier état envoyé.
     dates: (Option<SystemTime>, Option<SystemTime>),
@@ -411,6 +413,11 @@ impl Fenetre {
                 }
                 Err(e) => self.erreur(&format!("GIF non enregistré : {e}.")),
             },
+            Demande::Sorties => {
+                let liste: Vec<Value> = audio_commun::capture::sorties().into_iter().map(|(id, nom)| json!({ "id": id, "nom": nom })).collect();
+                let actuelle = Config::read(&config::path()).unwrap_or_default().audio.sortie;
+                self.envoyer(&json!({ "type": "sorties", "liste": liste, "actuelle": actuelle }));
+            }
             Demande::OuvrirDepot => {
                 let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
                 crate::win::open_url(&format!("https://github.com/{depot}"));
@@ -480,10 +487,15 @@ impl Fenetre {
     fn tick(&mut self, quoi: usize) {
         if quoi == TIMER_SON && !self.reduite {
             let au = self.son.view();
-            let cle = (au.kicks ^ au.aigus.rotate_left(16), au.bass.to_bits());
+            let cle = (au.kicks ^ au.aigus.rotate_left(16), au.bass.to_bits() ^ au.phase.to_bits());
             if cle != self.son_envoye {
                 self.son_envoye = cle;
-                self.envoyer(&json!({ "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "aigus": au.aigus, "brillance": au.brillance, "teinte": crate::render::sync_hue() }));
+                // tempo : `bpm` absent (null) tant qu'il n'est pas stable ; `relais` = break sans
+                // kick, l'essaim pulse alors sur `phase`
+                self.envoyer(&json!({
+                    "type": "son", "kicks": au.kicks, "basse": au.bass, "hauteur": au.pitch, "aigus": au.aigus, "brillance": au.brillance,
+                    "teinte": crate::render::sync_hue(), "bpm": au.bpm, "phase": au.phase, "relais": au.relais,
+                }));
             }
         } else if quoi == TIMER_FICHIERS {
             let (ms, ips) = crate::charge::lire();

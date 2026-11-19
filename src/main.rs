@@ -211,13 +211,21 @@ fn reglages_ouverts() -> bool {
 #[derive(Default)]
 struct Son {
     capture: Option<audio::AudioThread>,
+    /// Sortie écoutée par la capture en cours (`[audio] sortie`, vide = par défaut).
+    sortie: String,
     /// Le dernier lancement a échoué ; nouvel essai à cette date.
     reessai: Option<Instant>,
     publie: Option<&'static str>,
 }
 
 impl Son {
-    fn regler(&mut self, voulu: bool, shared: &Arc<audio::AudioShared>, now: Instant) {
+    fn regler(&mut self, voulu: bool, sortie: &str, shared: &Arc<audio::AudioShared>, now: Instant) {
+        // autre sortie choisie : la capture est relancée dessus tout de suite
+        if self.capture.is_some() && self.sortie != sortie {
+            self.capture = None;
+            self.reessai = None;
+            log::info!("son : sortie écoutée changée, capture relancée");
+        }
         if !voulu {
             self.reessai = None;
             if self.capture.take().is_some() {
@@ -226,9 +234,10 @@ impl Son {
                 log::info!("son : capture arrêtée");
             }
         } else if self.capture.is_none() && self.reessai.is_none_or(|r| now >= r) {
-            match audio::start(shared.clone()) {
+            match audio::start(shared.clone(), sortie) {
                 Ok(c) => {
                     self.capture = Some(c);
+                    sortie.clone_into(&mut self.sortie);
                     self.reessai = None;
                     log::info!("son : capture lancée");
                 }
@@ -401,7 +410,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         }
         // son : coupé en pause et en plein écran (sauf fenêtre des réglages ouverte, qui le montre)
         let son_voulu = conf.cfg.audio.actif && (!(user_paused || fs_paused) || reglages_ouverts());
-        son.regler(son_voulu, &shared, now);
+        son.regler(son_voulu, &conf.cfg.audio.sortie, &shared, now);
         automatique.tick(&conf.cfg, now);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
