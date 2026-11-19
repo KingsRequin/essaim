@@ -467,7 +467,7 @@ fn run(open_settings: bool) -> anyhow::Result<bool> {
         // son : coupé en pause et en plein écran (sauf fenêtre des réglages ouverte, qui le montre)
         let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts());
         son.regler(son_voulu, &conf.cfg.audio.sortie, &shared, now);
-        automatique.tick(&conf.cfg, now);
+        automatique.tick(&conf.cfg, now, shared.view().bpm);
         let cfg = &conf.cfg;
         // bordure sans illumination sur les kicks en mode sans flashs
         let bordure_cfg = bordure::sans_flashs(&cfg.bordure, doux);

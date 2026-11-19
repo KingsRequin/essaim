@@ -165,15 +165,25 @@ impl Default for Spectre {
     }
 }
 
-/// Preset choisi tout seul selon l'application au premier plan ou l'heure.
+/// Preset choisi tout seul : règles « si … alors … » (prioritaires), puis application au
+/// premier plan, puis heure.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Automatique {
     pub actif: bool,
+    /// Si la condition `si` est vraie (`artiste = Skrillex`, `bpm > 140 et appli = jeu.exe`…),
+    /// le preset `alors` ; la première règle vraie l'emporte (`auto.rs`).
+    pub regles: Vec<Regle>,
     /// Application (nom de l'exécutable) → preset ; prioritaire sur les horaires.
     pub applis: Vec<RegleAppli>,
     /// Plage horaire (« 22:00 » à « 07:00 », peut passer minuit) → preset.
     pub horaires: Vec<Horaire>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct Regle {
+    pub si: String,
+    pub alors: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -676,7 +686,9 @@ jeu = ""                # jeu de curseurs de Windows des réglages ("" = ne pas 
 avec_preset = true      # choisir un preset installe aussi son jeu de curseurs
 
 [automatique]
-actif = false           # choisit tout seul un preset selon l'application au premier plan ou l'heure
+actif = false           # choisit tout seul un preset selon les règles, l'application au premier plan ou l'heure
+regles = []             # [{ si = "artiste = Skrillex", alors = "Triangle" }] ; clés : artiste, titre, appli, bpm, heure ;
+                        # opérateurs : = != ~ (contient) < > <= >= ; plusieurs conditions : « et »
 applis = []             # [{ appli = "jeu.exe", preset = "Discret" }]
 horaires = []           # [{ debut = "22:00", fin = "07:00", preset = "Discret" }]
 

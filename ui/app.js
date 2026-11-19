@@ -1412,7 +1412,18 @@ function dessinerAuto() {
   $("raccourcis-actif").setAttribute("aria-pressed", etat.reglages.raccourcis.actif);
   remplirChoixPresets("appli-preset");
   remplirChoixPresets("horaire-preset");
+  remplirChoixPresets("si-preset");
   const vide = (texte) => el("div", "regle", "").appendChild(el("span", "vide-regle t-petit", texte)).parentNode;
+  // règles « si … alors … » (absentes d'une appli plus ancienne)
+  const regles = a.regles || [];
+  $("regles-si").replaceChildren(...(regles.length ? regles.map((r, i) => ligneRegle("si " + r.si, r.alors, () => {
+    regler("automatique", "regles", regles.filter((_, j) => j !== i));
+    dessinerAuto();
+  })) : [vide("Aucune règle : par exemple « artiste = Skrillex » → un preset.")]));
+  // raccourci : une règle pour l'artiste qui joue
+  const artiste = etat.morceau && etat.morceau.artiste;
+  $("si-artiste").hidden = !artiste;
+  if (artiste) $("si-artiste").textContent = `Artiste en cours : ${artiste.length > 24 ? artiste.slice(0, 23) + "…" : artiste}`;
   $("regles-applis").replaceChildren(...(a.applis.length ? a.applis.map((r, i) => ligneRegle(r.appli, r.preset, () => {
     regler("automatique", "applis", a.applis.filter((_, j) => j !== i));
     dessinerAuto();
@@ -1470,6 +1481,38 @@ $("ajout-appli").addEventListener("submit", (e) => {
   regler("automatique", "applis", liste);
   $("appli-nom").value = "";
   dessinerAuto();
+});
+// Condition d'une règle : chaque partie (séparée par « et », hors guillemets) est « clé
+// opérateur valeur » ; l'appli refait la vérification complète (une règle illisible est ignorée
+// et notée au journal). Renvoie un message d'erreur, ou "" si elle se lit.
+function verifierCondition(si) {
+  const parties = si.split(/ et (?=(?:[^"]*"[^"]*")*[^"]*$)/i);
+  for (const p of parties) {
+    const m = p.trim().match(/^(artiste|artist|titre|morceau|title|appli|application|app|bpm|tempo|heure)\s*(<=|>=|!=|=|~|<|>)\s*(.+)$/i);
+    if (!m) return `« ${p.trim()} » : écris « clé opérateur valeur », par exemple « artiste = Skrillex ».`;
+    const cle = m[1].toLowerCase(), op = m[2], v = m[3].trim();
+    const nombre = cle === "bpm" || cle === "tempo", heure = cle === "heure";
+    if (nombre && !/^\d+([.,]\d+)?$/.test(v)) return `« ${v} » : un tempo s'écrit en nombre (bpm > 140).`;
+    if (heure && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(v)) return `« ${v} » : une heure s'écrit HH:MM (heure >= 22:00).`;
+    if ((nombre || heure) && op === "~") return "« ~ » (contient) ne va qu'avec un texte.";
+    if (!nombre && !heure && /[<>]/.test(op)) return "« < » et « > » ne vont qu'avec bpm ou heure.";
+  }
+  return "";
+}
+$("ajout-si").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const si = $("si-condition").value.trim(), alors = $("si-preset").value;
+  if (!si || !alors) { bandeau("Indique une condition et un preset."); return; }
+  const erreur = verifierCondition(si);
+  if (erreur) { bandeau(erreur); return; }
+  regler("automatique", "regles", (etat.reglages.automatique.regles || []).concat([{ si, alors }]));
+  $("si-condition").value = "";
+  dessinerAuto();
+});
+$("si-artiste").addEventListener("click", () => {
+  const a = etat.morceau && etat.morceau.artiste;
+  if (a) $("si-condition").value = `artiste = "${a.split(/[,&;/]| feat\. | ft\. /)[0].trim()}"`;
+  $("si-condition").focus();
 });
 $("ajout-horaire").addEventListener("submit", (e) => {
   e.preventDefault();

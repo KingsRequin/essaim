@@ -282,11 +282,16 @@ pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
 /// disparaissent (`None` : suppression). Renvoie vrai si une règle a changé.
 fn regles_renommees(cfg: &mut Config, ancien: &str, nouveau: Option<&str>) -> bool {
     let a = &mut cfg.automatique;
-    let n = a.applis.len() + a.horaires.len();
+    let n = a.applis.len() + a.horaires.len() + a.regles.len();
     let mut change = false;
     match nouveau {
         Some(nouveau) => {
-            let presets = a.applis.iter_mut().map(|r| &mut r.preset).chain(a.horaires.iter_mut().map(|r| &mut r.preset));
+            let presets = a
+                .applis
+                .iter_mut()
+                .map(|r| &mut r.preset)
+                .chain(a.horaires.iter_mut().map(|r| &mut r.preset))
+                .chain(a.regles.iter_mut().map(|r| &mut r.alors));
             for p in presets.filter(|p| meme_nom(p, ancien)) {
                 *p = nouveau.to_owned();
                 change = true;
@@ -295,9 +300,10 @@ fn regles_renommees(cfg: &mut Config, ancien: &str, nouveau: Option<&str>) -> bo
         None => {
             a.applis.retain(|r| !meme_nom(&r.preset, ancien));
             a.horaires.retain(|r| !meme_nom(&r.preset, ancien));
+            a.regles.retain(|r| !meme_nom(&r.alors, ancien));
         }
     }
-    change || a.applis.len() + a.horaires.len() != n
+    change || a.applis.len() + a.horaires.len() + a.regles.len() != n
 }
 
 /// Met à jour les règles automatiques dans `config.toml` (un échec est seulement noté : le
@@ -624,14 +630,16 @@ mod tests {
             config::RegleAppli { appli: "film.exe".into(), preset: "Autre".into() },
         ];
         cfg.automatique.horaires = vec![config::Horaire { debut: "22:00".into(), fin: "07:00".into(), preset: "NUIT".into() }];
+        cfg.automatique.regles = vec![config::Regle { si: "bpm > 140".into(), alors: "nuit".into() }];
         assert!(regles_renommees(&mut cfg, "nuit", Some("Soir")));
         assert_eq!(cfg.automatique.applis[0].preset, "Soir");
         assert_eq!(cfg.automatique.applis[1].preset, "Autre");
         assert_eq!(cfg.automatique.horaires[0].preset, "Soir");
+        assert_eq!(cfg.automatique.regles[0].alors, "Soir");
         assert!(!regles_renommees(&mut cfg, "Absent", Some("X")));
         assert!(regles_renommees(&mut cfg, "soir", None));
         assert_eq!(cfg.automatique.applis.len(), 1);
-        assert!(cfg.automatique.horaires.is_empty());
+        assert!(cfg.automatique.horaires.is_empty() && cfg.automatique.regles.is_empty());
     }
 
     #[test]

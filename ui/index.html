@@ -108,7 +108,7 @@
   <section class="vue" id="vue-auto" role="tabpanel" aria-labelledby="onglet-auto" hidden>
     <aside class="colonne moyenne">
       <span class="t-titre">Preset automatique</span>
-      <p class="note">Essaim change tout seul de preset selon l'application au premier plan, ou selon l'heure. Quand plus aucune règle ne s'applique, tes réglages d'avant reviennent.</p>
+      <p class="note">Essaim change tout seul de preset selon tes règles (artiste, titre, tempo…), l'application au premier plan ou l'heure. Quand plus aucune règle ne s'applique, tes réglages d'avant reviennent.</p>
       <button class="puce debut" id="auto-actif" aria-pressed="false">Choisir le preset automatiquement</button>
       <span class="t-titre haut-2">Raccourcis clavier</span>
       <button class="puce debut" id="raccourcis-actif" aria-pressed="true">Raccourcis globaux</button>
@@ -120,7 +120,16 @@
       <p class="note">Ils marchent partout dans Windows, sans surveiller le clavier (pas de hook) : Windows prévient seulement Essaim quand ces touches sont pressées.</p>
     </aside>
     <div class="defile">
-      <div class="barre-titre"><span class="t-titre">Selon l'application</span><span class="t-label">prioritaire</span></div>
+      <div class="barre-titre"><span class="t-titre">Si … alors …</span><span class="t-label">prioritaire</span></div>
+      <p class="note haut-2" id="aide-regle">Clés : <b>artiste</b>, <b>titre</b> (morceau qui joue), <b>appli</b>, <b>bpm</b> (tempo des kicks), <b>heure</b>. Opérateurs : = &nbsp;!= &nbsp;~ (contient) &nbsp;&lt; &nbsp;&gt; &nbsp;&lt;= &nbsp;&gt;=. Plusieurs conditions : « et ». Exemple : <code>bpm &gt; 140 et heure &gt;= 20:00</code>.</p>
+      <div class="regles haut-2" id="regles-si"></div>
+      <form class="ajout-regle" id="ajout-si">
+        <label><span class="t-label">Si</span><input class="champ" id="si-condition" placeholder="artiste = Skrillex" autocomplete="off" spellcheck="false" aria-describedby="aide-regle"></label>
+        <label><span class="t-label">Alors</span><select class="choix" id="si-preset"></select></label>
+        <button class="puce" type="submit">Ajouter</button>
+        <button class="puce" type="button" id="si-artiste" hidden></button>
+      </form>
+      <div class="barre-titre haut-5"><span class="t-titre">Selon l'application</span></div>
       <div class="regles" id="regles-applis"></div>
       <form class="ajout-regle" id="ajout-appli">
         <label><span class="t-label">Application</span><input class="champ petit" id="appli-nom" list="applis-ouvertes" placeholder="jeu.exe" autocomplete="off" spellcheck="false"></label>
