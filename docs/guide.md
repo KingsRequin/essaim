@@ -292,21 +292,29 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (22), chacun avec son caractère : *Défaut* ; *Discret* (petit, lent, sans
-    fissure, pour travailler) ; *Intense* (deux anneaux, beaucoup de satellites, ondes, éclats et
-    fissures) ; *Zen* (trois anneaux lents qui respirent au tempo, peu de réactions) ; *Viseur*
-    (réticule et têtes serrées, pour jouer) ; *Spectre* (anneau de spectre) ; *Comète* (une seule
-    comète qui traîne derrière la souris, sillage) ; *Néon* (Lissajous magenta et vert, tout s'allume
-    au kick) ; *Arcade* (carré vert phosphore, carrés sur la caisse claire et au clic) ; *Orage*
-    (astroïde bleu, fissures sur des kicks au hasard et au drop) ; *Delta* (triangle qui tourne,
-    s'emballe à l'envers au drop) ; *Ruche* (hexagone ambre, satellites permanents reliés) ; *Huit*
-    (penche du côté qui joue le plus fort) ; *Spirale* (quatre anneaux qui tournent, satellites sur
-    une ellipse) ; *Mandala* (trois anneaux de fleur reliés, trois teintes) ; *Battement* (cœur qui
-    bat au tempo) ; *Constellation* (lignes entre les satellites, deux teintes) ; *Festival*
-    (contretemps, stéréo, inertie, trois teintes) ; *Tourbillon* (le trajet des satellites, seul à
-    tourner, s'emballe au drop) ; *Pollen* (sans comètes : des grains qui flottent, sillage) ;
-    *Pochette* (teinte de la pochette du morceau, trèfle) ; *Caméléon* (forme et couleur de l'icône
-    de l'application au premier plan). Chacun est refaisable à la main dans les réglages. Les
+  - Préréglages fournis (43), chacun avec sa forme, ses couleurs, ses effets et ses propres
+    modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
+    essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
+    (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
+    respirent au tempo) ; *Viseur* (réticule) ; *Spectre* (anneau de spectre) ; *Comète* (une
+    comète qui traîne derrière la souris) ; *Néon* (Lissajous magenta et vert) ; *Arcade* (carré
+    vert phosphore) ; *Orage* (astroïde bleu, fissures au hasard) ; *Delta* (triangle qui pivote au
+    kick) ; *Ruche* (hexagone ambre relié) ; *Huit* (penche du côté qui joue) ; *Spirale* (quatre
+    anneaux qui tournent) ; *Mandala* (fleur sur trois anneaux, reliée) ; *Battement* (cœur qui bat
+    au tempo) ; *Constellation* ; *Festival* (contretemps, stéréo, ressort) ; *Tourbillon* (le
+    trajet des satellites s'emballe au drop) ; *Pollen* (grains qui flottent) ; *Pochette* (teinte
+    de la pochette) ; *Caméléon* (forme et couleur de l'icône de l'appli) ; *Aurore* (voiles verts
+    et bleus, effacés sans basse) ; *Pulsar* (une onde à chaque temps) ; *Métronome* (balance à
+    gauche sur le temps, à droite sur le contretemps) ; *Typhon* (tourne de plus en plus vite
+    pendant la montée) ; *Bulles* (gonflent au kick, éclatent sur la caisse claire) ; *Lave*
+    (fleur lourde qui jaunit pendant la montée) ; *Glace* (flocon, scintillements, tout ralentit au
+    drop) ; *Ricochet* (éclats qui rebondissent, secoué par la caisse) ; *Radar* (faisceau autour
+    du réticule) ; *Séisme* (tremble sur les coups, fissures) ; *Disco* (change de couleur à
+    chaque temps) ; *Fantôme* (presque invisible sans basse) ; *Anaglyphe* (comètes rouges et
+    satellites cyan écartés par la stéréo) ; *Sub* (tout suit la basse) ; *Nuée* (des dizaines de
+    satellites) ; *Vortex* (implosions, tout est aspiré) ; *Artifice* (gerbes d'éclats) ;
+    *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort).
+    Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine) ni à l'option des
     curseurs.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.

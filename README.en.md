@@ -38,7 +38,7 @@ throw sparks, and on the drop, everything bursts.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
 - **Your way.** 14 path shapes, the outlines of an image, a text, an emoji or the icon of the
-  app in front; 22 bundled presets, animated live;
+  app in front; 43 bundled presets, animated live;
   triggers ("on the drop, a crack", "on the snare, sparks") and modulations ("the rotation spins
   up on the drop", "the orbit opens on low notes") to build your own swarm; "if the artist is…
   then this preset" rules; every setting applied instantly, with its cost shown.
@@ -98,7 +98,7 @@ in OBS; it follows your music like the swarm around the pointer.</td>
 | 💨 **Movement** | A dust trail when the mouse moves fast; optionally, the swarm lags behind it like on a spring |
 | 🪟 **Active window** | Its border takes the swarm's color and lights up on every kick; sparks bounce off its edges |
 | 🎨 **Colors** | Fixed or cycling hue, a palette of two or three hues, color of the foreground app, of the website open, of the album art, or drifting with the music |
-| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer; optional crosshair and spectrum ring |
+| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer; optional crosshair and spectrum ring (which fades out when the music stops) |
 
 ### On its own, and out of the way
 
@@ -118,10 +118,10 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 
 ## The settings window
 
-**Presets.** A grid of 22 bundled presets, all different (discreet, intense, zen, neon, storm, spectrum, album art…), each animated live with
+**Presets.** A grid of 43 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art…), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
 
-<img src="docs/images/presets.png" alt="Presets tab: the 22 bundled presets, animated" width="100%">
+<img src="docs/images/presets.png" alt="Presets tab: the bundled presets, animated" width="100%">
 
 <table>
 <tr>

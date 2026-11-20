@@ -36,7 +36,7 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
 - **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
 - **À ta façon.** 14 formes de trajet, les contours d'une image, d'un texte, d'un emoji ou de
-  l'icône de l'appli au premier plan ; 22 presets fournis, animés en
+  l'icône de l'appli au premier plan ; 43 presets fournis, animés en
   direct ; des déclencheurs (« au drop, une fissure », « sur la caisse claire, des étincelles ») et
   des modulations (« la rotation s'emballe au drop », « l'orbite s'ouvre sur les graves ») pour
   faire ton propre essaim ; des règles « si l'artiste est… alors tel preset » ; chaque réglage
@@ -98,7 +98,7 @@ dans OBS ; elle suit ta musique comme l'essaim du pointeur.</td>
 | 💨 **Mouvement** | Sillage de poussière quand la souris file ; en option, l'essaim traîne derrière elle comme sur un ressort |
 | 🪟 **Fenêtre active** | Sa bordure prend la couleur de l'essaim et s'illumine sur chaque kick ; les étincelles rebondissent sur ses bords |
 | 🎨 **Couleurs** | Teinte fixe ou qui défile, palette de deux ou trois teintes, couleur de l'appli au premier plan, du site ouvert, de la pochette, ou qui glisse avec la musique |
-| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur ; en option, réticule et anneau de spectre |
+| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur ; en option, réticule et anneau de spectre (qui s'efface quand la musique s'arrête) |
 
 ### Tout seul, et discret
 
@@ -120,11 +120,11 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## La fenêtre des réglages
 
-**Les presets.** Une grille de 22 presets fournis, tous différents (discret, intense, zen, néon, orage, spectre, pochette…), chacun animé
+**Les presets.** Une grille de 43 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette…), chacun animé
 en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
 filtre par forme.
 
-<img src="docs/images/presets.png" alt="Onglet Presets : les 22 presets fournis, animés" width="100%">
+<img src="docs/images/presets.png" alt="Onglet Presets : les presets fournis, animés" width="100%">
 
 <table>
 <tr>
