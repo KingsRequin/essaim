@@ -141,6 +141,13 @@ const SPECTRE_BARRE_MIN: f32 = 1.5;
 /// Lissage de l'affichage des bandes (par seconde) : montée vive, retombée douce.
 const SPECTRE_MONTEE: f32 = 30.0;
 const SPECTRE_DESCENTE: f32 = 8.0;
+/// Anneau masqué sans musique (`masquer_sans_musique`) : niveau absolu de la bande la plus forte
+/// sous lequel rien ne joue (≈ −60 dBFS), silence attendu avant l'effacement (s), durée du fondu
+/// à l'effacement et au retour (s).
+const SPECTRE_AUDIBLE: f32 = 0.001;
+const SPECTRE_ATTENTE: f32 = 1.5;
+const SPECTRE_EFFACEMENT: f32 = 0.8;
+const SPECTRE_RETOUR: f32 = 0.15;
 
 /// Épaisseur des barres du spectre (px écran) : la moitié de l'espace entre deux barres, bornée.
 pub fn spectre_largeur(n: usize, rayon: f32, scale: f32) -> f32 {
@@ -158,13 +165,16 @@ pub struct Effets {
     /// Bandes lues dans l'analyse du son, et affichées (lissées).
     lues: [f32; BANDES_MAX],
     bandes: [f32; BANDES_MAX],
+    /// Silence entendu depuis (s), et visibilité de l'anneau (0 à 1).
+    silence: f32,
+    visible: f32,
     /// Éclat du kick (celui de l'essaim), 1 → 0.
     env: f32,
 }
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], env: 0.0 }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0 }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -211,9 +221,11 @@ impl Effets {
         if voulues > 0 {
             let n = shared.bandes(&mut self.lues);
             lisser_bandes(&mut self.bandes[..n], &self.lues[..n], dt);
+            self.silence = if shared.bandes_crete() > SPECTRE_AUDIBLE { 0.0 } else { self.silence + dt };
         } else {
             self.bandes = [0.0; BANDES_MAX];
         }
+        self.visible = visibilite(self.visible, s.masquer_sans_musique && self.silence >= SPECTRE_ATTENTE, dt);
     }
 
     /// Projecteur en cours (écran assombri à redessiner en entier à chaque image).
@@ -251,15 +263,16 @@ impl Effets {
     pub fn dessiner(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
         let (cx, cy) = cursor;
         let s = &cfg.spectre;
-        if s.actif {
+        if s.actif && self.visible > 0.0 {
             let n = s.bandes.clamp(8, BANDES_MAX as u32) as usize;
             let r = s.rayon * scale;
             let w = spectre_largeur(n, r, scale);
+            let vis = self.visible;
             for (i, &v) in self.bandes[..n].iter().enumerate() {
                 // la bande la plus grave en haut, puis dans le sens des aiguilles d'une montre
                 let (sin, cos) = (-PI / 2.0 + i as f32 / n as f32 * TAU).sin_cos();
                 let long = (SPECTRE_BARRE_MIN + s.hauteur * v) * scale;
-                cv.line((cx + cos * r, cy + sin * r), (cx + cos * (r + long), cy + sin * (r + long)), w, prisme(cfg, t, v), 0.35 + 0.6 * v, true);
+                cv.line((cx + cos * r, cy + sin * r), (cx + cos * (r + long), cy + sin * (r + long)), w, prisme(cfg, t, v), (0.35 + 0.6 * v) * vis, true);
             }
         }
         let re = &cfg.reticule;
@@ -275,6 +288,16 @@ impl Effets {
                 cv.line(a, b, RETICULE_LARGEUR * scale, rgb, re.opacite * (0.6 + 0.4 * env), true);
             }
         }
+    }
+}
+
+/// Visibilité de l'anneau de spectre après `dt` : vers 0 si `masque` (fondu lent), vers 1
+/// sinon (retour rapide).
+fn visibilite(v: f32, masque: bool, dt: f32) -> f32 {
+    if masque {
+        (v - dt / SPECTRE_EFFACEMENT).max(0.0)
+    } else {
+        (v + dt / SPECTRE_RETOUR).min(1.0)
     }
 }
 
@@ -526,5 +549,32 @@ mod tests {
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             eprintln!("filtres du spectre, {n} bandes : {ms:.2} ms par seconde de son ({:.2} % d'un cœur)", ms / 10.0);
         }
+    }
+
+    #[test]
+    fn spectre_masque_sans_musique() {
+        let shared = AudioShared::default();
+        let mut cfg = Config::default();
+        cfg.spectre.actif = true;
+        let mut e = Effets::new();
+        let avance = |e: &mut Effets, cfg: &Config, secondes: f32| {
+            for _ in 0..(secondes * 60.0) as usize {
+                e.avance(0.0, 1.0 / 60.0, (100.0, 100.0), 1.0, 0.0, &shared, cfg, &[]);
+            }
+        };
+        // silence : l'anneau reste un moment, puis s'efface
+        avance(&mut e, &cfg, 1.0);
+        assert_eq!(e.visible, 1.0);
+        avance(&mut e, &cfg, 1.5);
+        assert_eq!(e.visible, 0.0);
+        // option coupée : il revient et reste
+        cfg.spectre.masquer_sans_musique = false;
+        avance(&mut e, &cfg, 0.3);
+        assert_eq!(e.visible, 1.0);
+        // option remise, la musique joue : il reste
+        cfg.spectre.masquer_sans_musique = true;
+        shared.set_bandes_crete(0.05);
+        avance(&mut e, &cfg, 3.0);
+        assert_eq!(e.visible, 1.0);
     }
 }

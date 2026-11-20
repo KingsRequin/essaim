@@ -143,7 +143,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   `opacite`), vides au centre, qui s'illuminent sur les éclats.
 - **Anneau de spectre** (`[spectre]`) : des barres autour du pointeur, une par bande de
   fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
-  (`rayon`, `hauteur`).
+  (`rayon`, `hauteur`). Avec `masquer_sans_musique` (oui par défaut, *Masquer sans musique*),
+  l'anneau s'efface après 1,5 s sans aucun son et revient dès que la musique reprend.
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs.

@@ -154,11 +154,13 @@ pub struct Spectre {
     pub rayon: f32,
     /// Longueur des barres à pleine énergie (px).
     pub hauteur: f32,
+    /// L'anneau s'efface quand plus aucun son ne joue, et revient avec la musique.
+    pub masquer_sans_musique: bool,
 }
 
 impl Default for Spectre {
     fn default() -> Self {
-        Self { actif: false, bandes: 16, rayon: 40.0, hauteur: 24.0 }
+        Self { actif: false, bandes: 16, rayon: 40.0, hauteur: 24.0, masquer_sans_musique: true }
     }
 }
 
@@ -966,6 +968,7 @@ actif = false           # barres autour du pointeur qui suivent l'énergie de ch
 bandes = 16             # nombre de bandes (8 à 32), de 40 Hz à 12 kHz
 rayon = 40              # rayon intérieur de l'anneau
 hauteur = 24            # longueur des barres à pleine énergie
+masquer_sans_musique = true # l'anneau s'efface quand plus aucun son ne joue
 
 [audio]
 actif = true

@@ -36,6 +36,8 @@ pub struct AudioShared {
     bandes_voulues: AtomicU32,
     /// Niveau de chaque bande, 0 à 1 (bits d'un f32), pour l'anneau de spectre.
     bandes: [AtomicU32; BANDES_MAX],
+    /// Niveau absolu de la bande la plus forte (bits d'un f32) : y a-t-il du son ?
+    bandes_crete: AtomicU32,
     /// Analyse musicale voulue (caisse claire, montée, drop) ; sinon rien n'est calculé.
     musique_voulue: AtomicBool,
     /// Caisses claires et drops (compteurs), tension de la montée (0 à 1), équilibre
@@ -123,10 +125,19 @@ impl AudioShared {
         }
         n
     }
+    /// Niveau absolu de la bande la plus forte (0 en silence ou sans capture).
+    pub fn bandes_crete(&self) -> f32 {
+        fini(f32::from_bits(self.bandes_crete.load(Ordering::Relaxed))).max(0.0)
+    }
+    #[cfg(test)]
+    pub fn set_bandes_crete(&self, v: f32) {
+        self.bandes_crete.store(v.to_bits(), Ordering::Relaxed);
+    }
     fn effacer_bandes(&self) {
         for a in &self.bandes {
             a.store(0f32.to_bits(), Ordering::Relaxed);
         }
+        self.bandes_crete.store(0f32.to_bits(), Ordering::Relaxed);
     }
     /// Le flux est perdu et la capture réessaie (pas de sortie son, erreur de Windows).
     pub fn perdu(&self) -> bool {
@@ -221,6 +232,7 @@ impl Kick {
             for (a, v) in self.shared.bandes.iter().zip(b.niveaux()) {
                 a.store(fini(v).to_bits(), Ordering::Relaxed);
             }
+            self.shared.bandes_crete.store(fini(b.crete()).to_bits(), Ordering::Relaxed);
         }
     }
 
@@ -445,6 +457,11 @@ impl Bandes {
                 (f.z1, f.z2) = (0.0, 0.0);
             }
         }
+    }
+
+    /// Niveau absolu de la bande la plus forte (enveloppe, pas rapportée au pic).
+    pub fn crete(&self) -> f32 {
+        self.env.iter().copied().fold(0.0, f32::max)
     }
 
     /// Niveau de chaque bande, 0 à 1 (dB sous le pic récent, plage de 36 dB).
