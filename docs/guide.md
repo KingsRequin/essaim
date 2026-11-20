@@ -292,7 +292,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (43), chacun avec sa forme, ses couleurs, ses effets et ses propres
+  - Préréglages fournis (41), chacun avec sa forme, ses couleurs, ses effets et ses propres
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
