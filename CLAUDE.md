@@ -4,7 +4,10 @@ Surcouche réactive à la musique autour du pointeur (Rust, Win32 pur, `tiny-ski
 loopback). Lire `docs/technique.md` (fonctionnement) et `docs/guide.md` (fonctions) avant de
 modifier. `README.md` (et `README.en.md`, à tenir pareil) est la page de présentation : une
 nouvelle fonction visible s'y ajoute en une ligne, le détail va dans `docs/guide.md`. Ses
-animations se refont avec `scripts/images-readme/rendre.py`.
+images se refont avec `scripts/images-readme/rendre.py`. **Le README est mis à jour à chaque
+changement** : tout ce qu'un changement rend faux ou inexact (texte, tableau, FAQ, image, texte
+alternatif) se corrige dans le même travail, jamais laissé « hors périmètre » ; une image qui ne
+montre plus la réalité se refait.
 
 ## Vérification (avant de dire « terminé »)
 
