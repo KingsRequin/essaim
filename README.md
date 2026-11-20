@@ -70,8 +70,8 @@ sur la fenêtre) ; chaque anneau de comètes suit un de ses contours. Ou 14 form
 tourner sur elles-mêmes.</td>
 <td valign="top"><b>Constellation et palette</b> : de fines lignes relient les satellites proches ;
 comètes et satellites se partagent jusqu'à trois teintes.</td>
-<td valign="top"><b>Fenêtre pour le stream</b> : l'essaim au centre, sur un fond uni à retirer
-dans OBS ; elle suit ta musique comme l'essaim du pointeur.</td>
+<td valign="top"><b>Fenêtre pour le stream</b> : l'essaim au centre, sur fond transparent pour
+OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 </tr>
 </table>
 
@@ -107,7 +107,7 @@ dans OBS ; elle suit ta musique comme l'essaim du pointeur.</td>
 | 🤖 **Si … alors …** | Des règles choisissent le preset : `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*… ; ou selon l'appli au premier plan, ou l'heure |
 | 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
 | 🫶 **Sans flashs** | Pour les personnes sensibles aux flashs : éclats adoucis, trois par seconde au plus, bordure qui ne clignote plus (tout seul si Windows réduit les animations) |
-| 📺 **Fenêtre pour le stream** | L'essaim au centre d'une fenêtre sur fond uni, à ajouter dans OBS |
+| 📺 **Fenêtre pour le stream** | L'essaim au centre d'une fenêtre à fond transparent, à ajouter dans OBS en *Capture de jeu* |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un widget d'Horizon met Essaim en pause et le règle depuis la barre |
 
 **Et aussi :** raccourcis globaux (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> preset suivant,
@@ -227,9 +227,11 @@ Windows*), ce mode s'active tout seul quand les effets d'animation sont coupés 
 <summary><b>Comment montrer l'essaim dans OBS ?</b></summary>
 
 Icône d'Essaim → *Fenêtre pour le stream* (ou `essaim.exe --stream`). L'essaim y danse au centre,
-sur un fond uni (vert par défaut, au choix dans *Réglages › Cet ordinateur*). Dans OBS : *Capture de
-fenêtre* sur « Essaim — stream », puis un filtre *Incrustation chromatique* pour retirer le fond.
-Elle reste capturable même si l'essaim autour du pointeur est masqué des captures.
+à une taille qui tient toujours dans la fenêtre. Dans OBS : *Capture de jeu* en mode *Capturer une
+fenêtre spécifique* sur « Essaim — stream », avec *Autoriser la transparence* et *Valeurs alpha
+prémultipliées* cochées : le fond est transparent, lueurs comprises. Sinon, un fond uni (au choix
+dans *Réglages › Cet ordinateur*) à retirer par *Incrustation chromatique* d'une *Capture de
+fenêtre*. Elle reste capturable même si l'essaim autour du pointeur est masqué des captures.
 </details>
 
 <details>

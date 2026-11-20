@@ -37,7 +37,8 @@ pub struct Config {
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Stream {
-    /// Fond uni de la fenêtre, à retirer dans OBS (incrustation chroma).
+    /// Fond de la fenêtre : transparent (OBS « Capture de jeu » avec la transparence), ou uni
+    /// (« Capture de fenêtre » et incrustation chroma).
     pub fond: Fond,
 }
 
@@ -46,6 +47,7 @@ pub struct Stream {
 #[serde(rename_all = "lowercase")]
 pub enum Fond {
     #[default]
+    Transparent,
     Vert,
     Bleu,
     Magenta,
@@ -1011,7 +1013,7 @@ batterie = "reduire"    # sur batterie : "rien", "reduire" (30 images/s au plus)
 applis = []             # pause quand l'une d'elles est au premier plan : ["obs64.exe", "zoom.exe"]
 
 [stream]
-fond = "vert"           # fond de la fenêtre pour le stream : "vert", "bleu", "magenta" ou "noir" ; hors presets
+fond = "transparent"    # fond de la fenêtre pour le stream : "transparent", "vert", "bleu", "magenta" ou "noir" ; hors presets
 
 [bordure]
 active = true           # la bordure de la fenêtre au premier plan prend la couleur d'Essaim

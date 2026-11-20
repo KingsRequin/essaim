@@ -70,8 +70,8 @@ window); each ring of comets follows one of its outlines. Or 14 shapes, which ca
 themselves.</td>
 <td valign="top"><b>Constellation and palette</b>: thin lines link nearby satellites; comets and
 satellites share up to three hues.</td>
-<td valign="top"><b>Stream window</b>: the swarm in the middle, on a solid background to key out
-in OBS; it follows your music like the swarm around the pointer.</td>
+<td valign="top"><b>Stream window</b>: the swarm in the middle, on a transparent background for
+OBS (or a solid one); it follows your music like the swarm around the pointer.</td>
 </tr>
 </table>
 
@@ -107,7 +107,7 @@ in OBS; it follows your music like the swarm around the pointer.</td>
 | 🤖 **If … then …** | Rules pick the preset: `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*…; or by foreground app, or time of day |
 | 🌙 **Stays out of the way** | Pauses for full-screen apps, presentations, on battery or in front of chosen apps; lowers its frame rate when the PC struggles; can be hidden from screenshots and streams |
 | 🫶 **No flashes** | For people sensitive to flashing: softer flashes, three per second at most, a border that no longer blinks (automatic when Windows reduces animations) |
-| 📺 **Stream window** | The swarm in the middle of a window on a solid background, to add in OBS |
+| 📺 **Stream window** | The swarm in the middle of a window with a transparent background, to add in OBS as a *Game Capture* |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | A Horizon widget pauses and tunes Essaim from the bar |
 
 **Also:** global hotkeys (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>→</kbd> next preset,
@@ -220,9 +220,11 @@ effects*).
 <summary><b>How do I show the swarm in OBS?</b></summary>
 
 Tray icon → *Fenêtre pour le stream* (or `essaim.exe --stream`). The swarm dances in the middle,
-on a solid background (green by default, selectable in *Réglages › Cet ordinateur*). In OBS: *Window
-Capture* on « Essaim — stream », then a *Chroma Key* filter to remove the background. It stays
-capturable even when the swarm around the pointer is hidden from captures.
+at a size that always fits in the window. In OBS: *Game Capture* in *Capture specific window* mode on
+« Essaim — stream », with *Allow Transparency* and *Premultiplied Alpha* checked: the background is
+transparent, glows included. Otherwise, a solid background (selectable in *Réglages › Cet
+ordinateur*) to remove with a *Chroma Key* on a *Window Capture*. It stays capturable even when the
+swarm around the pointer is hidden from captures.
 </details>
 
 <details>

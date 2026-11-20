@@ -1069,8 +1069,8 @@ const PANNEAUX = [
       },
       {
         choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",
-        valeurs: [["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
-        note: "La fenêtre pour le stream montre l'essaim au centre, sur ce fond uni : dans OBS, ajoute-la comme « Capture de fenêtre » et retire le fond avec un filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
+        valeurs: [["transparent", "Transparent"], ["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
+        note: "La fenêtre pour le stream montre l'essaim au centre, à une taille qui tient toujours dans la fenêtre. Transparent : dans OBS, ajoute une « Capture de jeu » sur « Essaim — stream » et coche « Autoriser la transparence » et « Valeurs alpha prémultipliées » (à l'écran, la fenêtre paraît sur fond noir). Fond uni : « Capture de fenêtre » et filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
       },
       { stream: true },
       { groupe: "Essaim" },

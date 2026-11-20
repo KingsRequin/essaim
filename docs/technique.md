@@ -105,9 +105,20 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Masquer des captures** : `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` sur chaque
   calque (`win::masquer_captures`). Les essais par capture `BitBlt` ne voient alors plus l'essaim.
 - **Fenêtre pour le stream** (`stream.rs`) : fenêtre ordinaire (classe `EssaimStream`), son
-  propre fil, son propre `Swarm` et ses `Effets`, dessinés au processeur (tiny-skia) au centre d'une
-  image de la taille de la zone cliente (échelle = petit côté / 205), sur fond uni, puis envoyés
-  par `SetDIBitsToDevice` à chaque rafraîchissement (`DwmFlush`). Elle relit `config.toml` chaque
+  propre fil, son propre `Swarm` et ses `Effets`. Affichage : périphérique Direct3D 11 (carte
+  graphique, sinon WARP), chaîne d'échange DXGI à retournement (`FLIP_DISCARD`, présentée à chaque
+  rafraîchissement), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
+  sprites). Le tampon garde la transparence, prémultipliée (fond `"transparent"`, effacé à 0) : la
+  *Capture de jeu* d'OBS le reprend sur la carte graphique (*Autoriser la transparence*, *Valeurs
+  alpha prémultipliées*) ; DWM l'affiche sans transparence, sur noir. Essai réel relu sur la carte
+  graphique : `cargo test --release image_transparente_relue -- --ignored`.
+  Taille : l'essaim est simulé à 100 % autour de (0, 0) puis agrandi par la transformation
+  Direct2D (petit côté / 2 − 4 px) / portée. La portée = plus grand demi-côté de `Swarm::bounds`
+  (et du réticule, du spectre) sur 12 s de musique synthétique (kicks, caisses claires, montée,
+  drop, changement de piste), mesurée à l'ouverture et à chaque changement de `config.toml`
+  (1 à 10 ms) ; si la vraie musique pousse plus loin, la portée vue en direct (oubliée en ~20 s)
+  prend le relais : l'essaim rapetisse en ~0,1 s, regrandit en ~2 s. Test : chaque preset fourni
+  tient dans sa portée sur une autre musique. Elle relit `config.toml` chaque
   seconde (`config::Watched`) et lit le son par le même `AudioShared` ; la capture du son continue
   tant qu'elle est ouverte. Pas de `WDA_EXCLUDEFROMCAPTURE` : elle reste capturable.
 - **Projecteur, réticule, spectre** (`effets.rs`) : le réticule et le spectre s'ajoutent à la

@@ -203,12 +203,16 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   seconde ; `"oui"` : toujours ; `"non"` : jamais.
 - **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton de
   *Cet ordinateur* dans les réglages, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
-  sur un fond uni (`[stream] fond` : `"vert"` par défaut, `"bleu"`, `"magenta"` ou `"noir"` ; propre
-  à la machine). Dans OBS : *Capture de fenêtre* sur « Essaim — stream », puis un filtre
-  *Incrustation chromatique* (ou, sur fond noir, un mode de fusion *Écran*). Elle suit le son et les
+  sur le fond `[stream] fond` (propre à la machine) : `"transparent"` (par défaut) ou un fond uni,
+  `"vert"`, `"bleu"`, `"magenta"` ou `"noir"`. Transparent, dans OBS : *Capture de jeu* en mode
+  *Capturer une fenêtre spécifique* sur « Essaim — stream », avec *Autoriser la transparence* et
+  *Valeurs alpha prémultipliées* (sans cette dernière, les lueurs ont un bord sombre) ; à l'écran,
+  la fenêtre paraît sur fond noir. Fond uni : *Capture de fenêtre*, puis un filtre *Incrustation
+  chromatique* (ou, sur fond noir, un mode de fusion *Écran*). Elle suit le son et les
   réglages, pas le pointeur, et continue quand l'essaim du pointeur est en pause, en plein écran ou
   masqué par la frappe (le son reste écouté tant qu'elle est ouverte). Elle reste capturable même
-  avec *Masquer des captures*. L'essaim y grandit avec la fenêtre.
+  avec *Masquer des captures*. L'essaim y grandit avec la fenêtre et y tient toujours entier, éclats
+  et ondes compris, quelle que soit sa forme.
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier.
