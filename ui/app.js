@@ -733,7 +733,7 @@ const IMPACT = {
   "particules.taille": [1, "estime"], "particules.rebonds": [1, "estime"], "sillage.densite": [1, "estime"],
   // banc `mesure_effets` (carte graphique, 144 images/s)
   "projecteur.actif": [1], "projecteur.duree": [1, "estime"], "reticule.actif": [1], "reticule.taille": [1, "estime"], "reticule.opacite": [1, "estime"],
-  "spectre.actif": [2], "spectre.bandes": [2], "spectre.rayon": [1, "estime"], "spectre.hauteur": [1, "estime"] "spectre.masquer_sans_musique": [1, "estime"],
+  "spectre.actif": [2], "spectre.bandes": [2], "spectre.rayon": [1, "estime"], "spectre.hauteur": [1, "estime"], "spectre.masquer_sans_musique": [1, "estime"],
   "orbite.inertie": [1, "estime"],
   "essaim.constellation": [2, "estime"], "couleur.palette": [1, "estime"], "couleur.ecart_palette": [1, "estime"],
   "orbite.rotation_sur": [1, "estime"],
