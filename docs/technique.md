@@ -267,7 +267,7 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   aux modulations ; sans `[modulations]` (0.3), la basse aussi. Les réglages par défaut en
   sortent (`Ancien::default`). La page fait de même pour un preset de la communauté
   (`reactionsAvant`, `fusion`). Essai `presets_comme_avant` : chaque preset fourni jusqu'à la
-  0.6 (`profils::presets_d_avant`, écrits avec les réglages d'avant) contre les mesures de l'ancien moteur (`tests/donnees/rendu-presets.json`, même
+  0.6 (`prereglages::presets_d_avant`, écrits avec les réglages d'avant) contre les mesures de l'ancien moteur (`tests/donnees/rendu-presets.json`, même
   son d'essai) : sens, satellites et particules identiques, distance des têtes à 8 % près par
   seconde (0,1 % en médiane).
 - `ui/apercu.js` reproduit `render.rs` jusqu'au détail : ordre de la mise à jour (écoute des

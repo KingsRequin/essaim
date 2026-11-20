@@ -30,6 +30,7 @@ mod media;
 mod migration;
 mod modulation;
 mod pauses;
+mod prereglages;
 mod prisme;
 mod profils;
 mod reglages;

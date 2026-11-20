@@ -1356,7 +1356,7 @@ mod tests {
         out
     }
 
-    /// Les presets fournis d'avant (`profils::presets_d_avant`), réglages d'avant convertis en
+    /// Les presets fournis d'avant (`prereglages::presets_d_avant`), réglages d'avant convertis en
     /// modulations et déclencheurs, se comportent comme avant : les mesures de l'ancien moteur (`tests/donnees/rendu-presets.json`, Essaim 0.4) sur le même
     /// son d'essai. Même sens de rotation, mêmes satellites et particules à chaque mesure ;
     /// distance des têtes au centre (8 % près ; 0,1 % en médiane) et éclat, en moyenne sur chaque
@@ -1366,7 +1366,7 @@ mod tests {
     fn presets_comme_avant() {
         let avant: std::collections::HashMap<String, Vec<[f32; 6]>> = serde_json::from_str(include_str!("../tests/donnees/rendu-presets.json")).unwrap();
         let mut ecarts = Vec::new();
-        for p in crate::profils::presets_d_avant() {
+        for p in crate::prereglages::presets_d_avant() {
             let a = &avant[&p.name];
             let m = mesures(&p.cfg, |s, i, t| match i {
                 60 => s.evenement(Evenement::Clic, C.0, C.1, t, &p.cfg, 1.0),
