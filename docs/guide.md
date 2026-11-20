@@ -97,11 +97,11 @@ lancement, commentaires gardés. Les presets fournis gardent leur allure (essai
 - **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
   moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
   losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
-  ou les contours d'une image (`forme = "trace"`, points dans `contours`, 8 au plus, parcourus à
+  ou les contours d'une image (`forme = "trace"`, points dans `contours`, 24 au plus, parcourus à
   vitesse constante, coins compris ; plusieurs contours : un anneau de comètes chacun, quel que
   soit `anneaux` ; un ancien trajet dessiné à la main, dans `trace`,
   marche toujours), ou ceux de l'icône de l'application au premier plan (`forme = "icone"`, qui
-  change avec elle ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; `rotation_sur` : `"tout"`,
+  change avec elle ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; quand sa rotation, modulations comprises, retombe sous 2 tours/min, il se redresse en douceur ; `rotation_sur` : `"tout"`,
   `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet) ; les satellites suivent le
   même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des satellites permanents,
   même sans musique. Entre deux images, les traînées suivent le vrai trajet (points
@@ -255,7 +255,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Trajet d'une image* : une image (choisie, ou glissée sur la fenêtre : PNG, JPEG, GIF, WebP,
     BMP, SVG, ICO, 20 Mo au plus), ou un texte, un emoji ; ses contours s'affichent sur l'image et
     l'essaim les parcourt dans un aperçu. *Seuil* (calculé : *Auto*), *Inverser* (la forme est de
-    l'autre côté du seuil), *Le plus grand* ou *Tous, un par anneau* (8 au plus : chaque anneau
+    l'autre côté du seuil), *Le plus grand* ou *Tous, un par anneau* (24 au plus : chaque anneau
     suit le sien, à sa place ; un texte les garde tous, une lettre chacune). Une image à fond
     transparent donne le plus net. Un clic sur l'aperçu y montre l'effet du
     clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans

@@ -31,6 +31,20 @@ const TRAIL_STEP: f64 = 1.0 / 90.0;
 const FINESSE_COMETES: (f32, f32) = (0.045, 4.0);
 const FINESSE_SATELLITES: (f32, f32) = (0.1, 8.0);
 
+/// Redressement du trajet : quand sa rotation (réglage plus modulations) retombe sous
+/// `REDRESSE.0` tours/min, il revient à l'endroit (angle 0, par le plus court) à `REDRESSE.1`
+/// par seconde, en douceur : une modulation retirée, la retombée d'un drop ou le silence ne le
+/// laissent pas de travers.
+const REDRESSE: (f32, f32) = (2.0, 3.0);
+
+/// Pas de rotation du trajet pendant `dt` : celui de la vitesse `tours_min`, plus le
+/// redressement vers l'angle 0 d'autant plus fort que la rotation est lente.
+fn pas_rotation(rot: f32, tours_min: f32, dt: f32) -> f32 {
+    let ecart = (PI - rot).rem_euclid(TAU) - PI;
+    let poids = (1.0 - tours_min.abs() / REDRESSE.0).clamp(0.0, 1.0);
+    tours_min * TAU / 60.0 * dt + ecart * (1.0 - (-REDRESSE.1 * dt).exp()) * poids
+}
+
 /// Pas intermédiaires pour un déplacement d'angle `da` sur un rayon de `r` px, pour que la
 /// traînée reste une courbe (et non une ligne brisée) quand l'essaim tourne vite.
 fn sous_pas(da: f32, r: f32, (angle, ecart): (f32, f32)) -> usize {
@@ -807,8 +821,9 @@ impl Swarm {
         let rayon = o.rayon * scale;
         let pose = |g: usize, rot: &mut f32, mods: &[Effet; 2], avant: &[Effet; 2]| {
             let base = if o.rotation_sur.inclut(g == 1) { o.rotation } else { 0.0 };
-            let drot = (base + mods[g].rotation) * TAU / 60.0 * dt;
-            let (rot0, drot) = (if rot.is_finite() { *rot } else { 0.0 }, if drot.is_finite() { drot } else { 0.0 });
+            let rot0 = if rot.is_finite() { *rot } else { 0.0 };
+            let drot = pas_rotation(rot0, base + mods[g].rotation, dt);
+            let drot = if drot.is_finite() { drot } else { 0.0 };
             *rot = (rot0 + drot).rem_euclid(TAU);
             let (dx0, dx) = (avant[g].decalage * rayon, mods[g].decalage * rayon);
             Pose { rot0, drot, rayon0: rayon * avant[g].rayon, rayon: rayon * mods[g].rayon, dx0, dx }
@@ -1631,6 +1646,43 @@ mod tests {
         // une seconde à 30 tr/min : un demi-tour pour les satellites, rien pour les comètes
         assert_eq!(s.rot, 0.0);
         assert!((s.rot_sats - PI).abs() < 0.01, "{}", s.rot_sats);
+    }
+
+    #[test]
+    fn trajet_redresse_quand_la_rotation_retombe() {
+        use crate::config::{Cible, Groupe, Modulation, Source};
+        let mut cfg = Config::default();
+        let mut s = Swarm::new();
+        // de travers (une modulation de rotation vient d'être retirée) : revient à l'endroit,
+        // par le plus court (5,5 rad : en avançant, pas en reculant de presque un tour)
+        (s.rot, s.rot_sats) = (2.0, 5.5);
+        let mut sens = 0.0;
+        for i in 0..120 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, AudioView::default(), &cfg, 1.0);
+            if i == 0 {
+                sens = s.rot_sats - 5.5;
+            }
+        }
+        let a_l_endroit = |r: f32| r.min(TAU - r) < 0.01;
+        assert!(a_l_endroit(s.rot) && a_l_endroit(s.rot_sats), "{} {}", s.rot, s.rot_sats);
+        assert!(sens > 0.0, "par le plus court : {sens}");
+        // une vraie rotation (réglage) n'est pas freinée : 30 tr/min, un demi-tour par seconde
+        cfg.orbite.rotation = 30.0;
+        let mut s = Swarm::new();
+        for i in 0..60 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, AudioView::default(), &cfg, 1.0);
+        }
+        assert!((s.rot - PI).abs() < 0.01, "{}", s.rot);
+        // modulation de rotation qui retombe (après le drop) : le trajet revient droit
+        cfg.orbite.rotation = 0.0;
+        cfg.modulations.liste = vec![Modulation { source: Source::Drop, cible: Cible::Rotation, sur: Groupe::Tout, quantite: 1.0, ..Default::default() }];
+        let mut s = Swarm::new();
+        let au = AudioView { drops: 1, ..Default::default() };
+        for i in 0..60 * 20 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, au, &cfg, 1.0);
+        }
+        assert!(s.mods[0].rotation.abs() < 0.1, "le drop est retombé : {}", s.mods[0].rotation);
+        assert!(a_l_endroit(s.rot), "{}", s.rot);
     }
 
     #[test]

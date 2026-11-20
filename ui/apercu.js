@@ -163,10 +163,10 @@ function pointContour(c, u) {
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
 }
 
-// Contours (8 au plus) centrés sur le milieu du cadre qui les englobe et mis à la même échelle
+// Contours (24 au plus) centrés sur le milieu du cadre qui les englobe et mis à la même échelle
 // (point le plus loin : 1,2), comme render::mettre_a_l_echelle ; `echelle` faux : déjà à
 // l'échelle (ceux de l'icône, venus de l'appli). Gardés par liste.
-const CONTOURS_MAX = 8;
+const CONTOURS_MAX = 24;
 const contoursVus = new WeakMap();
 function mettreALEchelle(liste, echelle = true) {
   if (!Array.isArray(liste) || !liste.length) return [];
@@ -279,6 +279,15 @@ function pousser(tr, t, x, y, vie, ecart) {
 
 // Pas intermédiaires pour un déplacement d'angle `da` sur un rayon de `r` px (comme
 // render::sous_pas) : la traînée reste une courbe quand l'essaim tourne vite.
+// Redressement du trajet (comme render::REDRESSE, render::pas_rotation) : sous 2 tours/min, il
+// revient à l'angle 0, par le plus court, à 3 par seconde.
+const REDRESSE = [2, 3];
+function pasRotation(rot, toursMin, dt) {
+  const ecart = reste(Math.PI - rot, TAU) - Math.PI;
+  const poids = Math.min(1, Math.max(0, 1 - Math.abs(toursMin) / REDRESSE[0]));
+  return ((toursMin * TAU) / 60) * dt + ecart * (1 - Math.exp(-REDRESSE[1] * dt)) * poids;
+}
+
 function sousPas(da, r, [angle, ecart]) {
   return Math.min(24, Math.max(1, Math.ceil(Math.max(Math.abs(da) / angle, (Math.abs(da) * r) / ecart))));
 }
@@ -481,7 +490,7 @@ class Apercu {
     const sur = o.rotation_sur || "tout";
     const pose = (g, rot) => {
       const base = (g === 1 ? sur !== "cometes" : sur !== "satellites") ? o.rotation || 0 : 0;
-      const drot = finiOu((((base + this.mods[g].rotation) * TAU) / 60) * dt, 0);
+      const drot = finiOu(pasRotation(finiOu(rot, 0), base + this.mods[g].rotation, dt), 0);
       return {
         rot0: finiOu(rot, 0), drot, rayon0: rayon * this.modsAvant[g].rayon, rayon: rayon * this.mods[g].rayon,
         dx0: this.modsAvant[g].decalage * rayon, dx: this.mods[g].decalage * rayon,

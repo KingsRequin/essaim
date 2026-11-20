@@ -59,8 +59,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   1-2-1, puis isocontour au niveau entre les centres des pixels (marching squares, cols tranchés
   par la moyenne de la cellule, marge hors de la forme autour de l'image) : le bord est placé au
   sous-pixel, les côtés droits restent droits. Les contours sont orientés : les trous (aire de
-  l'autre signe) et les formes de moins de 0,2 % de l'image sont écartés, les plus grandes
-  d'abord, 8 au plus ; simplifiés (Ramer-Douglas-Peucker sur contour fermé, ¼ px), 512 points au
+  l'autre signe) et les formes de moins de 0,025 % de l'image sont écartés, les plus grandes
+  d'abord, 24 au plus ; simplifiés (Ramer-Douglas-Peucker sur contour fermé, ¼ px), 512 points au
   plus, sans lissage (les coins restent des coins). La page envoie les pixels (`cmd: "contours"`,
   image ramenée à 512 px ; un texte ou un emoji est dessiné dans un canevas, cadré sur son encre)
   et lit un fichier choisi en adresse `data:` (la page refuse les `blob:`, CSP de `reglages.rs`) ;
@@ -247,7 +247,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   (`Effet` : tours/min de rotation, radians/s de vitesse, degrés de teinte et rayons de décalage
   additionnés ; accélération, rayon, taille, lueur, traînée et opacité multipliés) et la teinte
   « sur tout », que la boucle principale passe à `render::set_decalage` (tout ce qui est dessiné
-  la prend, bordure comprise). La vitesse du trajet de chaque groupe est lissée (~100 ms) vers la
+  la prend, bordure comprise). L'angle du trajet de chaque groupe s'accumule ; quand sa rotation
+  (réglage plus modulations) retombe sous 2 tours/min, il revient vers 0 par le plus court
+  (`render::pas_rotation`, taux 3/s pondéré par la lenteur), sinon une modulation retirée ou un
+  drop retombé le laisseraient de travers. La vitesse du trajet de chaque groupe est lissée (~100 ms) vers la
   vitesse de base × son accélération. Chaque groupe a sa `Pose` (rotation, rayon et décalage au
   début et à la fin de l'image) : le trajet des comètes et celui des satellites tournent chacun
   de leur côté (`[orbite] rotation_sur`). Une modulation de la taille élargit la marge de

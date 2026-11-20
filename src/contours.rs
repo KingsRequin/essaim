@@ -12,8 +12,9 @@
 //!    lettre donne la vraie position de son bord). Chaque bout de contour est
 //!    orienté : les bords extérieurs tournent dans un sens, les trous dans l'autre (signe de
 //!    l'aire). Les trous sont laissés de côté.
-//! 3. Les formes trop petites (moins de 0,2 % de l'image) sont écartées ; les plus grandes
-//!    d'abord, `CONTOURS_MAX` au plus (une lettre chacune, pour un texte).
+//! 3. Les formes trop petites (moins de 0,025 % de l'image ; le point d'un i reste) sont
+//!    écartées ; les plus grandes d'abord, `CONTOURS_MAX` au plus (une lettre chacune, pour un
+//!    texte).
 //! 4. Simplifié (Ramer-Douglas-Peucker à un quart de pixel, plus grossier s'il reste plus de
 //!    `POINTS_MAX` points) : les coins restent des coins.
 //!
@@ -21,7 +22,7 @@
 //! échelle (`render::set_traces`).
 
 /// Contours gardés au plus (un par anneau de comètes), et points par contour.
-pub const CONTOURS_MAX: usize = 8;
+pub const CONTOURS_MAX: usize = 24;
 pub const POINTS_MAX: usize = 512;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -50,7 +51,7 @@ pub fn contours(rgba: &[u8], l: usize, h: usize, o: &Options) -> Resultat {
     }
     let (valeurs, niveau, seuil, transparence) = forme(rgba, l, h, o);
     let valeurs = flou(&valeurs, l, h);
-    let aire_min = 12.0f32.max((l * h) as f32 / 500.0);
+    let aire_min = 12.0f32.max((l * h) as f32 / 4000.0);
     let mut formes: Vec<(f32, Vec<[f32; 2]>)> = isocontours(&valeurs, l, h, niveau)
         .into_iter()
         .map(|c| (-aire(&c), c))
@@ -342,6 +343,23 @@ mod tests {
         assert!((centre(&r.contours[0])[0] - 30.0).abs() < 2.0 && (centre(&r.contours[2])[0] - 60.0).abs() < 2.0);
         // le plus grand seulement
         assert_eq!(contours(&img, 120, 120, &Options::default()).contours.len(), 1);
+    }
+
+    #[test]
+    fn mot_long_toutes_les_lettres_et_les_points() {
+        // « KingsRequin » en blocs : 11 lettres de 30 × 60 et 2 points de 12 × 12, transparent
+        let img = image(512, 512, |x, y| {
+            let lettre = (0..11).any(|i| {
+                let x0 = 20.0 + i as f32 * 44.0;
+                (x0..x0 + 30.0).contains(&x) && (230.0..290.0).contains(&y)
+            });
+            let point = [64.0, 416.0].iter().any(|&x0| (x0..x0 + 12.0).contains(&x) && (205.0..217.0).contains(&y));
+            if lettre || point { [0, 0, 0, 255] } else { [0, 0, 0, 0] }
+        });
+        let r = contours(&img, 512, 512, &Options { tous: true, ..Default::default() });
+        assert_eq!(r.contours.len(), 13, "{:?}", r.contours.iter().map(Vec::len).collect::<Vec<_>>());
+        // bords droits : un rectangle simplifié garde ses 4 coins, à peu près rien d'autre
+        assert!(r.contours[0].len() <= 12, "{}", r.contours[0].len());
     }
 
     #[test]
