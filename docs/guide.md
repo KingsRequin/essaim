@@ -23,9 +23,9 @@ fissure, un clic droit une onde qui se referme.
 ### Ce qu'Essaim entend
 
 - **Kick** : reconnu par un petit modèle (`audio-commun`), en 25 ms environ.
-- **Caisse claire** (et clap) : bande à 2 kHz qui l'emporte sur le grave et l'aigu. Le charleston
-  et le clic d'attaque des kicks ne comptent pas ; une caisse claire jouée avec un kick (claps de
-  la house), si.
+- **Caisse claire** (et clap) : reconnue par un petit modèle appris sur les mêmes morceaux que le
+  kick, en 30 ms environ. Le charleston et les kicks ne comptent pas ; une caisse claire jouée avec
+  un kick (claps de la house), si.
 - **Charleston** (attaques des aigus, cymbales) : passe-haut à 5 kHz, enveloppes rapide et lente.
 - **Montée** et **drop** : roulement de caisse claire bien plus serré que d'habitude et son qui
   s'éclaircit (la tension monte) ; le drop est le premier kick après la montée, ou le retour

@@ -73,7 +73,7 @@ automatiques refusent un `essaim.exe` sans `essaim.exe.sig` valide (`docs/techni
 - Le kick (`../audio-commun/src/kick.rs`, bibliothèque partagée) est un modèle appris sur de vrais
   morceaux : tout changement de mesure ou de seuil passe par les tests sur signaux synthétiques
   (caisse claire seule = 0 kick, kicks trouvés avec et sans basse, délai médian < 30 ms) et par le
-  banc sur vraie musique (`audio-commun`, README, section « Kick »).
+  banc sur vraie musique (`audio-commun`, README, section « Kick et caisse claire »).
 - Aucune fenêtre ne doit bouger ni apparaître sous la souris : Windows redemande alors leur
   curseur aux applications (l'Explorateur répond « flèche »). Tout passe par les calques fixes
   de `layer.rs`.

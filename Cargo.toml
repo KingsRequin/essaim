@@ -16,7 +16,7 @@ toml_edit = "0.22"
 tungstenite = "0.30"
 # Capture du son et détection du kick, partagées avec Prisme et Horizon (dépôt voisin). Figée
 # par son commit (après v0.2.0 : niveaux stéréo) : un tag peut être déplacé, un commit non.
-audio-commun = { git = "https://github.com/KingsRequin/audio-commun", rev = "c6efca9ac165bf23400fb66a7284f525e15a9d46", default-features = false, features = ["capture"] }
+audio-commun = { git = "https://github.com/KingsRequin/audio-commun", rev = "2ccf9335bd06b7dfbb338d2802fd31367a346f44", default-features = false, features = ["capture"] }
 windows-numerics = "0.3"
 wry = { version = "=0.57.1", default-features = false }
 

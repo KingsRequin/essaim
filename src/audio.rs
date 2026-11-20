@@ -5,8 +5,8 @@
 //! kick depuis 2 s alors qu'un tempo stable était connu). Les résultats sont publiés après chaque paquet reçu
 //! (~10 ms), sans attendre l'image suivante.
 //!
-//! Seulement si un effet les demande (`set_musique`) : caisses claires (`Caisse`, sans FFT
-//! non plus), montée et drops (`Montee`). Les niveaux des deux canaux donnent l'équilibre
+//! Seulement si un effet les demande (`set_musique`) : caisses claires (reconnues par
+//! l'analyse du kick d'`audio-commun`, sur les mêmes attaques), montée et drops (`Montee`). Les niveaux des deux canaux donnent l'équilibre
 //! gauche-droite (`balance`).
 
 use audio_commun::capture::{self, Capture, Sink, Sortie};
@@ -62,7 +62,7 @@ pub struct AudioView {
     /// Relais du tempo : la musique joue sans kick depuis 2 s (break, couplet sans grosse
     /// caisse) alors qu'un tempo stable était connu.
     pub relais: bool,
-    /// Caisses claires (et claps) depuis le démarrage, sans celles qui tombent avec un kick.
+    /// Caisses claires (et claps) depuis le démarrage, y compris celles frappées avec un kick.
     pub caisses: u32,
     /// Drops depuis le démarrage : retour brutal de l'énergie, ou premier kick après une montée.
     pub drops: u32,
@@ -191,9 +191,9 @@ impl Kick {
         }
     }
 
-    /// Instant de l'analyse du kick et son compteur.
-    fn instant_kick(&self) -> Option<(f64, u32)> {
-        self.an.as_ref().map(|an| (an.t, an.kicks))
+    /// Compteurs de l'analyse du kick.
+    fn coups(&self) -> Option<Coups> {
+        self.an.as_ref().map(Coups::de)
     }
 
     /// Tempo : avancé et publié à chaque paquet (tempo, phase, relais).
@@ -489,8 +489,9 @@ impl Sink for Kick {
             a.push(mono);
         }
         self.duree_paquet = mono.len() as f32 / self.fs.max(1) as f32;
-        let kick = self.an.as_ref().map(|an| (an.t, an.kicks));
-        ecouter_musique(&self.shared, &mut self.musique, self.fs, Some(mono), mono.len(), kick);
+        // champ par champ : `mono` emprunte encore `self.propre`
+        let coups = self.an.as_ref().map(Coups::de);
+        ecouter_musique(&self.shared, &mut self.musique, self.fs, Some(mono), mono.len(), coups);
         // bandes du spectre : seulement si l'effet est voulu (sinon aucun filtre, coût nul)
         let voulues = self.shared.bandes_voulues.load(Ordering::Relaxed) as usize;
         let (mut publier, mut effacer) = (false, false);
@@ -524,8 +525,8 @@ impl Sink for Kick {
         }
         self.suivre_tempo(false);
         self.publier_aigus();
-        let kick = self.instant_kick();
-        ecouter_musique(&self.shared, &mut self.musique, self.fs, None, frames, kick);
+        let coups = self.coups();
+        ecouter_musique(&self.shared, &mut self.musique, self.fs, None, frames, coups);
         self.balance.silence(frames as f32 / self.fs.max(1) as f32);
         self.shared.balance.store(self.balance.valeur.to_bits(), Ordering::Relaxed);
         if let Some(b) = self.bandes.as_mut().filter(|b| b.actives()) {
@@ -590,10 +591,23 @@ impl Balance {
     }
 }
 
+/// Compteurs de l'analyse du kick (`audio_commun::kick`) après un paquet.
+#[derive(Clone, Copy)]
+struct Coups {
+    kicks: u32,
+    caisses: u32,
+}
+
+impl Coups {
+    fn de(an: &Analyzer) -> Self {
+        Self { kicks: an.kicks, caisses: an.caisses }
+    }
+}
+
 /// Analyse musicale de `n` échantillons (`mono`, ou du silence) quand un effet la demande ;
-/// caisses claires, drops et montée publiés. `kick` : instant de l'analyse du kick et son
-/// compteur. Analyse retirée (coût nul) quand plus aucun effet ne la demande.
-fn ecouter_musique(sh: &AudioShared, musique: &mut Option<Musique>, fs: u32, mono: Option<&[f32]>, n: usize, kick: Option<(f64, u32)>) {
+/// caisses claires, drops et montée publiés. `coups` : compteurs de l'analyse du kick. Analyse
+/// retirée (coût nul) quand plus aucun effet ne la demande.
+fn ecouter_musique(sh: &AudioShared, musique: &mut Option<Musique>, fs: u32, mono: Option<&[f32]>, n: usize, coups: Option<Coups>) {
     if !sh.musique_voulue.load(Ordering::Relaxed) {
         if musique.take().is_some() {
             sh.tension.store(0f32.to_bits(), Ordering::Relaxed);
@@ -601,30 +615,23 @@ fn ecouter_musique(sh: &AudioShared, musique: &mut Option<Musique>, fs: u32, mon
         return;
     }
     let m = musique.get_or_insert_with(|| Musique::new(fs, sh.caisses.load(Ordering::Relaxed), sh.drops.load(Ordering::Relaxed)));
-    m.ecouter(mono, n, kick);
+    m.ecouter(mono, n, coups);
     sh.caisses.store(m.caisses, Ordering::Relaxed);
     sh.drops.store(m.drops, Ordering::Relaxed);
     sh.tension.store(fini(m.montee.tension).to_bits(), Ordering::Relaxed);
 }
 
-/// Écart minimal entre deux caisses claires (s) : un roulement de 20 coups par seconde passe.
-const CAISSE_REFRACTAIRE: f32 = 0.05;
-/// Une attaque n'est une caisse claire que si son bruit tient encore 25 ms plus tard (au moins
-/// 30 % de son pic) : le clic d'attaque d'un kick, qui touche aussi cette bande, s'éteint en
-/// quelques millisecondes. Une caisse claire jouée avec un kick (claps de la house) compte.
-const CAISSE_TENUE: f32 = 0.025;
-const CAISSE_TENUE_MIN: f32 = 0.3;
 /// Sous ce niveau efficace (−60 dBFS), un paquet compte comme silencieux pour la montée.
 const MUSIQUE_SILENCE: f32 = 0.001;
 
 /// Caisses claires, drops et montée.
 struct Musique {
-    caisse: Caisse,
+    eclat: Eclat,
     /// Horloge propre (s, d'après les échantillons reçus).
     t: f64,
     fs: f64,
-    /// Compteur de kicks déjà vu.
-    kicks_vus: Option<u32>,
+    /// Compteurs de l'analyse du kick déjà vus.
+    vus: Option<Coups>,
     /// Compteurs publiés (continuent d'une analyse à l'autre).
     caisses: u32,
     drops: u32,
@@ -634,110 +641,61 @@ struct Musique {
 impl Musique {
     fn new(fs: u32, caisses: u32, drops: u32) -> Self {
         let fs = fs.max(8000);
-        Self { caisse: Caisse::new(fs), t: 0.0, fs: f64::from(fs), kicks_vus: None, caisses, drops, montee: Montee::default() }
+        Self { eclat: Eclat::new(fs), t: 0.0, fs: f64::from(fs), vus: None, caisses, drops, montee: Montee::default() }
     }
 
-    /// `n` échantillons (`mono`, ou du silence). `kick` : instant de l'analyse du kick et son
-    /// compteur après ce paquet.
-    fn ecouter(&mut self, mono: Option<&[f32]>, n: usize, kick: Option<(f64, u32)>) {
+    /// `n` échantillons (`mono`, ou du silence). `coups` : compteurs de l'analyse du kick après
+    /// ce paquet ; kicks et caisses claires reconnus dans le paquet sont notés à sa fin.
+    fn ecouter(&mut self, mono: Option<&[f32]>, n: usize, coups: Option<Coups>) {
         let mut carres = 0f64;
         for i in 0..n {
             let x = mono.map_or(0.0, |m| m[i]);
             carres += f64::from(x * x);
-            if self.caisse.step(x) {
-                self.caisses = self.caisses.wrapping_add(1);
-                self.montee.caisse();
-            }
+            self.eclat.step(x);
         }
         self.t += n as f64 / self.fs;
-        // kick reconnu dans ce paquet : noté à la fin du paquet
-        if let Some((_, k)) = kick {
-            if self.kicks_vus.is_some_and(|v| v != k) && self.montee.kick(self.t) {
-                self.drops = self.drops.wrapping_add(1);
+        if let Some(c) = coups {
+            if let Some(vus) = self.vus {
+                // au plus quelques coups par paquet de 10 ms ; la borne protège d'un compteur remis à 0
+                for _ in 0..c.caisses.wrapping_sub(vus.caisses).min(8) {
+                    self.caisses = self.caisses.wrapping_add(1);
+                    self.montee.caisse();
+                }
+                if c.kicks != vus.kicks && self.montee.kick(self.t) {
+                    self.drops = self.drops.wrapping_add(1);
+                }
             }
-            self.kicks_vus = Some(k);
+            self.vus = Some(c);
         }
         let rms = (carres / n.max(1) as f64).sqrt() as f32;
-        if self.montee.avancer(self.t, n as f32 / self.fs as f32, self.caisse.brillance(), rms) {
+        if self.montee.avancer(self.t, n as f32 / self.fs as f32, self.eclat.brillance(), rms) {
             self.drops = self.drops.wrapping_add(1);
         }
     }
 }
 
-/// Attaques de caisse claire (et de claps) : bande 1–4 kHz (deux passe-bande en série centrés
-/// sur 2 kHz), enveloppe rapide (~3 ms) comparée à une lente (~100 ms). Une attaque = la rapide
-/// passe 2,5 fois au-dessus de la lente, assez fort, et domine la bande 8–12 kHz : le charleston
-/// et les cymbales, presque tout dans l'aigu, ne comptent pas. Elle n'est retenue que si elle
-/// tient (`CAISSE_TENUE`). Mesure aussi la brillance du son (part de la bande 8–12 kHz, en dB).
-struct Caisse {
-    medium: [PasseBande; 2],
+/// Brillance du son pour la montée : part de la bande 8–12 kHz (deux passe-bande en série
+/// centrés sur 10 kHz) dans le son entier, niveaux lissés sur ~0,3 s.
+struct Eclat {
     aigu: [PasseBande; 2],
-    rapide: f32,
-    lent: f32,
-    rapide_aigu: f32,
-    /// Niveaux lissés (~0,3 s) de la bande aiguë et du son entier, pour la brillance.
     haut: f32,
     tout: f32,
-    k_rapide: f32,
-    k_lent: f32,
     k_doux: f32,
-    attente: u32,
-    refractaire: u32,
-    /// Attaque en cours de vérification : échantillons restants avant de juger sa tenue, et son pic.
-    suivi: u32,
-    pic: f32,
-    tenue: u32,
 }
 
-impl Caisse {
+impl Eclat {
     fn new(fs: u32) -> Self {
         let fs = fs.max(8000) as f32;
-        let k = |s: f32| 1.0 - (-1.0 / (s * fs)).exp();
-        let medium = PasseBande::new(fs, 2000.0f32.min(0.4 * fs), 0.9);
         let aigu = PasseBande::new(fs, 10_000.0f32.min(0.4 * fs), 1.6);
-        Self {
-            medium: [medium, medium],
-            aigu: [aigu, aigu],
-            rapide: 0.0,
-            lent: 0.0,
-            rapide_aigu: 0.0,
-            haut: 0.0,
-            tout: 0.0,
-            k_rapide: k(0.003),
-            k_lent: k(0.1),
-            k_doux: k(0.3),
-            attente: 0,
-            refractaire: (CAISSE_REFRACTAIRE * fs) as u32,
-            suivi: 0,
-            pic: 0.0,
-            tenue: (CAISSE_TENUE * fs) as u32,
-        }
+        Self { aigu: [aigu, aigu], haut: 0.0, tout: 0.0, k_doux: 1.0 - (-1.0 / (0.3 * fs)).exp() }
     }
 
-    /// Un échantillon ; vrai quand une caisse claire est reconnue (25 ms après son attaque).
     #[inline]
-    fn step(&mut self, x: f32) -> bool {
-        let [m0, m1] = &mut self.medium;
-        let m = m1.step(m0.step(x)).abs();
+    fn step(&mut self, x: f32) {
         let [a0, a1] = &mut self.aigu;
         let a = a1.step(a0.step(x)).abs();
-        self.rapide += (m - self.rapide) * self.k_rapide;
-        self.lent += (m - self.lent) * self.k_lent;
-        self.rapide_aigu += (a - self.rapide_aigu) * self.k_rapide;
         self.haut += (a - self.haut) * self.k_doux;
         self.tout += (x.abs() - self.tout) * self.k_doux;
-        let mut reconnue = false;
-        if self.suivi > 0 {
-            self.pic = self.pic.max(self.rapide);
-            self.suivi -= 1;
-            reconnue = self.suivi == 0 && self.rapide >= CAISSE_TENUE_MIN * self.pic;
-        }
-        if self.attente > 0 {
-            self.attente -= 1;
-        } else if self.rapide > 2.5 * self.lent && self.rapide > 0.004 && self.rapide > 0.4 * self.rapide_aigu {
-            (self.attente, self.suivi, self.pic) = (self.refractaire, self.tenue.max(1), self.rapide);
-        }
-        reconnue
     }
 
     /// Part de l'aigu dans le son, 0 (−40 dB) à 1 (autant que le son entier).
