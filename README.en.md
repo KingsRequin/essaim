@@ -62,7 +62,7 @@ right-click, a wave that closes in.</td>
 <tr>
 <td valign="top"><img src="docs/images/trace.gif" alt="Comets on the four outlines of a smiling face: the face, two eyes, the mouth"></td>
 <td valign="top"><img src="docs/images/constellation.gif" alt="Constellation preset: satellites linked by thin lines, two-hue palette"></td>
-<td valign="top"><img src="docs/images/stream.png" alt="Stream window: the swarm during a drop, on a green background"></td>
+<td valign="top"><img src="docs/images/stream.png" alt="Stream window: the swarm right after a drop, on a transparent background (checkerboard)"></td>
 </tr>
 <tr>
 <td valign="top"><b>The path of an image</b>: a logo, a text, an emoji (or drop an image on the

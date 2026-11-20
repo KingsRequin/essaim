@@ -332,6 +332,14 @@ fn run(son: Arc<AudioShared>) -> windows::core::Result<()> {
     resultat
 }
 
+/// Ce que montre la fenêtre, en px à 100 % autour de (0, 0) : effets, essaim et, au centre, un
+/// point blanc pour le pointeur (dans la fenêtre, il n'y a pas celui de Windows).
+fn dessiner(cv: &mut dyn Canvas, swarm: &Swarm, effets: &Effets, t: f64, cfg: &Config) {
+    effets.dessiner(cv, t, cfg, 1.0, (0.0, 0.0));
+    swarm.draw(cv, t, cfg, 1.0, (0.0, 0.0));
+    cv.circle(0.0, 0.0, POINTEUR, (255, 255, 255), 0.95);
+}
+
 fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let mut rendu = Rendu::new(hwnd)?;
     log::info!("stream : fenêtre ouverte");
@@ -395,12 +403,7 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
             std::thread::sleep(Duration::from_millis(50));
             continue;
         }
-        let dessin = rendu.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, true, |cv| {
-            effets.dessiner(cv, t, cfg, 1.0, (0.0, 0.0));
-            swarm.draw(cv, t, cfg, 1.0, (0.0, 0.0));
-            // le pointeur, au centre (dans la fenêtre, il n'y a pas celui de Windows)
-            cv.circle(0.0, 0.0, POINTEUR, (255, 255, 255), 0.95);
-        });
+        let dessin = rendu.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, true, |cv| dessiner(cv, &swarm, &effets, t, cfg));
         if let Err(e) = dessin {
             // pilote réinitialisé, sortie de veille… : tout est refait, au plus une fois par seconde
             log::warn!("stream : erreur d'affichage ({e}), nouvel essai");
@@ -480,34 +483,25 @@ mod tests {
         assert!(a > 180.0, "{a}");
     }
 
-    /// Image réelle (carte graphique ou WARP) relue depuis le tampon de la chaîne : fond
-    /// transparent aux bords, essaim au centre, valeurs prémultipliées (aucune composante au-dessus
-    /// de l'opacité).
-    #[test]
-    #[ignore]
-    fn image_transparente_relue() {
-        use windows::Win32::Graphics::Direct3D11::*;
-        let hwnd = unsafe {
+    /// Fenêtre cachée pour les essais d'affichage.
+    fn fenetre_essai() -> HWND {
+        unsafe {
             let instance = GetModuleHandleW(None).unwrap();
             let wc = WNDCLASSW { lpfnWndProc: Some(proc), hInstance: instance.into(), lpszClassName: w!("EssaimStreamEssai"), ..Default::default() };
             RegisterClassW(&wc);
             CreateWindowExW(WINDOW_EX_STYLE(0), w!("EssaimStreamEssai"), w!("essai"), WS_OVERLAPPEDWINDOW, 0, 0, 300, 300, None, None, Some(instance.into()), None).unwrap()
-        };
-        let cfg = Config::default();
-        let mut s = Swarm::new();
-        for i in 0..120 {
-            let t = i as f64 / 60.0;
-            s.avance(t, 1.0 / 60.0, (0.0, 0.0), musique(t), &cfg, 1.0);
         }
-        let (l, h) = (256u32, 256u32);
-        let mut r = Rendu::new(hwnd).unwrap();
-        let z = zoom(l as i32, h as i32, portee(&cfg));
-        r.image(l, h, couleur_fond(Fond::Transparent), z, false, |cv| s.draw(cv, 2.0, &cfg, 1.0, (0.0, 0.0))).unwrap();
-        // relecture : tampon → texture lisible par le processeur
-        let px: Vec<[u8; 4]> = unsafe {
+    }
+
+    /// Image restée dans le tampon de la chaîne (`presenter` faux), relue par le processeur :
+    /// pixels BGRA prémultipliés, ligne par ligne.
+    fn relire(r: &Rendu) -> Vec<[u8; 4]> {
+        use windows::Win32::Graphics::Direct3D11::*;
+        unsafe {
             let tampon: ID3D11Texture2D = r.chaine.GetBuffer(0).unwrap();
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             tampon.GetDesc(&mut desc);
+            let (l, h) = (desc.Width, desc.Height);
             desc.Usage = D3D11_USAGE_STAGING;
             desc.BindFlags = 0;
             desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -526,7 +520,27 @@ mod tests {
             }
             ctx.Unmap(&copie, 0);
             px
-        };
+        }
+    }
+
+    /// Image réelle (carte graphique ou WARP) relue depuis le tampon de la chaîne : fond
+    /// transparent aux bords, essaim au centre, valeurs prémultipliées (aucune composante au-dessus
+    /// de l'opacité).
+    #[test]
+    #[ignore]
+    fn image_transparente_relue() {
+        let hwnd = fenetre_essai();
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        for i in 0..120 {
+            let t = i as f64 / 60.0;
+            s.avance(t, 1.0 / 60.0, (0.0, 0.0), musique(t), &cfg, 1.0);
+        }
+        let (l, h) = (256u32, 256u32);
+        let mut r = Rendu::new(hwnd).unwrap();
+        let z = zoom(l as i32, h as i32, portee(&cfg));
+        r.image(l, h, couleur_fond(Fond::Transparent), z, false, |cv| s.draw(cv, 2.0, &cfg, 1.0, (0.0, 0.0))).unwrap();
+        let px = relire(&r);
         let _ = unsafe { DestroyWindow(hwnd) };
         let at = |x: u32, y: u32| px[(y * l + x) as usize];
         for i in 0..l {
@@ -539,5 +553,38 @@ mod tests {
         assert!(px.iter().all(|p| p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]), "valeurs non prémultipliées");
         assert!(peints.iter().any(|p| p[3] < 255), "aucune demi-transparence (lueurs)");
         eprintln!("{} px peints sur {}", peints.len(), px.len());
+    }
+
+    /// Image du README (`docs/images/stream.png`, refaite par `scripts/images-readme/rendre.py`) :
+    /// la fenêtre à sa taille de départ, réglages par défaut, juste après le drop de la musique
+    /// synthétique, en PNG transparent :
+    /// `ESSAIM_STREAM=<fichier.png> cargo test --release exporter_image_stream -- --ignored`.
+    #[test]
+    #[ignore]
+    fn exporter_image_stream() {
+        let sortie = std::env::var("ESSAIM_STREAM").expect("ESSAIM_STREAM : fichier de sortie");
+        let fin: f64 = std::env::var("ESSAIM_STREAM_T").ok().and_then(|v| v.parse().ok()).unwrap_or(7.5);
+        let (cfg, son) = (Config::default(), AudioShared::default());
+        let (mut s, mut e) = (Swarm::new(), Effets::new());
+        let ips = 60.0;
+        let mut t = 0.0;
+        for i in 0..=(fin * ips) as usize {
+            t = i as f64 / ips;
+            s.avance(t, 1.0 / ips as f32, (0.0, 0.0), musique(t), &cfg, 1.0);
+            s.fissures.clear();
+            e.avance(t, 1.0 / ips as f32, (0.0, 0.0), 1.0, s.env, &son, &cfg, &[]);
+        }
+        let hwnd = fenetre_essai();
+        let mut r = Rendu::new(hwnd).unwrap();
+        let n = TAILLE as u32;
+        r.image(n, n, couleur_fond(Fond::Transparent), zoom(TAILLE, TAILLE, portee(&cfg)), false, |cv| dessiner(cv, &s, &e, t, &cfg)).unwrap();
+        let px = relire(&r);
+        let _ = unsafe { DestroyWindow(hwnd) };
+        // tiny-skia garde du RGBA prémultiplié et l'écrit en PNG à opacité ordinaire
+        let mut image = tiny_skia::Pixmap::new(n, n).unwrap();
+        for (d, p) in image.data_mut().chunks_exact_mut(4).zip(&px) {
+            d.copy_from_slice(&[p[2], p[1], p[0], p[3]]);
+        }
+        image.save_png(sortie).unwrap();
     }
 }

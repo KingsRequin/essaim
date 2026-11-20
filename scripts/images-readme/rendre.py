@@ -1,13 +1,17 @@
-"""Refait les animations du README (docs/images/*.gif).
+"""Refait les images du README (docs/images/).
 
 Les aperçus sont ceux de la fenêtre des réglages (`ui/apercu.js`, calculés comme l'essaim),
 rendus dans Edge sans fenêtre (protocole CDP) sur un son simulé à 120 BPM (et une montée suivie
 d'un drop pour `drop.gif`), puis assemblés en GIF. Les réglages des presets fournis viennent du test `exporter_presets`.
 
+`stream.png` est la vraie image de la fenêtre pour le stream (Direct2D, test `exporter_image_stream`),
+posée sur un damier qui montre sa transparence.
+
     pip install websocket-client pillow
-    python scripts/images-readme/rendre.py
+    python scripts/images-readme/rendre.py            # tout
+    python scripts/images-readme/rendre.py stream     # seulement stream.png (ou : gifs)
 """
-import base64, copy, io, json, math, os, pathlib, shutil, subprocess, tempfile, time, urllib.request
+import base64, copy, io, json, math, os, pathlib, shutil, subprocess, sys, tempfile, time, urllib.request
 import websocket
 from PIL import Image
 
@@ -18,8 +22,30 @@ EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 PORT = 9339
 FPS = 20
 N = 60  # 3 s : six temps à 120 BPM, la boucle retombe sur un kick
+REFAIRE = set(sys.argv[1:]) or {"stream", "gifs"}
 
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="essaim-images-"))
+
+
+def damier(cote, case=16):
+    """Damier gris foncé, la convention des logiciels d'image pour « transparent »."""
+    d = Image.new("RGBA", (cote, cote))
+    for y in range(0, cote, case):
+        for x in range(0, cote, case):
+            d.paste((40, 40, 46, 255) if (x // case + y // case) % 2 else (28, 28, 32, 255), (x, y, x + case, y + case))
+    return d
+
+
+if "stream" in REFAIRE:
+    subprocess.run(["cargo", "test", "--release", "exporter_image_stream", "--", "--ignored", "--quiet"],
+                   cwd=DEPOT, check=True, env={**os.environ, "ESSAIM_STREAM": str(tmp / "stream.png")})
+    im = Image.open(tmp / "stream.png").convert("RGBA")
+    Image.alpha_composite(damier(im.width), im).convert("RGB").save(SORTIE / "stream.png", optimize=True)
+    print("stream.png", im.size)
+if "gifs" not in REFAIRE:
+    shutil.rmtree(tmp, ignore_errors=True)
+    sys.exit()
+
 subprocess.run(["cargo", "test", "--release", "exporter_presets", "--", "--ignored", "--quiet"],
                cwd=DEPOT, check=True, env={**os.environ, "ESSAIM_PRESETS": str(tmp / "presets.json")})
 presets = json.loads((tmp / "presets.json").read_text(encoding="utf-8"))

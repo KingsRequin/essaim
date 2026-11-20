@@ -344,6 +344,8 @@ travail : `CLAUDE.md`.
 
 `python scripts/images-readme/rendre.py` refait les animations de `docs/images/` : les aperçus de
 `ui/apercu.js` (calculés comme l'essaim), rendus dans Edge sans fenêtre sur un son simulé à
-120 BPM, avec les réglages des presets fournis (test `exporter_presets`). Les captures de la
+120 BPM, avec les réglages des presets fournis (test `exporter_presets`). `stream.png` est la
+vraie image de la fenêtre pour le stream (Direct2D, test `exporter_image_stream`) posée sur un damier
+(`rendre.py stream` ne refait qu'elle). Les captures de la
 fenêtre (`presets.png`, `reglages.png`, `curseurs.png`) sont faites à la main, fenêtre en
 1440 × 900.

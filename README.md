@@ -62,7 +62,7 @@ au clic droit, une onde qui se referme.</td>
 <tr>
 <td valign="top"><img src="docs/images/trace.gif" alt="Comètes sur les quatre contours d'un visage souriant : le visage, deux yeux, la bouche"></td>
 <td valign="top"><img src="docs/images/constellation.gif" alt="Preset Constellation : satellites reliés par de fines lignes, palette de deux teintes"></td>
-<td valign="top"><img src="docs/images/stream.png" alt="Fenêtre pour le stream : l'essaim au moment d'un drop, sur fond vert"></td>
+<td valign="top"><img src="docs/images/stream.png" alt="Fenêtre pour le stream : l'essaim juste après un drop, sur fond transparent (damier)"></td>
 </tr>
 <tr>
 <td valign="top"><b>Le trajet d'une image</b> : un logo, un texte, un emoji (ou glisse une image
