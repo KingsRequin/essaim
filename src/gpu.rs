@@ -89,8 +89,7 @@ impl Gpu {
                         surface,
                         prev: None,
                         empty_since: None,
-                        sprites: SpriteCanvas::default(),
-                        batch: None,
+                        pinceau: Pinceau::default(),
                     })
                 }
                 Err(e) => {
@@ -116,10 +115,7 @@ pub struct GpuLayer {
     surface: IDCompositionVirtualSurface,
     prev: Option<IRect>,
     pub empty_since: Option<Instant>,
-    /// Pastilles de l'image, tampons gardés d'une image à l'autre.
-    sprites: SpriteCanvas,
-    /// Lot de sprites, créé une fois (ressource du périphérique Direct2D) puis vidé à chaque image.
-    batch: Option<ID2D1SpriteBatch>,
+    pinceau: Pinceau,
 }
 
 impl GpuLayer {
@@ -157,49 +153,7 @@ impl GpuLayer {
             dc.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
             // le contenu de la zone rendue n'est pas conservé : tout est effacé puis redessiné
             dc.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
-            let sprites = &mut self.sprites;
-            sprites.rects.clear();
-            sprites.colors.clear();
-            sprites.voiles.clear();
-            draw(sprites);
-            // voiles (projecteur) d'abord : tout le reste est dessiné par-dessus
-            for v in &sprites.voiles {
-                voile(&dc, v)?;
-            }
-            if !sprites.rects.is_empty() {
-                let dc3: ID2D1DeviceContext3 = dc.cast()?;
-                let batch = match &self.batch {
-                    Some(b) => {
-                        b.Clear();
-                        b.clone()
-                    }
-                    None => {
-                        let b = dc3.CreateSpriteBatch()?;
-                        self.batch = Some(b.clone());
-                        b
-                    }
-                };
-                batch.AddSprites(
-                    sprites.rects.len() as u32,
-                    sprites.rects.as_ptr(),
-                    None,
-                    Some(sprites.colors.as_ptr()),
-                    None,
-                    std::mem::size_of::<D2D_RECT_F>() as u32,
-                    0,
-                    std::mem::size_of::<D2D1_COLOR_F>() as u32,
-                    0,
-                )?;
-                dc3.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED); // exigé par DrawSpriteBatch
-                dc3.DrawSpriteBatch(
-                    &batch,
-                    0,
-                    sprites.rects.len() as u32,
-                    &gpu.disc,
-                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                    D2D1_SPRITE_OPTIONS_NONE,
-                );
-            }
+            self.pinceau.peindre(&dc, &gpu.disc, draw)?;
             dc.PopAxisAlignedClip();
             let t0 = Instant::now();
             self.surface.EndDraw()?;
@@ -221,8 +175,65 @@ impl Drop for GpuLayer {
     }
 }
 
+/// Pastilles d'une image et lot de sprites qui les dessine, gardés d'une image à l'autre : un
+/// par calque, et un pour la fenêtre pour le stream (`stream.rs`).
+#[derive(Default)]
+pub struct Pinceau {
+    sprites: SpriteCanvas,
+    /// Lot de sprites, créé une fois (ressource du périphérique Direct2D) puis vidé à chaque image.
+    batch: Option<ID2D1SpriteBatch>,
+}
+
+impl Pinceau {
+    /// Laisse `draw` poser ses pastilles et ses voiles, puis les dessine sur `dc` (entre
+    /// `BeginDraw` et `EndDraw`, avec la transformation et la découpe en place). `disc` vient de
+    /// `make_disc` sur le même périphérique.
+    pub unsafe fn peindre(&mut self, dc: &ID2D1DeviceContext, disc: &ID2D1Bitmap1, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<()> {
+        let sprites = &mut self.sprites;
+        sprites.rects.clear();
+        sprites.colors.clear();
+        sprites.voiles.clear();
+        draw(sprites);
+        unsafe {
+            // voiles (projecteur) d'abord : tout le reste est dessiné par-dessus
+            for v in &sprites.voiles {
+                voile(dc, v)?;
+            }
+            if sprites.rects.is_empty() {
+                return Ok(());
+            }
+            let dc3: ID2D1DeviceContext3 = dc.cast()?;
+            let batch = match &self.batch {
+                Some(b) => {
+                    b.Clear();
+                    b.clone()
+                }
+                None => {
+                    let b = dc3.CreateSpriteBatch()?;
+                    self.batch = Some(b.clone());
+                    b
+                }
+            };
+            batch.AddSprites(
+                sprites.rects.len() as u32,
+                sprites.rects.as_ptr(),
+                None,
+                Some(sprites.colors.as_ptr()),
+                None,
+                std::mem::size_of::<D2D_RECT_F>() as u32,
+                0,
+                std::mem::size_of::<D2D1_COLOR_F>() as u32,
+                0,
+            )?;
+            dc3.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED); // exigé par DrawSpriteBatch
+            dc3.DrawSpriteBatch(&batch, 0, sprites.rects.len() as u32, disc, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_SPRITE_OPTIONS_NONE);
+        }
+        Ok(())
+    }
+}
+
 /// Pastille blanche lissée, prémultipliée, en image Direct2D.
-unsafe fn make_disc(dc: &ID2D1DeviceContext) -> windows::core::Result<ID2D1Bitmap1> {
+pub unsafe fn make_disc(dc: &ID2D1DeviceContext) -> windows::core::Result<ID2D1Bitmap1> {
     let mut pm = tiny_skia::Pixmap::new(DISC, DISC).expect("taille valide");
     let c = DISC as f32 / 2.0;
     crate::canvas::circle(&mut pm, c, c, DISC_R, &crate::canvas::paint((255, 255, 255), 1.0));
