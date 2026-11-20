@@ -80,74 +80,86 @@ pub fn decalage() -> f32 {
 
 
 /// Contours du trajet « image » (`[orbite] contours`, ou le trajet dessiné d'avant) et de
-/// l'icône de l'application au premier plan, rééchantillonnés à pas égaux et mis à l'échelle
-/// ensemble (vide : cercle).
-type Contours = std::sync::RwLock<Vec<Vec<(f32, f32)>>>;
+/// l'icône de l'application au premier plan, mis à l'échelle ensemble (vide : cercle).
+type Contours = std::sync::RwLock<Vec<Contour>>;
 static TRACES: Contours = std::sync::RwLock::new(Vec::new());
 static ICONE: Contours = std::sync::RwLock::new(Vec::new());
 
-/// Points par contour rééchantillonné.
-const PAS_CONTOUR: usize = 256;
+/// Un contour fermé, parcouru à vitesse constante : ses sommets (coins gardés) et la longueur
+/// parcourue jusqu'à chacun.
+#[derive(Clone, Debug)]
+struct Contour {
+    points: Vec<(f32, f32)>,
+    cumul: Vec<f32>,
+    total: f32,
+}
+
+impl Contour {
+    fn new(points: Vec<(f32, f32)>) -> Option<Self> {
+        let n = points.len();
+        if n < 3 {
+            return None;
+        }
+        let mut cumul = Vec::with_capacity(n);
+        let mut total = 0.0f32;
+        for i in 0..n {
+            cumul.push(total);
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            total += ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        }
+        (total > 1e-6).then_some(Self { points, cumul, total })
+    }
+
+    /// Point à la fraction `u` (0 à 1) du tour.
+    fn point(&self, u: f32) -> (f32, f32) {
+        let s = u.rem_euclid(1.0) * self.total;
+        let i = self.cumul.partition_point(|&c| c <= s).saturating_sub(1);
+        let (a, b) = (self.points[i], self.points[(i + 1) % self.points.len()]);
+        let long = self.cumul.get(i + 1).copied().unwrap_or(self.total) - self.cumul[i];
+        let f = if long > 1e-9 { ((s - self.cumul[i]) / long).clamp(0.0, 1.0) } else { 0.0 };
+        (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+    }
+}
 
 /// Remplace les contours du trajet « image » (`Orbite::chemins`).
 pub fn set_traces(contours: &[Vec<[f32; 2]>]) {
     if let Ok(mut t) = TRACES.write() {
-        *t = reechantillonner_tous(contours);
+        *t = mettre_a_l_echelle(contours);
     }
 }
 
 /// Remplace les contours de l'icône de l'application au premier plan.
 pub fn set_icone(contours: &[Vec<[f32; 2]>]) {
     if let Ok(mut t) = ICONE.write() {
-        *t = reechantillonner_tous(contours);
+        *t = mettre_a_l_echelle(contours);
     }
 }
 
-/// Chaque contour rééchantillonné à `PAS_CONTOUR` pas égaux le long de la courbe fermée ; tous
-/// centrés sur le milieu de l'ensemble et mis à la même échelle (point le plus loin du centre :
-/// 1,2), pour garder leur place les uns par rapport aux autres (les yeux et la bouche d'un
-/// visage). Un seul contour : centré sur lui-même, comme le trajet dessiné d'avant.
-fn reechantillonner_tous(contours: &[Vec<[f32; 2]>]) -> Vec<Vec<(f32, f32)>> {
-    let tous: Vec<Vec<(f32, f32)>> = contours.iter().take(crate::contours::CONTOURS_MAX).map(|c| reechantillonner(c)).filter(|c| !c.is_empty()).collect();
-    let n = tous.iter().map(Vec::len).sum::<usize>().max(1) as f32;
-    let (cx, cy) = tous.iter().flatten().fold((0.0, 0.0), |s, q| (s.0 + q.0 / n, s.1 + q.1 / n));
+/// Contours (`CONTOURS_MAX` au plus, 2000 points chacun) centrés sur le milieu de l'ensemble et
+/// mis à la même échelle (point le plus loin du centre : 1,2), pour garder leur place les uns
+/// par rapport aux autres (les yeux et la bouche d'un visage, les lettres d'un mot). Un seul
+/// contour : centré sur lui-même, comme le trajet dessiné d'avant.
+fn mettre_a_l_echelle(contours: &[Vec<[f32; 2]>]) -> Vec<Contour> {
+    let tous: Vec<Vec<(f32, f32)>> = contours
+        .iter()
+        .take(crate::contours::CONTOURS_MAX)
+        .map(|c| c.iter().filter(|q| q[0].is_finite() && q[1].is_finite()).take(2000).map(|q| (q[0], q[1])).collect::<Vec<_>>())
+        .filter(|c| c.len() >= 3)
+        .collect();
+    // milieu : celui du cadre qui les englobe (un contour très détaillé d'un côté ne le tire pas)
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for q in tous.iter().flatten() {
+        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
+    }
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let r = tous.iter().flatten().map(|q| ((q.0 - cx).powi(2) + (q.1 - cy).powi(2)).sqrt()).fold(0.0f32, f32::max).max(1e-6);
-    tous.into_iter().map(|c| c.into_iter().map(|q| ((q.0 - cx) / r * 1.2, (q.1 - cy) / r * 1.2)).collect()).collect()
-}
-
-/// Un contour fermé rééchantillonné à `PAS_CONTOUR` pas égaux (sans changer d'échelle).
-fn reechantillonner(points: &[[f32; 2]]) -> Vec<(f32, f32)> {
-    let p: Vec<(f32, f32)> = points.iter().filter(|q| q[0].is_finite() && q[1].is_finite()).take(2000).map(|q| (q[0], q[1])).collect();
-    let n = p.len();
-    if n < 3 {
-        return Vec::new();
-    }
-    let long = |i: usize| {
-        let (a, b) = (p[i], p[(i + 1) % n]);
-        ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
-    };
-    let total: f32 = (0..n).map(long).sum();
-    if total <= 1e-6 {
-        return Vec::new();
-    }
-    let (mut out, mut i, mut fait) = (Vec::with_capacity(PAS_CONTOUR), 0usize, 0f32);
-    for k in 0..PAS_CONTOUR {
-        let cible = total * k as f32 / PAS_CONTOUR as f32;
-        while i < n - 1 && fait + long(i) < cible {
-            fait += long(i);
-            i += 1;
-        }
-        let f = if long(i) > 0.0 { ((cible - fait) / long(i)).clamp(0.0, 1.0) } else { 0.0 };
-        let (a, b) = (p[i], p[(i + 1) % n]);
-        out.push((a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f));
-    }
-    out
+    tous.into_iter().filter_map(|c| Contour::new(c.into_iter().map(|q| ((q.0 - cx) / r * 1.2, (q.1 - cy) / r * 1.2)).collect())).collect()
 }
 
 /// Contours de l'icône de l'application au premier plan, déjà mis à l'échelle (pour l'aperçu des
 /// réglages).
 pub fn contours_icone() -> Vec<Vec<[f32; 2]>> {
-    ICONE.read().map(|t| t.iter().map(|c| c.iter().map(|p| [p.0, p.1]).collect()).collect()).unwrap_or_default()
+    ICONE.read().map(|t| t.iter().map(|c| c.points.iter().map(|p| [p.0, p.1]).collect()).collect()).unwrap_or_default()
 }
 
 /// Contours de la forme (image ou icône) ; aucun pour les formes calculées.
@@ -168,12 +180,18 @@ pub fn nombre_contours(forme: Forme) -> usize {
 /// cercle s'il n'y en a pas.
 fn sur_contour(forme: Forme, i: usize, a: f32) -> (f32, f32) {
     let Some(Ok(t)) = contours_de(forme).map(|c| c.read()) else { return (a.cos(), a.sin()) };
-    let Some(c) = (!t.is_empty()).then(|| &t[i % t.len()]) else { return (a.cos(), a.sin()) };
-    let n = c.len() as f32;
-    let u = (a / TAU * n).rem_euclid(n);
-    let (j, f) = (u.floor() as usize, u.fract());
-    let (p, q) = (c[j % c.len()], c[(j + 1) % c.len()]);
-    (p.0 + (q.0 - p.0) * f, p.1 + (q.1 - p.1) * f)
+    if t.is_empty() {
+        return (a.cos(), a.sin());
+    }
+    t[i % t.len()].point(a / TAU)
+}
+
+/// Longueur parcourue sur le trajet par radian d'angle (le rayon d'un cercle de même tour), pour
+/// découper chaque image en assez de pas : 1,2 pour les formes calculées, plus pour un contour
+/// long et tourmenté.
+fn longueur_par_radian(forme: Forme, i: usize) -> f32 {
+    let Some(Ok(t)) = contours_de(forme).map(|c| c.read()) else { return 1.2 };
+    t.get(i % t.len().max(1)).map_or(1.2, |c| (c.total / TAU).max(1.2))
 }
 
 /// Teinte de base imposée en ce moment (application, Prisme), en degrés.
@@ -776,7 +794,10 @@ impl Swarm {
 
         // comètes : `nombre` par anneau, réparties sur le trajet
         let e = &cfg.essaim;
-        let (anneaux, nombre) = (o.anneaux.max(1) as usize, o.nombre.max(1) as usize);
+        // plusieurs contours (une image, une icône, un texte) : un anneau par contour, à sa place
+        let contours_cometes = nombre_contours(o.forme);
+        let anneaux = if contours_cometes > 1 { contours_cometes } else { o.anneaux.max(1) as usize };
+        let nombre = o.nombre.max(1) as usize;
         self.angles.resize(anneaux, 0.0);
         self.trails.resize_with(anneaux * nombre, Trail::new);
         let life = o.trainee.max(0.01) as f64 * self.mods[0].trainee as f64;
@@ -804,14 +825,12 @@ impl Swarm {
         // vitesse : celle du trajet plus celle des modulations (accélérée aussi), jamais négative
         let vitesse = |g: usize| self.dir * self.vitesse(g);
         let (w_cometes, w_sats) = (vitesse(0), vitesse(1));
-        // plusieurs contours (une image, une icône) : chaque anneau suit le sien, à sa place
-        let contours_cometes = nombre_contours(o.forme);
         for (k, angle) in self.angles.iter_mut().enumerate() {
             let (rk, wk) = if contours_cometes > 1 { (1.0, 1.0) } else { anneau(k) };
             let contour = k % contours_cometes;
             let (a0, da) = (*angle, w_cometes * wk * dt);
             *angle = (a0 + da).rem_euclid(TAU);
-            let n = sous_pas(da, poses[0].rayon * rk * 1.2, FINESSE_COMETES);
+            let n = sous_pas(da, poses[0].rayon * rk * longueur_par_radian(o.forme, contour), FINESSE_COMETES);
             for i in 0..nombre {
                 let decale = i as f32 * TAU / nombre as f32;
                 for j in 1..=n {
@@ -841,7 +860,7 @@ impl Swarm {
             let (contour, rel) = if contours_sats > 1 { (s.couleur % contours_sats, 1.0 + (s.r - 1.3) * 0.25) } else { (0, s.r) };
             let (a0, da) = (s.a, w_sats * s.mul * dt);
             s.a = (a0 + da).rem_euclid(TAU);
-            let n = sous_pas(da, poses[1].rayon * rel * 1.2, FINESSE_SATELLITES);
+            let n = sous_pas(da, poses[1].rayon * rel * longueur_par_radian(forme, contour), FINESSE_SATELLITES);
             for j in 1..=n {
                 let f = j as f32 / n as f32;
                 let (x, y) = point(&poses[1], forme, contour, a0 + da * f, rel, f);
@@ -2116,37 +2135,45 @@ mod tests {
     }
 
     #[test]
-    fn trace_reechantillonne_et_borne() {
-        // un carré dessiné grossièrement, décentré
+    fn contours_mis_a_l_echelle_et_parcourus_coins_compris() {
+        // un carré décentré : centré, point le plus loin à 1,2, coins atteints exactement
         let pts = vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0], [10.0, 30.0]];
-        let r = &reechantillonner_tous(&[pts])[0];
-        assert_eq!(r.len(), 256);
-        let max = r.iter().map(|p| (p.0 * p.0 + p.1 * p.1).sqrt()).fold(0.0f32, f32::max);
+        let c = &mettre_a_l_echelle(&[pts])[0];
+        let max = c.points.iter().map(|p| (p.0 * p.0 + p.1 * p.1).sqrt()).fold(0.0f32, f32::max);
         assert!((max - 1.2).abs() < 1e-3, "{max}");
-        assert!(reechantillonner(&[[0.0, 0.0], [1.0, 1.0]]).is_empty());
+        let k = 1.2 / 2f32.sqrt();
+        for (u, coin) in [(0.0, (-k, -k)), (0.25, (k, -k)), (0.5, (k, k)), (0.75, (-k, k)), (1.0, (-k, -k))] {
+            let p = c.point(u);
+            assert!((p.0 - coin.0).abs() < 1e-4 && (p.1 - coin.1).abs() < 1e-4, "{u} : {p:?}");
+        }
+        // milieu d'un côté : sur le côté, pas en dedans
+        assert!((c.point(0.125).1 + k).abs() < 1e-4);
+        assert!(mettre_a_l_echelle(&[vec![[0.0, 0.0], [1.0, 1.0]]]).is_empty());
         // deux contours : mis à l'échelle ensemble, chacun garde sa place (gauche, droite)
         let carre = |x: f32| vec![[x, 0.0], [x + 10.0, 0.0], [x + 10.0, 10.0], [x, 10.0]];
-        let deux = reechantillonner_tous(&[carre(0.0), carre(40.0)]);
-        let milieu = |c: &[(f32, f32)]| c.iter().map(|p| p.0).sum::<f32>() / c.len() as f32;
+        let deux = mettre_a_l_echelle(&[carre(0.0), carre(40.0)]);
+        let milieu = |c: &Contour| c.points.iter().map(|p| p.0).sum::<f32>() / c.points.len() as f32;
         assert!(milieu(&deux[0]) < -0.5 && milieu(&deux[1]) > 0.5, "{} {}", milieu(&deux[0]), milieu(&deux[1]));
     }
 
     #[test]
     fn un_anneau_par_contour_d_une_image() {
         use crate::config::Forme;
-        // deux disques côte à côte : deux anneaux, chacun sur le sien
+        // trois disques côte à côte (un mot de trois lettres) : trois anneaux, chacun sur le sien,
+        // quel que soit le réglage « anneaux »
         let disque = |cx: f32| (0..64).map(|i| { let a = i as f32 * TAU / 64.0; [cx + 10.0 * a.cos(), 10.0 * a.sin()] }).collect::<Vec<_>>();
         let mut cfg = Config::default();
-        (cfg.orbite.forme, cfg.orbite.anneaux, cfg.orbite.nombre) = (Forme::Trace, 2, 1);
-        cfg.orbite.contours = vec![disque(-30.0), disque(30.0)];
+        (cfg.orbite.forme, cfg.orbite.anneaux, cfg.orbite.nombre) = (Forme::Trace, 1, 1);
+        cfg.orbite.contours = vec![disque(-40.0), disque(0.0), disque(40.0)];
         set_traces(&cfg.orbite.chemins());
-        assert_eq!(nombre_contours(Forme::Trace), 2);
+        assert_eq!(nombre_contours(Forme::Trace), 3);
         let mut s = Swarm::new();
         for i in 0..60 {
             s.update(i as f64 / 60.0, 1.0 / 60.0, C, AudioView::default(), &cfg, 1.0);
         }
+        assert_eq!(s.trails.len(), 3);
         let x = |k: usize| s.trails[k].back().unwrap().1 - C.0;
-        assert!(x(0) < -5.0 && x(1) > 5.0, "anneau 0 à gauche, anneau 1 à droite : {} {}", x(0), x(1));
+        assert!(x(0) < -5.0 && x(1).abs() < x(0).abs() && x(2) > 5.0, "gauche, milieu, droite : {} {} {}", x(0), x(1), x(2));
         set_traces(&[]);
         assert_eq!(nombre_contours(Forme::Trace), 1);
     }

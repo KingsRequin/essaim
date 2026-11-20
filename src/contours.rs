@@ -2,21 +2,26 @@
 //! les réglages, un texte ou un emoji dessinés par la page, l'icône de l'application au premier
 //! plan (`[orbite] forme = "icone"`).
 //!
-//! 1. Masque de la forme : la transparence quand l'image en a (logo en PNG), sinon la luminosité
-//!    séparée par le seuil d'Otsu (ou celui demandé), du côté qui n'est pas le fond (le fond est
-//!    ce que montrent la plupart des bords de l'image) ; « inverser » prend l'autre côté.
-//! 2. Filtre majoritaire 3 × 3, deux fois : les pixels isolés et les bords en escalier s'en vont.
-//! 3. Régions d'un seul tenant (8 voisins) ; les plus petites (moins de 0,2 % de l'image) sont
-//!    écartées ; les plus grandes d'abord.
-//! 4. Bord extérieur de chaque région, suivi pixel à pixel (voisinage de Moore, arrêt de Jacob).
-//! 5. Simplifié (Ramer-Douglas-Peucker, coupé en deux aux points les plus éloignés : un contour
-//!    fermé n'a pas d'extrémités), puis adouci (Chaikin, deux fois) : `POINTS_MAX` points au plus.
+//! 1. Valeur de « forme » de chaque pixel : l'opacité quand l'image a de la transparence (logo en
+//!    PNG, texte), sinon la luminosité séparée par le seuil d'Otsu (ou celui demandé), du côté
+//!    qui n'est pas le fond (le fond est ce que montrent la plupart des bords de l'image) ;
+//!    « inverser » prend l'autre côté. Un léger flou (noyau 1-2-1) efface le bruit d'une photo et
+//!    les escaliers d'une image en gros pixels.
+//! 2. Isocontour au seuil, entre les pixels (marching squares) : le bord tombe là où passe le
+//!    seuil, au dixième de pixel près : les bords droits restent droits (l'anticrénelage d'une
+//!    lettre donne la vraie position de son bord). Chaque bout de contour est
+//!    orienté : les bords extérieurs tournent dans un sens, les trous dans l'autre (signe de
+//!    l'aire). Les trous sont laissés de côté.
+//! 3. Les formes trop petites (moins de 0,2 % de l'image) sont écartées ; les plus grandes
+//!    d'abord, `CONTOURS_MAX` au plus (une lettre chacune, pour un texte).
+//! 4. Simplifié (Ramer-Douglas-Peucker à un quart de pixel, plus grossier s'il reste plus de
+//!    `POINTS_MAX` points) : les coins restent des coins.
 //!
 //! Le moteur rééchantillonne ensuite chaque contour à pas égaux et les met tous à la même
 //! échelle (`render::set_traces`).
 
 /// Contours gardés au plus (un par anneau de comètes), et points par contour.
-pub const CONTOURS_MAX: usize = 4;
+pub const CONTOURS_MAX: usize = 8;
 pub const POINTS_MAX: usize = 512;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -43,32 +48,33 @@ pub fn contours(rgba: &[u8], l: usize, h: usize, o: &Options) -> Resultat {
     if l < 3 || h < 3 || rgba.len() < l * h * 4 {
         return Resultat::default();
     }
-    let (masque, seuil, transparence) = masque(rgba, l, h, o);
-    let masque = majoritaire(&majoritaire(&masque, l, h), l, h);
-    let mut regions = regions(&masque, l, h);
-    let aire_min = 12.max(l * h / 500);
-    regions.retain(|r| r.len() >= aire_min);
-    regions.sort_by_key(|r| std::cmp::Reverse(r.len()));
-    regions.truncate(if o.tous { CONTOURS_MAX } else { 1 });
-    let contours = regions
-        .iter()
-        .filter_map(|r| {
-            let bord = bord(r, l, h);
-            (bord.len() >= 4).then(|| adoucir(&simplifier(&bord)))
-        })
+    let (valeurs, niveau, seuil, transparence) = forme(rgba, l, h, o);
+    let valeurs = flou(&valeurs, l, h);
+    let aire_min = 12.0f32.max((l * h) as f32 / 500.0);
+    let mut formes: Vec<(f32, Vec<[f32; 2]>)> = isocontours(&valeurs, l, h, niveau)
+        .into_iter()
+        .map(|c| (-aire(&c), c))
+        // un bord extérieur tourne dans le sens inverse des aiguilles d'une montre (y vers le
+        // bas : aire négative), un trou dans l'autre
+        .filter(|(a, _)| *a >= aire_min)
         .collect();
+    formes.sort_by(|a, b| b.0.total_cmp(&a.0));
+    formes.truncate(if o.tous { CONTOURS_MAX } else { 1 });
+    let contours = formes.into_iter().map(|(_, c)| simplifier(&c)).filter(|c| c.len() >= 3).collect();
     Resultat { contours, seuil, transparence }
 }
 
-/// Masque de la forme, seuil employé, et s'il porte sur la transparence.
-fn masque(rgba: &[u8], l: usize, h: usize, o: &Options) -> (Vec<bool>, u8, bool) {
+/// Valeur de « forme » de chaque pixel (0 à 255) et niveau au-dessus duquel un point est dans la
+/// forme ; seuil employé, et s'il porte sur la transparence.
+fn forme(rgba: &[u8], l: usize, h: usize, o: &Options) -> (Vec<f32>, f32, u8, bool) {
     let n = l * h;
     let opaques = rgba.chunks_exact(4).take(n).filter(|p| p[3] >= 128).count();
     // transparence utile : ni (presque) tout opaque, ni (presque) tout transparent
     if opaques > n / 50 && opaques < n - n / 50 {
         let s = o.seuil.unwrap_or(128).max(1);
-        let m: Vec<bool> = rgba.chunks_exact(4).take(n).map(|p| (p[3] >= s) != o.inverser).collect();
-        return (m, s, true);
+        let valeurs = rgba.chunks_exact(4).take(n).map(|p| p[3] as f32).collect();
+        // l'opacité « ≥ s » sur des entiers : le niveau passe entre s − 1 et s
+        return inverser(valeurs, s as f32 - 0.5, s, true, o);
     }
     // luminosité, sur fond blanc pour les pixels un peu transparents
     let lum: Vec<u8> = rgba
@@ -88,13 +94,27 @@ fn masque(rgba: &[u8], l: usize, h: usize, o: &Options) -> (Vec<bool>, u8, bool)
         total += 1;
         sombres += (lum[i] < s) as usize;
     }
-    let fond_sombre = sombres * 2 > total;
-    let m = lum.iter().map(|&v| ((v < s) != fond_sombre) != o.inverser).collect();
-    (m, s, false)
+    if sombres * 2 > total {
+        // fond sombre : la forme est claire (luminosité ≥ s)
+        inverser(lum.iter().map(|&v| v as f32).collect(), s as f32 - 0.5, s, false, o)
+    } else {
+        // fond clair : la forme est sombre (luminosité < s, soit 255 − luminosité > 255,5 − s)
+        inverser(lum.iter().map(|&v| 255.0 - v as f32).collect(), 255.5 - s as f32, s, false, o)
+    }
 }
 
-/// Seuil d'Otsu : celui qui sépare le mieux les deux classes de luminosité (variance entre les
-/// classes la plus grande).
+/// « Inverser » : la forme est de l'autre côté du niveau.
+fn inverser(valeurs: Vec<f32>, niveau: f32, seuil: u8, transparence: bool, o: &Options) -> (Vec<f32>, f32, u8, bool) {
+    if o.inverser {
+        (valeurs.into_iter().map(|v| 255.0 - v).collect(), 255.0 - niveau, seuil, transparence)
+    } else {
+        (valeurs, niveau, seuil, transparence)
+    }
+}
+
+/// Seuil d'Otsu : la coupure qui sépare le mieux les deux classes de luminosité (variance entre
+/// les classes la plus grande), placée au milieu des moyennes des deux classes (le bord adouci
+/// d'une forme passe alors à mi-chemin entre elle et le fond).
 fn otsu(lum: &[u8]) -> u8 {
     let mut hist = [0u64; 256];
     for &v in lum {
@@ -113,103 +133,123 @@ fn otsu(lum: &[u8]) -> u8 {
         let v = poids * (total - poids) * (m0 - m1) * (m0 - m1);
         if v > meilleur {
             meilleur = v;
-            // le seuil sépare « jusqu'à t » de « au-dessus de t »
-            seuil = (t + 1).min(255) as u8;
+            seuil = ((m0 + m1) / 2.0).ceil().clamp(1.0, 255.0) as u8;
         }
     }
     seuil
 }
 
-/// Filtre majoritaire 3 × 3 (hors de l'image : vide).
-fn majoritaire(m: &[bool], l: usize, h: usize) -> Vec<bool> {
-    let mut sortie = vec![false; l * h];
-    for y in 0..h {
-        for x in 0..l {
+/// Flou 1-2-1, horizontal puis vertical (au bord : le pixel du bord répété).
+fn flou(v: &[f32], l: usize, h: usize) -> Vec<f32> {
+    let passe = |v: &[f32], pas: usize, long: usize, lignes: usize, ecart: usize| {
+        let mut sortie = vec![0.0; v.len()];
+        for ligne in 0..lignes {
+            let base = ligne * ecart;
+            for i in 0..long {
+                let at = |j: usize| v[base + j * pas];
+                sortie[base + i * pas] = (at(i.saturating_sub(1)) + 2.0 * at(i) + at((i + 1).min(long - 1))) / 4.0;
+            }
+        }
+        sortie
+    };
+    let horizontal = passe(v, 1, l, h, l);
+    passe(&horizontal, l, h, l, 1)
+}
+
+/// Isocontours fermés du champ `v` (`l` × `h`) au `niveau` : marching squares sur les centres des
+/// pixels, l'image entourée d'une marge hors de la forme (un contour qui touche le bord se
+/// referme). Chaque contour est orienté : bord extérieur d'aire négative, trou d'aire positive
+/// (y vers le bas). Points en pixels de l'image.
+fn isocontours(v: &[f32], l: usize, h: usize, niveau: f32) -> Vec<Vec<[f32; 2]>> {
+    // grille avec une marge d'un pixel, toujours hors de la forme
+    let (gl, gh) = (l + 2, h + 2);
+    let val = |x: usize, y: usize| if x == 0 || y == 0 || x > l || y > h { f32::NEG_INFINITY } else { v[(y - 1) * l + x - 1] };
+    let dedans = |x: usize, y: usize| val(x, y) > niveau;
+    // une arête par point de la grille vers la droite (2k) et vers le bas (2k + 1)
+    let arete = |x: usize, y: usize, bas: bool| 2 * (y * gl + x) + bas as usize;
+    let mut suivant = vec![u32::MAX; 2 * gl * gh];
+    let mut position = vec![[0.0f32; 2]; 2 * gl * gh];
+    let croise = |x0: usize, y0: usize, x1: usize, y1: usize| -> [f32; 2] {
+        let (a, b) = (val(x0, y0), val(x1, y1));
+        // un bout dans la marge : le bord tombe au bord du pixel
+        let t = if a.is_finite() && b.is_finite() && (b - a).abs() > 1e-6 { ((niveau - a) / (b - a)).clamp(0.0, 1.0) } else { 0.5 };
+        // centre du pixel (x, y) de la grille : (x − 0,5 ; y − 0,5) dans l'image
+        [x0 as f32 - 0.5 + (x1 as f32 - x0 as f32) * t, y0 as f32 - 0.5 + (y1 as f32 - y0 as f32) * t]
+    };
+    for y in 0..gh - 1 {
+        for x in 0..gl - 1 {
+            // coins dans le sens des aiguilles d'une montre (y vers le bas) : haut gauche, haut
+            // droit, bas droit, bas gauche ; l'arête i va du coin i au coin i + 1
+            let coins = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)];
+            let d = coins.map(|(cx, cy)| dedans(cx, cy));
+            if d.iter().all(|&b| b) || d.iter().all(|&b| !b) {
+                continue;
+            }
+            let aretes = [arete(x, y, false), arete(x + 1, y, true), arete(x, y + 1, false), arete(x, y, true)];
+            // passages, dans l'ordre du tour : (arête, entrée dans la forme ?)
+            let mut passages = [(0usize, false); 4];
             let mut n = 0;
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    let (xx, yy) = (x as i32 + dx, y as i32 + dy);
-                    if xx >= 0 && yy >= 0 && (xx as usize) < l && (yy as usize) < h && m[yy as usize * l + xx as usize] {
-                        n += 1;
-                    }
+            for i in 0..4 {
+                let (a, b) = (d[i], d[(i + 1) % 4]);
+                if a != b {
+                    let ((x0, y0), (x1, y1)) = (coins[i], coins[(i + 1) % 4]);
+                    // la même arête est vue de deux cellules : position calculée dans le même sens
+                    let p = if (x0, y0) < (x1, y1) { croise(x0, y0, x1, y1) } else { croise(x1, y1, x0, y0) };
+                    position[aretes[i]] = p;
+                    passages[n] = (aretes[i], b);
+                    n += 1;
                 }
             }
-            sortie[y * l + x] = n >= 5;
+            // segments de l'entrée vers la sortie : tous les contours sont orientés pareil
+            let entree = (0..n).find(|&i| passages[i].1).unwrap_or(0);
+            let p = |k: usize| passages[(entree + k) % n].0;
+            if n == 2 {
+                suivant[p(0)] = p(1) as u32;
+            } else {
+                // col : le centre de la cellule dit si les deux parties de la forme se touchent
+                let centre = coins.iter().map(|&(cx, cy)| val(cx, cy)).sum::<f32>() / 4.0;
+                if centre > niveau {
+                    suivant[p(0)] = p(3) as u32;
+                    suivant[p(2)] = p(1) as u32;
+                } else {
+                    suivant[p(0)] = p(1) as u32;
+                    suivant[p(2)] = p(3) as u32;
+                }
+            }
+        }
+    }
+    let mut vu = vec![false; suivant.len()];
+    let mut sortie = Vec::new();
+    for depart in 0..suivant.len() {
+        if suivant[depart] == u32::MAX || vu[depart] {
+            continue;
+        }
+        let mut c = Vec::new();
+        let mut i = depart;
+        while !vu[i] && suivant[i] != u32::MAX {
+            vu[i] = true;
+            c.push(position[i]);
+            i = suivant[i] as usize;
+        }
+        if c.len() >= 3 {
+            sortie.push(c);
         }
     }
     sortie
 }
 
-/// Régions d'un seul tenant (8 voisins) : les pixels de chacune, dans l'ordre de l'image (le
-/// premier est le plus haut, puis le plus à gauche).
-fn regions(m: &[bool], l: usize, h: usize) -> Vec<Vec<usize>> {
-    let mut vu = vec![false; l * h];
-    let mut regions = Vec::new();
-    for depart in 0..l * h {
-        if !m[depart] || vu[depart] {
-            continue;
-        }
-        let mut region = Vec::new();
-        let mut pile = vec![depart];
-        vu[depart] = true;
-        while let Some(i) = pile.pop() {
-            region.push(i);
-            let (x, y) = ((i % l) as i32, (i / l) as i32);
-            for (dx, dy) in VOISINS {
-                let (xx, yy) = (x + dx, y + dy);
-                if xx >= 0 && yy >= 0 && (xx as usize) < l && (yy as usize) < h {
-                    let j = yy as usize * l + xx as usize;
-                    if m[j] && !vu[j] {
-                        vu[j] = true;
-                        pile.push(j);
-                    }
-                }
-            }
-        }
-        region.sort_unstable();
-        regions.push(region);
-    }
-    regions
-}
-
-/// Les 8 voisins, dans le sens des aiguilles d'une montre en partant de l'ouest (y vers le bas).
-const VOISINS: [(i32, i32); 8] = [(-1, 0), (-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1)];
-
-/// Bord extérieur d'une région (ses pixels, triés), suivi pixel à pixel : voisinage de Moore,
-/// arrêt de Jacob (revenu au départ, entré du même côté). Centres des pixels.
-fn bord(region: &[usize], l: usize, h: usize) -> Vec<(i32, i32)> {
-    let mut dedans = vec![false; l * h];
-    for &i in region {
-        dedans[i] = true;
-    }
-    let est = |x: i32, y: i32| x >= 0 && y >= 0 && (x as usize) < l && (y as usize) < h && dedans[y as usize * l + x as usize];
-    let depart = ((region[0] % l) as i32, (region[0] / l) as i32);
-    // le premier pixel de la région dans l'ordre de l'image : son voisin de l'ouest est dehors
-    let (mut p, mut retour) = (depart, 0usize);
-    let mut contour = vec![p];
-    for _ in 0..4 * region.len() + 8 {
-        let suivant = (1..=8).map(|i| (retour + i) % 8).find(|&d| est(p.0 + VOISINS[d].0, p.1 + VOISINS[d].1));
-        let Some(d) = suivant else { break };
-        let q = (p.0 + VOISINS[d].0, p.1 + VOISINS[d].1);
-        // nouveau retour : le voisin examiné juste avant q, vu depuis q
-        let avant = (p.0 + VOISINS[(d + 7) % 8].0, p.1 + VOISINS[(d + 7) % 8].1);
-        retour = VOISINS.iter().position(|&(dx, dy)| (q.0 + dx, q.1 + dy) == avant).unwrap_or(0);
-        p = q;
-        if p == depart && retour == 0 {
-            break;
-        }
-        contour.push(p);
-    }
-    contour
+/// Aire orientée d'un contour fermé (formule du lacet).
+fn aire(c: &[[f32; 2]]) -> f32 {
+    let n = c.len();
+    (0..n).map(|i| c[i][0] * c[(i + 1) % n][1] - c[(i + 1) % n][0] * c[i][1]).sum::<f32>() / 2.0
 }
 
 /// Ramer-Douglas-Peucker sur un contour fermé : coupé en deux au point le plus éloigné du
-/// premier, chaque moitié simplifiée à `EPSILON` près ; plus grossier si trop de points restent.
-fn simplifier(bord: &[(i32, i32)]) -> Vec<[f32; 2]> {
-    let pts: Vec<[f32; 2]> = bord.iter().map(|&(x, y)| [x as f32 + 0.5, y as f32 + 0.5]).collect();
+/// premier, chaque moitié simplifiée à `epsilon` près ; plus grossier si trop de points restent.
+fn simplifier(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
     let d2 = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
     let loin = (0..pts.len()).max_by(|&i, &j| d2(pts[0], pts[i]).total_cmp(&d2(pts[0], pts[j]))).unwrap_or(0);
-    let mut epsilon = 0.8f32;
+    let mut epsilon = 0.25f32;
     loop {
         let mut garde = vec![false; pts.len()];
         garde[0] = true;
@@ -237,34 +277,11 @@ fn simplifier(bord: &[(i32, i32)]) -> Vec<[f32; 2]> {
             }
         }
         let sortie: Vec<[f32; 2]> = pts.iter().zip(&garde).filter(|(_, &g)| g).map(|(p, _)| *p).collect();
-        if sortie.len() * 4 <= POINTS_MAX || epsilon > 64.0 {
+        if sortie.len() <= POINTS_MAX || epsilon > 64.0 {
             return sortie;
         }
         epsilon *= 1.5;
     }
-}
-
-/// Chaikin sur un contour fermé, deux fois : chaque côté donne deux points, au quart et aux
-/// trois quarts ; les angles s'arrondissent.
-fn adoucir(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
-    let mut p = pts.to_vec();
-    for _ in 0..2 {
-        if p.len() < 3 {
-            break;
-        }
-        let n = p.len();
-        p = (0..n)
-            .flat_map(|i| {
-                let (a, b) = (p[i], p[(i + 1) % n]);
-                [[0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]], [0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]]]
-            })
-            .collect();
-    }
-    if p.len() > POINTS_MAX {
-        let pas = p.len().div_ceil(POINTS_MAX);
-        p = p.into_iter().step_by(pas).collect();
-    }
-    p
 }
 
 #[cfg(test)]
@@ -359,6 +376,29 @@ mod tests {
         let r = contours(&img, 200, 200, &Options { tous: true, ..Default::default() });
         assert_eq!(r.contours.len(), 4);
         std::fs::write(sortie, serde_json::to_string(&r.contours).unwrap()).unwrap();
+    }
+
+    /// Banc sur de vraies images : pour chaque `NN.rgba` (et `NN.taille` : « largeur hauteur ») du
+    /// dossier `ESSAIM_BANC`, écrit `NN.json` (le plus grand contour) et `NN-tous.json` :
+    /// `cargo test --release banc_images -- --ignored`.
+    #[test]
+    #[ignore]
+    fn banc_images() {
+        let dossier = std::path::PathBuf::from(std::env::var("ESSAIM_BANC").expect("ESSAIM_BANC : dossier"));
+        for f in std::fs::read_dir(&dossier).unwrap().flatten() {
+            let p = f.path();
+            if p.extension().is_none_or(|e| e != "rgba") {
+                continue;
+            }
+            let taille = std::fs::read_to_string(p.with_extension("taille")).unwrap();
+            let [l, h]: [usize; 2] = taille.split_whitespace().map(|v| v.parse().unwrap()).collect::<Vec<_>>().try_into().unwrap();
+            let px = std::fs::read(&p).unwrap();
+            for (suffixe, tous) in [("", false), ("-tous", true)] {
+                let r = contours(&px, l, h, &Options { tous, ..Default::default() });
+                let nom = format!("{}{suffixe}.json", p.file_stem().unwrap().to_string_lossy());
+                std::fs::write(dossier.join(nom), serde_json::to_string(&r.contours).unwrap()).unwrap();
+            }
+        }
     }
 
     #[test]

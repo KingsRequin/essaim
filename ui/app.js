@@ -2339,7 +2339,7 @@ const image = {
   apercu: null,
   attente: 0, // minuterie de la prochaine analyse
 };
-const COTE_ANALYSE = 256;
+const COTE_ANALYSE = 512;
 
 // Couleur d'un jeton de style.css, pour dessiner dans un canevas.
 function couleurJeton(nom) {
@@ -2358,13 +2358,14 @@ function fermerImage() {
   fermerBoite("voile-image");
 }
 
-// Image à analyser : un fichier (adresse `data:` ou `blob:`).
+// Image à analyser, par son adresse `data:` (la page n'accepte pas les adresses `blob:`).
 function chargerImage(adresse, nom) {
   const img = new Image();
   img.onload = () => {
     image.source = img;
     image.nom = nom || "";
     $("texte-image").value = "";
+    garderTous(false);
     analyser();
   };
   img.onerror = () => bandeau(`« ${nom || "Cette image"} » ne s'ouvre pas.`);
@@ -2372,21 +2373,26 @@ function chargerImage(adresse, nom) {
 }
 
 // L'image (ou le texte) dans un canevas de `COTE_ANALYSE` pixels de côté au plus, proportions
-// gardées ; un texte est dessiné en noir sur transparent (sa forme : la transparence).
+// gardées ; un texte est dessiné en noir sur transparent (sa forme : la transparence), cadré sur
+// son encre (largeur et hauteur réelles des lettres).
 function rasteriser() {
   const c = document.createElement("canvas"), texte = $("texte-image").value.trim();
   if (texte) {
     c.width = c.height = COTE_ANALYSE;
     const g = c.getContext("2d", { willReadFrequently: true });
     const police = (px) => `900 ${px}px Archivo, "Segoe UI Emoji", "Segoe UI Symbol", sans-serif`;
-    g.font = police(200);
-    const m = g.measureText(texte);
-    const px = Math.max(10, Math.floor(200 * Math.min((COTE_ANALYSE * 0.86) / Math.max(1, m.width), 1.05)));
-    g.font = police(px);
-    g.textAlign = "center";
-    g.textBaseline = "middle";
+    g.textAlign = "left";
+    g.textBaseline = "alphabetic";
+    const encre = (px) => {
+      g.font = police(px);
+      const m = g.measureText(texte);
+      return { g: m.actualBoundingBoxLeft, d: m.actualBoundingBoxRight, h: m.actualBoundingBoxAscent, b: m.actualBoundingBoxDescent };
+    };
+    const e0 = encre(100), cible = COTE_ANALYSE * 0.86;
+    const px = Math.max(8, Math.floor(100 * Math.min(cible / Math.max(1, e0.g + e0.d), cible / Math.max(1, e0.h + e0.b))));
+    const e = encre(px);
     g.fillStyle = "#000";
-    g.fillText(texte, COTE_ANALYSE / 2, COTE_ANALYSE / 2 + px * 0.04);
+    g.fillText(texte, (COTE_ANALYSE - (e.d - e.g)) / 2, (COTE_ANALYSE + e.h - e.b) / 2);
     return { c, g };
   }
   const img = image.source;
@@ -2431,7 +2437,8 @@ function recevoirContours(m) {
   dessinerImage();
 }
 
-// L'image en pâle, ses contours en couleur, dans la toile carrée.
+// L'image adoucie sur un papier clair (un logo sombre se voit), ses contours en couleur, dans la
+// toile carrée.
 function dessinerImage() {
   const c = $("toile-image"), g = c.getContext("2d");
   g.clearRect(0, 0, c.width, c.height);
@@ -2444,7 +2451,9 @@ function dessinerImage() {
     return;
   }
   const k = Math.min(c.width / l, c.height / h) * 0.94, ox = (c.width - l * k) / 2, oy = (c.height - h * k) / 2;
-  g.globalAlpha = 0.35;
+  g.fillStyle = couleurJeton("--papier-image");
+  g.fillRect(ox, oy, l * k, h * k);
+  g.globalAlpha = 0.45;
   g.drawImage(image.rendu, ox, oy, l * k, h * k);
   g.globalAlpha = 1;
   g.strokeStyle = couleurJeton("--signal");
@@ -2460,11 +2469,11 @@ function dessinerImage() {
 
 // Réglages de l'aperçu de la boîte : ceux en place, avec ces contours.
 function reglagesImage() {
-  const r = etat.reglages, n = image.contours.length;
+  const r = etat.reglages;
   const orbite = { ...r.orbite, contours: image.contours };
   const essaim = { ...r.essaim };
   if (image.cible && image.cible.section === "essaim") essaim.forme = "trace";
-  else { orbite.forme = "trace"; if (n > 1) orbite.anneaux = n; }
+  else orbite.forme = "trace";
   return { ...r, orbite, essaim };
 }
 
@@ -2477,7 +2486,6 @@ function validerImage() {
   const pas = Math.ceil(arrondi[0].length / 200);
   regler("orbite", "trace", arrondi[0].filter((_, i) => i % pas === 0));
   regler(image.cible.section, image.cible.cle, "trace");
-  if (image.cible.section === "orbite" && arrondi.length > 1) regler("orbite", "anneaux", arrondi.length);
   majReglages();
   fermerImage();
 }
@@ -2485,10 +2493,23 @@ function validerImage() {
 $("choisir-image").addEventListener("click", () => $("fichier-image").click());
 $("fichier-image").addEventListener("change", (e) => {
   const f = e.target.files && e.target.files[0];
-  if (f) chargerImage(URL.createObjectURL(f), f.name);
   e.target.value = "";
+  if (!f) return;
+  const lecteur = new FileReader();
+  lecteur.onload = () => chargerImage(lecteur.result, f.name);
+  lecteur.onerror = () => bandeau(`« ${f.name} » illisible.`);
+  lecteur.readAsDataURL(f);
 });
-$("texte-image").addEventListener("input", () => analyser());
+// Garder tous les contours, ou le plus grand seulement.
+function garderTous(tous) {
+  image.tous = tous;
+  for (const x of document.querySelectorAll("[data-contours]")) x.setAttribute("aria-pressed", (x.dataset.contours === "tous") === tous);
+}
+// un texte : une lettre par contour, toutes gardées
+$("texte-image").addEventListener("input", () => {
+  if ($("texte-image").value.trim()) garderTous(true);
+  analyser();
+});
 $("seuil-image").addEventListener("input", (e) => {
   image.seuil = +e.target.value;
   $("seuil-auto").setAttribute("aria-pressed", "false");
@@ -2506,8 +2527,7 @@ $("inverser-image").addEventListener("click", (e) => {
 });
 for (const b of document.querySelectorAll("[data-contours]")) {
   b.addEventListener("click", () => {
-    image.tous = b.dataset.contours === "tous";
-    for (const x of document.querySelectorAll("[data-contours]")) x.setAttribute("aria-pressed", x === b);
+    garderTous(b.dataset.contours === "tous");
     analyser();
   });
 }

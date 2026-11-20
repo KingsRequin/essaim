@@ -53,17 +53,23 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   toutes les 250 ms avec le plein écran ; ni bureau, ni barre des tâches, ni fenêtre réduite, en
   plein écran ou d'Essaim). Une étincelle ou un grain de poussière qui traverse un bord entre deux
   pas est réfléchi (vitesse × 0,7).
-- **Trajet d'une image** (`contours.rs`) : masque de la forme (la transparence si l'image en a,
-  sinon la luminosité coupée au seuil d'Otsu, du côté qui n'est pas le fond que montrent les bords
-  de l'image), filtre majoritaire 3 × 3 deux fois, régions d'un seul tenant (8 voisins, les plus
-  petites que 0,2 % de l'image écartées), bord extérieur de chacune suivi pixel à pixel (voisinage
-  de Moore, arrêt de Jacob), simplifié (Ramer-Douglas-Peucker sur contour fermé) puis adouci
-  (Chaikin ×2), 512 points au plus. La page envoie les pixels (`cmd: "contours"`, image ramenée à
-  256 px ; un texte ou un emoji est dessiné dans un canevas) ; une image glissée sur la fenêtre est
-  lue par `reglages.rs` et renvoyée à la page. Le moteur (`render::set_traces`) rééchantillonne
-  chaque contour à 256 pas égaux et les met tous à la même échelle autour de leur milieu : avec
-  plusieurs contours, l'anneau k suit le contour k mod n (sans le rétrécissement des anneaux), le
-  satellite le contour de sa couleur. `forme = "icone"` : `appli::IconeAppli` lit l'icône
+- **Trajet d'une image** (`contours.rs`) : valeur de forme de chaque pixel (l'opacité si l'image a
+  de la transparence, sinon la luminosité, du côté du seuil d'Otsu qui n'est pas le fond que
+  montrent les bords de l'image ; le niveau est le milieu des moyennes des deux classes), flou
+  1-2-1, puis isocontour au niveau entre les centres des pixels (marching squares, cols tranchés
+  par la moyenne de la cellule, marge hors de la forme autour de l'image) : le bord est placé au
+  sous-pixel, les côtés droits restent droits. Les contours sont orientés : les trous (aire de
+  l'autre signe) et les formes de moins de 0,2 % de l'image sont écartés, les plus grandes
+  d'abord, 8 au plus ; simplifiés (Ramer-Douglas-Peucker sur contour fermé, ¼ px), 512 points au
+  plus, sans lissage (les coins restent des coins). La page envoie les pixels (`cmd: "contours"`,
+  image ramenée à 512 px ; un texte ou un emoji est dessiné dans un canevas, cadré sur son encre)
+  et lit un fichier choisi en adresse `data:` (la page refuse les `blob:`, CSP de `reglages.rs`) ;
+  une image glissée sur la fenêtre est lue par `reglages.rs` et renvoyée à la page. Le moteur
+  (`render::set_traces`) met les contours à la même échelle autour du milieu de leur cadre et les
+  parcourt à l'abscisse curviligne (sommets gardés, coins atteints exactement) ; chaque image est
+  découpée en pas selon la longueur du contour. Avec plusieurs contours, un anneau par contour
+  (quel que soit `anneaux`, sans le rétrécissement des anneaux), le satellite suit le contour de
+  sa couleur. `forme = "icone"` : `appli::IconeAppli` lit l'icône
   (`PrivateExtractIconsW`, 128 px) de la dernière application au premier plan qui n'est pas Essaim,
   une fois par exécutable.
 - **Inertie** (`[orbite] inertie`) : le centre de l'orbite est un ressort amorti vers le pointeur

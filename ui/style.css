@@ -28,6 +28,9 @@
   /* dessins sur la scène (toujours sombre) : guide et point du trajet dessiné */
   --scene-guide: rgba(255, 255, 255, 0.18);
   --scene-point: #ffffff;
+  /* fond de l'image analysée (boîte « Trajet d'une image ») : clair dans les deux thèmes, pour
+     qu'un logo sombre se voie */
+  --papier-image: #f4f3ee;
 
   --esp-1: 4px;
   --esp-2: 8px;
