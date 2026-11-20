@@ -118,7 +118,7 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 
 ## The settings window
 
-**Presets.** A grid of 22 bundled presets (one per shape, and a few more), each animated live with
+**Presets.** A grid of 22 bundled presets, all different (discreet, intense, zen, neon, storm, spectrum, album art…), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
 
 <img src="docs/images/presets.png" alt="Presets tab: the 22 bundled presets, animated" width="100%">

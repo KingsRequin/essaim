@@ -120,7 +120,7 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## La fenêtre des réglages
 
-**Les presets.** Une grille de 22 presets fournis (un par forme, et quelques autres), chacun animé
+**Les presets.** Une grille de 22 presets fournis, tous différents (discret, intense, zen, néon, orage, spectre, pochette…), chacun animé
 en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
 filtre par forme.
 

@@ -35,8 +35,8 @@ pub const ANCIENNES_CLES: [(&str, &str); 21] = [
 /// Sections qui n'existent plus (retirées si elles sont vides après la conversion).
 pub const ANCIENNES_SECTIONS: [&str; 3] = ["scintillement", "clic", "musique"];
 
-/// Les réglages d'avant, avec leurs valeurs par défaut d'alors (les presets fournis en partent
-/// aussi, `profils::builtins`).
+/// Les réglages d'avant, avec leurs valeurs par défaut d'alors (les presets fournis jusqu'à la
+/// 0.6 en partent aussi, `profils::presets_d_avant`).
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Ancien {

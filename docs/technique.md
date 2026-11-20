@@ -262,10 +262,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   deviennent des modulations et des déclencheurs : à la lecture (`config::de_texte`, presets
   compris), et dans `config.toml` une fois au lancement (`config::migrer_fichier`, commentaires
   gardés). Sans `[declencheurs]`, les réactions d'avant deviennent les déclencheurs et s'ajoutent
-  aux modulations ; sans `[modulations]` (0.3), la basse aussi. Les réglages par défaut et les
-  presets fournis en sortent (`Ancien::default`, `profils::builtins`). La page fait de même pour
-  un preset de la communauté (`reactionsAvant`, `fusion`). Essai `presets_comme_avant` : chaque
-  preset fourni contre les mesures de l'ancien moteur (`tests/donnees/rendu-presets.json`, même
+  aux modulations ; sans `[modulations]` (0.3), la basse aussi. Les réglages par défaut en
+  sortent (`Ancien::default`). La page fait de même pour un preset de la communauté
+  (`reactionsAvant`, `fusion`). Essai `presets_comme_avant` : chaque preset fourni jusqu'à la
+  0.6 (`profils::presets_d_avant`, écrits avec les réglages d'avant) contre les mesures de l'ancien moteur (`tests/donnees/rendu-presets.json`, même
   son d'essai) : sens, satellites et particules identiques, distance des têtes à 8 % près par
   seconde (0,1 % en médiane).
 - `ui/apercu.js` reproduit `render.rs` jusqu'au détail : ordre de la mise à jour (écoute des

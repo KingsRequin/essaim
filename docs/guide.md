@@ -89,8 +89,8 @@ Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillem
 `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`, `[audio] pulsation_tempo`,
 `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`, `[essaim] par_kick_min` et
 `par_kick_max`) sont convertis avec leurs valeurs ; `config.toml` est réécrit une fois au
-lancement, commentaires gardés. Les presets fournis gardent leur allure (essai
-`presets_comme_avant`).
+lancement, commentaires gardés. Un preset d'avant garde son allure (essai
+`presets_comme_avant`, sur les presets fournis jusqu'à la version 0.6).
 
 ### Les effets
 
@@ -291,13 +291,21 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (22) : *Défaut*, *Discret*, *Intense*, *Point seul*, *Pollen*, *Spirale* ;
-    un par forme du trajet : *Delta* (triangle), *Ruche* (hexagone), *Huit*, *Losange*, *Ellipse*,
-    *Carré*, *Pentagone*, *Étoile*, *Fleur*, *Trèfle*, *Cœur*, *Lissajous*, *Astroïde* ; et
-    *Constellation* (lignes entre les satellites, deux teintes) et *Festival* (contretemps, stéréo,
-    inertie, palette de trois teintes), *Tourbillon* (modulations : le trajet des satellites, seul à
-    tourner, s'emballe au drop, l'orbite s'ouvre sur les graves, les comètes grossissent au kick).
-    Chacun est refaisable à la main dans les réglages. Les
+  - Préréglages fournis (22), chacun avec son caractère : *Défaut* ; *Discret* (petit, lent, sans
+    fissure, pour travailler) ; *Intense* (deux anneaux, beaucoup de satellites, ondes, éclats et
+    fissures) ; *Zen* (trois anneaux lents qui respirent au tempo, peu de réactions) ; *Viseur*
+    (réticule et têtes serrées, pour jouer) ; *Spectre* (anneau de spectre) ; *Comète* (une seule
+    comète qui traîne derrière la souris, sillage) ; *Néon* (Lissajous magenta et vert, tout s'allume
+    au kick) ; *Arcade* (carré vert phosphore, carrés sur la caisse claire et au clic) ; *Orage*
+    (astroïde bleu, fissures sur des kicks au hasard et au drop) ; *Delta* (triangle qui tourne,
+    s'emballe à l'envers au drop) ; *Ruche* (hexagone ambre, satellites permanents reliés) ; *Huit*
+    (penche du côté qui joue le plus fort) ; *Spirale* (quatre anneaux qui tournent, satellites sur
+    une ellipse) ; *Mandala* (trois anneaux de fleur reliés, trois teintes) ; *Battement* (cœur qui
+    bat au tempo) ; *Constellation* (lignes entre les satellites, deux teintes) ; *Festival*
+    (contretemps, stéréo, inertie, trois teintes) ; *Tourbillon* (le trajet des satellites, seul à
+    tourner, s'emballe au drop) ; *Pollen* (sans comètes : des grains qui flottent, sillage) ;
+    *Pochette* (teinte de la pochette du morceau, trèfle) ; *Caméléon* (forme et couleur de l'icône
+    de l'application au premier plan). Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine) ni à l'option des
     curseurs.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
