@@ -42,6 +42,15 @@ jobs:
             throw "Le tag $env:GITHUB_REF_NAME ne correspond pas à la version $version de Cargo.toml"
           }
 
+      # la fenêtre des réglages refuse tout le script à la moindre erreur de syntaxe (0.8.0)
+      - name: Syntaxe de l'interface
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem ui -Filter *.js) {
+            node --check $f.FullName
+            if ($LASTEXITCODE) { throw "Erreur de syntaxe dans $($f.Name)" }
+          }
+
       - name: Tests
         run: cargo test --release
 

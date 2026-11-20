@@ -12,7 +12,11 @@ animations se refont avec `scripts/images-readme/rendre.py`.
 cargo test --release
 cargo clippy --all-targets -- -D warnings
 cargo build --release
+node --check ui/app.js; node --check ui/apercu.js
 ```
+
+Les scripts de `ui/` sont embarqués tels quels : aucune commande cargo ne les lit, et une seule
+erreur de syntaxe laisse la fenêtre des réglages vide (0.8.0). Un nouveau `.js` s'ajoute ici.
 
 Lancer cargo depuis le dépôt : `.cargo/config.toml` (local, non suivi) y choisit le dossier de
 compilation et remplace `audio-commun` de GitHub par le dossier voisin. Consignes propres au PC
