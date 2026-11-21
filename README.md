@@ -28,8 +28,8 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
 ## Pourquoi Essaim ?
 
 - **Il écoute vraiment la musique.** Le kick est reconnu par un petit modèle appris sur de vrais
-  morceaux (électro, dubstep, rap, rock…), en 25 ms environ : l'essaim tombe sur le temps, pas
-  après. Il entend aussi la caisse claire, la montée avant un drop, le tempo et le côté qui joue.
+  morceaux de 42 styles (de la techno au jazz, rap, rock, reggae, salsa…), en 25 ms environ et à
+  n'importe quel volume : l'essaim tombe sur le temps, pas après. Il entend aussi la caisse claire, la montée avant un drop, le tempo et le côté qui joue.
   Rien à brancher : Essaim écoute ce que joue Windows.
 - **Ton pointeur reste le tien.** C'est le vrai curseur de Windows, sans aucun retard ; Essaim
   dessine seulement autour, dans un calque transparent aux clics.

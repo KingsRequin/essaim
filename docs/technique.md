@@ -178,10 +178,13 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   nature du son (musique, voix seule, basse tenue) ; il est oublié après 2 s de silence.
   `sensibilite_kick` règle le dernier seuil ; sans kick depuis 4 s (intro, montée, reprise après
   une pause), le premier doit être franc. Détails et banc d'essai : README d'`audio-commun`,
-  section « Kick et caisse claire ». En validation croisée (morceaux jamais appris) : F1 0,88 sur
-  107 morceaux d'électro, dubstep, hardstyle, rap, pop et rock, 0,87 sur 93 morceaux d'autres
-  genres, 0,75 sur MDB Drums ; sans le contexte (versions jusqu'à 0.9.0), 0,84, 0,79 et 0,64 sur
-  les mêmes références. Le premier détecteur, qui n'écoutait que le sub, avait 50 à 150 ms de
+  section « Kick et caisse claire ». En validation croisée (morceaux jamais appris) : F1 0,89 sur
+  107 morceaux d'électro, dubstep, hardstyle, rap, pop et rock, 0,88 sur 93 morceaux d'autres
+  genres, 0,84 sur 277 morceaux de 42 styles (tableau par style dans ce README), 0,78 sur MDB
+  Drums ; sans le contexte (versions jusqu'à 0.9.0), 0,84, 0,79 et 0,64 sur les trois jeux
+  d'alors. Le seuil de silence suit le niveau récent (52 dB sous le pic, entre -100 et -60 dB) :
+  un lecteur réglé 48 dB plus bas donne encore 0,90 là où le seuil fixe d'avant la 0.10.0 donnait
+  0,75. Le premier détecteur, qui n'écoutait que le sub, avait 50 à 150 ms de
   retard en électro, où le sub arrive après l'attaque. Calcul : 0,26 % d'un cœur.
 - **Niveau de basse** : énergie du grave (3 passe-bas à 90 Hz) en dB, rapportée au pic récent du
   morceau (plage de 20 dB).
@@ -203,7 +206,8 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   que le kick, jugées par trois réseaux à elle, appris sur les mêmes morceaux (caisses claires
   transcrites par ADTOF, annotations de MDB Drums). Une attaque peut être un kick et une caisse
   claire à la fois. 50 ms au moins entre deux. En validation croisée : F1 0,78 sur les 107
-  morceaux, 0,80 sur les 93 autres, 0,59 sur MDB Drums (0,68, 0,70 et 0,39 sans le contexte) ;
+  morceaux, 0,82 sur les 93 autres, 0,76 sur les 277 de 42 styles, 0,59 sur MDB Drums (0,68, 0,70
+  et 0,39 sans le contexte sur les trois jeux d'alors) ;
   délai médian 20 ms. Elle remplace un détecteur à seuils (bande à 2 kHz, enveloppes rapide et
   lente, tenue à 25 ms) qui comptait aussi les kicks distordus du hardstyle. `Musique` lit le compteur de l'analyse du kick après chaque paquet ; elle
   ne calcule plus elle-même que la brillance de la montée (`Eclat`).
@@ -333,7 +337,7 @@ l'auteur ; la clé de secours est rangée hors du PC. Si la principale est perdu
 
 `cargo build --release` suffit : l'analyse du son vient de la bibliothèque
 [audio-commun](https://github.com/KingsRequin/audio-commun) (figée par commit, celui du tag
-`v0.4.0` : `rev` dans `Cargo.toml`), partagée avec Horizon.
+`v0.5.0` : `rev` dans `Cargo.toml`), partagée avec Horizon.
 Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
 suivi par git) :
 

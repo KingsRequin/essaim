@@ -29,9 +29,9 @@ throw sparks, and on the drop, everything bursts.
 
 ## Why Essaim?
 
-- **It really listens.** Kicks are recognized by a small model trained on real tracks
-  (electronic, dubstep, rap, rock…), about 25 ms after they hit: the swarm lands on the beat, not
-  after it. It also hears the snare, the build-up before a drop, the tempo and which side is
+- **It really listens.** Kicks are recognized by a small model trained on real tracks in
+  42 styles (from techno to jazz, rap, rock, reggae, salsa…), about 25 ms after they hit and at any
+  volume: the swarm lands on the beat, not after it. It also hears the snare, the build-up before a drop, the tempo and which side is
   playing. Nothing to plug in: Essaim listens to what Windows plays.
 - **Your pointer stays yours.** It is the real Windows cursor, with no lag; Essaim only draws
   around it, in a click-through layer.

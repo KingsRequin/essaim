@@ -24,7 +24,9 @@ fissure, un clic droit une onde qui se referme.
 
 - **Kick** : reconnu par un petit modèle (`audio-commun`), en 25 ms environ. Le modèle garde le
   contexte en mémoire (rythme, coups récents) : une voix grave ou une contrebasse seules ne
-  comptent presque plus comme des kicks.
+  comptent presque plus comme des kicks. Il est appris sur des morceaux de 42 styles et juge le son
+  par rapport à son niveau récent : le volume du lecteur ne change rien (après une forte baisse, il
+  lui faut une vingtaine de secondes pour s'y faire).
 - **Caisse claire** (et clap) : reconnue par un petit modèle appris sur les mêmes morceaux que le
   kick, en 20 à 30 ms. Le charleston et les kicks ne comptent pas ; une caisse claire jouée avec
   un kick (claps de la house), si.
