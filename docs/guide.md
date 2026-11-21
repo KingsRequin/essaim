@@ -22,9 +22,11 @@ fissure, un clic droit une onde qui se referme.
 
 ### Ce qu'Essaim entend
 
-- **Kick** : reconnu par un petit modèle (`audio-commun`), en 25 ms environ.
+- **Kick** : reconnu par un petit modèle (`audio-commun`), en 25 ms environ. Le modèle garde le
+  contexte en mémoire (rythme, coups récents) : une voix grave ou une contrebasse seules ne
+  comptent presque plus comme des kicks.
 - **Caisse claire** (et clap) : reconnue par un petit modèle appris sur les mêmes morceaux que le
-  kick, en 30 ms environ. Le charleston et les kicks ne comptent pas ; une caisse claire jouée avec
+  kick, en 20 à 30 ms. Le charleston et les kicks ne comptent pas ; une caisse claire jouée avec
   un kick (claps de la house), si.
 - **Charleston** (attaques des aigus, cymbales) : passe-haut à 5 kHz, enveloppes rapide et lente.
 - **Montée** et **drop** : roulement de caisse claire bien plus serré que d'habitude et son qui

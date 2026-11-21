@@ -170,14 +170,19 @@ Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'af
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
-- **Kick** : 10 bandes (biquads, pas de FFT) suivies tous les 5 ms ; chaque pic de montée
-  d'énergie est jugé par un petit réseau appris sur de vrais morceaux, 10, 20 ou 30 ms après
-  l'attaque selon sa netteté (délai médian mesuré : 20–30 ms). `sensibilite_kick` règle le dernier
-  seuil ; sans kick depuis 4 s (intro, montée, reprise après une pause), le premier doit être franc.
-  Détails et banc d'essai : README d'`audio-commun`, section « Kick et caisse claire » (F1 0,81 sur
-  107 morceaux d'électro, dubstep, hardstyle, rap, pop et rock, 0,70 sur MDB Drums ; l'ancien
-  détecteur, qui n'écoutait que le sub, faisait 0,18 avec 50 à 150 ms de retard en électro, où le
-  sub arrive après l'attaque).
+- **Kick** : 10 bandes (biquads, pas de FFT ; celles sous 4 kHz sur le son sous-échantillonné)
+  suivies tous les 5 ms ; chaque pic de montée d'énergie est jugé par un petit réseau appris sur de
+  vrais morceaux, 10, 20 ou 30 ms après l'attaque selon sa netteté (délai médian mesuré :
+  20–30 ms). Le réseau lit la forme de l'attaque et le contexte : l'état d'un petit réseau
+  récurrent (GRU) qui écoute les bandes en continu et retient le rythme, les coups récents et la
+  nature du son (musique, voix seule, basse tenue) ; il est oublié après 2 s de silence.
+  `sensibilite_kick` règle le dernier seuil ; sans kick depuis 4 s (intro, montée, reprise après
+  une pause), le premier doit être franc. Détails et banc d'essai : README d'`audio-commun`,
+  section « Kick et caisse claire ». En validation croisée (morceaux jamais appris) : F1 0,89 sur
+  107 morceaux d'électro, dubstep, hardstyle, rap, pop et rock, 0,88 sur 93 morceaux d'autres
+  genres, 0,79 sur MDB Drums ; sans le contexte (versions jusqu'à 0.9.0), 0,84, 0,79 et 0,64 sur
+  les mêmes références. Le premier détecteur, qui n'écoutait que le sub, avait 50 à 150 ms de
+  retard en électro, où le sub arrive après l'attaque. Calcul : 0,26 % d'un cœur.
 - **Niveau de basse** : énergie du grave (3 passe-bas à 90 Hz) en dB, rapportée au pic récent du
   morceau (plage de 20 dB).
 - **Hauteur** : autocorrélation du grave sous-échantillonné à ~1 kHz, 25–83 Hz, mise à jour hors
@@ -197,10 +202,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - **Caisse claire** (et clap ; `audio-commun`, `kick::Analyzer::caisses`) : les mêmes attaques
   que le kick, jugées par trois réseaux à elle, appris sur les mêmes morceaux (caisses claires
   transcrites par ADTOF, annotations de MDB Drums). Une attaque peut être un kick et une caisse
-  claire à la fois. 50 ms au moins entre deux. F1 0,36 → 0,63 sur les 107 morceaux (précision
-  0,29 → 0,61), 0,28 → 0,48 sur MDB Drums ; délai médian 30 ms. Elle remplace un détecteur à
-  seuils (bande à 2 kHz, enveloppes rapide et lente, tenue à 25 ms) qui comptait aussi les kicks
-  distordus du hardstyle. `Musique` lit le compteur de l'analyse du kick après chaque paquet ; elle
+  claire à la fois. 50 ms au moins entre deux. En validation croisée : F1 0,78 sur les 107
+  morceaux, 0,80 sur les 93 autres, 0,56 sur MDB Drums (0,68, 0,70 et 0,39 sans le contexte) ;
+  délai médian 20 ms. Elle remplace un détecteur à seuils (bande à 2 kHz, enveloppes rapide et
+  lente, tenue à 25 ms) qui comptait aussi les kicks distordus du hardstyle. `Musique` lit le compteur de l'analyse du kick après chaque paquet ; elle
   ne calcule plus elle-même que la brillance de la montée (`Eclat`).
 - **Montée et drop** (`Montee`) : tension = 0,75 × accélération + 0,45 × éclaircie, bornée à 1,
   lissée (montée 0,6 s, retombée 1,5 s). Accélération : caisses claires par seconde sur ~1 s face à
@@ -229,10 +234,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   passe-bande (deux biquads f32 en série chacun) répartis en échelle log de 40 Hz à 12 kHz,
   enveloppes 5 ms / 120 ms, niveaux en dB sous le pic récent (plage 36 dB). 0,9 % d'un cœur à
   32 bandes.
-- Limites connues : une note de basse tenue ou une voix grave qui démarre sèchement peut encore
-  compter comme un kick (la distinguer demanderait d'écouter plus de 30 ms) ; le jazz (balais,
-  contrebasse) reste mal reconnu ; les notes fantômes de caisse claire de la batterie acoustique
-  sont souvent manquées (rappel 0,34 sur MDB Drums).
+- Limites connues : sur un son sans batterie (voix seule, piano, orgue, contrebasse), il reste
+  environ un faux kick toutes les deux minutes (dix par minute avant le contexte) ; le kick
+  effleuré du jazz acoustique reste mal reconnu ; les notes fantômes de caisse claire de la
+  batterie acoustique sont souvent manquées (rappel 0,68 sur MDB Drums).
 
 ## Interface : technique et charte
 
@@ -328,7 +333,7 @@ l'auteur ; la clé de secours est rangée hors du PC. Si la principale est perdu
 
 `cargo build --release` suffit : l'analyse du son vient de la bibliothèque
 [audio-commun](https://github.com/KingsRequin/audio-commun) (figée par commit, celui du tag
-`v0.2.0` : `rev` dans `Cargo.toml`), partagée avec Horizon.
+`v0.4.0` : `rev` dans `Cargo.toml`), partagée avec Horizon.
 Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
 suivi par git) :
 
