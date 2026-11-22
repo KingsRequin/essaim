@@ -140,6 +140,9 @@ preset can carry its own.</td>
 
 **Auto**: the rules that pick the preset by track, tempo, app or time of day, and the hotkeys.
 
+**Application** (the gear, right of the tabs): the installed version, checking for an update,
+starting with Windows, pauses, captures and streaming.
+
 ## Install
 
 **Easiest:** download `essaim.exe` from the
@@ -147,12 +150,12 @@ preset can carry its own.</td>
 install, no administrator rights: the settings window opens on first launch.
 
 - First put the file where it will stay (for example `%LOCALAPPDATA%\Programs\Essaim`), then
-  tick *Démarrer Essaim avec Windows* in *Réglages › Cet ordinateur*.
+  tick *Démarrer Essaim avec Windows* in the *Application* view (the gear, top right).
 - Windows may show « Windows protected your PC »: the executable isn't signed. *More info* →
   *Run anyway*.
 - The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
 - Essaim then updates itself: a notification tells you about the download, then offers to
-  restart.
+  restart. To skip the wait: *Chercher une mise à jour* in the *Application* view.
 
 **From source:** Essaim builds with one command.
 
@@ -222,8 +225,8 @@ effects*).
 Tray icon → *Fenêtre pour le stream* (or `essaim.exe --stream`). The swarm dances in the middle,
 at a size that always fits in the window. In OBS: *Game Capture* in *Capture specific window* mode on
 « Essaim — stream », with *Allow Transparency* and *Premultiplied Alpha* checked: the background is
-transparent, glows included. Otherwise, a solid background (selectable in *Réglages › Cet
-ordinateur*) to remove with a *Chroma Key* on a *Window Capture*. It stays capturable even when the
+transparent, glows included. Otherwise, a solid background (selectable in the *Application*
+view) to remove with a *Chroma Key* on a *Window Capture*. It stays capturable even when the
 swarm around the pointer is hidden from captures.
 </details>
 

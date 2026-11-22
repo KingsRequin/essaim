@@ -1048,9 +1048,8 @@ const PANNEAUX = [
   },
   {
     id: "machine", famille: "Cet ordinateur", titre: "Cet ordinateur", compact: true,
-    note: "Réglages propres à ce PC : ils ne font pas partie des presets.",
+    note: "Le dessin de l'essaim sur ce PC : ces réglages ne font pas partie des presets. Mises à jour, démarrage, pauses et captures sont dans la vue Application (l'engrenage, en haut).",
     base: [
-      { groupe: "Dessin" },
       { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
       { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
       // masqué tant que l'appli ne fournit pas ce réglage
@@ -1068,37 +1067,45 @@ const PANNEAUX = [
         valeurs: [["auto", "Comme Windows"], ["oui", "Toujours"], ["non", "Jamais"]],
         note: "Tous les éclats adoucis et trois par seconde au plus, quels que soient les déclencheurs ; ni halo blanc ni bordure qui clignote. « Comme Windows » : quand les effets d'animation sont coupés (Accessibilité › Effets visuels).",
       },
-      { groupe: "Pauses" },
-      {
-        bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
-        note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
-      },
-      {
-        choix: "Sur batterie", section: "pause", cle: "batterie",
-        valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
-        note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",
-      },
-      { groupe: "Captures et stream" },
-      {
-        bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
-        note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
-      },
-      {
-        choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",
-        valeurs: [["transparent", "Transparent"], ["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
-        note: "La fenêtre pour le stream montre l'essaim au centre, à une taille qui tient toujours dans la fenêtre. Transparent : dans OBS, ajoute une « Capture de jeu » sur « Essaim — stream » et coche « Autoriser la transparence » et « Valeurs alpha prémultipliées » (à l'écran, la fenêtre paraît sur fond noir). Fond uni : « Capture de fenêtre » et filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
-      },
-      { stream: true },
-      { groupe: "Essaim" },
-      {
-        bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
-        note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
-      },
-      { demarrage: true },
-      { accueil: true },
     ],
   },
 ];
+// Vue « Application » (l'engrenage) : ce qui tient à Essaim sur ce PC et non à l'allure de
+// l'essaim, hors presets. `maj` : sous la version, dans la colonne ; `lignes` : le reste.
+const APPLICATION = {
+  maj: [
+    {
+      bascule: "Mises à jour automatiques", section: "mise_a_jour", cle: "auto",
+      note: "Essaim cherche les nouvelles versions publiées sur GitHub, les télécharge, vérifie leur empreinte et te prévient par une notification. La nouvelle version s'applique au redémarrage.",
+    },
+  ],
+  lignes: [
+    { groupe: "Démarrage" },
+    { demarrage: true },
+    { accueil: true },
+    { groupe: "Pauses" },
+    {
+      bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
+      note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
+    },
+    {
+      choix: "Sur batterie", section: "pause", cle: "batterie",
+      valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
+      note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",
+    },
+    { groupe: "Captures et stream" },
+    {
+      bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
+      note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
+    },
+    {
+      choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",
+      valeurs: [["transparent", "Transparent"], ["vert", "Vert"], ["bleu", "Bleu"], ["magenta", "Magenta"], ["noir", "Noir"]],
+      note: "La fenêtre pour le stream montre l'essaim au centre, à une taille qui tient toujours dans la fenêtre. Transparent : dans OBS, ajoute une « Capture de jeu » sur « Essaim — stream » et coche « Autoriser la transparence » et « Valeurs alpha prémultipliées » (à l'écran, la fenêtre paraît sur fond noir). Fond uni : « Capture de fenêtre » et filtre « Incrustation chromatique » (ou, sur fond noir, un mode de fusion « Écran »). Elle reste capturable même si Essaim est masqué des captures.",
+    },
+    { stream: true },
+  ],
+};
 // Tous les éléments, pour retrouver le libellé d'un réglage (comparaison de presets).
 const ELEMENTS = PANNEAUX.flatMap((p) => p.base.concat(p.avance || []));
 
@@ -1462,6 +1469,28 @@ function construireReglages() {
   $("avec-preset").addEventListener("click", () => { regler("souris", "avec_preset", !val("souris", "avec_preset")); majReglages(); });
   montrerPanneau(memoire.lire("panneau", "orbite"));
   majAvance();
+}
+
+function construireApplication() {
+  for (const def of APPLICATION.maj) construireAvance(def, $("reglages-maj"));
+  for (const def of APPLICATION.lignes) construireAvance(def, $("reglages-application"));
+}
+
+// Mise à jour : où en est la recherche (`m.etat`, envoyé par l'appli quand il change).
+function recevoirMaj(m) {
+  const heure = (s) => new Date(s * 1000).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const prete = m.etat === "prete" && typeof m.version === "string";
+  const textes = {
+    jamais: "Pas encore de recherche depuis le lancement d'Essaim.",
+    recherche: "Recherche en cours…",
+    a_jour: `À jour : aucune version plus récente${typeof m.heure === "number" && m.heure > 0 ? ` (vérifié à ${heure(m.heure)})` : ""}.`,
+    prete: prete ? `Version ${m.version} téléchargée et vérifiée : elle s'applique au redémarrage.` : "",
+    echec: `Recherche impossible : ${String(m.texte || "erreur inconnue")}.`,
+  };
+  $("maj-etat").textContent = textes[m.etat] || "";
+  $("chercher-maj").hidden = prete;
+  $("chercher-maj").disabled = m.etat === "recherche";
+  $("redemarrer-maj").hidden = !prete;
 }
 
 function montrerPanneau(id, focus) {
@@ -2763,7 +2792,7 @@ function fermerBoite(id) {
 
 // Onglets : un seul dans l'ordre de tabulation (celui de la vue), flèches gauche / droite, Début
 // et Fin pour passer de l'un à l'autre (la vue suit le focus).
-const VUES = ["presets", "reglages", "curseurs", "auto"];
+const VUES = ["presets", "reglages", "curseurs", "auto", "application"];
 function montrerVue(v, focus) {
   etat.vue = v;
   for (const id of VUES) {
@@ -2856,8 +2885,12 @@ window.essaim = {
         etat.curseurs = m.curseurs;
         etat.demarrage = m.demarrage;
         if (premier) {
-          $("version").textContent = typeof m.version === "string" ? "v" + m.version : "";
+          if (typeof m.version === "string") {
+            $("version").textContent = "v" + m.version;
+            $("version-installee").textContent = m.version;
+          }
           construireReglages();
+          construireApplication();
           chargerCommu(false);
           if (!memoire.lire("accueil", false)) ouvrirAccueil();
         }
@@ -2880,6 +2913,9 @@ window.essaim = {
       case "sorties":
         etat.sorties = Array.isArray(m.liste) ? m.liste.filter((s) => s && typeof s.id === "string" && typeof s.nom === "string") : [];
         majSorties();
+        break;
+      case "maj":
+        recevoirMaj(m);
         break;
       case "charge":
         recevoirCharge(m);
@@ -3082,6 +3118,8 @@ $("panneau").addEventListener("submit", (e) => {
   envoyer({ cmd: "enregistrer", nom: $("nom-preset").value, publier: $("publier").checked });
 });
 $("ouvrir-config").addEventListener("click", () => envoyer({ cmd: "ouvrir_config" }));
+$("chercher-maj").addEventListener("click", () => envoyer({ cmd: "chercher_maj" }));
+$("redemarrer-maj").addEventListener("click", () => envoyer({ cmd: "redemarrer" }));
 $("importer").addEventListener("click", () => envoyer({ cmd: "importer" }));
 $("surprise").addEventListener("click", surprise);
 $("exporter-gif").addEventListener("click", lancerGif);
@@ -3104,7 +3142,7 @@ suivreSouris($("grand-apercu"), grand);
 $("pause").addEventListener("click", () => envoyer({ cmd: "pause" }));
 $("bandeau-fermer").addEventListener("click", () => { $("bandeau").hidden = true; });
 
-// Clavier : / chercher, Ctrl+1 à 4 onglets, Ctrl+S enregistrer, Ctrl+Z annuler le dernier preset,
+// Clavier : / chercher, Ctrl+1 à 5 onglets, Ctrl+S enregistrer, Ctrl+Z annuler le dernier preset,
 // Ctrl+P pause, flèches dans la grille, Échap ferme la boîte ouverte.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
@@ -3112,7 +3150,7 @@ document.addEventListener("keydown", (e) => {
     if (ouverte) { FERMETURES[ouverte.id](); return; }
     if (etat.comparer) { etat.comparer = null; dessinerPresets(); return; }
   }
-  if (e.ctrlKey && ["1", "2", "3", "4"].includes(e.key)) { e.preventDefault(); montrerVue(VUES[+e.key - 1]); return; }
+  if (e.ctrlKey && ["1", "2", "3", "4", "5"].includes(e.key)) { e.preventDefault(); montrerVue(VUES[+e.key - 1]); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); ouvrirPanneau(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "p") { e.preventDefault(); envoyer({ cmd: "pause" }); return; }
   if (enSaisie()) return;

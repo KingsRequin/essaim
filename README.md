@@ -144,6 +144,9 @@ Un preset peut emporter le sien.</td>
 **Auto** : les règles qui choisissent le preset selon le morceau, le tempo, l'application ou
 l'heure, et les raccourcis clavier.
 
+**Application** (l'engrenage, à droite des onglets) : la version installée, la recherche d'une
+mise à jour, le démarrage avec Windows, les pauses, les captures et le stream.
+
 ## Installation
 
 **Le plus simple :** télécharge `essaim.exe` dans la
@@ -151,12 +154,12 @@ l'heure, et les raccourcis clavier.
 installer, pas de droits administrateur : la fenêtre des réglages s'ouvre au premier lancement.
 
 - Range d'abord le fichier là où il restera (par exemple `%LOCALAPPDATA%\Programs\Essaim`),
-  puis coche *Démarrer Essaim avec Windows* dans *Réglages › Cet ordinateur*.
+  puis coche *Démarrer Essaim avec Windows* dans la vue *Application* (l'engrenage, en haut à droite).
 - Windows peut afficher « Windows a protégé votre ordinateur » : l'exécutable n'est pas signé.
   *Informations complémentaires* → *Exécuter quand même*.
 - Le curseur **Dotter** est à côté : `curseur-Dotter.zip` (voir l'étape 3 plus bas).
 - Essaim se met ensuite à jour tout seul : une notification prévient du téléchargement, puis
-  propose de redémarrer.
+  propose de redémarrer. Pour ne pas attendre : *Chercher une mise à jour* dans la vue *Application*.
 
 **Depuis les sources :** Essaim se compile en une commande.
 
@@ -230,7 +233,7 @@ Icône d'Essaim → *Fenêtre pour le stream* (ou `essaim.exe --stream`). L'essa
 à une taille qui tient toujours dans la fenêtre. Dans OBS : *Capture de jeu* en mode *Capturer une
 fenêtre spécifique* sur « Essaim — stream », avec *Autoriser la transparence* et *Valeurs alpha
 prémultipliées* cochées : le fond est transparent, lueurs comprises. Sinon, un fond uni (au choix
-dans *Réglages › Cet ordinateur*) à retirer par *Incrustation chromatique* d'une *Capture de
+dans la vue *Application*) à retirer par *Incrustation chromatique* d'une *Capture de
 fenêtre*. Elle reste capturable même si l'essaim autour du pointeur est masqué des captures.
 </details>
 

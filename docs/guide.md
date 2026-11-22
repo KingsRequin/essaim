@@ -215,7 +215,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   les effets d'animation de Windows sont coupés (*Accessibilité › Effets visuels*), relu chaque
   seconde ; `"oui"` : toujours ; `"non"` : jamais.
 - **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton de
-  *Cet ordinateur* dans les réglages, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
+  la vue *Application* des réglages, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
   sur le fond `[stream] fond` (propre à la machine) : `"transparent"` (par défaut) ou un fond uni,
   `"vert"`, `"bleu"`, `"magenta"` ou `"noir"`. Transparent, dans OBS : *Capture de jeu* en mode
   *Capturer une fenêtre spécifique* sur « Essaim — stream », avec *Autoriser la transparence* et
@@ -258,7 +258,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
     *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
     *Spectre*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
-    *Cet ordinateur* (réglages propres au PC) ; chacun avec ses réglages courants et *+ Avancé*
+    *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un
     réglage sans effet (densité du sillage sans sillage…), est estompé mais reste réglable. Chaque
@@ -281,7 +281,12 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *04 Auto* : les règles du preset automatique (*Si … alors …*, avec le bouton *Artiste en
     cours* qui remplit la condition pour le morceau qui joue ; par application ; par heure), les
     pauses par application et les raccourcis.
-  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Cet ordinateur*).
+  - *Application* (l'engrenage, à droite des onglets) : ce qui tient à Essaim sur ce PC et non
+    à l'allure de l'essaim, hors presets. À gauche, la version installée, où en est la mise à
+    jour, *Chercher une mise à jour*, *Mises à jour automatiques* et *Ouvrir config.toml* ; à
+    droite, le démarrage avec Windows, l'accueil à revoir, les pauses (*ne pas déranger*, sur
+    batterie), les captures et le stream.
+  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Application*).
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
     *Aigus* s'allume sur les attaques des aigus. Sous *Pause*, l'état de l'écoute : *Son capté*,
@@ -303,8 +308,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     Installer ou importer un preset ne remplace jamais un preset différent du même nom (à la
     casse près), et les noms réservés de Windows (CON, NUL, COM1…) sont refusés.
   - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
-  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Cet ordinateur*.
-  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 4 ou flèches
+  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application*.
+  - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 5 ou flèches
     (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
@@ -345,7 +350,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 ## Mises à jour
 
 La version installée est écrite en petit à côté du titre de la fenêtre des réglages (« v0.11.1 »),
-et au début du journal à chaque lancement.
+en grand dans la vue *Application*, et au début du journal à chaque lancement.
 
 Trente secondes après le lancement, puis toutes les six heures, Essaim regarde la dernière
 version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus récente :
@@ -358,10 +363,16 @@ version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus
 4. une seconde notification propose de redémarrer. Clic dessus, ou *Redémarrer avec la version…*
    dans le menu de l'icône. Sans clic, la nouvelle version démarre avec la session suivante.
 
+Sans attendre : *Chercher une mise à jour*, dans la vue *Application* des réglages, lance la
+même recherche tout de suite, même si les mises à jour automatiques sont coupées. Le résultat
+s'affiche au-dessus du bouton : *À jour* avec l'heure de la recherche, la raison d'un échec, ou
+la version téléchargée avec un bouton *Redémarrer*.
+
 Le dossier de l'exécutable doit être modifiable (c'est le cas de
 `%LOCALAPPDATA%\Programs\Essaim`, pas de `Program Files`). Couper : *Mises à jour automatiques*
-dans *Cet ordinateur*, ou `[mise_a_jour] auto = false`. Les échecs (pas de réseau, fichier
-refusé) sont notés dans le journal, et Essaim réessaie six heures plus tard.
+dans *Application*, ou `[mise_a_jour] auto = false`. Les échecs (pas de réseau, fichier
+refusé) sont notés dans le journal et affichés dans *Application*, et Essaim réessaie six heures
+plus tard.
 
 ## Bibliothèque de presets (GitHub)
 

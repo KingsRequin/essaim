@@ -35,6 +35,13 @@
         <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num">02</span>Réglages</button>
         <button class="onglet t-nav" role="tab" id="onglet-curseurs" aria-controls="vue-curseurs" aria-selected="false"><span class="num">03</span>Curseurs</button>
         <button class="onglet t-nav" role="tab" id="onglet-auto" aria-controls="vue-auto" aria-selected="false"><span class="num">04</span>Auto</button>
+        <button class="onglet t-nav icone" role="tab" id="onglet-application" aria-controls="vue-application" aria-selected="false" aria-label="Application" title="Application : mises à jour, démarrage, pauses, captures">
+          <!-- engrenage : un anneau, et huit dents faites d'un cercle en pointillés -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="6" stroke-width="4"/>
+            <circle cx="12" cy="12" r="9.25" stroke-width="4.5" stroke-dasharray="4 3.265" stroke-dashoffset="2"/>
+          </svg>
+        </button>
       </nav>
     </div>
   </header>
@@ -117,7 +124,6 @@
         <button class="signal" id="ouvrir-panneau-2">Enregistrer le preset →</button>
         <button class="puce" id="surprise" title="Des réglages tirés au hasard (Ctrl+Z pour revenir)">Surprends-moi</button>
         <button class="puce" id="exporter-gif" title="Trois secondes de l'aperçu, en GIF, dans Images\Essaim">Exporter en GIF</button>
-        <button class="puce" id="ouvrir-config">Ouvrir config.toml</button>
       </div>
     </div>
     <div class="principal vue-panneaux">
@@ -176,6 +182,30 @@
           <button class="puce" type="button" id="pause-recente" hidden></button>
         </form>
       </div>
+    </div>
+  </section>
+
+  <section class="vue" id="vue-application" role="tabpanel" aria-labelledby="onglet-application" hidden>
+    <aside class="colonne moyenne">
+      <div class="pile">
+        <span class="t-label">Version installée</span>
+        <span class="t-chiffre" id="version-installee">—</span>
+      </div>
+      <div class="pile">
+        <p class="t-texte maj-etat" id="maj-etat" role="status"></p>
+        <button class="puce debut" id="chercher-maj">Chercher une mise à jour</button>
+        <button class="signal debut" id="redemarrer-maj" hidden>Redémarrer →</button>
+      </div>
+      <div class="avance" id="reglages-maj"></div>
+      <div class="ressort"></div>
+      <div class="groupe-puces aere actions-colonne">
+        <button class="puce" id="ouvrir-config" title="Tous les réglages, dans un fichier commenté, modifiable à la main">Ouvrir config.toml</button>
+      </div>
+    </aside>
+    <div class="principal">
+      <div class="barre-titre"><span class="t-titre">Application</span><span class="t-label">cet ordinateur</span></div>
+      <p class="note intro">Ce qui tient à Essaim sur ce PC, pas à l'allure de l'essaim : rien de tout ça ne fait partie des presets.</p>
+      <div class="defile"><div class="avance" id="reglages-application"></div></div>
     </div>
   </section>
 

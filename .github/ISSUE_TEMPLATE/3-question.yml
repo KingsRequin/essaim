@@ -29,4 +29,4 @@ body:
       description: |
         Le numéro écrit à côté du titre ESSAIM, dans la fenêtre des réglages.
         *The number next to the ESSAIM title, in the settings window.*
-      placeholder: "0.11.1"
+      placeholder: "0.12.0"

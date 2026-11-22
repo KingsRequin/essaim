@@ -10,7 +10,9 @@
 //! en cours : Windows permet de renommer un exécutable lancé, l'ancien devient
 //! `essaim.exe.ancien` et sera effacé au lancement suivant. Une bulle prévient au début du
 //! téléchargement et quand la version est prête. Elle s'applique au redémarrage (clic sur la
-//! bulle, menu de l'icône, ou prochaine session).
+//! bulle, menu de l'icône, fenêtre des réglages, ou prochaine session). La fenêtre des réglages
+//! (vue Application) montre où en est la recherche (`Etat`) et peut en demander une tout de suite
+//! (`chercher`), même quand la recherche automatique est coupée.
 //!
 //! Réseau : WinHTTP, fourni avec Windows (proxy du système, certificats du système).
 
@@ -18,7 +20,7 @@ use anyhow::{bail, Context};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 const DEPOT: &str = "KingsRequin/essaim";
 /// Nom du fichier attendu parmi ceux de la version publiée.
@@ -47,9 +49,42 @@ const INTERVALLE: Duration = Duration::from_secs(6 * 3600);
 /// Au-delà, la réponse est refusée (l'exécutable fait quelques Mo).
 const TAILLE_MAX: usize = 64 << 20;
 
+/// Où en est la mise à jour, pour la fenêtre des réglages.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Etat {
+    /// Aucune recherche depuis le lancement.
+    Jamais,
+    Recherche,
+    /// Rien de plus récent à la dernière recherche, faite à cette heure.
+    AJour(SystemTime),
+    /// Version téléchargée et mise en place, en attente d'un redémarrage.
+    Prete(String),
+    /// La dernière recherche a échoué (pas de réseau, fichier refusé…).
+    Echec(String),
+}
+
+impl Etat {
+    /// Pour la page des réglages : `etat`, et selon le cas `heure` (secondes depuis 1970),
+    /// `version` ou `texte`.
+    pub fn json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Etat::Jamais => json!({ "etat": "jamais" }),
+            Etat::Recherche => json!({ "etat": "recherche" }),
+            Etat::AJour(quand) => {
+                let heure = quand.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                json!({ "etat": "a_jour", "heure": heure })
+            }
+            Etat::Prete(version) => json!({ "etat": "prete", "version": version }),
+            Etat::Echec(texte) => json!({ "etat": "echec", "texte": texte }),
+        }
+    }
+}
+
 static ACTIF: AtomicBool = AtomicBool::new(true);
-/// Version téléchargée et mise en place, en attente d'un redémarrage.
-static PRETE: Mutex<Option<String>> = Mutex::new(None);
+static ETAT: Mutex<Etat> = Mutex::new(Etat::Jamais);
+/// Une recherche est en cours (automatique ou demandée) : une seule à la fois.
+static EN_COURS: AtomicBool = AtomicBool::new(false);
 /// Chemin de l'exécutable au lancement (il change de nom une fois la mise à jour en place).
 static EXE: OnceLock<PathBuf> = OnceLock::new();
 
@@ -58,9 +93,22 @@ pub fn regler(actif: bool) {
     ACTIF.store(actif, Ordering::Relaxed);
 }
 
+pub fn etat() -> Etat {
+    ETAT.lock().map_or(Etat::Jamais, |e| e.clone())
+}
+
+fn noter(etat: Etat) {
+    if let Ok(mut e) = ETAT.lock() {
+        *e = etat;
+    }
+}
+
 /// Version prête à être lancée, s'il y en a une.
 pub fn prete() -> Option<String> {
-    PRETE.lock().ok().and_then(|p| p.clone())
+    match etat() {
+        Etat::Prete(version) => Some(version),
+        _ => None,
+    }
 }
 
 /// Exécutable à relancer pour passer à la nouvelle version.
@@ -82,20 +130,8 @@ pub fn start(actif: bool) {
     let lance = std::thread::Builder::new().name("mise à jour".into()).spawn(move || {
         std::thread::sleep(PREMIERE_VERIFICATION);
         loop {
-            if ACTIF.load(Ordering::Relaxed) && prete().is_none() {
-                match verifier(&exe) {
-                    Ok(Some(version)) => {
-                        log::info!("mise à jour : version {version} en place, active au redémarrage");
-                        if let Ok(mut p) = PRETE.lock() {
-                            *p = Some(version.clone());
-                        }
-                        crate::win::bulle_maj(&format!(
-                            "Essaim {version} est prêt. Clique ici pour redémarrer (sinon, au prochain démarrage)."
-                        ));
-                    }
-                    Ok(None) => {}
-                    Err(e) => log::warn!("mise à jour : {e:#}"),
-                }
+            if ACTIF.load(Ordering::Relaxed) && reserver() {
+                recherche(&exe);
             }
             std::thread::sleep(INTERVALLE);
         }
@@ -103,6 +139,51 @@ pub fn start(actif: bool) {
     if let Err(e) = lance {
         log::warn!("mise à jour : fil impossible à lancer ({e})");
     }
+}
+
+/// Cherche une mise à jour tout de suite, à la demande de l'utilisateur (fenêtre des réglages),
+/// que la recherche automatique soit active ou non. Le résultat se lit dans `etat`.
+pub fn chercher() {
+    // une compilation de travail ne se remplace pas, même sur demande
+    if cfg!(debug_assertions) {
+        return noter(Etat::Echec("compilation de travail, jamais remplacée".into()));
+    }
+    let Some(exe) = exe() else { return noter(Etat::Echec("exécutable introuvable".into())) };
+    // annoncée avant de lancer le fil : la fenêtre des réglages la montre dès le clic
+    if !reserver() {
+        return;
+    }
+    if let Err(e) = std::thread::Builder::new().name("mise à jour demandée".into()).spawn(move || recherche(exe)) {
+        noter(Etat::Echec(format!("fil impossible à lancer ({e})")));
+        EN_COURS.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Prend la main pour une recherche et l'annonce dans `ETAT`. Refusé si une autre est en cours
+/// ou si une version attend déjà le redémarrage.
+fn reserver() -> bool {
+    if prete().is_some() || EN_COURS.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    noter(Etat::Recherche);
+    true
+}
+
+/// La recherche, une fois réservée (`reserver`) : son résultat reste dans `ETAT`.
+fn recherche(exe: &Path) {
+    noter(match verifier(exe) {
+        Ok(Some(version)) => {
+            log::info!("mise à jour : version {version} en place, active au redémarrage");
+            crate::win::bulle_maj(&format!("Essaim {version} est prêt. Clique ici pour redémarrer (sinon, au prochain démarrage)."));
+            Etat::Prete(version)
+        }
+        Ok(None) => Etat::AJour(SystemTime::now()),
+        Err(e) => {
+            log::warn!("mise à jour : {e:#}");
+            Etat::Echec(format!("{e:#}"))
+        }
+    });
+    EN_COURS.store(false, Ordering::SeqCst);
 }
 
 fn ancien(exe: &Path) -> PathBuf {
@@ -326,6 +407,17 @@ mod tests {
         assert!(!plus_recente("0.1.0", "0.2.0"));
         assert!(!plus_recente("1.0.0-beta", "1.0.0"));
         assert!(!plus_recente("n'importe quoi", "0.1.0"));
+    }
+
+    #[test]
+    fn etat_pour_la_page() {
+        use serde_json::json;
+        assert_eq!(Etat::Jamais.json(), json!({ "etat": "jamais" }));
+        assert_eq!(Etat::Recherche.json(), json!({ "etat": "recherche" }));
+        let quand = SystemTime::UNIX_EPOCH + Duration::from_secs(1_795_000_000);
+        assert_eq!(Etat::AJour(quand).json(), json!({ "etat": "a_jour", "heure": 1_795_000_000u64 }));
+        assert_eq!(Etat::Prete("9.9.9".into()).json(), json!({ "etat": "prete", "version": "9.9.9" }));
+        assert_eq!(Etat::Echec("api.github.com a répondu 403".into()).json(), json!({ "etat": "echec", "texte": "api.github.com a répondu 403" }));
     }
 
     #[test]

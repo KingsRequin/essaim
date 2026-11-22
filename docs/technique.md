@@ -320,6 +320,13 @@ d'un exécutable lancé). Redémarrer : la boucle s'arrête, la bordure est rend
 d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
 ne vérifie rien.
 
+L'avancement tient dans `maj::Etat` (jamais, recherche, à jour, prête, échec), que la fenêtre
+des réglages envoie à la page quand il change (message `maj`, vue Application). Son bouton
+*Chercher une mise à jour* (`chercher_maj` → `maj::chercher`) lance la même recherche sur un
+fil à part, même si `[mise_a_jour] auto` est coupé ; une seule recherche à la fois (`EN_COURS`),
+et plus aucune une fois qu'une version attend le redémarrage. *Redémarrer* (`redemarrer`) envoie
+`CMD_REDEMARRER` à la boucle principale, comme le menu de l'icône.
+
 Publier une version :
 
 1. monter `version` dans `Cargo.toml`, commiter, puis pousser un tag `vX.Y.Z` identique ;

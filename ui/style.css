@@ -128,6 +128,10 @@ button, input { font-family: inherit; color: inherit; }
 .onglet[aria-selected="true"] { border-bottom-color: var(--signal); }
 .onglet[aria-selected="true"] .num { color: var(--signal-texte); }
 .onglet:hover .num { color: var(--signal-texte); }
+/* onglet sans texte (Application) : un pictogramme de la hauteur d'une ligne, qui rougit comme un numéro */
+.onglet.icone { display: flex; align-items: center; }
+.onglet.icone svg { display: block; width: 1.1em; height: 1.1em; }
+.onglet.icone:hover, .onglet.icone[aria-selected="true"] { color: var(--signal-texte); }
 
 /* Sonde : ce que l'essaim entend (kick, niveau et note de la basse). */
 .sonde { display: flex; align-items: center; gap: var(--esp-5); }
@@ -369,9 +373,13 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   .onglets { gap: var(--esp-3); }
   .entete-droite, .sonde { gap: var(--esp-3); }
 }
-/* Quatre onglets : sous 1 200 px, la sonde ne garde que ses témoins (kick, aigus). */
+/* Sous 1 200 px (la fenêtre s'ouvre à 1 180), la sonde ne garde que ses témoins (kick, aigus), et
+   l'en-tête se resserre : le tempo, quand il s'affiche, doit tenir sans renvoyer les onglets à la
+   ligne. */
 @media (max-width: 1200px) {
   .sonde .mesures { display: none; }
+  .sonde .tempo { min-width: 0; }
+  .entete { gap: var(--esp-3); }
   .entete-droite { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--esp-2); }
 }
 @media (max-width: 1000px) {
@@ -452,6 +460,9 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .avance .ligne-avance .tete { display: flex; align-items: center; gap: var(--esp-3); }
 .avance .nom-reglage { display: flex; align-items: center; gap: var(--esp-2); }
 .avance .impact { margin-top: 0; }
+
+/* Vue Application : où en est la mise à jour, sous le numéro de version. */
+.maj-etat { margin: 0; }
 
 /* ---------- Onglet Réglages : un panneau par effet ---------- */
 .vue-panneaux { flex-direction: row; gap: var(--esp-5); }

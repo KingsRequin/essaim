@@ -143,6 +143,10 @@ enum Demande {
     Contours { largeur: usize, hauteur: usize, pixels: String, seuil: Option<u8>, inverser: bool, tous: bool },
     /// Contours de l'icône de l'application au premier plan, pour l'aperçu (trajet « icône »).
     Icone,
+    /// Cherche une mise à jour tout de suite (`maj::chercher`).
+    ChercherMaj,
+    /// Redémarre sur la version téléchargée, comme le menu de l'icône.
+    Redemarrer,
 }
 
 struct Fenetre {
@@ -161,6 +165,8 @@ struct Fenetre {
     jeux: Option<Vec<crate::souris::Jeu>>,
     /// Fenêtre réduite : la vue est cachée et le son n'est plus envoyé.
     reduite: bool,
+    /// Dernier état de la mise à jour envoyé à la page (rien au départ).
+    maj: Option<crate::maj::Etat>,
 }
 
 thread_local! {
@@ -210,6 +216,17 @@ impl Fenetre {
             "demarrage": demarrage_actif(),
             "version": env!("CARGO_PKG_VERSION"),
         }));
+    }
+
+    /// État de la mise à jour, envoyé à la page quand il change.
+    fn maj(&mut self) {
+        let etat = crate::maj::etat();
+        if self.maj.as_ref() != Some(&etat) {
+            let mut m = etat.json();
+            m["type"] = json!("maj");
+            self.envoyer(&m);
+            self.maj = Some(etat);
+        }
     }
 
     /// Réduite : la vue est cachée (WebView2 suspend alors son rendu) et le son n'est plus
@@ -430,20 +447,17 @@ impl Fenetre {
                 }
                 Err(e) => self.erreur(&format!("Réglages illisibles : {e}.")),
             },
-            Demande::Pause => unsafe {
-                if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
-                    let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_PAUSE), LPARAM(0));
-                }
-            },
+            Demande::Pause => commande(crate::win::CMD_PAUSE),
             Demande::Icone => {
                 let liste: Vec<Vec<[f32; 2]>> = crate::render::contours_icone();
                 self.envoyer(&json!({ "type": "icone", "liste": liste }));
             }
-            Demande::Stream => unsafe {
-                if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
-                    let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(crate::win::CMD_STREAM), LPARAM(0));
-                }
-            },
+            Demande::Stream => commande(crate::win::CMD_STREAM),
+            Demande::ChercherMaj => {
+                crate::maj::chercher();
+                self.maj();
+            }
+            Demande::Redemarrer => commande(crate::win::CMD_REDEMARRER),
             Demande::Demarrage { actif } => {
                 match regler_demarrage(actif) {
                     Ok(()) => self.message(if actif { "Essaim démarrera avec Windows." } else { "Essaim ne démarrera plus avec Windows." }),
@@ -565,6 +579,17 @@ impl Fenetre {
             if dates() != self.dates {
                 self.etat();
             }
+            self.maj();
+        }
+    }
+}
+
+/// Envoie une commande du menu de l'icône (pause, fenêtre pour le stream, redémarrage) à la
+/// boucle principale.
+fn commande(cmd: usize) {
+    unsafe {
+        if let Ok(h) = FindWindowW(crate::win::TRAY_CLASS, None) {
+            let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(cmd), LPARAM(0));
         }
     }
 }
@@ -860,6 +885,7 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         avant: None,
         jeux: None,
         reduite: false,
+        maj: None,
     };
     FENETRE.with(|f| *f.borrow_mut() = Some(fenetre));
     unsafe {
@@ -1058,6 +1084,8 @@ mod tests {
         assert!(matches!(d, Demande::Regler { .. }));
         let d: Demande = serde_json::from_str(r#"{"cmd":"enregistrer","nom":"Nuit","publier":true}"#).unwrap();
         assert!(matches!(d, Demande::Enregistrer { publier: true, .. }));
+        assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"chercher_maj"}"#).unwrap(), Demande::ChercherMaj));
+        assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"redemarrer"}"#).unwrap(), Demande::Redemarrer));
         assert!(serde_json::from_str::<Demande>(r#"{"cmd":"formater_disque"}"#).is_err());
     }
 }

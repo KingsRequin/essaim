@@ -19,7 +19,7 @@ body:
       description: |
         Le numéro écrit à côté du titre ESSAIM, dans la fenêtre des réglages. Avant la 0.11.1 : la ligne « démarrage d'Essaim X.Y.Z » du journal (`%APPDATA%\Essaim\essaim.log`).
         *The number next to the ESSAIM title, in the settings window. Before 0.11.1: the line "démarrage d'Essaim X.Y.Z" in the log (`%APPDATA%\Essaim\essaim.log`).*
-      placeholder: "0.11.1"
+      placeholder: "0.12.0"
     validations:
       required: true
 
@@ -105,5 +105,5 @@ body:
     attributes:
       label: "Capture d'écran ou vidéo / Screenshot or video"
       description: |
-        Glisse tes fichiers ici. Si l'essaim n'apparaît pas dans la capture, décoche *Réglages › Cet ordinateur › Masquer Essaim des captures et des streams*.
-        *Drop your files here. If the swarm is missing from the capture, untick "Masquer Essaim des captures et des streams" in Settings › Cet ordinateur.*
+        Glisse tes fichiers ici. Si l'essaim n'apparaît pas dans la capture, décoche *Masquer Essaim des captures et des streams* (vue *Application*, l'engrenage ; avant la 0.12.0 : *Réglages › Cet ordinateur*).
+        *Drop your files here. If the swarm is missing from the capture, untick "Masquer Essaim des captures et des streams" (Application view, the gear; before 0.12.0: Réglages › Cet ordinateur).*
