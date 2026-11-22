@@ -3,8 +3,8 @@
 //! Préréglages intégrés (non modifiables, chacun refaisable à la main dans les réglages) et
 //! profils de l'utilisateur, un fichier `%APPDATA%\Essaim\profils\<nom>.toml` chacun.
 //! Appliquer un profil réécrit ses réglages dans `config.toml` (commentaires gardés). Les choix
-//! propres à la machine n'en font pas partie : `[rendu]`, `[souris] avec_preset` et
-//! `[audio] sortie`.
+//! propres à la machine ou à la main de l'utilisateur n'en font pas partie : `[rendu]`,
+//! `[souris] avec_preset`, `[audio] sortie` et `[projecteur] secousse`, `sensibilite`.
 
 use crate::config::{self, Config};
 use crate::prereglages::builtins;
@@ -18,7 +18,8 @@ const SECTIONS: [&str; 15] = [
 
 /// Le réglage `[section] key` fait-il partie des profils ?
 pub fn in_profile(section: &str, key: &str) -> bool {
-    SECTIONS.contains(&section) && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie"))
+    SECTIONS.contains(&section)
+        && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie") | ("projecteur", "secousse") | ("projecteur", "sensibilite"))
 }
 
 pub struct Profile {

@@ -17,11 +17,12 @@ use std::f32::consts::{PI, TAU};
 // --- Secousse de la souris ----------------------------------------------------------------------
 
 /// Inversions de sens horizontales franches qu'il faut, et fenêtre de temps où elles doivent
-/// tenir (de la première à la dernière).
+/// tenir (de la première à la dernière), à la sensibilité 5.
 const SECOUSSE_INVERSIONS: usize = 3;
 const SECOUSSE_FENETRE: f64 = 0.6;
-/// Course horizontale la plus courte d'un aller (px à 100 %), durée la plus longue, et rapport
-/// minimal entre course horizontale et étendue verticale (un cercle rapide n'est pas une secousse).
+/// Course horizontale la plus courte d'un aller (px à 100 %) et durée la plus longue, à la
+/// sensibilité 5 ; rapport minimal entre course horizontale et étendue verticale (un cercle
+/// rapide n'est pas une secousse).
 const SECOUSSE_COURSE: f32 = 60.0;
 const SECOUSSE_DUREE_MAX: f64 = 0.35;
 const SECOUSSE_RAPPORT: f32 = 1.5;
@@ -29,10 +30,20 @@ const SECOUSSE_RAPPORT: f32 = 1.5;
 /// comptent pas.
 const SECOUSSE_RECUL: f32 = 10.0;
 
+/// Exigence de la secousse à la sensibilité `s` (`[projecteur] sensibilite`, 1 à 10) : course
+/// minimale d'un aller (px à 100 %), durée maximale d'un aller et fenêtre des inversions (s).
+/// La course double tous les 5 crans en moins (104 px à 1, 60 à 5, 30 à 10) ; les durées
+/// s'allongent comme sa racine quand elle raccourcit (un geste plus petit peut être plus lent).
+pub fn secousse_exigence(s: f32) -> (f32, f64, f64) {
+    let k = 2f32.powf((5.0 - s.clamp(1.0, 10.0)) / 5.0);
+    let lent = f64::from(k.sqrt().recip());
+    (SECOUSSE_COURSE * k, SECOUSSE_DUREE_MAX * lent, SECOUSSE_FENETRE * lent)
+}
+
 /// Reconnaît une secousse de la souris (va-et-vient horizontal rapide) à partir des positions lues
 /// à chaque image. Un aller va d'un changement de sens au suivant ; il est franc s'il est assez
 /// long, assez rapide et plutôt horizontal. Trois changements de sens francs d'affilée en moins de
-/// 0,6 s font une secousse.
+/// 0,6 s font une secousse (seuils de la sensibilité 5 ; `secousse_exigence`).
 #[derive(Default)]
 pub struct Secousse {
     /// Sens de l'aller en cours : 0 inconnu, 1 vers la droite, -1 vers la gauche.
@@ -48,8 +59,10 @@ pub struct Secousse {
 }
 
 impl Secousse {
-    /// Nouvelle position du pointeur ; vrai si une secousse vient d'être reconnue.
-    pub fn pousser(&mut self, t: f64, x: f32, y: f32, scale: f32) -> bool {
+    /// Nouvelle position du pointeur ; vrai si une secousse vient d'être reconnue, à la
+    /// sensibilité donnée (1 à 10).
+    pub fn pousser(&mut self, t: f64, x: f32, y: f32, scale: f32, sensibilite: f32) -> bool {
+        let (course_min, duree_max, fenetre) = secousse_exigence(sensibilite);
         let recul = SECOUSSE_RECUL * scale;
         let Some((t0, x0)) = self.depart else {
             self.recommencer(t, x, y);
@@ -77,11 +90,11 @@ impl Secousse {
         let course = (self.bout.0 - x0).abs();
         let duree = self.bout.1 - t0;
         let haut = self.y.1 - self.y.0;
-        let franc = course >= SECOUSSE_COURSE * scale && duree <= SECOUSSE_DUREE_MAX && course >= SECOUSSE_RAPPORT * haut;
+        let franc = course >= course_min * scale && duree <= duree_max && course >= SECOUSSE_RAPPORT * haut;
         let (tb, xb) = (self.bout.1, self.bout.0);
         if franc {
             self.inversions.push(tb);
-            self.inversions.retain(|&ti| tb - ti <= SECOUSSE_FENETRE);
+            self.inversions.retain(|&ti| tb - ti <= fenetre);
         } else {
             self.inversions.clear();
         }
@@ -108,34 +121,30 @@ impl Secousse {
 
 // --- Projecteur ---------------------------------------------------------------------------------
 
-/// Rayon du disque clair au début et à la fin de l'effet (px à 100 %), opacité du voile, part du
-/// rayon sur laquelle son bord s'adoucit, gonflement du disque sur un kick.
-const PROJ_R_DEBUT: f32 = 420.0;
-const PROJ_R_FIN: f32 = 60.0;
-const PROJ_OPACITE: f32 = 0.62;
+/// Ce dont le disque clair se resserre pendant l'effet (px à 100 %, en plus de son rayon final
+/// `[projecteur] taille`), part du rayon sur laquelle son bord s'adoucit, gonflement du disque
+/// sur un kick.
+const PROJ_RESSERRE: f32 = 360.0;
 const PROJ_FLOU: f32 = 0.6;
 const PROJ_KICK: f32 = 0.18;
 /// Teinte du voile : presque noir, à peine bleuté.
 const PROJ_VOILE: (u8, u8, u8) = (4, 6, 14);
 
-/// Rayon du disque clair (px écran) et opacité du voile à la fraction `p` (0 à 1) de l'effet :
-/// le disque se resserre vite puis ralentit ; le voile monte en 12 % de l'effet et s'efface sur
-/// les 30 derniers ; `env` (éclat du kick, 1 → 0) gonfle le disque.
-pub fn projecteur_forme(p: f32, env: f32, scale: f32) -> (f32, f32) {
+/// Rayon du disque clair (px écran) et présence du voile (0 à 1, à multiplier par son opacité) à
+/// la fraction `p` (0 à 1) de l'effet : le disque se resserre vite puis ralentit, jusqu'à
+/// `taille` (px à 100 %) ; le voile monte en 12 % de l'effet et s'efface sur les 30 derniers ;
+/// `env` (éclat du kick, 1 → 0) gonfle le disque.
+pub fn projecteur_forme(p: f32, env: f32, scale: f32, taille: f32) -> (f32, f32) {
     let p = p.clamp(0.0, 1.0);
-    let resserre = 1.0 - (1.0 - p).powi(3);
-    let r = (PROJ_R_FIN + (PROJ_R_DEBUT - PROJ_R_FIN) * (1.0 - resserre)) * scale * (1.0 + PROJ_KICK * env.clamp(0.0, 1.0));
-    let a = PROJ_OPACITE * (p / 0.12).min(1.0) * ((1.0 - p) / 0.3).min(1.0);
-    (r, a.max(0.0))
+    let r = (taille + PROJ_RESSERRE * (1.0 - p).powi(3)) * scale * (1.0 + PROJ_KICK * env.clamp(0.0, 1.0));
+    let presence = (p / 0.12).min(1.0) * ((1.0 - p) / 0.3).min(1.0);
+    (r, presence.max(0.0))
 }
 
 // --- Réticule et spectre ------------------------------------------------------------------------
 
-/// Vide au centre du réticule (px à 100 %) : le pointeur n'est jamais couvert.
-const RETICULE_VIDE: f32 = 12.0;
-/// Épaisseur des lignes du réticule et de leur lueur au kick (px à 100 %).
-const RETICULE_LARGEUR: f32 = 1.2;
-const RETICULE_LUEUR: f32 = 4.0;
+/// Ce que la lueur du réticule au kick ajoute à l'épaisseur de ses lignes (px à 100 %).
+const RETICULE_LUEUR: f32 = 2.8;
 /// Longueur des barres sans énergie (px à 100 %).
 const SPECTRE_BARRE_MIN: f32 = 1.5;
 /// Lissage de l'affichage des bandes (par seconde) : montée vive, retombée douce.
@@ -160,7 +169,8 @@ pub struct Effets {
     demande: bool,
     /// Début du projecteur en cours.
     projecteur: Option<f64>,
-    /// Projecteur de cette image : écran assombri, centre, rayon du disque clair, opacité.
+    /// Projecteur de cette image : écran assombri, centre, rayon du disque clair, présence du
+    /// voile (0 à 1).
     voile: Option<(IRect, (f32, f32), f32, f32)>,
     /// Bandes lues dans l'analyse du son, et affichées (lissées).
     lues: [f32; BANDES_MAX],
@@ -195,7 +205,10 @@ impl Effets {
             self.secousse.oublier();
         } else {
             let en_cours = self.projecteur.is_some_and(|d| t - d < f64::from(p.duree));
-            let secoue = !en_cours && self.secousse.pousser(t, cursor.0, cursor.1, scale);
+            if !p.secousse {
+                self.secousse.oublier();
+            }
+            let secoue = p.secousse && !en_cours && self.secousse.pousser(t, cursor.0, cursor.1, scale, p.sensibilite);
             if demande || secoue {
                 self.projecteur = Some(t);
                 self.secousse.oublier();
@@ -206,7 +219,7 @@ impl Effets {
             if !(0.0..1.0).contains(&f) {
                 return None;
             }
-            let (r, a) = projecteur_forme(f, env, scale);
+            let (r, a) = projecteur_forme(f, env, scale, p.taille);
             let (cx, cy) = (cursor.0 as i32, cursor.1 as i32);
             let ecran = monitors.iter().map(|m| m.1).find(|r| cx >= r.0 && cx < r.2 && cy >= r.1 && cy < r.3).or(monitors.first().map(|m| m.1))?;
             Some((ecran, cursor, r, a))
@@ -237,7 +250,8 @@ impl Effets {
     pub fn rect_pointeur(&self, cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
         let mut e = 0.0f32;
         if cfg.reticule.actif {
-            e = e.max((RETICULE_VIDE + cfg.reticule.taille) * scale + RETICULE_LUEUR * scale);
+            let re = &cfg.reticule;
+            e = e.max((re.vide + re.taille + re.epaisseur + RETICULE_LUEUR) * scale);
         }
         if cfg.spectre.actif {
             let n = cfg.spectre.bandes.clamp(8, BANDES_MAX as u32) as usize;
@@ -252,11 +266,11 @@ impl Effets {
 
     /// Voile du projecteur, sous tout le reste (fissures et essaim restent visibles par-dessus).
     pub fn dessiner_voile(&self, cv: &mut dyn Canvas, cfg: &Config, t: f64, scale: f32) {
-        let Some((ecran, (x, y), r, a)) = self.voile else { return };
+        let Some((ecran, (x, y), r, presence)) = self.voile else { return };
         let zone = (ecran.0 as f32, ecran.1 as f32, ecran.2 as f32, ecran.3 as f32);
-        cv.voile(zone, x, y, r, r * PROJ_FLOU, PROJ_VOILE, a);
+        cv.voile(zone, x, y, r, r * PROJ_FLOU, PROJ_VOILE, cfg.projecteur.opacite * presence);
         // liseré à la teinte de l'essaim sur le bord du disque clair
-        cv.ring(x, y, r, 2.0 * scale, prisme(cfg, t, 1.0), 0.5 * a / PROJ_OPACITE);
+        cv.ring(x, y, r, 2.0 * scale, prisme(cfg, t, 1.0), 0.5 * presence);
     }
 
     /// Réticule et anneau de spectre autour de `cursor`, sous l'essaim.
@@ -278,14 +292,14 @@ impl Effets {
         let re = &cfg.reticule;
         if re.actif {
             let rgb = prisme(cfg, t, 1.0);
-            let (vide, long) = (RETICULE_VIDE * scale, (RETICULE_VIDE + re.taille) * scale);
+            let (vide, long) = (re.vide * scale, (re.vide + re.taille) * scale);
             let env = self.env.clamp(0.0, 1.0);
             for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
                 let (a, b) = ((cx + dx * vide, cy + dy * vide), (cx + dx * long, cy + dy * long));
                 if env > 0.02 {
-                    cv.line(a, b, RETICULE_LUEUR * scale, rgb, 0.3 * env * re.opacite, true);
+                    cv.line(a, b, (re.epaisseur + RETICULE_LUEUR) * scale, rgb, 0.3 * env * re.opacite, true);
                 }
-                cv.line(a, b, RETICULE_LARGEUR * scale, rgb, re.opacite * (0.6 + 0.4 * env), true);
+                cv.line(a, b, re.epaisseur * scale, rgb, re.opacite * (0.6 + 0.4 * env), true);
             }
         }
     }
@@ -314,15 +328,20 @@ mod tests {
     use super::*;
 
     /// Trajectoire échantillonnée à `ips` images/s : `pos(t)` pendant `duree` s ; nombre de
-    /// secousses reconnues.
+    /// secousses reconnues à la sensibilité par défaut.
     fn secousses(ips: f64, duree: f64, scale: f32, pos: impl Fn(f64) -> (f32, f32)) -> usize {
+        secousses_a(Config::default().projecteur.sensibilite, ips, duree, scale, pos)
+    }
+
+    /// Comme `secousses`, à la sensibilité donnée.
+    fn secousses_a(sensibilite: f32, ips: f64, duree: f64, scale: f32, pos: impl Fn(f64) -> (f32, f32)) -> usize {
         let mut s = Secousse::default();
         let n = (duree * ips) as usize;
         (0..=n)
             .filter(|&i| {
                 let t = i as f64 / ips;
                 let (x, y) = pos(t);
-                s.pousser(t, x, y, scale)
+                s.pousser(t, x, y, scale, sensibilite)
             })
             .count()
     }
@@ -369,14 +388,51 @@ mod tests {
     }
 
     #[test]
+    fn sensibilite_de_la_secousse() {
+        // sensibilité 5 : les seuils de toujours
+        let (course, duree, fenetre) = secousse_exigence(5.0);
+        assert!((course - SECOUSSE_COURSE).abs() < 1e-4 && (duree - SECOUSSE_DUREE_MAX).abs() < 1e-9 && (fenetre - SECOUSSE_FENETRE).abs() < 1e-9);
+        // plus sensible : course plus courte, gestes plus lents acceptés ; hors bornes : ramenée
+        let (c1, d1, f1) = secousse_exigence(1.0);
+        let (c10, d10, f10) = secousse_exigence(10.0);
+        assert!(c1 > course && course > c10 && d1 < duree && duree < d10 && f1 < fenetre && fenetre < f10);
+        assert_eq!(secousse_exigence(99.0), secousse_exigence(10.0));
+        assert_eq!(secousse_exigence(-3.0), secousse_exigence(1.0));
+        for ips in [30.0, 60.0, 144.0] {
+            // petit geste vif (45 px) : seulement à forte sensibilité
+            assert_eq!(secousses_a(5.0, ips, 1.5, 1.0, va_et_vient(45.0, 4.0)), 0, "{ips} i/s");
+            assert!(secousses_a(10.0, ips, 1.5, 1.0, va_et_vient(45.0, 4.0)) >= 1, "{ips} i/s");
+            // geste ample un peu lent (0,38 s par aller) : seulement à forte sensibilité
+            assert_eq!(secousses_a(5.0, ips, 2.0, 1.0, va_et_vient(300.0, 1.3)), 0, "{ips} i/s");
+            assert!(secousses_a(10.0, ips, 2.0, 1.0, va_et_vient(300.0, 1.3)) >= 1, "{ips} i/s");
+            // geste moyen (90 px) : reconnu par défaut, plus à faible sensibilité
+            assert!(secousses_a(5.0, ips, 1.5, 1.0, va_et_vient(90.0, 3.0)) >= 1, "{ips} i/s");
+            assert_eq!(secousses_a(1.0, ips, 1.5, 1.0, va_et_vient(90.0, 3.0)), 0, "{ips} i/s");
+            // secousse franche : reconnue à toutes les sensibilités
+            for s in [1.0, 5.0, 10.0] {
+                assert!(secousses_a(s, ips, 0.8, 1.0, va_et_vient(250.0, 3.0)) >= 1, "{ips} i/s, sensibilité {s}");
+            }
+            // même à la plus forte : ni la main qui tremble, ni la ligne droite, ni les cercles
+            assert_eq!(secousses_a(10.0, ips, 3.0, 1.0, va_et_vient(8.0, 8.0)), 0, "{ips} i/s");
+            assert_eq!(secousses_a(10.0, ips, 0.6, 1.0, |t| (100.0 + 3000.0 * t as f32, 500.0)), 0, "{ips} i/s");
+            assert_eq!(secousses_a(10.0, ips, 2.0, 1.0, |t| (800.0 + 120.0 * (TAU as f64 * 3.0 * t).cos() as f32, 500.0 + 120.0 * (TAU as f64 * 3.0 * t).sin() as f32)), 0, "{ips} i/s");
+        }
+    }
+
+    #[test]
     fn projecteur_se_resserre_puis_s_efface() {
-        let (r0, a0) = projecteur_forme(0.0, 0.0, 1.0);
-        let (r1, a1) = projecteur_forme(0.5, 0.0, 1.0);
-        let (r2, a2) = projecteur_forme(1.0, 0.0, 1.0);
-        assert!(r0 > r1 && r1 > r2 && (r2 - PROJ_R_FIN).abs() < 1e-3, "{r0} {r1} {r2}");
-        assert!(a0 == 0.0 && (a1 - PROJ_OPACITE).abs() < 1e-6 && a2 == 0.0, "{a0} {a1} {a2}");
+        let taille = Config::default().projecteur.taille;
+        let (r0, a0) = projecteur_forme(0.0, 0.0, 1.0, taille);
+        let (r1, a1) = projecteur_forme(0.5, 0.0, 1.0, taille);
+        let (r2, a2) = projecteur_forme(1.0, 0.0, 1.0, taille);
+        assert!(r0 > r1 && r1 > r2 && (r2 - taille).abs() < 1e-3, "{r0} {r1} {r2}");
+        assert!(a0 == 0.0 && a1 == 1.0 && a2 == 0.0, "{a0} {a1} {a2}");
         // un kick gonfle le disque
-        assert!(projecteur_forme(0.5, 1.0, 1.0).0 > r1);
+        assert!(projecteur_forme(0.5, 1.0, 1.0, taille).0 > r1);
+        // disque plus grand : il se resserre d'autant, jusqu'à sa taille
+        let (g0, _) = projecteur_forme(0.0, 0.0, 1.0, 200.0);
+        let (g2, _) = projecteur_forme(1.0, 0.0, 1.0, 200.0);
+        assert!((g0 - r0 - (200.0 - taille)).abs() < 1e-3 && (g2 - 200.0).abs() < 1e-3, "{g0} {g2}");
     }
 
     fn ecran() -> Vec<(isize, IRect)> {
@@ -418,6 +474,39 @@ mod tests {
             e.rect_ecran().is_some()
         });
         assert!(lance);
+        // secousse coupée : le même geste ne lance rien, le raccourci toujours
+        cfg.projecteur.secousse = false;
+        for i in 0..240 {
+            let t = 10.0 + i as f64 * dt as f64;
+            e.avance(t, dt, geste(t), 1.0, 0.0, &shared, &cfg, &ecran());
+            assert_eq!(e.rect_ecran(), None, "image {i}");
+        }
+        e.demander_projecteur();
+        e.avance(14.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
+        e.avance(14.0 + f64::from(dt) * 12.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
+        assert!(e.rect_ecran().is_some());
+    }
+
+    #[test]
+    fn voile_a_l_opacite_reglee() {
+        // au milieu de l'effet, le coin de l'écran a l'opacité du réglage
+        let coin = |opacite: f32| {
+            let mut cfg = Config::default();
+            (cfg.projecteur.duree, cfg.projecteur.opacite) = (1.0, opacite);
+            let shared = AudioShared::default();
+            let mons = [(1isize, (0, 0, 400, 300))];
+            let mut e = Effets::new();
+            e.demander_projecteur();
+            e.avance(0.0, 1.0 / 60.0, (200.0, 150.0), 0.2, 0.0, &shared, &cfg, &mons);
+            e.avance(0.5, 1.0 / 60.0, (200.0, 150.0), 0.2, 0.0, &shared, &cfg, &mons);
+            let mut pm = tiny_skia::Pixmap::new(400, 300).unwrap();
+            e.dessiner_voile(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, &cfg, 0.5, 0.2);
+            (pm.pixel(2, 2).unwrap().alpha(), pm.pixel(200, 150).unwrap().alpha())
+        };
+        let (sombre, centre) = coin(0.9);
+        assert!((227..=232).contains(&sombre) && centre == 0, "{sombre} {centre}");
+        let (clair, centre) = coin(0.3);
+        assert!((75..=79).contains(&clair) && centre == 0, "{clair} {centre}");
     }
 
     #[test]
@@ -425,6 +514,7 @@ mod tests {
         // dessin dans une grande image : aucun pixel peint hors de `rect_pointeur`
         let mut cfg = Config::default();
         (cfg.reticule.actif, cfg.reticule.taille, cfg.spectre.actif, cfg.spectre.bandes) = (true, 200.0, true, 8);
+        (cfg.reticule.epaisseur, cfg.reticule.vide) = (6.0, 60.0);
         (cfg.spectre.rayon, cfg.spectre.hauteur) = (150.0, 100.0);
         let mut e = Effets::new();
         e.bandes = [1.0; BANDES_MAX];

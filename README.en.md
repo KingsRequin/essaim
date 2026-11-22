@@ -98,7 +98,7 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | 💨 **Movement** | A dust trail when the mouse moves fast; optionally, the swarm lags behind it like on a spring |
 | 🪟 **Active window** | Its border takes the swarm's color and lights up on every kick; sparks bounce off its edges |
 | 🎨 **Colors** | Fixed or cycling hue, a palette of two or three hues, color of the foreground app, of the website open, of the album art, or drifting with the music |
-| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer; optional crosshair and spectrum ring (which fades out when the music stops) |
+| 🔦 **Find the pointer** | Shake the mouse (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) to dim the screen around the pointer (adjustable shake sensitivity, size and dimming); optional crosshair and spectrum ring (which fades out when the music stops) |
 
 ### On its own, and out of the way
 

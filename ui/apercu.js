@@ -25,9 +25,7 @@ const ETINCELLES_DROP = 28;
 const LIENS_MAX = 160;
 const LIENS_PORTEE = 1.1;
 // Réticule et anneau de spectre : comme src/effets.rs.
-const RETICULE_VIDE = 12;
-const RETICULE_LARGEUR = 1.2;
-const RETICULE_LUEUR = 4;
+const RETICULE_LUEUR = 2.8;
 const SPECTRE_BARRE_MIN = 1.5;
 const SPECTRE_MONTEE = 30;
 const SPECTRE_DESCENTE = 8;
@@ -753,11 +751,11 @@ class Apercu {
     }
     const re = c.reticule;
     if (re && re.actif) {
-      const vide = RETICULE_VIDE * S, long = (RETICULE_VIDE + re.taille) * S, env = Math.min(1, Math.max(0, this.env));
+      const vide = re.vide * S, long = (re.vide + re.taille) * S, env = Math.min(1, Math.max(0, this.env));
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const a = [cx + dx * vide, cy + dy * vide], b = [cx + dx * long, cy + dy * long];
-        if (env > 0.02) trait(a, b, RETICULE_LUEUR * S, tete, 0.3 * env * re.opacite);
-        trait(a, b, RETICULE_LARGEUR * S, tete, re.opacite * (0.6 + 0.4 * env));
+        if (env > 0.02) trait(a, b, (re.epaisseur + RETICULE_LUEUR) * S, tete, 0.3 * env * re.opacite);
+        trait(a, b, re.epaisseur * S, tete, re.opacite * (0.6 + 0.4 * env));
       }
     }
     // fissures, sous l'essaim : trait sombre, reflet, lueur colorée au début, fondu sur la fin

@@ -142,9 +142,18 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   loin qu'à 0), la dépasse un peu à l'arrêt, puis revient sur elle.
 - **Projecteur** (`[projecteur]`, actif par défaut) : secouer la souris (quelques allers-retours
   rapides de gauche à droite) ou Ctrl+Alt+F assombrit l'écran du pointeur autour d'un disque clair
-  qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les éclats.
+  qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les éclats. *Sensibilité à
+  la secousse* (`sensibilite`, 1 à 10, 5 par défaut) : à 1, il faut un geste ample et vif
+  (allers d'au moins 104 px) ; à 10, un petit geste plus lent suffit (30 px). S'il part tout
+  seul, la baisser ; `secousse = false` (*Projecteur lancé par › La secousse de la souris*) ne
+  garde que le raccourci. Ces deux réglages, propres à la main et à la souris, ne changent pas
+  avec le preset. Sous *+ Avancé* : *Taille du projecteur*, le rayon du disque à la fin de l'effet
+  (`taille`, 30 à 300, 60 par défaut), et *Obscurité du projecteur*, l'assombrissement de l'écran
+  (`opacite`, 20 à 95 %, 62 % par défaut).
 - **Réticule** (`[reticule]`) : deux fines lignes croisées centrées sur le pointeur (`taille`,
-  `opacite`), vides au centre, qui s'illuminent sur les éclats.
+  `opacite`), vides au centre, qui s'illuminent sur les éclats. Sous *+ Avancé* : l'épaisseur
+  des lignes (`epaisseur`, 0,5 à 6, 1,2 par défaut) et le vide autour du pointeur (`vide`, 4 à
+  60, 12 par défaut).
 - **Anneau de spectre** (`[spectre]`) : des barres autour du pointeur, une par bande de
   fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
   (`rayon`, `hauteur`). Avec `masquer_sans_musique` (oui par défaut, *Masquer sans musique*),
@@ -323,8 +332,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     satellites) ; *Vortex* (implosions, tout est aspiré) ; *Artifice* (gerbes d'éclats) ;
     *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort).
     Chacun est refaisable à la main dans les réglages. Les
-    presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine) ni à l'option des
-    curseurs.
+    presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
+    curseurs, ni à la secousse du projecteur et à sa sensibilité.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
 - `essaim.exe --quitter` ferme l'instance en cours ; `essaim.exe --stream` ouvre la fenêtre pour

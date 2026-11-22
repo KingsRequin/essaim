@@ -98,7 +98,7 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | 💨 **Mouvement** | Sillage de poussière quand la souris file ; en option, l'essaim traîne derrière elle comme sur un ressort |
 | 🪟 **Fenêtre active** | Sa bordure prend la couleur de l'essaim et s'illumine sur chaque kick ; les étincelles rebondissent sur ses bords |
 | 🎨 **Couleurs** | Teinte fixe ou qui défile, palette de deux ou trois teintes, couleur de l'appli au premier plan, du site ouvert, de la pochette, ou qui glisse avec la musique |
-| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur ; en option, réticule et anneau de spectre (qui s'efface quand la musique s'arrête) |
+| 🔦 **Retrouver la souris** | Secouer la souris (ou <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>) assombrit l'écran autour du pointeur (sensibilité de la secousse, taille et assombrissement réglables) ; en option, réticule et anneau de spectre (qui s'efface quand la musique s'arrête) |
 
 ### Tout seul, et discret
 

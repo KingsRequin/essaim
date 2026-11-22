@@ -197,8 +197,9 @@ const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure", "souris",
   "modulations", "declencheurs",
 ];
-// Réglages de ces sections propres à la machine, hors presets (comme profils::in_profile).
-const HORS_PRESET = new Set(["avec_preset", "sortie"]);
+// Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
+// (comme profils::in_profile).
+const HORS_PRESET = new Set(["souris.avec_preset", "audio.sortie", "projecteur.secousse", "projecteur.sensibilite"]);
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
@@ -243,7 +244,7 @@ function fusion(base, partiel) {
     if (!estObjet(distant)) return null;
     r[s] = { ...sec };
     for (const [k, defaut] of Object.entries(sec)) {
-      if (!HORS_PRESET.has(k) && k in distant && valeurValide(k, distant[k], defaut)) r[s][k] = distant[k];
+      if (!HORS_PRESET.has(s + "." + k) && k in distant && valeurValide(k, distant[k], defaut)) r[s][k] = distant[k];
     }
   }
   return r;
@@ -733,6 +734,8 @@ const IMPACT = {
   "particules.taille": [1, "estime"], "particules.rebonds": [1, "estime"], "sillage.densite": [1, "estime"],
   // banc `mesure_effets` (carte graphique, 144 images/s)
   "projecteur.actif": [1], "projecteur.duree": [1, "estime"], "reticule.actif": [1], "reticule.taille": [1, "estime"], "reticule.opacite": [1, "estime"],
+  "projecteur.secousse": [1, "estime"], "projecteur.sensibilite": [1, "estime"], "projecteur.taille": [1, "estime"], "projecteur.opacite": [1, "estime"],
+  "reticule.epaisseur": [1, "estime"], "reticule.vide": [1, "estime"],
   "spectre.actif": [2], "spectre.bandes": [2], "spectre.rayon": [1, "estime"], "spectre.hauteur": [1, "estime"], "spectre.masquer_sans_musique": [1, "estime"],
   "orbite.inertie": [1, "estime"],
   "essaim.constellation": [2, "estime"], "couleur.palette": [1, "estime"], "couleur.ecart_palette": [1, "estime"],
@@ -790,6 +793,7 @@ const SI = {
   bordure: (r) => r.bordure.active,
   sillage: (r) => r.sillage.actif,
   projecteur: (r) => !!(r.projecteur && r.projecteur.actif),
+  secousse: (r) => !!(r.projecteur && r.projecteur.actif && r.projecteur.secousse),
   reticule: (r) => !!(r.reticule && r.reticule.actif),
   spectre: (r) => !!(r.spectre && r.spectre.actif) && r.audio.actif,
   palette: (r) => (r.couleur.palette || 1) > 1,
@@ -996,17 +1000,29 @@ const PANNEAUX = [
   },
   {
     id: "pointeur", famille: "Les effets", titre: "Réticule et projecteur", voyant: (r) => SI.reticule(r) || SI.projecteur(r),
-    note: "Pour retrouver le pointeur : le projecteur (secouer la souris, ou Ctrl+Alt+F) et le réticule.",
+    note: "Pour retrouver le pointeur : le projecteur (secouer la souris, ou Ctrl+Alt+F) et le réticule. Si le projecteur part tout seul, baisse la sensibilité ; s'il faut trop secouer, monte-la.",
     base: [
       {
         rangee: "Retrouver le pointeur", puces: [
-          ["Projecteur (secouer la souris)", "projecteur", "actif", "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver"],
+          ["Projecteur", "projecteur", "actif", "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver"],
           ["Réticule", "reticule", "actif", "Deux fines lignes croisées centrées sur le pointeur, qui s'illuminent sur le kick"],
         ],
       },
+      {
+        rangee: "Projecteur lancé par", si: SI.projecteur, puces: [
+          ["La secousse de la souris", "projecteur", "secousse", "Quelques allers-retours rapides de gauche à droite lancent le projecteur ; coupé, seul Ctrl+Alt+F le lance. Propre à ta main et à ta souris, comme la sensibilité : ne change pas avec le preset"],
+        ],
+      },
+      { libelle: "Sensibilité à la secousse", section: "projecteur", cle: "sensibilite", si: SI.secousse, min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
       { libelle: "Durée du projecteur", section: "projecteur", cle: "duree", si: SI.projecteur, min: 0.3, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
       { libelle: "Taille du réticule", section: "reticule", cle: "taille", si: SI.reticule, min: 10, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Opacité du réticule", section: "reticule", cle: "opacite", si: SI.reticule, min: 0.05, max: 1, pas: 0.05, ...pourcent },
+    ],
+    avance: [
+      { libelle: "Taille du projecteur", section: "projecteur", cle: "taille", si: SI.projecteur, min: 30, max: 300, pas: 5, aff: (v) => String(Math.round(v)) },
+      { libelle: "Obscurité du projecteur", section: "projecteur", cle: "opacite", si: SI.projecteur, min: 0.2, max: 0.95, pas: 0.01, ...pourcent },
+      { libelle: "Épaisseur du réticule", section: "reticule", cle: "epaisseur", si: SI.reticule, min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+      { libelle: "Vide du réticule", section: "reticule", cle: "vide", si: SI.reticule, min: 4, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
     ],
   },
   {
@@ -2257,7 +2273,7 @@ function ecartsEntre(a, b) {
   for (const s of SECTIONS_PRESET) {
     const x = a[s] || {}, y = b[s] || {};
     for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
-      if (HORS_PRESET.has(k) || k === "trace" || memeValeur(x[k], y[k])) continue;
+      if (HORS_PRESET.has(s + "." + k) || k === "trace" || memeValeur(x[k], y[k])) continue;
       const [libelle, aff] = libelleReglage(s, k);
       lignes.push([libelle, valeurLisible(x[k], aff, s), valeurLisible(y[k], aff, s)]);
     }

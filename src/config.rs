@@ -120,11 +120,21 @@ pub struct Projecteur {
     pub actif: bool,
     /// Durée de l'effet (s).
     pub duree: f32,
+    /// Secouer la souris le lance (sinon, seulement Ctrl+Alt+F). Propre à la main et à la
+    /// souris de l'utilisateur, comme `sensibilite` : hors presets.
+    pub secousse: bool,
+    /// Sensibilité à la secousse : 1 = geste ample et vif, 10 = petit geste, plus lent
+    /// (`effets::secousse_exigence`).
+    pub sensibilite: f32,
+    /// Rayon du disque clair à la fin de l'effet (px).
+    pub taille: f32,
+    /// Opacité du voile qui assombrit l'écran (0,2 à 0,95).
+    pub opacite: f32,
 }
 
 impl Default for Projecteur {
     fn default() -> Self {
-        Self { actif: true, duree: 1.2 }
+        Self { actif: true, duree: 1.2, secousse: true, sensibilite: 5.0, taille: 60.0, opacite: 0.62 }
     }
 }
 
@@ -137,11 +147,15 @@ pub struct Reticule {
     pub taille: f32,
     /// Opacité des lignes (0,05 à 1).
     pub opacite: f32,
+    /// Épaisseur des lignes (px).
+    pub epaisseur: f32,
+    /// Vide au centre, du pointeur au début de chaque branche (px).
+    pub vide: f32,
 }
 
 impl Default for Reticule {
     fn default() -> Self {
-        Self { actif: false, taille: 40.0, opacite: 0.6 }
+        Self { actif: false, taille: 40.0, opacite: 0.6, epaisseur: 1.2, vide: 12.0 }
     }
 }
 
@@ -959,11 +973,17 @@ liste = [
 [projecteur]
 actif = true            # secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur
 duree = 1.2             # durée de l'effet (s)
+secousse = true         # secouer la souris le lance ; false = seulement Ctrl+Alt+F ; hors presets
+sensibilite = 5         # à la secousse : 1 = geste ample et vif, 10 = petit geste, plus lent ; hors presets
+taille = 60             # rayon du disque clair à la fin de l'effet (30 à 300)
+opacite = 0.62          # assombrissement de l'écran (0.2 à 0.95)
 
 [reticule]
 actif = false           # deux fines lignes croisées centrées sur le pointeur
 taille = 40             # longueur de chaque branche
 opacite = 0.6           # 0.05 à 1
+epaisseur = 1.2         # épaisseur des lignes (0.5 à 6)
+vide = 12               # vide au centre, autour du pointeur (4 à 60)
 
 [spectre]
 actif = false           # barres autour du pointeur qui suivent l'énergie de chaque bande de fréquences
@@ -1052,8 +1072,13 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("particules", "taille") => (0.3, 3.0),
         ("sillage", "densite") => (1.0, 10.0),
         ("projecteur", "duree") => (0.3, 5.0),
+        ("projecteur", "sensibilite") => (1.0, 10.0),
+        ("projecteur", "taille") => (30.0, 300.0),
+        ("projecteur", "opacite") => (0.2, 0.95),
         ("reticule", "taille") => (10.0, 200.0),
         ("reticule", "opacite") => (0.05, 1.0),
+        ("reticule", "epaisseur") => (0.5, 6.0),
+        ("reticule", "vide") => (4.0, 60.0),
         ("spectre", "bandes") => (8.0, 32.0),
         ("spectre", "rayon") => (10.0, 150.0),
         ("spectre", "hauteur") => (4.0, 100.0),
@@ -1605,10 +1630,17 @@ mod tests {
         assert_eq!((c.projecteur.actif, c.reticule.actif, c.spectre.actif), (true, false, false));
         assert_eq!((c.projecteur.duree, c.reticule.taille, c.reticule.opacite), (d.projecteur.duree, d.reticule.taille, d.reticule.opacite));
         assert_eq!((c.spectre.bandes, c.spectre.rayon, c.spectre.hauteur), (d.spectre.bandes, d.spectre.rayon, d.spectre.hauteur));
+        assert_eq!((c.projecteur.secousse, c.projecteur.sensibilite, c.projecteur.taille, c.projecteur.opacite), (d.projecteur.secousse, d.projecteur.sensibilite, d.projecteur.taille, d.projecteur.opacite));
+        assert_eq!((c.reticule.epaisseur, c.reticule.vide), (d.reticule.epaisseur, d.reticule.vide));
+        // fichier d'avant ces réglages : leurs valeurs par défaut
+        let c: super::Config = toml::from_str("[projecteur]\nduree = 2\n[reticule]\nactif = true").unwrap();
+        assert_eq!((c.projecteur.secousse, c.projecteur.sensibilite, c.reticule.epaisseur, c.reticule.vide), (true, 5.0, 1.2, 12.0));
         // valeurs absurdes ramenées dans leurs bornes
-        let texte = "[projecteur]\nduree = 99\n[reticule]\ntaille = 1\nopacite = 7\n[spectre]\nbandes = 300\nrayon = -5\nhauteur = 1e9";
+        let texte = "[projecteur]\nduree = 99\nsensibilite = 40\ntaille = 5\nopacite = 3\n[reticule]\ntaille = 1\nopacite = 7\nepaisseur = 90\nvide = 0\n[spectre]\nbandes = 300\nrayon = -5\nhauteur = 1e9";
         let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
         assert_eq!((c.projecteur.duree, c.reticule.taille, c.reticule.opacite), (5.0, 10.0, 1.0));
+        assert_eq!((c.projecteur.sensibilite, c.projecteur.taille, c.projecteur.opacite), (10.0, 30.0, 0.95));
+        assert_eq!((c.reticule.epaisseur, c.reticule.vide), (6.0, 4.0));
         assert_eq!((c.spectre.bandes, c.spectre.rayon, c.spectre.hauteur), (32, 10.0, 100.0));
         let c = toml::from_str::<super::Config>("[spectre]\nbandes = 2\n[projecteur]\nduree = 0").unwrap().clamped();
         assert_eq!((c.spectre.bandes, c.projecteur.duree), (8, 0.3));
@@ -1619,8 +1651,19 @@ mod tests {
         assert!(super::set_value_in(&p, "reticule", "opacite", &serde_json::json!(0.0)).is_err());
         super::set_value_in(&p, "spectre", "bandes", &serde_json::json!(24)).unwrap();
         super::set_value_in(&p, "projecteur", "actif", &serde_json::json!(false)).unwrap();
+        assert!(super::set_value_in(&p, "projecteur", "sensibilite", &serde_json::json!(11)).is_err());
+        super::set_value_in(&p, "projecteur", "sensibilite", &serde_json::json!(8)).unwrap();
         let c = super::Config::read(&p).unwrap();
-        assert_eq!((c.spectre.bandes, c.projecteur.actif), (24, false));
+        assert_eq!((c.spectre.bandes, c.projecteur.actif, c.projecteur.sensibilite), (24, false, 8.0));
+        // config d'avant ces réglages : la clé absente est ajoutée à sa section
+        std::fs::write(&p, "[projecteur]\nactif = true\n").unwrap();
+        super::set_value_in(&p, "projecteur", "sensibilite", &serde_json::json!(7.5)).unwrap();
+        super::set_value_in(&p, "reticule", "epaisseur", &serde_json::json!(3)).unwrap();
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!((c.projecteur.actif, c.projecteur.sensibilite, c.reticule.epaisseur), (true, 7.5, 3.0));
+        // la secousse et sa sensibilité sont propres à l'utilisateur : hors presets
+        assert!(!crate::profils::in_profile("projecteur", "secousse") && !crate::profils::in_profile("projecteur", "sensibilite"));
+        assert!(crate::profils::in_profile("projecteur", "taille") && crate::profils::in_profile("reticule", "vide"));
         let _ = std::fs::remove_file(&p);
     }
 

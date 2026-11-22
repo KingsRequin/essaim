@@ -125,7 +125,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   zone de l'essaim ; le projecteur ajoute l'écran entier du pointeur aux zones à redessiner, le
   temps de l'effet seulement (voile : dégradé radial Direct2D, ou remplissage ligne par ligne sur
   le processeur). Secousse : trois changements de sens horizontaux francs (allers ≥ 60 px,
-  < 0,35 s, plutôt horizontaux) en moins de 0,6 s, lus sur les positions de chaque image.
+  < 0,35 s, plutôt horizontaux) en moins de 0,6 s, lus sur les positions de chaque image. Ces
+  seuils sont ceux de `[projecteur] sensibilite = 5` (`effets::secousse_exigence`) : la course
+  minimale double tous les 5 crans en moins (104 px à 1, 30 px à 10), les deux durées
+  s'allongent comme l'inverse de sa racine (0,49 s et 0,85 s à 10). `secousse` et `sensibilite`
+  sont hors presets (`profils::in_profile`, `HORS_PRESET` dans `ui/app.js`).
 - **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
   fil « essaim-media » (MTA, appels asynchrones attendus par `join`), réveillé par
   `CurrentSessionChanged`, `MediaPropertiesChanged` et `PlaybackInfoChanged`, et au moins
