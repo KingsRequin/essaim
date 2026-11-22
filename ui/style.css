@@ -47,6 +47,8 @@
   /* texte courant ; plancher du texte informatif (libellés, notes, petites puces) */
   --texte-base: 14px;
   --texte-mini: 12px;
+  /* corps du titre de la fenêtre : réduit avec la largeur (requêtes plus bas) */
+  --texte-affiche: 88px;
   --largeur-jauge: 72px;
   --colonne: 280px;
   --colonne-moyenne: 330px;
@@ -92,7 +94,7 @@ button, input { font-family: inherit; color: inherit; }
 [hidden] { display: none !important; }
 
 /* ---------- Typographie ---------- */
-.t-affiche { font-size: 88px; font-weight: 900; font-stretch: 125%; letter-spacing: -0.035em; line-height: 1; margin: 0; }
+.t-affiche { font-size: var(--texte-affiche); font-weight: 900; font-stretch: 125%; letter-spacing: -0.035em; line-height: 1; margin: 0; }
 .t-chiffre { font-size: 46px; font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
 .t-numero { font-size: 26px; font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
 .t-titre { font-size: 22px; font-weight: 900; font-stretch: 115%; text-transform: uppercase; line-height: 1.1; }
@@ -110,7 +112,12 @@ button, input { font-family: inherit; color: inherit; }
   border-bottom: var(--trait-epais) solid var(--encre);
   flex-shrink: 0;
 }
+.entete-titre { display: flex; align-items: flex-start; gap: var(--esp-2); }
 .entete .t-affiche { margin-bottom: -12px; }
+/* numéro de version, en exposant du titre : son haut s'aligne sur celui des capitales (à 0,148 em
+   du haut de la ligne en Archivo, moins les 2 px qui séparent le haut de sa propre ligne de ses
+   chiffres) */
+.entete .version { margin-top: calc(var(--texte-affiche) * 0.148 - 2px); text-transform: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .entete-droite { display: flex; align-items: flex-end; gap: var(--esp-5); padding-bottom: var(--esp-3); }
 .onglets { display: flex; gap: var(--esp-5); }
 .onglet {
@@ -348,21 +355,19 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .vide .zero { font-size: 64px; font-weight: 900; font-stretch: 125%; line-height: 0.9; color: var(--signal-texte); }
 
 @media (max-width: 1500px) {
-  .t-affiche { font-size: 64px; }
+  :root { --texte-affiche: 64px; --largeur-jauge: 52px; }
   .t-nav { font-size: 19px; }
   .onglets { gap: var(--esp-4); }
   .entete-droite, .sonde { gap: var(--esp-4); }
-  :root { --largeur-jauge: 52px; }
   /* le détail (« aperçus en démo ») ne tient plus sous sa jauge : il déborderait sur les onglets */
   .sonde .detail { display: none; }
   .sonde .mesures { grid-template-columns: auto var(--largeur-jauge); }
 }
 @media (max-width: 1300px) {
-  .t-affiche { font-size: 54px; }
+  :root { --texte-affiche: 54px; --largeur-jauge: 44px; --colonne-onglets: 170px; --colonne-large: 320px; }
   .t-nav { font-size: 17px; }
   .onglets { gap: var(--esp-3); }
   .entete-droite, .sonde { gap: var(--esp-3); }
-  :root { --largeur-jauge: 44px; --colonne-onglets: 170px; --colonne-large: 320px; }
 }
 /* Quatre onglets : sous 1 200 px, la sonde ne garde que ses témoins (kick, aigus). */
 @media (max-width: 1200px) {
@@ -370,7 +375,7 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   .entete-droite { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--esp-2); }
 }
 @media (max-width: 1000px) {
-  .t-affiche { font-size: 46px; }
+  :root { --texte-affiche: 46px; }
   .colonne { width: 230px; }
   .vue { gap: var(--esp-5); padding-left: var(--esp-5); padding-right: var(--esp-5); }
   .entete { padding-left: var(--esp-5); padding-right: var(--esp-5); }

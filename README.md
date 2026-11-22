@@ -272,8 +272,8 @@ tout le travail : chaque fonction a été décidée, relue et essayée en vrai s
 
 ## Contribuer
 
-Bugs, idées et questions : un [formulaire à remplir](https://github.com/KingsRequin/essaim/issues/new/choose).
-Fonctionnement interne, compilation et analyse du son : [docs/technique.md](docs/technique.md).
+Bugs, idées et questions : un [formulaire à remplir](https://github.com/KingsRequin/essaim/issues/new/choose)
+(ta version est écrite à côté du titre de la fenêtre des réglages). Fonctionnement interne, compilation et analyse du son : [docs/technique.md](docs/technique.md).
 
 ## Licence
 

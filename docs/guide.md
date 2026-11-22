@@ -344,6 +344,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 
 ## Mises à jour
 
+La version installée est écrite en petit à côté du titre de la fenêtre des réglages (« v0.11.1 »),
+et au début du journal à chaque lancement.
+
 Trente secondes après le lancement, puis toutes les six heures, Essaim regarde la dernière
 version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus récente :
 

@@ -208,6 +208,7 @@ impl Fenetre {
             "proche": proche.map(|(n, p)| json!({ "nom": p.name, "ecarts": n })),
             "defauts": Config::default(),
             "demarrage": demarrage_actif(),
+            "version": env!("CARGO_PKG_VERSION"),
         }));
     }
 

@@ -17,9 +17,9 @@ body:
     attributes:
       label: "Version d'Essaim / Essaim version"
       description: |
-        Le numéro de la version téléchargée, ou la ligne « démarrage d'Essaim X.Y.Z » du journal (`%APPDATA%\Essaim\essaim.log`).
-        *The number of the release you downloaded, or the line "démarrage d'Essaim X.Y.Z" in the log.*
-      placeholder: "0.11.0"
+        Le numéro écrit à côté du titre ESSAIM, dans la fenêtre des réglages. Avant la 0.11.1 : la ligne « démarrage d'Essaim X.Y.Z » du journal (`%APPDATA%\Essaim\essaim.log`).
+        *The number next to the ESSAIM title, in the settings window. Before 0.11.1: the line "démarrage d'Essaim X.Y.Z" in the log (`%APPDATA%\Essaim\essaim.log`).*
+      placeholder: "0.11.1"
     validations:
       required: true
 

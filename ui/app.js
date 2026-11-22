@@ -2856,6 +2856,7 @@ window.essaim = {
         etat.curseurs = m.curseurs;
         etat.demarrage = m.demarrage;
         if (premier) {
+          $("version").textContent = typeof m.version === "string" ? "v" + m.version : "";
           construireReglages();
           chargerCommu(false);
           if (!memoire.lire("accueil", false)) ouvrirAccueil();

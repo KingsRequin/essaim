@@ -264,8 +264,8 @@ every feature was decided, reviewed and tried for real on a four-monitor PC befo
 
 ## Contributing
 
-Bugs, ideas and questions: a [form to fill in](https://github.com/KingsRequin/essaim/issues/new/choose).
-Internals, building and audio analysis (French): [docs/technique.md](docs/technique.md).
+Bugs, ideas and questions: a [form to fill in](https://github.com/KingsRequin/essaim/issues/new/choose)
+(your version is shown next to the title of the settings window). Internals, building and audio analysis (French): [docs/technique.md](docs/technique.md).
 
 ## License
 
