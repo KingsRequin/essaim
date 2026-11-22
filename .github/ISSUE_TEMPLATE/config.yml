@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Questions fréquentes / FAQ"
+    url: https://github.com/KingsRequin/essaim#questions-fréquentes
+    about: "Son ignoré, photosensibilité, OBS, Windows 10… à lire avant d'ouvrir une issue. / English: README.en.md."
+  - name: "Guide des fonctions"
+    url: https://github.com/KingsRequin/essaim/blob/master/docs/guide.md
+    about: "Chaque réglage expliqué en détail (en français)."
