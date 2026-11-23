@@ -120,7 +120,7 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## La fenêtre des réglages
 
-À sa première ouverture, le logo s'assemble en orbes, puis le nom file prendre sa place dans
+À l'ouverture, le logo s'assemble en orbes, puis le nom file prendre sa place dans
 l'en-tête pendant que la fenêtre se dessine (un clic l'abrège).
 
 **Les presets.** Une grille de 41 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette…), chacun animé

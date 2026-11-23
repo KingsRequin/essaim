@@ -185,8 +185,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 
 ## Utilisation
 
-- La première fois que la fenêtre des réglages s'ouvre après le lancement d'Essaim, le logo
-  s'assemble, puis le nom va prendre sa place dans l'en-tête pendant que la fenêtre se dessine
+- À chaque ouverture de la fenêtre des réglages, le logo s'assemble, puis le nom va prendre sa place dans l'en-tête pendant que la fenêtre se dessine
   (trois secondes ; un clic ou une touche l'abrège ; rien si Windows demande moins d'animations).
 - Icône de notification : un clic (ou double-clic) ouvre les réglages ; clic droit, le menu :
   *Mettre en pause*, *Réglages…*, *Fenêtre pour le stream*, *Presets* (celui en place coché),

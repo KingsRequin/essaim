@@ -393,8 +393,8 @@ const Lancement = (() => {
   // filet de l'en-tête, et le reste de la fenêtre se dessine par blocs décalés. Un clic ou une
   // touche l'abrège.
   //
-  // La page ne la montre qu'à l'adresse `index.html#ouverture` (style.css, `.ouverture:target`),
-  // et jamais si Windows demande moins d'animations.
+  // Elle se joue à chaque ouverture de la fenêtre, sauf si Windows demande moins d'animations
+  // (style.css ne montre alors pas le voile).
 
   /** L'ouverture va plus vite que le GIF : secondes de l'animation par seconde réelle. */
   const VITESSE = 1.35;
@@ -434,7 +434,7 @@ const Lancement = (() => {
     if (!voile) return;
     const fenetre = document.querySelector(".fenetre"), entete = fenetre && fenetre.querySelector(".entete");
     const titre = entete && entete.querySelector(".t-affiche");
-    if (location.hash !== "#ouverture" || matchMedia("(prefers-reduced-motion: reduce)").matches || !titre) { voile.remove(); return; }
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches || !titre) { voile.remove(); return; }
     const svg = voile.querySelector("svg"), fond = voile.querySelector(".fond");
     let image = 0, anims = [], fini = false;
 

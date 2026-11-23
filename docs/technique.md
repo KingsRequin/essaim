@@ -268,11 +268,9 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   (4K à 150 %), WebView2 ne présente sa première image que quelques images après l'apparition,
   et c'est ce fond qu'on voit entre-temps. Une ouverture se contrôle par capture de l'écran
   (`BitBlt`), sur chaque écran : `PrintWindow` fait rendre la page et ne montre pas ce blanc.
-- **Ouverture animée** (`ui/lancement.js`) : à la première ouverture de la fenêtre depuis le
-  lancement d'Essaim (`reglages::DEJA_OUVERTE`), la page est chargée à l'adresse
-  `index.html#ouverture`, qui seule montre le voile `#ouverture` (`:target` dans `style.css`,
-  jamais si Windows demande moins d'animations). Le logo s'y assemble en orbes (SVG, soudure par
-  un filtre de flou durci), puis le nom ESSAIM va se poser sur le titre de l'en-tête, mesuré dans
+- **Ouverture animée** (`ui/lancement.js`) : à chaque ouverture de la fenêtre, la page naît sous
+  le voile `#ouverture` (`style.css` ; absent si Windows demande moins d'animations). Le logo s'y
+  assemble en orbes (SVG, soudure par un filtre de flou durci), puis le nom ESSAIM va se poser sur le titre de l'en-tête, mesuré dans
   la page (même police, même interlettrage : il s'y superpose lettre pour lettre), son filet
   devient celui de l'en-tête et les blocs de la fenêtre entrent en décalé (Web Animations) ; le
   voile est alors retiré. L'animation part quand la fenêtre se montre (événement `essaim-prete`
