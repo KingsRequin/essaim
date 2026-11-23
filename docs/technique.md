@@ -264,6 +264,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - La fenêtre naît cachée et ne se montre que lorsque la page se dit dessinée (message `prete`,
   envoyé par `ui/app.js` après le premier état, la police et deux images ; au bout de 3 s sinon) :
   montrée tout de suite, elle resterait blanche le temps que WebView2 rende sa première image.
+  Son propre fond est peint à la couleur de la page (`WM_ERASEBKGND`) : sur un grand écran
+  (4K à 150 %), WebView2 ne présente sa première image que quelques images après l'apparition,
+  et c'est ce fond qu'on voit entre-temps. Une ouverture se contrôle par capture de l'écran
+  (`BitBlt`), sur chaque écran : `PrintWindow` fait rendre la page et ne montre pas ce blanc.
 - **Ouverture animée** (`ui/lancement.js`) : à la première ouverture de la fenêtre depuis le
   lancement d'Essaim (`reglages::DEJA_OUVERTE`), la page est chargée à l'adresse
   `index.html#ouverture`, qui seule montre le voile `#ouverture` (`:target` dans `style.css`,

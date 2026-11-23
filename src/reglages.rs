@@ -22,7 +22,9 @@ use std::time::SystemTime;
 use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Gdi::{
+    CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, MonitorFromPoint, UpdateWindow, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -569,6 +571,8 @@ impl Fenetre {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_MONTRER);
             let _ = ShowWindow(self.hwnd, SW_SHOW);
+            // le fond est peint tout de suite (WM_ERASEBKGND), avant que la fenêtre soit à l'écran
+            let _ = UpdateWindow(self.hwnd);
             let _ = SetForegroundWindow(self.hwnd);
         }
         let _ = self.vue.focus();
@@ -1043,6 +1047,18 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 let mm = &mut *(lp.0 as *mut MINMAXINFO);
                 mm.ptMinTrackSize = POINT { x: TAILLE_MIN.0 * dpi / 96, y: TAILLE_MIN.1 * dpi / 96 };
                 return LRESULT(0);
+            }
+            WM_ERASEBKGND => {
+                // Le fond de la fenêtre, à la couleur de la page : c'est lui qu'on voit tant que
+                // WebView2 n'a pas présenté sa première image (sur un grand écran, quelques
+                // images après l'apparition). Sans lui, la fenêtre s'ouvre blanche.
+                let (r, g, b) = fond(theme_sombre());
+                let mut zone = RECT::default();
+                let _ = GetClientRect(hwnd, &mut zone);
+                let pinceau = CreateSolidBrush(COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16));
+                FillRect(HDC(wp.0 as *mut _), &zone, pinceau);
+                let _ = DeleteObject(pinceau.into());
+                return LRESULT(1);
             }
             WM_DPICHANGED => {
                 let r = &*(lp.0 as *const RECT);
