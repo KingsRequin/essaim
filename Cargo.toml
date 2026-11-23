@@ -1,6 +1,6 @@
 [package]
 name = "essaim"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 description = "Surcouche réactive à la musique autour du pointeur de Windows : comètes, essaim en orbite, fissures au clic"
 license = "MIT"
