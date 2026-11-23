@@ -120,6 +120,8 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 
 **Presets.** A grid of 41 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art…), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
+Publish them to the [community library](https://github.com/KingsRequin/essaim-presets) and
+install other people's.
 
 <img src="docs/images/presets.png" alt="Presets tab: the bundled presets, animated" width="100%">
 
@@ -256,7 +258,6 @@ and the log `essaim.log`.
 
 ## Roadmap
 
-- **Shared preset library** on GitHub: publish yours, install others'.
 - **More dot cursors**, designed to go with the swarm.
 
 ## Made with Claude Code

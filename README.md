@@ -122,7 +122,9 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 **Les presets.** Une grille de 41 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette…), chacun animé
 en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
-filtre par forme.
+filtre par forme. Publie-les dans la
+[bibliothèque communautaire](https://github.com/KingsRequin/essaim-presets) et installe ceux des
+autres.
 
 <img src="docs/images/presets.png" alt="Onglet Presets : les presets fournis, animés" width="100%">
 
@@ -263,7 +265,6 @@ Dans `%APPDATA%\Essaim` : `config.toml` (commenté, modifiable à la main), tes 
 
 ## Feuille de route
 
-- **Bibliothèque de presets partagés** sur GitHub : publier les tiens, installer ceux des autres.
 - **D'autres curseurs en point**, pensés pour aller avec l'essaim.
 
 ## Fait avec Claude Code
