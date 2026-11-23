@@ -261,6 +261,16 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
+- **Ouverture animée** (`ui/lancement.js`) : à la première ouverture de la fenêtre depuis le
+  lancement d'Essaim (`reglages::DEJA_OUVERTE`), la page est chargée à l'adresse
+  `index.html#ouverture`, qui seule montre le voile `#ouverture` (`:target` dans `style.css`,
+  jamais si Windows demande moins d'animations). Le logo s'y assemble en orbes (SVG, soudure par
+  un filtre de flou durci), puis le nom ESSAIM va se poser sur le titre de l'en-tête, mesuré dans
+  la page (même police, même interlettrage : il s'y superpose lettre pour lettre), son filet
+  devient celui de l'en-tête et les blocs de la fenêtre entrent en décalé (Web Animations) ; le
+  voile est alors retiré. Un clic ou une touche l'abrège (un changement de taille aussi, une fois
+  le nom parti) ; une erreur le retire. Ni bibliothèque ni fichier en ligne : le temps est mené par des segments et des courbes
+  écrits dans le fichier. La même animation, avec sa sortie, fait les GIF du logo du README.
 - **Déclencheurs** (`[declencheurs]`, `render.rs`) : `Ecoute::lire` donne les événements du son
   depuis l'image précédente (`Coups` : kicks, caisses claires, drops, attaques des aigus, au plus 4
   chacun ; temps, break, contretemps) ; `Swarm::update` les passe à `declencher` dans un ordre
@@ -372,6 +382,8 @@ travail : `CLAUDE.md`.
 `ui/apercu.js` (calculés comme l'essaim), rendus dans Edge sans fenêtre sur un son simulé à
 120 BPM, avec les réglages des presets fournis (test `exporter_presets`). `stream.png` est la
 vraie image de la fenêtre pour le stream (Direct2D, test `exporter_image_stream`) posée sur un damier
-(`rendre.py stream` ne refait qu'elle). Les captures de la
+(`rendre.py stream` ne refait qu'elle). `logo.gif` et `logo-nom.gif` sont l'ouverture animée de
+la fenêtre (`ui/lancement.js`), jouée sur fond noir par `scripts/images-readme/logo.html` et
+photographiée image par image (`rendre.py logo`). Les captures de la
 fenêtre (`presets.png`, `reglages.png`, `curseurs.png`) sont faites à la main, fenêtre en
 1440 × 900.

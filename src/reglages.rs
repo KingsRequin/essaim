@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::num::NonZeroIsize;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 use windows::core::{w, BOOL, PCWSTR};
@@ -40,6 +40,9 @@ const ORIGINE: &str = "http://essaim.localhost/";
 
 /// Fenêtre ouverte (0 = aucune).
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
+/// La fenêtre a déjà été ouverte depuis le lancement d'Essaim : l'ouverture animée (le logo qui
+/// s'assemble, `ui/lancement.js`) ne se joue que la première fois.
+static DEJA_OUVERTE: AtomicBool = AtomicBool::new(false);
 
 /// Ouvre la fenêtre, ou la ramène devant si elle l'est déjà.
 pub fn open(son: Arc<AudioShared>) {
@@ -66,13 +69,19 @@ pub fn open(son: Arc<AudioShared>) {
 // Fichiers de la page
 
 /// Fichiers de `ui/` servis à la page : (chemin, type, contenu).
-const FICHIERS: [(&str, &str, &[u8]); 5] = [
+const FICHIERS: [(&str, &str, &[u8]); 6] = [
     ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
     ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
     ("app.js", "text/javascript; charset=utf-8", include_bytes!("../ui/app.js")),
     ("apercu.js", "text/javascript; charset=utf-8", include_bytes!("../ui/apercu.js")),
+    ("lancement.js", "text/javascript; charset=utf-8", include_bytes!("../ui/lancement.js")),
     ("polices/Archivo.ttf", "font/ttf", include_bytes!("../ui/polices/Archivo.ttf")),
 ];
+
+/// Adresse à charger : la première fois, celle qui joue l'ouverture animée (`#ouverture`).
+fn adresse(premiere: bool) -> String {
+    format!("{ORIGINE}index.html{}", if premiere { "#ouverture" } else { "" })
+}
 
 /// La page ne charge que ses propres fichiers ; seuls l'index de la bibliothèque et les images
 /// d'aperçu de ses presets viennent d'ailleurs.
@@ -868,7 +877,7 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
     let mut contexte = wry::WebContext::new(Some(config::dir().join("webview")));
     let vue = WebViewBuilder::new_with_web_context(&mut contexte)
         .with_custom_protocol("essaim".into(), |_, req| servir(req))
-        .with_url(format!("{ORIGINE}index.html"))
+        .with_url(adresse(!DEJA_OUVERTE.swap(true, Ordering::Relaxed)))
         .with_background_color((r, g, b, 255))
         .with_ipc_handler(move |req| recus.borrow_mut().push(req.into_body()))
         .with_drag_drop_handler(|ev| {
@@ -1099,9 +1108,14 @@ mod tests {
         assert_eq!(servir(req("../src/main.rs")).status(), 404);
         // chaque fichier nommé par la page existe
         let page = std::str::from_utf8(FICHIERS[0].2).unwrap();
-        for (chemin, ..) in &FICHIERS[1..4] {
+        for (chemin, ..) in &FICHIERS[1..5] {
             assert!(page.contains(chemin), "{chemin} non chargé par index.html");
         }
+        // l'ouverture animée : la page a le voile que l'adresse de la première ouverture désigne,
+        // et cette adresse reste dans l'origine (seule navigation acceptée)
+        assert!(page.contains(r#"id="ouverture""#));
+        assert_eq!(adresse(true), format!("{ORIGINE}index.html#ouverture"));
+        assert_eq!(adresse(false), format!("{ORIGINE}index.html"));
     }
 
     #[test]

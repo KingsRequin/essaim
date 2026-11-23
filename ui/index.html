@@ -4,10 +4,14 @@
 <meta charset="utf-8">
 <title>Essaim</title>
 <link rel="stylesheet" href="style.css">
+<script src="lancement.js" defer></script>
 <script src="apercu.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body>
+<!-- Ouverture : le logo s'assemble, puis le nom va se poser dans l'en-tête pendant que la fenêtre
+     se dessine (lancement.js). Montrée seulement à l'adresse index.html#ouverture. -->
+<div class="ouverture" id="ouverture" aria-hidden="true"><div class="fond"></div><svg focusable="false"></svg></div>
 <div class="fenetre">
   <header class="entete">
     <div class="entete-titre">

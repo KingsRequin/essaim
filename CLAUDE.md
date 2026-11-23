@@ -15,7 +15,7 @@ montre plus la réalité se refait.
 cargo test --release
 cargo clippy --all-targets -- -D warnings
 cargo build --release
-node --check ui/app.js; node --check ui/apercu.js
+node --check ui/app.js; node --check ui/apercu.js; node --check ui/lancement.js
 ```
 
 Les scripts de `ui/` sont embarqués tels quels : aucune commande cargo ne les lit, et une seule

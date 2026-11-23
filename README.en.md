@@ -118,6 +118,9 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 
 ## The settings window
 
+The first time it opens, the logo assembles out of orbs, then the name slides into the header
+while the window draws itself (a click skips it).
+
 **Presets.** A grid of 41 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art…), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
 Publish them to the [community library](https://github.com/KingsRequin/essaim-presets) and
