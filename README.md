@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="96" alt="Logo d'Essaim">
+<img src="docs/images/logo.gif" width="200" alt="Le logo d'Essaim qui s'assemble : des orbes se rangent en anneau, puis se soudent en une comète enroulée autour d'un orbe">
 
 # Essaim
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="96" alt="Essaim logo">
+<img src="docs/images/logo.gif" width="200" alt="The Essaim logo assembling: orbs line up in a ring, then fuse into a comet wrapped around an orb">
 
 # Essaim
 

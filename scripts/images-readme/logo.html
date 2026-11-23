@@ -1,0 +1,400 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Logo animé d'Essaim</title>
+<!--
+  Le logo d'Essaim qui s'assemble : un germe éclate en orbes, ils se rangent en anneau, l'anneau
+  se dévide dans le logo et chaque orbe se soude à ses voisins sitôt posé. Avec le nom, un second
+  anneau de petits orbes clairs écrit ESSAIM en même temps.
+
+  `rendre.py` s'en sert pour docs/images/logo.gif et logo-nom.gif : il appelle `preparer(…)` puis
+  `rendre(t)` image par image. Pour le voir bouger à la main : ouvrir ce fichier avec #jouer (logo
+  seul) ou #jouer-nom au bout de l'adresse.
+
+  Rien n'est chargé en ligne : la police est celle de l'appli (ui/polices), et le temps est mené
+  par quelques lignes ici même (segments et courbes), sans bibliothèque.
+-->
+<style>
+@font-face { font-family: "Archivo"; src: url("../../ui/polices/Archivo.ttf"); font-weight: 100 900; font-stretch: 62% 125%; }
+html, body { margin: 0; background: #000; }
+svg { display: block; }
+</style>
+<svg id="scene" width="400" height="400" viewBox="-23 -20 88 88" role="img" aria-label="Logo d'Essaim">
+  <defs>
+    <!-- Soudure liquide : les orbes floutés puis durcis se rejoignent dès qu'ils se touchent ;
+         le contour du logo (ou des lettres) les contient. -->
+    <filter id="liquide" filterUnits="userSpaceOnUse" x="-60" y="-60" width="170" height="170">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1" result="flou"/>
+      <feColorMatrix in="flou" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7"/>
+    </filter>
+    <filter id="liquide-nom" filterUnits="userSpaceOnUse" x="-60" y="-60" width="170" height="170">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="0.45" result="flou"/>
+      <feColorMatrix in="flou" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7"/>
+    </filter>
+    <clipPath id="clip-logo">
+      <path d="M21 6A18 18 0 0 1 21 42A9 9 0 0 0 21 24A9 9 0 0 1 21 6Z"/>
+      <circle cx="21" cy="33" r="6"/>
+    </clipPath>
+  </defs>
+  <g id="camera">
+    <g id="style"></g>
+    <g id="net" fill="#ff3b2f" opacity="0">
+      <path d="M21 6A18 18 0 0 1 21 42A9 9 0 0 0 21 24A9 9 0 0 1 21 6Z"/>
+      <circle cx="21" cy="33" r="6"/>
+    </g>
+  </g>
+  <g id="nom"></g>
+</svg>
+<script>
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  var ROUGE = '#ff3b2f', ENCRE = '#ecebe4';
+  var $ = function (id) { return document.getElementById(id); };
+  var scene = $('scene'), racine = $('style'), camera = $('camera'), netEl = $('net'), nomEl = $('nom');
+
+  // ---- Outils -----------------------------------------------------------------------------
+  function N(balise, attrs, parent) {
+    var e = document.createElementNS(NS, balise);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function graine(g) { var x = g; return function () { x = (x * 1664525 + 1013904223) % 4294967296; return x / 4294967296; }; }
+  function hasard(a, b) { var x = Math.sin(a * 127.1 + b * 311.7 + 1.3) * 43758.5453; return x - Math.floor(x); }
+  function echelle(cx, cy, e) { return 'translate(' + cx + ' ' + cy + ') scale(' + e + ') translate(' + (-cx) + ' ' + (-cy) + ')'; }
+
+  // ---- Le temps : des segments, chacun mène quelques valeurs d'un objet d'un état à un autre
+  //      selon une courbe. Aucune n'est linéaire.
+  function puissance(n) {
+    return {
+      'in': function (k) { return Math.pow(k, n); },
+      out: function (k) { return 1 - Math.pow(1 - k, n); },
+      inOut: function (k) { return k < 0.5 ? Math.pow(2 * k, n) / 2 : 1 - Math.pow(2 * (1 - k), n) / 2; }
+    };
+  }
+  var FAMILLES = {
+    power2: puissance(3), power3: puissance(4),
+    sine: { out: function (k) { return Math.sin(k * Math.PI / 2); }, inOut: function (k) { return (1 - Math.cos(Math.PI * k)) / 2; } },
+    expo: {
+      out: function (k) { return k >= 1 ? 1 : 1 - Math.pow(2, -10 * k); },
+      inOut: function (k) { return k <= 0 ? 0 : k >= 1 ? 1 : k < 0.5 ? Math.pow(2, 20 * k - 10) / 2 : 1 - Math.pow(2, 10 - 20 * k) / 2; }
+    }
+  };
+  // « back.out(1.4) » : dépasse sa cible puis y revient ; le nombre règle le dépassement
+  function courbe(nom) {
+    var m = /^back\.out\(([\d.]+)\)$/.exec(nom);
+    if (m) { var s = +m[1]; return function (k) { var p = k - 1; return p * p * ((s + 1) * p + s) + 1; }; }
+    var parts = nom.split('.');
+    return FAMILLES[parts[0]][parts[1]];
+  }
+  var segments = [], departs = [];
+  function seg(cible, t, d, de, vers, nomCourbe) {
+    for (var p in vers) departs.push({ cible: cible, p: p, v: cible[p] });
+    segments.push({ cible: cible, t: t, d: d, de: de, vers: vers, courbe: courbe(nomCourbe) });
+  }
+  // remet chaque valeur à son départ, puis joue dans l'ordre les segments déjà commencés
+  function avancer(t) {
+    var i, s, p;
+    for (i = departs.length - 1; i >= 0; i--) departs[i].cible[departs[i].p] = departs[i].v;
+    for (i = 0; i < segments.length; i++) {
+      s = segments[i];
+      if (t < s.t) continue;
+      var k = s.courbe(s.d > 0 ? Math.min(1, (t - s.t) / s.d) : 1);
+      for (p in s.vers) s.cible[p] = s.de[p] + (s.vers[p] - s.de[p]) * k;
+    }
+  }
+
+  // ---- Le logo ----------------------------------------------------------------------------
+  // un point est-il dans le logo, à au moins `m` unités du bord ?
+  function dansLogo(x, y, m) {
+    var dx = x - 21, a = dx * dx + (y - 24) * (y - 24), b = dx * dx + (y - 15) * (y - 15), c = dx * dx + (y - 33) * (y - 33);
+    if (m < 6 && c <= (6 - m) * (6 - m)) return true;
+    if (m < 9 && b <= (9 - m) * (9 - m)) return true;
+    return m < 18 && a <= (18 - m) * (18 - m) && dx >= m && c >= (9 + m) * (9 + m);
+  }
+  // distance d'un point du logo à son bord (0 s'il est dehors)
+  function bord(x, y) {
+    if (!dansLogo(x, y, 0)) return 0;
+    var a = 0, b = 9;
+    for (var i = 0; i < 12; i++) { var m = (a + b) / 2; if (dansLogo(x, y, m)) a = m; else b = m; }
+    return a;
+  }
+  // Sème les orbes du logo, puis les range le long du logo : de la pointe de la queue vers la
+  // tête, l'orbe en dernier. Chaque orbe a son rayon au repos (r) et ce dont il gonfle en se
+  // soudant (gonfle).
+  function semer() {
+    var r = graine(11), P = [], essais = 0;
+    function orbe(x, y, rayon) { return { x: x, y: y, r: rayon, gonfle: rayon * 1.3 + 1, orbe: (x - 21) * (x - 21) + (y - 33) * (y - 33) <= 36.5 }; }
+    // 74 orbes de taille pleine, jetés au hasard sans se toucher
+    while (P.length < 74 && essais++ < 60000) {
+      var x = 11 + r() * 29, y = 5 + r() * 38;
+      if (!dansLogo(x, y, 0.945)) continue;
+      var libre = true;
+      for (var j = 0; j < P.length; j++) { var ex = P[j].x - x, ey = P[j].y - y; if (ex * ex + ey * ey < 4.41) { libre = false; break; } }
+      if (libre) P.push(orbe(x, y, 1.2));
+    }
+    // La pointe de la queue est trop fine pour un orbe ordinaire : sur ses cinq dernières unités
+    // elle fait moins d'une demi-unité d'épaisseur. On y pose une file de grains, de plus en
+    // plus petits, sur sa ligne médiane (à l'angle `a` depuis la pointe, la queue va du rayon
+    // 18·cos a au rayon 18 autour du centre du cercle). En gonflant, ils la remplissent jusqu'au bout.
+    for (var a = 0.06; a < 0.4; a += 0.06) {
+      var milieu = 9 * (1 + Math.cos(a));
+      P.push(orbe(21 + milieu * Math.sin(a), 24 + milieu * Math.cos(a), Math.max(0.1, 8.1 * (1 - Math.cos(a)))));
+    }
+    // Puis on comble : tant qu'un point du logo resterait hors d'atteinte de la matière une fois
+    // les orbes gonflés, on y pose un orbe de plus, à la taille que le bord permet. La soudure
+    // remplit alors toute la forme, au lieu de laisser le tracé net finir le travail.
+    var grille = [];
+    for (var gx = 11.25; gx <= 40; gx += 0.5) {
+      for (var gy = 5.25; gy <= 43; gy += 0.5) { var d = bord(gx, gy); if (d > 0) grille.push({ x: gx, y: gy, d: d, fait: false }); }
+    }
+    function atteint(g) {
+      for (var j = 0; j < P.length; j++) {
+        var p = P[j], portee = (p.r + p.gonfle) * 0.88, ex = p.x - g.x, ey = p.y - g.y;
+        if (ex * ex + ey * ey <= portee * portee) return true;
+      }
+      return false;
+    }
+    for (var tour = 0; tour < 160; tour++) {
+      var pire = null;
+      for (var k = 0; k < grille.length; k++) {
+        var g = grille[k];
+        if (g.fait) continue;
+        if (g.d < 0.25 || atteint(g)) { g.fait = true; continue; }
+        if (!pire || g.d > pire.d) pire = g;
+      }
+      if (!pire) break;
+      P.push(orbe(pire.x, pire.y, Math.min(1.2, Math.max(0.3, pire.d * 0.9))));
+    }
+    P.forEach(function (p) {
+      var ox = p.x - 24, oy = p.y - 24, d = Math.sqrt(ox * ox + oy * oy) || 1;
+      p.dx = ox / d; p.dy = oy / d;
+      var a = Math.atan2(p.x - 21, p.y - 24);
+      if (a < 0) a += 6.2832;
+      p.cle = p.orbe ? 10 + Math.atan2(p.y - 33, p.x - 21) : a;
+    });
+    P.sort(function (a, b) { return a.cle - b.cle; });
+    // dans l'anneau, chaque orbe prend la place de sa taille
+    var total = 0, cumul = 0;
+    P.forEach(function (p) { total += 2 * p.r + 0.5; });
+    P.forEach(function (p, i) {
+      p.rang = i / (P.length - 1);
+      p.t0 = -6.2832 * (cumul + p.r + 0.25) / total;
+      cumul += 2 * p.r + 0.5;
+    });
+    return { P: P, r: r };
+  }
+
+  // ---- Le nom, sous le logo. Avec lui, le logo est posé 7 unités plus haut dès le départ. --
+  var BASE = 51, CORPS = 12.5, MONTE = -7, MILIEU_X = 25.5;
+  var POLICE = "Archivo, 'Arial Narrow', Arial, sans-serif";
+  function ecrire(parent, x, opacite) {
+    var e = N('text', { x: x, y: BASE, 'font-size': CORPS, 'font-weight': 900, 'letter-spacing': -0.44, fill: ENCRE, 'font-family': POLICE, opacity: opacite }, parent);
+    e.style.fontStretch = '125%';
+    e.textContent = 'ESSAIM';
+    return e;
+  }
+  function poserNom() {
+    var mot = 'ESSAIM', net = ecrire(nomEl, 0, 0);
+    // chaque lettre est mesurée dans la police réellement affichée
+    var places = [], large = 0;
+    try {
+      for (var i = 0; i < mot.length; i++) { var b = net.getExtentOfChar(i); places.push({ x: b.x, w: b.width }); large = b.x + b.width; }
+    } catch (e) { places = []; }
+    if (!places.length || !(large > 0)) { large = 57; places = mot.split('').map(function (c, i) { return { x: i * 9.5, w: 9.5 }; }); }
+    var x0 = MILIEU_X - large / 2;
+    net.setAttribute('x', x0);
+    // le dessin des lettres sert aussi de contour à la soudure liquide
+    ecrire(N('clipPath', { id: 'clip-nom' }, nomEl), x0, 1);
+    var filet = N('rect', { x: x0, y: BASE + 2.1, width: 0, height: 1.4, fill: ENCRE }, nomEl);
+    return { mot: mot, net: net, filet: filet, large: large, x0: x0, places: places };
+  }
+  // Sème des places dans le dessin des lettres : chaque lettre est peinte hors écran, puis on
+  // garde les points tombés dans l'encre. Rangées de gauche à droite.
+  function semerNom(nom) {
+    var Q = [], r = graine(23), T = 96;
+    try {
+      var toile = document.createElement('canvas'), ctx = toile.getContext('2d', { willReadFrequently: true });
+      for (var i = 0; i < nom.mot.length; i++) {
+        toile.width = 2 * T; toile.height = Math.ceil(1.4 * T);
+        ctx.font = '900 ' + T + 'px ' + POLICE;
+        if ('fontStretch' in ctx) ctx.fontStretch = 'extra-expanded';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#fff';
+        var c = nom.mot.charAt(i), avance = ctx.measureText(c).width, place = nom.places[i];
+        if (!(avance > 0)) continue;
+        ctx.fillText(c, 0.3 * T, T);
+        var L = toile.width, H = toile.height, pixels = ctx.getImageData(0, 0, L, H).data;
+        // la lettre peinte est ramenée à la case mesurée dans la page
+        var kx = avance / place.w, ky = T / CORPS;
+        var encre = function (ux, uy) {
+          var px = Math.round(0.3 * T + ux * kx), py = Math.round(T + uy * ky);
+          return px >= 0 && py >= 0 && px < L && py < H && pixels[(py * L + px) * 4 + 3] > 127;
+        };
+        var debut = Q.length, essais = 0;
+        while (Q.length - debut < 34 && essais++ < 5000) {
+          var ux = r() * place.w, uy = -r() * CORPS * 0.8;
+          // le point et ses quatre voisins proches doivent être dans l'encre : pas d'orbe à cheval sur un bord
+          if (!encre(ux, uy) || !encre(ux - 0.35, uy) || !encre(ux + 0.35, uy) || !encre(ux, uy - 0.35) || !encre(ux, uy + 0.35)) continue;
+          var x = nom.x0 + place.x + ux, y = BASE + uy, libre = true;
+          for (var j = debut; j < Q.length; j++) { var ex = Q[j].x - x, ey = Q[j].y - y; if (ex * ex + ey * ey < 1.5) { libre = false; break; } }
+          if (libre) Q.push({ x: x, y: y, lettre: i });
+        }
+      }
+    } catch (e) { Q = []; }
+    Q.sort(function (a, b) { return a.lettre - b.lettre || a.x - b.x; });
+    return Q;
+  }
+
+  // ---- L'animation ------------------------------------------------------------------------
+  // Chaque orbe a quatre avancements : e (du germe à sa place dans l'anneau), u (de l'anneau à
+  // sa place dans le logo), g (soudure : il gonfle et se fond dans ses voisins), o (sortie).
+  var POSE = 0.42, ATTENTE = 0.1, SOUDURE = 0.4;
+  function vie(p, r, ordre, sortie) {
+    p.e = 0; p.u = 0; p.g = 0; p.o = 0; p.fondu = false;
+    var depart = 1.0 + ordre * 0.75;
+    seg(p, 0.4 + r() * 0.06, 0.45, { e: 0 }, { e: 1 }, 'expo.out');
+    seg(p, depart, POSE, { u: 0 }, { u: 1 }, 'back.out(1.4)');
+    // la soudure commence à peine l'orbe posé : elle suit le déversement au lieu de l'attendre
+    seg(p, depart + POSE + ATTENTE, SOUDURE, { g: 0 }, { g: 1 }, 'sine.inOut');
+    // sortie : la matière se défait en orbes, qui filent
+    seg(p, sortie, 0.14, { g: 1 }, { g: 0 }, 'power2.in');
+    seg(p, sortie + 0.1 + hasard(p.x, p.y) * 0.08, 0.42, { o: 0 }, { o: 1 }, 'power3.in');
+  }
+  // place un orbe : `libres` porte les orbes en vol, `fondus` ceux qui se soudent (filtre
+  // liquide, contenus par le contour)
+  function poser(p, x, y, rayon, gonfle, libres, fondus) {
+    var fondu = p.g > 0.001;
+    if (fondu !== p.fondu) { p.fondu = fondu; (fondu ? fondus : libres).appendChild(p.el); }
+    p.el.setAttribute('cx', x);
+    p.el.setAttribute('cy', y);
+    p.el.setAttribute('r', Math.max((rayon * (0.3 + 0.7 * Math.min(p.e, 1)) + p.g * gonfle) * (1 - 0.7 * p.o), 0));
+    p.el.style.opacity = p.e > 0.001 && p.o < 1 ? 1 : 0;
+  }
+
+  // Construit l'animation et rend de quoi la dessiner à l'instant t. `sortie` : l'instant où
+  // tout se défait (la pose dure jusque-là) ; la durée totale est `sortie` + 0,6 s.
+  function lancement(avecNom, sortie) {
+    segments = []; departs = [];
+    racine.textContent = ''; nomEl.textContent = ''; nomEl.removeAttribute('transform');
+    var S = semer(), P = S.P, r = S.r, monte = avecNom ? MONTE : 0;
+    var finSoudure = 1.0 + 0.75 + POSE + ATTENTE + SOUDURE;   // 2,67 s : le dernier orbe est fondu
+    var st = { pouls: 1, net: 0, liq: 1, w: 0, s: 0, rot: 0, filet: 0 };
+    var germe = N('circle', { cx: 21, cy: 33, r: 0, fill: ROUGE }, racine);
+    // l'onde part du cercle dans lequel le logo s'inscrit (centre 21, 24 ; rayon 18) ; avec le
+    // nom elle reste courte, pour s'éteindre avant de passer sur les lettres
+    var onde = N('circle', { cx: 21, cy: 24, fill: 'none', stroke: ROUGE, opacity: 0 }, racine), portee = avecNom ? 8 : 26;
+    var fondus = N('g', { fill: ROUGE, filter: 'url(#liquide)', 'clip-path': 'url(#clip-logo)' }, racine);
+    var libres = N('g', { fill: ROUGE }, racine);
+
+    // 1. Le germe gonfle, se contracte (anticipation), puis éclate
+    seg(st, 0, 0.3, { s: 0 }, { s: 1 }, 'back.out(2.5)');
+    seg(st, 0.3, 0.1, { s: 1 }, { s: 0.7 }, 'power2.in');
+    seg(st, 0.4, 0.08, { s: 0.7 }, { s: 0 }, 'power3.out');
+    seg(st, 0.4, 0.06, { pouls: 1 }, { pouls: 1.07 }, 'power2.out');
+    seg(st, 0.46, 0.26, { pouls: 1.07 }, { pouls: 1 }, 'power2.out');
+    // 2. Les orbes se rangent en anneau, qui prend de la vitesse puis ralentit en se vidant
+    seg(st, 0.4, 0.6, { rot: 0 }, { rot: 2.2 }, 'power2.in');
+    seg(st, 1.0, 1.25, { rot: 2.2 }, { rot: 9.5 }, 'sine.out');
+    // 3. L'anneau se dévide dans le logo (la queue d'abord, la tête, l'orbe en dernier) et
+    //    chaque orbe se soude à ses voisins sitôt posé
+    P.forEach(function (p) {
+      p.el = N('circle', { r: 0, opacity: 0 }, libres);
+      p.v = 0.6 + r() * 0.6;
+      vie(p, r, p.rang, sortie);
+    });
+
+    // Avec le nom : le germe lâche aussi de petits orbes clairs. Ils forment un second anneau,
+    // plus serré et à contresens, qui se dévide dans les lettres, de gauche à droite.
+    var nom = null, Q = [], fondusNom = null, libresNom = null;
+    if (avecNom) {
+      nom = poserNom();
+      Q = semerNom(nom);
+      fondusNom = N('g', { fill: ENCRE, filter: 'url(#liquide-nom)', 'clip-path': 'url(#clip-nom)' }, nomEl);
+      libresNom = N('g', { fill: ENCRE }, nomEl);
+      Q.forEach(function (q, j) {
+        q.el = N('circle', { r: 0, opacity: 0 }, libresNom);
+        q.t0 = j * (6.2832 / Q.length); q.v = 0.6 + r() * 0.6;
+        var ox = q.x - MILIEU_X, oy = q.y - (BASE - 4.3), d = Math.sqrt(ox * ox + oy * oy) || 1;
+        q.dx = ox / d; q.dy = oy / d;
+        vie(q, r, j / Math.max(1, Q.length - 1), sortie);
+      });
+      // le filet se trace pendant que les dernières lettres se soudent
+      seg(st, 2.2, 0.5, { filet: 0 }, { filet: 1 }, 'expo.out');
+      seg(st, sortie, 0.25, { filet: 1 }, { filet: 0 }, 'expo.inOut');
+    }
+
+    // 4. Fin de la soudure : la matière remplit exactement le contour, le tracé net la relaie
+    //    sans que rien ne change à l'œil. Le logo gonfle un instant puis retombe : c'est en
+    //    retombant qu'il lâche l'onde.
+    seg(st, finSoudure, 0.1, { net: 0 }, { net: 1 }, 'power2.out');
+    seg(st, finSoudure + 0.06, 0.08, { liq: 1 }, { liq: 0 }, 'power2.out');
+    seg(st, finSoudure - 0.1, 0.16, { pouls: 1 }, { pouls: 1.045 }, 'sine.out');
+    seg(st, finSoudure + 0.06, 0.22, { pouls: 1.045 }, { pouls: 1 }, 'power3.out');
+    seg(st, finSoudure + 0.06, 0.6, { w: 0 }, { w: 1 }, 'power3.out');
+    // 5. Sortie : tout se ramasse, la matière se défait en orbes, qui filent
+    seg(st, sortie, 0.03, { net: 1, liq: 0 }, { net: 0, liq: 1 }, 'power2.out');
+    seg(st, sortie, 0.1, { pouls: 1 }, { pouls: 0.95 }, 'power2.out');
+    seg(st, sortie + 0.1, 0.2, { pouls: 0.95 }, { pouls: 1 }, 'power2.out');
+    // les segments se jouent dans l'ordre de leur début
+    segments.sort(function (a, b) { return a.t - b.t; });
+
+    return function (t) {
+      avancer(t);
+      // le logo (orbes, onde, tracé net) bat d'un bloc, autour du centre de son cercle
+      camera.setAttribute('transform', 'translate(21 ' + (24 + monte) + ') scale(' + st.pouls + ') translate(-21 -24)');
+      netEl.setAttribute('opacity', st.net);
+      fondus.style.opacity = st.liq;
+      germe.setAttribute('r', 5 * st.s);
+      var w = st.w, visible = w > 0 && w < 1;
+      onde.style.opacity = visible ? 0.6 * Math.pow(1 - w, 0.7) : 0;
+      if (visible) { onde.setAttribute('r', 18 + portee * w); onde.setAttribute('stroke-width', 1.8 * (1 - w) + 0.1); }
+      for (var i = 0; i < P.length; i++) {
+        var p = P[i], a = p.t0 + st.rot, rx = 24 + Math.cos(a) * 36, ry = 24 + Math.sin(a) * 36;
+        var bx = 21 + (rx - 21) * p.e, by = 33 + (ry - 33) * p.e, fuite = p.o * 70 * p.v;
+        poser(p, bx + (p.x - bx) * p.u + p.dx * fuite, by + (p.y - by) * p.u + p.dy * fuite, p.r, p.gonfle, libres, fondus);
+      }
+      if (!nom) return;
+      // le nom vit hors du bloc du logo, mais bat avec lui ; ses orbes partent du même germe
+      var cy0 = 24 + monte, gy = 33 + monte;
+      nomEl.setAttribute('transform', echelle(21, cy0, st.pouls));
+      nom.net.setAttribute('opacity', st.net);
+      fondusNom.style.opacity = st.liq;
+      nom.filet.setAttribute('width', nom.large * st.filet);
+      for (var j = 0; j < Q.length; j++) {
+        var q = Q[j], b = q.t0 - st.rot * 0.85, qx = 24 + Math.cos(b) * 27, qy = cy0 + Math.sin(b) * 27;
+        var ax = 21 + (qx - 21) * q.e, ay = gy + (qy - gy) * q.e, f = q.o * 60 * q.v;
+        poser(q, ax + (q.x - ax) * q.u + q.dx * f, ay + (q.y - ay) * q.u + q.dy * f, 0.62, 1.5, libresNom, fondusNom);
+      }
+    };
+  }
+
+  // ---- Ce que `rendre.py` appelle ---------------------------------------------------------
+  var dessiner = null;
+  // prépare l'animation dans un carré de `cote` pixels ; rend sa durée, en secondes
+  window.preparer = function (avecNom, cote, sortie) {
+    scene.setAttribute('width', cote);
+    scene.setAttribute('height', cote);
+    scene.setAttribute('viewBox', avecNom ? '-23 -27 88 88' : '-23 -20 88 88');
+    // les lettres sont mesurées et semées dans la police : on attend qu'elle soit chargée
+    return document.fonts.load('900 20px Archivo').then(function () {
+      dessiner = lancement(avecNom, sortie);
+      dessiner(0);
+      return sortie + 0.6;
+    });
+  };
+  // dessine l'instant t, et attend que l'image soit à l'écran
+  window.rendre = function (t) {
+    dessiner(t);
+    return new Promise(function (ok) { requestAnimationFrame(function () { requestAnimationFrame(function () { ok(true); }); }); });
+  };
+  window.pret = true;
+
+  // à la main : #jouer ou #jouer-nom rejoue l'animation en boucle
+  if (/^#jouer/.test(location.hash)) {
+    window.preparer(location.hash === '#jouer-nom', Math.min(innerWidth, innerHeight), 4.2).then(function (duree) {
+      var debut = performance.now();
+      (function image(maintenant) { dessiner(((maintenant - debut) / 1000) % (duree + 0.3)); requestAnimationFrame(image); })(debut);
+    });
+  }
+})();
+</script>
