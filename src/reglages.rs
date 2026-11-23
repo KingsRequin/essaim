@@ -35,6 +35,9 @@ const TAILLE: (i32, i32) = (1180, 800);
 const TAILLE_MIN: (i32, i32) = (900, 620);
 const TIMER_SON: usize = 1;
 const TIMER_FICHIERS: usize = 2;
+/// Délai au bout duquel la fenêtre se montre même si la page ne s'est pas dite prête.
+const TIMER_MONTRER: usize = 3;
+const ATTENTE_PAGE_MS: u32 = 3000;
 /// Adresse de la page : wry sert le protocole `essaim` sous `http://essaim.localhost/`.
 const ORIGINE: &str = "http://essaim.localhost/";
 
@@ -108,6 +111,8 @@ fn servir(req: wry::http::Request<Vec<u8>>) -> wry::http::Response<Cow<'static, 
 enum Demande {
     /// Réglages, presets et dépôt de la bibliothèque.
     Etat,
+    /// La page est dessinée : la fenêtre, cachée jusque-là, peut se montrer.
+    Prete,
     Regler { section: String, cle: String, valeur: Value },
     Appliquer { nom: String },
     /// Enregistre les réglages actuels sous `nom` ; `publier` ouvre la proposition sur GitHub.
@@ -174,6 +179,8 @@ struct Fenetre {
     jeux: Option<Vec<crate::souris::Jeu>>,
     /// Fenêtre réduite : la vue est cachée et le son n'est plus envoyé.
     reduite: bool,
+    /// La fenêtre a été montrée (elle naît cachée, le temps que la page se dessine).
+    montree: bool,
     /// Dernier état de la mise à jour envoyé à la page (rien au départ).
     maj: Option<crate::maj::Etat>,
 }
@@ -273,6 +280,7 @@ impl Fenetre {
         };
         match demande {
             Demande::Etat => self.etat(),
+            Demande::Prete => self.montrer(),
             Demande::Regler { section, cle, valeur } => match config::set_value(&section, &cle, &valeur) {
                 Ok(()) => config::request_reload(),
                 Err(e) => self.erreur(&format!("Réglage refusé : {e}.")),
@@ -552,7 +560,25 @@ impl Fenetre {
     }
 
     /// Son et fichiers : envoyés à la page quand ils changent.
+    /// Montre la fenêtre, une fois : quand la page se dit prête, ou au bout de l'attente.
+    fn montrer(&mut self) {
+        if self.montree {
+            return;
+        }
+        self.montree = true;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_MONTRER);
+            let _ = ShowWindow(self.hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(self.hwnd);
+        }
+        let _ = self.vue.focus();
+    }
+
     fn tick(&mut self, quoi: usize) {
+        if quoi == TIMER_MONTRER {
+            log::warn!("réglages : la page ne s'est pas dite prête, fenêtre montrée quand même");
+            return self.montrer();
+        }
         if quoi == TIMER_SON && !self.reduite {
             let au = self.son.view();
             let compteurs = au.kicks ^ au.aigus.rotate_left(16) ^ au.caisses.rotate_left(8) ^ au.drops.rotate_left(24);
@@ -907,14 +933,16 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         avant: None,
         jeux: None,
         reduite: false,
+        montree: false,
         maj: None,
     };
     FENETRE.with(|f| *f.borrow_mut() = Some(fenetre));
     unsafe {
         SetTimer(Some(hwnd), TIMER_SON, 33, None);
         SetTimer(Some(hwnd), TIMER_FICHIERS, 700, None);
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = SetForegroundWindow(hwnd);
+        // La fenêtre reste cachée tant que la page n'est pas dessinée (message `prete`) : montrée
+        // tout de suite, elle serait blanche le temps que WebView2 rende sa première image.
+        SetTimer(Some(hwnd), TIMER_MONTRER, ATTENTE_PAGE_MS, None);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -1126,6 +1154,7 @@ mod tests {
         assert!(matches!(d, Demande::Enregistrer { publier: true, .. }));
         assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"chercher_maj"}"#).unwrap(), Demande::ChercherMaj));
         assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"redemarrer"}"#).unwrap(), Demande::Redemarrer));
+        assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"prete"}"#).unwrap(), Demande::Prete));
         assert!(serde_json::from_str::<Demande>(r#"{"cmd":"formater_disque"}"#).is_err());
     }
 }

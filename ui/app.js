@@ -23,6 +23,17 @@ function remplacer(conteneur, enfants) {
   if (cible) cible.focus({ preventScroll: true });
 }
 const envoyer = (demande) => window.ipc && window.ipc.postMessage(JSON.stringify(demande));
+// La fenêtre ne se montre qu'à ce message (reglages.rs) : elle s'ouvre sur la page dessinée, police
+// chargée, et non sur le blanc du chargement. L'ouverture animée part au même moment
+// (lancement.js). Si les images ne viennent pas (fenêtre encore cachée), on n'attend pas plus de 0,4 s.
+function annoncerPrete() {
+  const image = () => new Promise((ok) => requestAnimationFrame(ok));
+  const dessinee = document.fonts.ready.then(image).then(image);
+  Promise.race([dessinee, new Promise((ok) => setTimeout(ok, 400))]).then(() => {
+    envoyer({ cmd: "prete" });
+    dispatchEvent(new Event("essaim-prete"));
+  });
+}
 const memoire = {
   lire(cle, defaut) {
     try { const v = localStorage.getItem("essaim." + cle); return v === null ? defaut : JSON.parse(v); } catch { return defaut; }
@@ -2900,6 +2911,7 @@ window.essaim = {
         dessinerPresets();
         dessinerCurseurs();
         if (etat.vue === "auto") dessinerAuto();
+        if (premier) annoncerPrete();
         break;
       }
       case "applis":

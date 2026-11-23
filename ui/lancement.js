@@ -477,8 +477,8 @@ const Lancement = (() => {
     }
     const taille = () => (passe ? abreger() : placer());
 
-    function jouer() {
-      if (fini) return;
+    // Monte le logo sur sa première image (le germe pas encore né), puis rend de quoi le lancer.
+    function monterScene() {
       placer();
       // Où le nom doit arriver : sur le titre de l'en-tête. Sa ligne de base est le bas d'un bloc
       // sans hauteur posé dans sa ligne.
@@ -496,6 +496,7 @@ const Lancement = (() => {
         };
       };
       const scene = monter(racine, { nom: true, rouge: "var(--signal)", encre: "var(--encre)", fin: { genre: "passage", t: DEPART, cible } });
+      scene.dessiner(0);
       let debut = null;
       const pas = garder((maintenant) => {
         if (fini) return;
@@ -510,21 +511,23 @@ const Lancement = (() => {
         if (t >= scene.duree) finir(false);
         else image = requestAnimationFrame(pas);
       });
-      image = requestAnimationFrame(pas);
+      return () => { if (!fini) image = requestAnimationFrame(pas); };
     }
 
     voile.addEventListener("pointerdown", abreger);
     addEventListener("keydown", touche, true);
     addEventListener("resize", taille);
-    // les lettres sont mesurées et semées dans la police : on l'attend, 1,5 s au plus
-    let parti = false;
-    const demarrer = garder(() => {
-      if (parti) return;
-      parti = true;
-      jouer();
-    });
-    setTimeout(demarrer, 1500);
-    document.fonts.load("900 20px Archivo").then(demarrer, demarrer);
+    // Le logo est monté dès que la police est là (les lettres y sont mesurées et semées : on
+    // l'attend 1,5 s au plus). L'animation part quand la fenêtre se montre : app.js l'annonce
+    // (« essaim-prete ») en demandant à l'appli de la montrer. Sans nouvelles, elle part seule.
+    const attendre = (ms) => new Promise((ok) => setTimeout(ok, ms));
+    const police = Promise.race([document.fonts.load("900 20px Archivo").catch(() => {}), attendre(1500)]);
+    const montree = Promise.race([new Promise((ok) => addEventListener("essaim-prete", ok, { once: true })), attendre(2500)]);
+    police.then(garder(() => {
+      if (fini) return;
+      const lancer = monterScene();
+      montree.then(lancer);
+    }));
   }
 
   return { monter, ouvrir };

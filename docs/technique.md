@@ -261,6 +261,9 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
   `ui/polices/OFL.txt`).
+- La fenêtre naît cachée et ne se montre que lorsque la page se dit dessinée (message `prete`,
+  envoyé par `ui/app.js` après le premier état, la police et deux images ; au bout de 3 s sinon) :
+  montrée tout de suite, elle resterait blanche le temps que WebView2 rende sa première image.
 - **Ouverture animée** (`ui/lancement.js`) : à la première ouverture de la fenêtre depuis le
   lancement d'Essaim (`reglages::DEJA_OUVERTE`), la page est chargée à l'adresse
   `index.html#ouverture`, qui seule montre le voile `#ouverture` (`:target` dans `style.css`,
@@ -268,7 +271,8 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   un filtre de flou durci), puis le nom ESSAIM va se poser sur le titre de l'en-tête, mesuré dans
   la page (même police, même interlettrage : il s'y superpose lettre pour lettre), son filet
   devient celui de l'en-tête et les blocs de la fenêtre entrent en décalé (Web Animations) ; le
-  voile est alors retiré. Un clic ou une touche l'abrège (un changement de taille aussi, une fois
+  voile est alors retiré. L'animation part quand la fenêtre se montre (événement `essaim-prete`
+  de la page). Un clic ou une touche l'abrège (un changement de taille aussi, une fois
   le nom parti) ; une erreur le retire. Ni bibliothèque ni fichier en ligne : le temps est mené par des segments et des courbes
   écrits dans le fichier. La même animation, avec sa sortie, fait les GIF du logo du README.
 - **Déclencheurs** (`[declencheurs]`, `render.rs`) : `Ecoute::lire` donne les événements du son
