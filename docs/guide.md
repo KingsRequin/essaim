@@ -391,9 +391,10 @@ Les presets partagés vivent dans un dépôt GitHub public, `[bibliotheque] depo
 `reglages` reprend les sections de `config.toml` (sauf `[rendu]`) ; les clés absentes prennent
 les valeurs du preset *Défaut*. *Installer* copie le preset dans Mes presets. *Publier* (case du
 panneau d'enregistrement) ouvre GitHub sur la création de `presets/<nom>.toml` dans le dépôt :
-GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index. Un
-preset trop long pour l'adresse (plus de 6 000 caractères, par exemple le trajet d'une image)
-est copié dans le presse-papiers : il suffit de le coller dans la page qui s'ouvre. Une entrée de
+GitHub en fait une copie et une pull request, à relire avant d'ajouter le preset à l'index. Le
+fichier arrive déjà rempli. Un preset trop long pour l'adresse (plus de 8 000 caractères une fois
+encodé, par exemple le trajet d'une image très détaillée) est copié dans le presse-papiers : le
+fichier ouvert le rappelle, il suffit de l'y coller (Ctrl+A, puis Ctrl+V). Une entrée de
 l'index mal formée (section qui n'est pas une table) est ignorée. Champ facultatif `apercu` :
 chemin relatif d'une image PNG ou GIF du dépôt (`"apercus/Pollen.gif"`), montrée dans la vignette
 quand l'aperçu est figé ; sans lui, ou si l'image ne se charge pas, l'aperçu est calculé.

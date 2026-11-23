@@ -523,10 +523,9 @@ impl Fenetre {
             Ok(t) => t,
             Err(e) => return self.erreur(&format!("Preset « {nom} » enregistré, mais illisible pour la publication ({e}).")),
         };
-        let page = format!("https://github.com/{depot}/new/main?filename={}", encoder(&format!("presets/{nom}.toml")));
-        let url = format!("{page}&value={}", encoder(&texte));
-        // une adresse trop longue est coupée par le navigateur ou refusée par GitHub : le
-        // preset passe alors par le presse-papiers
+        let url = adresse_de_publication(&depot, nom, &texte);
+        // une adresse trop longue est refusée par GitHub : le preset passe alors par le
+        // presse-papiers, et le fichier ouvert dit de le coller
         if url.len() <= URL_MAX {
             crate::win::open_url(&url);
             self.message(&format!("Preset « {nom} » enregistré. GitHub s'ouvre pour le proposer à la bibliothèque."));
@@ -537,9 +536,9 @@ impl Fenetre {
                 "Preset « {nom} » enregistré, mais trop long pour l'adresse et non copié ({e}) : exporte-le pour le publier."
             ));
         }
-        crate::win::open_url(&page);
+        crate::win::open_url(&adresse_de_publication(&depot, nom, A_COLLER));
         self.message(&format!(
-            "Preset « {nom} » enregistré et copié : GitHub s'ouvre, colle-le (Ctrl+V) dans le fichier pour le proposer à la bibliothèque."
+            "Preset « {nom} » enregistré et copié : GitHub s'ouvre, colle-le (Ctrl+A, Ctrl+V) dans le fichier pour le proposer à la bibliothèque."
         ));
     }
 
@@ -717,7 +716,19 @@ fn nom_de_gif(nom: &str) -> String {
 }
 
 /// Adresse la plus longue confiée au navigateur (au-delà, le preset passe par le presse-papiers).
-const URL_MAX: usize = 6000;
+/// GitHub répond « 414 » vers 8 190 caractères, comptés tels que sa page réécrit l'adresse : en
+/// encodage de formulaire, celui d'`encoder`, pour que la longueur mesurée ici soit la sienne.
+/// Essayé en vrai : 8 000 passe.
+const URL_MAX: usize = 8000;
+
+/// Contenu du fichier ouvert sur GitHub quand le preset, trop long pour l'adresse, attend dans le
+/// presse-papiers : un commentaire TOML, sans effet s'il reste dans le fichier.
+const A_COLLER: &str = "# Preset trop long pour l'adresse : Essaim l'a copié. Colle-le ici à la place de cette ligne (Ctrl+A, puis Ctrl+V).\n";
+
+/// Adresse GitHub qui ouvre la création de `presets/<nom>.toml` dans `depot`, rempli de `texte`.
+fn adresse_de_publication(depot: &str, nom: &str, texte: &str) -> String {
+    format!("https://github.com/{depot}/new/main?filename={}&value={}", encoder(&format!("presets/{nom}.toml")), encoder(texte))
+}
 
 /// Copie `texte` dans le presse-papiers de Windows.
 fn copier(texte: &str) -> Result<(), String> {
@@ -782,11 +793,13 @@ fn majuscule(s: &str) -> String {
     c.next().map(|p| p.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-/// Encodage d'URL (RFC 3986) : tout sauf les caractères non réservés.
+/// Encodage de formulaire (`application/x-www-form-urlencoded`, celui de `URLSearchParams`) :
+/// l'espace devient « + », un caractère au lieu de trois, ce qui compte pour un preset.
 fn encoder(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => (b as char).to_string(),
+            b' ' => "+".to_owned(),
             _ => format!("%{b:02X}"),
         })
         .collect()
@@ -1061,8 +1074,21 @@ mod tests {
 
     #[test]
     fn encodage_d_url() {
-        assert_eq!(encoder("presets/Nuit blanche.toml"), "presets%2FNuit%20blanche.toml");
+        assert_eq!(encoder("presets/Nuit blanche.toml"), "presets%2FNuit+blanche.toml");
         assert_eq!(encoder("é=1\n"), "%C3%A9%3D1%0A");
+        assert_eq!(encoder("1+1 ~*-._"), "1%2B1+%7E*-._");
+    }
+
+    #[test]
+    fn adresse_de_publication_d_un_preset() {
+        assert_eq!(
+            adresse_de_publication("a/b", "Nuit blanche", "[essaim]\nforme = \"cercle\"\n"),
+            "https://github.com/a/b/new/main?filename=presets%2FNuit+blanche.toml&value=%5Bessaim%5D%0Aforme+%3D+%22cercle%22%0A"
+        );
+        // le mot laissé dans le fichier quand le preset passe par le presse-papiers tient dans
+        // l'adresse et reste une seule ligne de commentaire TOML
+        assert!(adresse_de_publication("a/b", &"n".repeat(40), A_COLLER).len() <= URL_MAX);
+        assert!(A_COLLER.starts_with("# ") && A_COLLER.ends_with('\n') && A_COLLER.lines().count() == 1);
     }
 
     #[test]
