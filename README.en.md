@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.png" width="96" alt="Essaim logo">
+<img src="docs/images/logo.svg" width="96" alt="Essaim logo">
 
 # Essaim
 

@@ -833,45 +833,72 @@ pub fn app_icon(petite: bool) -> Option<HICON> {
     }
 }
 
-/// Le motif de l'icône d'Essaim (le point et trois comètes) dans un carré de `cote` pixels ;
+/// Couleur de l'icône : le rouge `signal` de la charte (thème sombre), lisible sur une barre des
+/// tâches sombre comme claire.
+const ICONE_ROUGE: (u8, u8, u8) = (0xff, 0x3b, 0x2f);
+/// Couleur de l'icône en pause : un gris moyen, lisible lui aussi sur les deux thèmes.
+const ICONE_GRIS: (u8, u8, u8) = (0x8a, 0x89, 0x84);
+
+/// Géométrie du motif pour une icône de `cote` pixels : rayon de la comète, centre de son
+/// cercle (x, y) et rayon de l'orbe, en pixels. Jusqu'à 40 px chaque taille a la sienne : la
+/// marge est plus étroite que dans la référence (l'icône garde sa présence à côté des autres) et
+/// les bords tombent sur un pixel entier, ce qu'une simple réduction ne donnerait pas. Au-delà,
+/// c'est la référence sur 48 unités (`docs/images/logo.svg`).
+fn geometrie_icone(cote: u32) -> (f32, f32, f32, f32) {
+    match cote {
+        16 => (7.0, 6.5, 8.0, 2.5),
+        20 => (8.0, 8.0, 10.0, 3.0),
+        24 => (11.0, 9.5, 12.0, 3.5),
+        32 => (14.0, 12.0, 16.0, 5.0),
+        40 => (18.0, 16.0, 20.0, 6.0),
+        _ => {
+            let k = cote as f32 / 48.0;
+            (18.0 * k, 21.0 * k, 24.0 * k, 6.0 * k)
+        }
+    }
+}
+
+/// Le motif de l'icône d'Essaim dans un carré de `cote` pixels : une comète en virgule (tête
+/// ronde, queue qui s'effile en tournant) enroulée autour d'un orbe, d'une seule couleur ;
 /// `gris` : variante éteinte (pause). Sert à l'icône de notification et au fichier
 /// `ressources/essaim.ico` (essai `exporter_icone`).
 pub fn dessin_icone(cote: u32, gris: bool) -> Option<Pixmap> {
-    use tiny_skia::{Color, FillRule, Paint, PathBuilder, Transform};
-    let mut pm = Pixmap::new(cote, cote)?;
-    let k = cote as f32 / 32.0;
-    let mut fill = |x: f32, y: f32, r: f32, c: (u8, u8, u8)| {
-        let (x, y, r) = (x * k, y * k, r * k);
-        let c = if gris {
-            let l = (0.3 * c.0 as f32 + 0.59 * c.1 as f32 + 0.11 * c.2 as f32) * 0.6;
-            (l as u8, l as u8, l as u8)
-        } else {
-            c
-        };
-        let mut p = Paint::default();
-        p.set_color(Color::from_rgba8(c.0, c.1, c.2, 255));
-        p.anti_alias = true;
-        if let Some(path) = PathBuilder::from_circle(x, y, r) {
-            pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+    use tiny_skia::{BlendMode, Color, FillRule, Paint, PathBuilder, Rect, Transform};
+    fn disque(pm: &mut Pixmap, x: f32, y: f32, rayon: f32, paint: &Paint) {
+        if let Some(path) = PathBuilder::from_circle(x, y, rayon) {
+            pm.fill_path(&path, paint, FillRule::Winding, Transform::identity(), None);
         }
-    };
-    fill(16.0, 16.0, 4.5, (255, 255, 255));
-    fill(26.0, 10.0, 3.5, (122, 162, 247));
-    fill(6.0, 22.0, 3.5, (187, 154, 247));
-    fill(9.0, 6.0, 2.0, (125, 207, 255));
+    }
+    let (rayon, cx, cy, orbe) = geometrie_icone(cote);
+    let c = if gris { ICONE_GRIS } else { ICONE_ROUGE };
+    let mut encre = Paint::default();
+    encre.set_color(Color::from_rgba8(c.0, c.1, c.2, 255));
+    encre.anti_alias = true;
+    let gomme = Paint { blend_mode: BlendMode::Clear, anti_alias: true, ..Paint::default() };
+    let mut pm = Pixmap::new(cote, cote)?;
+    // La virgule : la moitié droite d'un disque, plus la tête (un disque de rayon moitié, en haut
+    // sur l'axe), moins le creux (le même disque, en bas). L'orbe se loge dans le creux.
+    disque(&mut pm, cx, cy, rayon, &encre);
+    pm.fill_rect(Rect::from_ltrb(0.0, 0.0, cx, cote as f32)?, &gomme, Transform::identity(), None);
+    disque(&mut pm, cx, cy - rayon / 2.0, rayon / 2.0, &encre);
+    disque(&mut pm, cx, cy + rayon / 2.0, rayon / 2.0, &gomme);
+    disque(&mut pm, cx, cy + rayon / 2.0, orbe, &encre);
     Some(pm)
 }
 
-/// Icône 32×32 dessinée à la volée (`dessin_icone`) ; `gris` : variante éteinte (pause).
+/// Icône dessinée à la volée (`dessin_icone`) à la taille d'une petite icône de l'écran (16 px à
+/// 100 %, 20 à 125 %…) : Windows n'a pas à réduire une image plus grande ; `gris` : variante
+/// éteinte (pause).
 fn make_icon(gris: bool) -> Option<HICON> {
-    let pm = dessin_icone(32, gris)?;
+    let cote = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
+    let pm = dessin_icone(cote as u32, gris)?;
     unsafe {
         let dc = CreateCompatibleDC(None);
         let bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: 32,
-                biHeight: -32,
+                biWidth: cote,
+                biHeight: -cote,
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -881,7 +908,7 @@ fn make_icon(gris: bool) -> Option<HICON> {
         };
         let mut bits: *mut c_void = std::ptr::null_mut();
         let color = CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
-        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, 32 * 32 * 4);
+        let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (cote * cote * 4) as usize);
         for (d, s) in dst.chunks_exact_mut(4).zip(pm.data().chunks_exact(4)) {
             let a = s[3] as u32;
             let un = |v: u8| if a == 0 { 0 } else { ((v as u32 * 255 + a / 2) / a).min(255) as u8 };
@@ -890,7 +917,10 @@ fn make_icon(gris: bool) -> Option<HICON> {
             d[2] = un(s[0]);
             d[3] = s[3];
         }
-        let mask = CreateBitmap(32, 32, 1, 1, Some([0u8; 128].as_ptr() as *const c_void));
+        // masque d'un bit par pixel, tout à zéro (la transparence vient du canal alpha) : ses
+        // lignes sont alignées sur 16 bits
+        let masque = vec![0u8; (cote as usize).div_ceil(16) * 2 * cote as usize];
+        let mask = CreateBitmap(cote, cote, 1, 1, Some(masque.as_ptr() as *const c_void));
         let info = ICONINFO { fIcon: true.into(), hbmMask: mask, hbmColor: color, ..Default::default() };
         let icon = CreateIconIndirect(&info).ok();
         let _ = DeleteObject(color.into());
@@ -959,6 +989,34 @@ mod tests {
         assert!(calque(0x0828_00a8) && calque((WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST).0));
         // fenêtre superposée qui prend les clics (fondu, jeu), fenêtre ordinaire
         assert!(!calque(WS_EX_LAYERED.0) && !calque(WS_EX_TRANSPARENT.0) && !calque(0x0020_0000));
+    }
+
+    #[test]
+    fn icone_une_comete_et_son_orbe() {
+        for cote in [16u32, 20, 24, 32, 40, 48, 64, 256] {
+            let (rayon, cx, cy, orbe) = geometrie_icone(cote);
+            let pm = dessin_icone(cote, false).unwrap();
+            let pixel = |x: f32, y: f32| {
+                let p = pm.pixel(x as u32, y as u32).unwrap();
+                (p.red(), p.green(), p.blue(), p.alpha())
+            };
+            let plein = (ICONE_ROUGE.0, ICONE_ROUGE.1, ICONE_ROUGE.2, 255);
+            // l'orbe, la tête de la comète et sa queue (à droite de l'axe) sont pleins
+            assert_eq!(pixel(cx, cy + rayon / 2.0), plein, "orbe à {cote} px");
+            assert_eq!(pixel(cx - rayon / 4.0, cy - rayon / 2.0), plein, "tête à {cote} px");
+            assert_eq!(pixel(cx + rayon * 0.75, cy), plein, "queue à {cote} px");
+            // le jeu entre l'orbe et la comète reste ouvert (un pixel de large aux petites
+            // tailles : il garde un reste de lissage) ; la moitié gauche du bas et les coins sont
+            // vides
+            let jeu = cx + (orbe + rayon / 2.0) / 2.0;
+            assert!(pixel(jeu, cy + rayon / 2.0).3 < 64, "jeu à {cote} px");
+            assert_eq!(pixel(cx - rayon * 0.75, cy + rayon / 2.0).3, 0, "bas gauche à {cote} px");
+            assert_eq!(pixel(0.0, 0.0).3, 0);
+            assert_eq!(pixel(cote as f32 - 1.0, cote as f32 - 1.0).3, 0);
+        }
+        // en pause : le même motif, en gris
+        let p = dessin_icone(32, true).unwrap().pixel(12, 23).unwrap();
+        assert_eq!((p.red(), p.green(), p.blue(), p.alpha()), (ICONE_GRIS.0, ICONE_GRIS.1, ICONE_GRIS.2, 255));
     }
 
     /// Refait `ressources/essaim.ico` (le motif de l'icône en 16 à 256 px, images PNG) :
