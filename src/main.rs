@@ -414,6 +414,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 }
                 ipc::Cmd::SetPaused(_) => {}
                 ipc::Cmd::OpenConfig => win::open_file(&config::path()),
+                ipc::Cmd::OpenSettings => reglages::open(shared.clone()),
             }
         }
         if win::take_display_changed() {
@@ -486,6 +487,12 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         automatique.tick(&conf.cfg, now, shared.view().bpm);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
+        // preset en place (interface locale, infobulle de l'icône) : recherché quand les réglages changent
+        if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
+            let nom = profils::list().into_iter().find(|p| profils::same(&p.cfg, cfg)).map(|p| p.name);
+            preset = Some((conf_gen, nom));
+        }
+        let nom_preset = preset.as_ref().and_then(|p| p.1.as_deref());
         let fields = (user_paused, fs_paused, !user_paused && !retrait, backend.is_gpu(), prisme.connected(), conf_gen);
         if published != Some(fields) {
             ipc_state.publish(serde_json::json!({
@@ -494,6 +501,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 "active": fields.2,
                 "gpu": fields.3,
                 "prisme": fields.4,
+                "preset": nom_preset,
                 "config": ipc::config_publiee(cfg),
             }));
             published = Some(fields);
@@ -501,12 +509,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // icône : grisée en pause, infobulle avec le preset en place, l'état et le morceau
         let montre = (user_paused, retrait || profond, conf_gen, media::version());
         if icone != Some(montre) {
-            if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
-                let nom = profils::list().into_iter().find(|p| profils::same(&p.cfg, cfg)).map(|p| p.name);
-                preset = Some((conf_gen, nom));
-            }
-            let nom = preset.as_ref().and_then(|p| p.1.as_deref());
-            win::etat_icone(user_paused, &media::infobulle(&win::infobulle(nom, montre.0, montre.1)));
+            win::etat_icone(user_paused, &media::infobulle(&win::infobulle(nom_preset, montre.0, montre.1)));
             icone = Some(montre);
         }
 

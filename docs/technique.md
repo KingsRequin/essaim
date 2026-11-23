@@ -143,7 +143,13 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 = hooks
 d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
 (`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
-bornées ; par exemple `bordure`/`repos`), `open_config` ; événement `state` à chaque changement et au moins toutes les 2 s.
+bornées ; par exemple `bordure`/`repos`), `list_presets` (presets fournis puis ceux de
+l'utilisateur : `name`, `builtin`, `active`, relus à chaque demande), `apply_preset` (`name` :
+comme le menu de l'icône, curseurs du preset compris), `open_settings` (fenêtre des réglages,
+ouverte par la boucle principale), `open_config` ; événement `state` à chaque changement et au
+moins toutes les 2 s, avec `preset` : le nom du preset en place, `null` si les réglages ne sont
+ceux d'aucun (recherché à chaque relecture de `config.toml` ; un preset enregistré ou supprimé
+sans autre changement ne le fait pas bouger, `list_presets` reste juste).
 Clés d'avant les déclencheurs, encore lues et écrites par Horizon : `orbite.vitesse_basse` et
 `orbite.eloignement_grave` (les modulations de base basse → vitesse et grave → rayon, calculées à
 la publication, réécrites, ajoutées ou retirées par `set_config`) et `fissures.actives` (le
@@ -152,8 +158,8 @@ Toute connexion avec un en-tête `Origin` est refusée (pages web, mais aussi ap
 Tauri, Electron) ; 8 clients au plus, 3 s pour la poignée de main, messages de 64 Ko au plus,
 client fermé après 60 s sans message. `set_config` refuse les sections `mise_a_jour`,
 `bibliotheque`, `automatique` et `pause` (elles ne changent que par la fenêtre des réglages ou
-le fichier). Le widget Essaim d'Horizon s'en sert depuis son côté Rust (pause au clic, réglages
-en direct dans son panneau).
+le fichier). Le plugin Essaim d'Horizon s'en sert (pause au clic ; dans son panneau, choix du
+preset et ouverture des réglages).
 
 ## Consommation (mesurée le 2026-11-14)
 

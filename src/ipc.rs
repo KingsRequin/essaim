@@ -6,10 +6,16 @@
 //! `{"event": "state", "data": …}` à chaque changement et au moins toutes les 2 s.
 //!
 //! Commandes :
-//! - `get_state` : état (`paused`, `fullscreen`, `active`, `gpu`, `prisme`) et réglages (`config`) ;
+//! - `get_state` : état (`paused`, `fullscreen`, `active`, `gpu`, `prisme`), preset en place
+//!   (`preset` : son nom, ou `null` si les réglages ne sont ceux d'aucun preset) et réglages
+//!   (`config`) ;
 //! - `set_paused` `{"paused": bool}` ;
 //! - `set_config` `{"section": "orbite", "key": "rayon", "value": 24}` : écrit la valeur dans
 //!   `config.toml` en gardant ses commentaires ; Essaim la recharge dans la seconde ;
+//! - `list_presets` : presets fournis puis ceux de l'utilisateur,
+//!   `[{"name": "Discret", "builtin": true, "active": false}]` (relus à chaque demande) ;
+//! - `apply_preset` `{"name": "Discret"}` : applique le preset, comme le menu de l'icône ;
+//! - `open_settings` : ouvre la fenêtre des réglages (ou la ramène devant) ;
 //! - `open_config` : ouvre `config.toml` dans l'éditeur.
 //!
 //! Clés d'avant les modulations et les déclencheurs, encore lues et écrites par Horizon
@@ -22,6 +28,7 @@
 
 use crate::config::{Action, Cible, Config, Declencheur, Evenement, Groupe, Modulation, Source};
 use crate::modulation;
+use crate::profils::{self, Profile};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::net::{TcpListener, TcpStream};
@@ -47,6 +54,7 @@ const SECTIONS_PROTEGEES: [&str; 4] = ["mise_a_jour", "bibliotheque", "automatiq
 pub enum Cmd {
     SetPaused(bool),
     OpenConfig,
+    OpenSettings,
 }
 
 /// État publié par la boucle principale.
@@ -78,6 +86,9 @@ enum Request {
     GetState,
     SetPaused { paused: bool },
     SetConfig { section: String, key: String, value: Value },
+    ListPresets,
+    ApplyPreset { name: String },
+    OpenSettings,
     OpenConfig,
 }
 
@@ -186,6 +197,9 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>) -> Value {
         Request::GetState => Ok(shared.snapshot().1),
         Request::SetPaused { paused } => tx.send(Cmd::SetPaused(paused)).map(|_| Value::Null).map_err(|e| e.to_string()),
         Request::OpenConfig => tx.send(Cmd::OpenConfig).map(|_| Value::Null).map_err(|e| e.to_string()),
+        Request::OpenSettings => tx.send(Cmd::OpenSettings).map(|_| Value::Null).map_err(|e| e.to_string()),
+        Request::ListPresets => Ok(presets_publies(&profils::list(), &Config::read(&crate::config::path()).unwrap_or_default())),
+        Request::ApplyPreset { name } => profils::appliquer(&name).map(|_| Value::Null),
         Request::SetConfig { section, .. } if SECTIONS_PROTEGEES.contains(&section.as_str()) => {
             Err(format!("la section [{section}] ne se change pas par l'interface locale"))
         }
@@ -196,6 +210,12 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>) -> Value {
         Ok(data) => json!({ "id": id, "ok": true, "data": data }),
         Err(e) => json!({ "id": id, "ok": false, "error": e }),
     }
+}
+
+/// Presets publiés aux clients, dans l'ordre du menu de l'icône ; `active` : ses réglages sont
+/// ceux de `cfg`.
+fn presets_publies(liste: &[Profile], cfg: &Config) -> Value {
+    liste.iter().map(|p| json!({ "name": p.name, "builtin": p.builtin, "active": profils::same(&p.cfg, cfg) })).collect()
 }
 
 /// Clés d'avant gardées pour les clients (Horizon) : la vitesse ajoutée par la basse (rad/s à
@@ -279,6 +299,39 @@ mod tests {
             let r = handle(&json!({ "id": 1, "cmd": "set_config", "section": section, "key": "x", "value": 1 }).to_string(), &shared, &tx);
             assert_eq!(r["ok"], false, "{section}");
         }
+    }
+
+    #[test]
+    fn presets_publies_avec_celui_en_place() {
+        let liste = crate::prereglages::builtins();
+        let v = presets_publies(&liste, &liste[1].cfg);
+        let presets = v.as_array().unwrap();
+        assert_eq!(presets.len(), liste.len());
+        assert_eq!(presets[1], json!({ "name": liste[1].name, "builtin": true, "active": true }));
+        let actifs = presets.iter().filter(|p| p["active"] == true).count();
+        assert_eq!(actifs, liste.iter().filter(|p| profils::same(&p.cfg, &liste[1].cfg)).count());
+        // un profil de l'utilisateur n'est pas « fourni »
+        let a_moi = [Profile { name: "À moi".into(), builtin: false, cfg: Config::default(), date: None }];
+        assert_eq!(presets_publies(&a_moi, &Config::default()), json!([{ "name": "À moi", "builtin": false, "active": true }]));
+    }
+
+    #[test]
+    fn reglages_ouverts_par_la_boucle_principale() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let r = handle(&json!({ "id": 7, "cmd": "open_settings" }).to_string(), &Shared::default(), &tx);
+        assert_eq!(r, json!({ "id": 7, "ok": true, "data": null }));
+        assert!(matches!(rx.try_recv(), Ok(Cmd::OpenSettings)));
+    }
+
+    #[test]
+    fn preset_inconnu_refuse() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let shared = Shared::default();
+        let r = handle(&json!({ "id": 2, "cmd": "apply_preset", "name": "aucun preset de ce nom ?" }).to_string(), &shared, &tx);
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap().contains("aucun preset"));
+        // sans nom : requête refusée, rien n'est appliqué
+        assert_eq!(handle(&json!({ "id": 3, "cmd": "apply_preset" }).to_string(), &shared, &tx)["ok"], false);
     }
 
     #[test]
