@@ -163,7 +163,12 @@ fn musique(t: f64) -> AudioView {
 /// Portée de l'essaim avec `cfg` (px à 100 %) : le plus grand demi-côté atteint pendant
 /// `CALIBRAGE` s de musique synthétique, changement de piste compris.
 fn portee(cfg: &Config) -> f32 {
-    let (mut swarm, effets) = (Swarm::new(), Effets::new());
+    portee_de(Swarm::new(), cfg)
+}
+
+/// La même mesure avec l'essaim `swarm` (les essais lui donnent des tirages fixés).
+fn portee_de(mut swarm: Swarm, cfg: &Config) -> f32 {
+    let effets = Effets::new();
     let dt = 1.0 / CALIBRAGE_IPS;
     let n = (CALIBRAGE * CALIBRAGE_IPS) as usize;
     let mut max = POINTEUR;
@@ -424,8 +429,8 @@ mod tests {
 
     /// Plus grand demi-côté atteint par l'essaim de `cfg` sur une autre musique que celle de la
     /// mesure (autre tempo, kicks irréguliers, drop plus tôt), avec un changement de piste.
-    fn portee_autre_musique(cfg: &Config) -> f32 {
-        let (mut s, effets) = (Swarm::new(), Effets::new());
+    fn portee_autre_musique(cfg: &Config, graine: u64) -> f32 {
+        let (mut s, effets) = (Swarm::avec_graine(graine), Effets::new());
         let mut max = 0.0f32;
         let ips = 90.0;
         for i in 0..(10.0 * ips) as usize {
@@ -442,18 +447,43 @@ mod tests {
         max
     }
 
+    /// Mesure du hasard : sur 40 tirages par preset, le pire rapport entre la portée atteinte sur
+    /// une autre musique et la portée mesurée, et le nombre de dépassements de la marge de 10 %
+    /// (2 sur 2 120 en novembre 2026, pour « Ressorts » : 1,15 au pire).
+    /// `cargo test --release mesure_des_ecarts_de_portee -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn mesure_des_ecarts_de_portee() {
+        let mut cfgs = vec![("défaut".to_string(), Config::default())];
+        cfgs.extend(crate::prereglages::builtins().into_iter().map(|p| (p.name, p.cfg)));
+        let (mut pire, mut depassements, mut total) = ((0.0f32, String::new()), 0, 0);
+        for (nom, cfg) in &cfgs {
+            for g in 0..40u64 {
+                let r = portee_autre_musique(cfg, 500_000 + g) / portee_de(Swarm::avec_graine(1000 * g + 3), cfg);
+                total += 1;
+                depassements += (r > 1.1) as usize;
+                if r > pire.0 {
+                    pire = (r, nom.clone());
+                }
+            }
+        }
+        eprintln!("pire rapport {:.3} ({}), {depassements} dépassements de 10 % sur {total}", pire.0, pire.1);
+    }
+
     #[test]
     fn chaque_preset_tient_dans_la_fenetre() {
         // la portée mesurée couvre ce que l'essaim dessine sur une autre musique, pour chaque
         // preset fourni ; une petite marge pour le hasard des particules (la portée vue en direct
-        // prend le relais au-delà)
+        // prend le relais au-delà). Tirages fixés : au hasard libre, la marge est dépassée environ
+        // une fois sur mille par preset (`mesure_des_ecarts_de_portee`), et l'essai échouait une
+        // fois sur dix.
         let mut cfgs = vec![("défaut".to_string(), Config::default())];
         cfgs.extend(crate::prereglages::builtins().into_iter().map(|p| (p.name, p.cfg)));
         for (nom, cfg) in cfgs {
             let t0 = std::time::Instant::now();
-            let p = portee(&cfg);
+            let p = portee_de(Swarm::avec_graine(7), &cfg);
             eprintln!("{nom:24} portée {p:5.0} px, mesurée en {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
-            let autre = portee_autre_musique(&cfg);
+            let autre = portee_autre_musique(&cfg, 11);
             assert!(p.is_finite() && p > POINTEUR, "{nom} : portée {p}");
             assert!(autre <= p * 1.1, "{nom} : {autre:.0} px atteints, portée mesurée {p:.0} px");
             // dans une fenêtre de 480 px, le carré de la portée tient entre les marges

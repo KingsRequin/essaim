@@ -663,6 +663,12 @@ struct Tampons {
 }
 
 impl Swarm {
+    /// Essaim au hasard fixé (essais : même suite de tirages à chaque fois).
+    #[cfg(test)]
+    pub fn avec_graine(g: u64) -> Self {
+        Self { rng: Rng::graine(g), ..Self::new() }
+    }
+
     pub fn new() -> Self {
         Self {
             rng: Rng::seeded(),
