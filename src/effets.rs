@@ -263,6 +263,11 @@ impl Effets {
         self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), ecran_du_pointeur(monitors, cursor));
     }
 
+    /// Effets des modulations sur chaque figure, pris par les figures à l'image suivante.
+    pub fn moduler_figures(&mut self, mods: &[crate::modulation::Effet; crate::modulation::NB_FIGURES]) {
+        self.figures.moduler(mods);
+    }
+
     /// Avance l'habillage seul (équerres, liseré), quand l'essaim n'est pas dessiné : pointeur
     /// masqué par la frappe, veille profonde. Les coups du son sont lus ici aussi : ceux joués
     /// entre-temps ne partent pas en rafale à la reprise.

@@ -694,6 +694,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // simulation ; teinte qui glisse avec la musique, lissée (~150 ms)
         (swarm.murs, swarm.doux) = (murs, doux);
         swarm.avance(t, dt, cursor, au, cfg, scale);
+        effets.moduler_figures(swarm.effets_figures());
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
         etiquette.avance(t, dt, cursor, scale, &au, cfg, layer::ecran_du_pointeur(&monitors, cursor));
         // fissures demandées par les déclencheurs (clic, drop…) ; teinte de tout ce qu'Essaim

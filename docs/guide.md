@@ -85,7 +85,14 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   qu'Essaim dessine, particules et bordure comprises ; comètes ou satellites : leurs têtes et
   traînées), `decalage` de l'orbite vers la droite (1,6 rayon ; vers la gauche en négatif),
   `luminosite` (la lueur des têtes, +200 %), `trainee` (+300 %), `opacite` (−1 : transparent).
-- `sur` : `"tout"`, `"cometes"` ou `"satellites"`. `quantite` de -1 à 1 (négatif : dans l'autre
+- `sur` : `"tout"` (les comètes et les satellites), `"cometes"`, `"satellites"`, `"figures"`
+  (toutes les figures autour du pointeur) ou une figure : `"arcs"`, `"quatre_temps"`,
+  `"anneau"`, `"orbe"`, `"voix"`, `"trame"`, `"pinceau"` (le trait), `"pendule"`, `"gouttes"`.
+  Sur une figure, `rayon` l'agrandit tout entière, `taille` épaissit ses traits, `rotation` et
+  `vitesse` la font tourner autour du pointeur (la vitesse dix fois moins que pour l'essaim),
+  `decalage` la pousse de côté (48 px à fond), `opacite` et `luminosite` la pâlissent ou la
+  ravivent, `teinte` la colore, `acceleration` multiplie sa rotation ; `trainee` n'y fait rien.
+  Le trait et le pendule ne tournent, ne grandissent ni ne se déplacent. `quantite` de -1 à 1 (négatif : dans l'autre
   sens). `seuil` (0 à 0,95) : rien sous ce niveau de la source, puis jusqu'au maximum. `lissage`
   (0 à 1) : 0 réagit aussitôt, 1 en douceur (0,4 s ; 0,35 par défaut ≈ 50 ms). `inverser` : la
   source à l'envers (1 − valeur ; stéréo : l'autre côté).
@@ -221,7 +228,15 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   `taille` (0,6 à 1,6) agrandit ou réduit l'ensemble (à 1, les perles tournent jusqu'à 35 px du
   pointeur).
   Ces neuf figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
-  pointeur dégagé, et s'utilisent seules ou avec l'essaim.
+  pointeur dégagé, et s'utilisent seules ou avec l'essaim : ce sont des alternatives aux
+  comètes, aussi réglables qu'elles. Chacune a, en plus de ses réglages propres, son **allure**
+  (mêmes clés dans sa section) : `echelle` (0,5 à 2), `opacite` (0,1 à 1), `teinte` (degrés
+  ajoutés à celle de l'essaim, -180 à 180), `rotation` (tours par minute autour du pointeur, -30
+  à 30), `decalage_x` et `decalage_y` (sa place par rapport au pointeur, -80 à 80 px), et la
+  force de chacune de ses réactions à la musique, de 0 (aucune) à 2 (double) :
+  `reaction_kick`, `reaction_caisse`, `reaction_charleston`, `reaction_basse`,
+  `reaction_montee`, `reaction_drop`. Le trait et le pendule n'ont ni échelle, ni rotation, ni
+  décalage. Les modulations peuvent viser chaque figure (`sur`, ci-dessus).
 - **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres, le halo et le
   liseré ne sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
   pas partie des presets : une fois allumés, ils restent quand on change de preset (la bordure,
@@ -355,10 +370,13 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque. Filtre par
     forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
     montre côte à côte avec la liste de leurs réglages différents.
-  - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
-    *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*,
-    *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*,
-    *Pendule*, *Gouttes*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
+  - *02 Réglages* : des sous-onglets rangés par familles repliables (seule celle du panneau
+    ouvert est dépliée d'office ; l'en-tête compte les effets actifs) : *L'essaim* (*Orbite*,
+    *Comètes*, *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*,
+    *Particules*, *Fissures*, *Réticule et projecteur*), *Figures* (*Spectre*, *Arcs*,
+    *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*, *Pendule*,
+    *Gouttes* ; sous *+ Avancé*, leur teinte, rotation, place et réactions, et un bouton qui
+    leur ajoute une modulation), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* (*Écoute*, *Étiquette du morceau*) et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet

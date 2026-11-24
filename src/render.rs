@@ -278,7 +278,8 @@ fn prisme_palette(cfg: &Config, t: f64, k: f32, j: usize, decale: f32) -> (u8, u
     prisme_decale(cfg, t, k, (j % n) as f32 * cfg.couleur.ecart_palette + decale)
 }
 
-fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u8, u8) {
+/// Couleur de l'essaim (comme `prisme`), décalée de `decale` degrés.
+pub(crate) fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u8, u8) {
     let synced = f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed));
     let base = if synced.is_finite() { synced } else { (cfg.couleur.teinte + t as f32 * cfg.couleur.vitesse_teinte).rem_euclid(360.0) };
     let base = base + decalage();
@@ -582,6 +583,8 @@ pub struct Swarm {
     valeurs: Vec<f32>,
     mods: [Effet; 2],
     mods_avant: [Effet; 2],
+    /// Effets des modulations sur chaque figure (`figures.rs` s'en sert).
+    mods_figures: [Effet; modulation::NB_FIGURES],
     teinte: f32,
     /// Dernier déclenchement de chaque déclencheur (délai minimal).
     derniers: Vec<f64>,
@@ -681,6 +684,7 @@ impl Swarm {
             valeurs: Vec::new(),
             mods: [Effet::default(); 2],
             mods_avant: [Effet::default(); 2],
+            mods_figures: [Effet::default(); modulation::NB_FIGURES],
             teinte: 0.0,
             derniers: Vec::new(),
             fissures: Vec::new(),
@@ -707,6 +711,11 @@ impl Swarm {
             tetes: Vec::new(),
             tampons: Default::default(),
         }
+    }
+
+    /// Effets des modulations sur chaque figure, dans l'ordre de `config::FIGURES`.
+    pub fn effets_figures(&self) -> &[Effet; modulation::NB_FIGURES] {
+        &self.mods_figures
     }
 
     /// Rectangle écran (x0, y0, x1, y1) qui contient tout ce qui sera dessiné : traînées, têtes
@@ -874,7 +883,7 @@ impl Swarm {
         }
         let effets = modulation::effets(liste, &self.valeurs);
         self.mods_avant = self.mods;
-        (self.mods, self.teinte) = (effets.groupes, effets.teinte);
+        (self.mods, self.teinte, self.mods_figures) = (effets.groupes, effets.teinte, effets.figures);
         // vitesse du trajet de chaque groupe, accélérée (montée…), lissée (~100 ms)
         for (v, m) in self.spd.iter_mut().zip(&self.mods) {
             *v += (o.vitesse_base * m.acceleration - *v) * (dt * 10.0).min(1.0);

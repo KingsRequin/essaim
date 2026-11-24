@@ -8,10 +8,9 @@
 //!
 //! `ui/apercu.js` reproduit ce calcul : le modifier ici oblige à le reporter là.
 
-use super::{autour, melange, Partage, Ressort, Son};
+use super::{melange, Elan, Partage, Ressort};
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
-use crate::layer::IRect;
 use std::f32::consts::TAU;
 
 /// Demi-côté de la zone calculée (px à 100 %, pour une taille de 1) et nœuds de la grille par
@@ -85,24 +84,25 @@ impl Gouttes {
         a + (b - a) * ((self.graine >> 8) as f32 / (1u32 << 24) as f32)
     }
 
-    pub(super) fn avance(&mut self, p: &Partage, t: f64, dt: f32, son: &Son, cfg: &Config) {
+    /// Avance d'une image ; `el` : les coups à la force des réactions des gouttes.
+    pub(super) fn avance(&mut self, p: &Partage, el: &Elan, t: f64, dt: f32, cfg: &Config) {
         if !cfg.gouttes.actif {
             self.oublier();
             return;
         }
-        for _ in 0..son.coups.kicks.min(4) {
-            self.noyau.v += NOYAU_ELAN.0;
+        for _ in 0..if el.kick > 0.0 { el.kicks.min(4) } else { 0 } {
+            self.noyau.v += NOYAU_ELAN.0 * el.fk;
             for i in 0..self.perles.len() {
-                self.perles[i].ecart.v += self.hasard(PERLE_ELAN.0);
+                self.perles[i].ecart.v += self.hasard(PERLE_ELAN.0) * el.fk;
             }
         }
-        if son.coups.drops > 0 {
-            self.noyau.v += NOYAU_ELAN.1;
+        if el.drop > 0.0 {
+            self.noyau.v += NOYAU_ELAN.1 * el.drop;
             for q in &mut self.perles {
-                q.ecart.v += PERLE_ELAN.1;
+                q.ecart.v += PERLE_ELAN.1 * el.drop;
             }
             for i in 0..BULLES {
-                let (a, v) = (i as f32 * TAU / BULLES as f32 + self.hasard((-0.3, 0.3)), self.hasard(BULLE_VITESSE));
+                let (a, v) = (i as f32 * TAU / BULLES as f32 + self.hasard((-0.3, 0.3)), self.hasard(BULLE_VITESSE) * el.drop);
                 let (r, vie) = (self.hasard(BULLE_RAYON), self.hasard(BULLE_VIE));
                 self.bulles.push(Bulle { x: 0.0, y: 0.0, vx: a.cos() * v, vy: a.sin() * v, r, ne: t, vie });
             }
@@ -139,17 +139,13 @@ impl Gouttes {
         contour(&gouttes[..n], &mut self.champ, &mut self.segments);
     }
 
-    /// Zone écran qui contient les gouttes ; `None` si elles sont éteintes.
-    pub(super) fn rect(&self, centre: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
-        let c = &cfg.gouttes;
-        c.actif.then(|| autour(centre, (DEMI * c.taille + c.epaisseur) * scale + 2.0))
+    /// Demi-côté (px à 100 %) du carré autour du centre qui contient les gouttes.
+    pub(super) fn etendue(&self, cfg: &Config) -> f32 {
+        DEMI * cfg.gouttes.taille + cfg.gouttes.epaisseur + 2.0
     }
 
     pub(super) fn dessiner(&self, p: &Partage, cv: &mut dyn Canvas, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
         let c = &cfg.gouttes;
-        if !c.actif {
-            return;
-        }
         let ((cx, cy), k, largeur) = (p.centre, c.taille * scale, c.epaisseur * scale);
         for &[a, b] in &self.segments {
             // couleur des têtes au centre, des queues au large

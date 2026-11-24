@@ -5,11 +5,12 @@
 //!
 //! `ui/apercu.js` les reproduit (mêmes formules) : les modifier ici oblige à les reporter là.
 
-use super::{autour, gauss, melange, Partage, Ressort, Son, SOUS_LE_POINTEUR};
+use super::{autour, gauss, melange, Elan, Partage, Ressort, Son, ORBE, PENDULE, SOUS_LE_POINTEUR, TRAIT, TRAME, VOIX};
+use crate::modulation::NB_FIGURES;
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
 use crate::layer::IRect;
-use crate::render::prisme;
+use crate::render::prisme_decale;
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 
@@ -180,27 +181,27 @@ impl Plus {
             .collect()
     }
 
+    /// Avance d'une image ; `ecoutes` : ce que chaque figure entend (à la force de ses réactions).
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn avance(&mut self, p: &Partage, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config) {
+    pub(super) fn avance(&mut self, ecoutes: &[(Partage, Elan); NB_FIGURES], t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config) {
         if !Self::actives(cfg) {
             self.oublier();
             return;
         }
-        let (kicks, caisse, drop, aigus) = (son.coups.kicks, son.coups.caisses > 0, son.coups.drops > 0, son.coups.aigus > 0);
-        self.kick = if kicks > 0 { 1.0 } else { self.kick * (-dt * 7.0).exp() };
-        let (cx, cy) = p.centre;
+        self.kick = if son.coups.kicks > 0 { 1.0 } else { self.kick * (-dt * 7.0).exp() };
 
         if cfg.orbe.actif {
+            let (p, el) = &ecoutes[ORBE];
             let echo = |s: &Self, retard: f64, force: f32| (t + retard, force, s.rayons(p, son.bandes, cfg));
-            for _ in 0..kicks.min(1) {
-                self.orbe.souffle.v += ORBE_ELAN;
-                let e = echo(self, 0.03, 1.0);
+            if el.kick > 0.0 {
+                self.orbe.souffle.v += ORBE_ELAN * el.kick;
+                let e = echo(self, 0.03, el.kick.min(1.5));
                 self.orbe.echos.push(e);
             }
-            if drop {
-                self.orbe.souffle.v += 2.0 * ORBE_ELAN;
+            if el.drop > 0.0 {
+                self.orbe.souffle.v += 2.0 * ORBE_ELAN * el.drop;
                 for retard in [0.12, 0.24] {
-                    let e = echo(self, retard, 1.5);
+                    let e = echo(self, retard, (1.5 * el.drop).min(1.5));
                     self.orbe.echos.push(e);
                 }
             }
@@ -213,15 +214,13 @@ impl Plus {
         }
 
         if cfg.voix.actif {
-            let v = &mut self.voix;
-            let cibles = [0.3 * p.basse + 0.85 * self.kick, if p.basse > 0.02 { 0.15 } else { 0.0 } + 0.9 * p.caisse, 0.9 * p.charleston + 0.6 * p.montee];
+            let ((p, el), v) = (&ecoutes[VOIX], &mut self.voix);
+            let cibles = [0.3 * p.basse + 0.85 * self.kick * el.fk, if p.basse > 0.02 { 0.15 } else { 0.0 } + 0.9 * p.caisse, 0.9 * p.charleston + 0.6 * p.montee];
             for (n, c) in v.niveaux.iter_mut().zip(cibles) {
                 let c = c.min(1.0);
                 *n += (c - *n) * (1.0 - (-dt * if c > *n { 30.0 } else { 9.0 }).exp());
             }
-            if drop {
-                v.large.v += 5.0;
-            }
+            v.large.v += 5.0 * el.drop;
             v.large.vers(1.0, (12.0, 0.35), dt, VOIX_LARGE);
             // sans son, la ligne s'efface ; elle revient dès qu'il reprend
             v.silence = if v.niveaux.iter().sum::<f32>() < 0.03 { v.silence + dt } else { 0.0 };
@@ -231,25 +230,25 @@ impl Plus {
         }
 
         if cfg.trame.actif {
-            let c = &cfg.trame;
-            let pas = c.pas * scale;
-            if aigus {
+            let ((p, el), c) = (&ecoutes[TRAME], &cfg.trame);
+            let ((cx, cy), pas) = (p.centre, c.pas * scale);
+            if el.aigus > 0.0 {
                 // quelques points scintillent autour du pointeur
-                for _ in 0..4 {
+                for _ in 0..(4.0 * el.aigus).round() as usize {
                     let (a, d) = (self.hasard() * TAU, (14.0 + 28.0 * self.hasard()) * scale);
                     self.trame.eclairs.push((((cx + a.cos() * d) / pas).round() as i32, ((cy + a.sin() * d) / pas).round() as i32, t));
                 }
             }
             let tr = &mut self.trame;
-            for _ in 0..kicks.min(1) {
-                tr.vagues.push(Vague { x: cx, y: cy, ne: t, force: 1.0, vie: 0.4, losange: false });
-                tr.loupe.v += 1.96 * c.rayon;
+            if el.kick > 0.0 {
+                tr.vagues.push(Vague { x: cx, y: cy, ne: t, force: el.kick, vie: 0.4, losange: false });
+                tr.loupe.v += 1.96 * c.rayon * el.kick;
             }
-            if caisse {
-                tr.vagues.push(Vague { x: cx, y: cy, ne: t, force: 0.6, vie: 0.34, losange: true });
+            if el.caisse > 0.0 {
+                tr.vagues.push(Vague { x: cx, y: cy, ne: t, force: 0.6 * el.caisse, vie: 0.34, losange: true });
             }
-            if drop {
-                tr.vagues.push(Vague { x: cx, y: cy, ne: t + 0.05, force: 1.8, vie: 0.6, losange: false });
+            if el.drop > 0.0 {
+                tr.vagues.push(Vague { x: cx, y: cy, ne: t + 0.05, force: 1.8 * el.drop, vie: 0.6, losange: false });
             }
             tr.vagues.retain(|v| t - v.ne < v.vie as f64);
             if tr.vagues.len() > TRAME_VAGUES_MAX {
@@ -264,16 +263,14 @@ impl Plus {
         }
 
         if cfg.pinceau.actif {
-            let (pi, c) = (&mut self.pinceau, &cfg.pinceau);
-            if kicks > 0 && pi.perles.len() < 6 {
+            let (el, pi, c) = (&ecoutes[TRAIT].1, &mut self.pinceau, &cfg.pinceau);
+            if el.kick > 0.0 && pi.perles.len() < 6 {
                 pi.perles.push(t);
             }
             if pi.vie.x <= 0.0 {
                 pi.vie = Ressort::en(c.duree);
             }
-            if drop {
-                pi.vie.v += 5.2 * c.duree;
-            }
+            pi.vie.v += 5.2 * c.duree * el.drop;
             pi.vie.vers(c.duree, (9.0, 0.45), dt, (c.duree * 0.5, c.duree * 2.2));
             pi.perles.retain(|&ne| t - ne < 0.5);
             pi.trajet.push_back((t, cursor.0, cursor.1));
@@ -284,28 +281,26 @@ impl Plus {
         }
 
         if cfg.pendule.actif && dt > 1e-5 {
-            let c = &cfg.pendule;
+            let ((p, el), c) = (&ecoutes[PENDULE], &cfg.pendule);
             let saut = (self.hasard() * 2.0 - 1.0) * 70.0 * scale;
             let pe = &mut self.pendule;
             if pe.fil.x <= 0.0 {
                 pe.fil = Ressort::en(c.longueur);
             }
-            if drop {
-                pe.fil.v += 7.3 * c.longueur;
-            }
+            pe.fil.v += 7.3 * c.longueur * el.drop;
             pe.fil.vers(c.longueur * (1.0 + 0.32 * p.basse - 0.6 * p.montee), (12.0, 0.4), dt, (4.0, c.longueur * 2.0));
             let l = pe.fil.x * scale;
             let (mut qx, mut qy) = pe.poids.unwrap_or((cursor.0, cursor.1 + l));
-            if kicks > 0 {
-                pe.vitesse.1 -= PENDULE_SAUT.0 * scale;
-                pe.vitesse.0 += saut;
+            if el.kick > 0.0 {
+                pe.vitesse.1 -= PENDULE_SAUT.0 * scale * el.kick;
+                pe.vitesse.0 += saut * el.kick;
             }
-            if caisse {
+            if el.caisse > 0.0 {
                 pe.cote = -pe.cote;
-                pe.vitesse.0 += PENDULE_SAUT.1 * pe.cote * scale;
+                pe.vitesse.0 += PENDULE_SAUT.1 * pe.cote * scale * el.caisse;
             }
-            if drop {
-                pe.vitesse.1 -= 1.5 * PENDULE_SAUT.0 * scale;
+            if el.drop > 0.0 {
+                pe.vitesse.1 -= 1.5 * PENDULE_SAUT.0 * scale * el.drop;
             }
             // gravité et frottement, puis le fil : il ne s'étire pas, mais peut se détendre
             let (avant, frein) = ((qx, qy), (-dt * PENDULE_FREIN).exp());
@@ -327,171 +322,186 @@ impl Plus {
         }
     }
 
-    /// Zone écran des figures actives : autour de `centre` (orbe, voix, trame), autour du pointeur
-    /// (pendule) et le long du trajet du pointeur (trait).
-    pub(super) fn rect(&self, centre: (f32, f32), cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
-        let mut e = 0.0f32;
-        if cfg.orbe.actif {
-            let c = &cfg.orbe;
-            e = e.max((c.rayon + c.relief + ORBE_SOUFFLE.1 + 4.0) * (1.0 + ORBE_ECHO.1 * 1.5) + c.epaisseur + 1.0);
-        }
-        if cfg.voix.actif {
-            let c = &cfg.voix;
-            let large = SOUS_LE_POINTEUR.0 + c.largeur * VOIX_LARGE.1 / 2.0;
-            let haut = SOUS_LE_POINTEUR.1 + c.hauteur * (1.4 + 1.0 + VOIX_ONDES.0 + VOIX_ONDES.1);
-            e = e.max(large.max(haut) + c.epaisseur + 1.0);
-        }
-        if cfg.trame.actif {
-            let c = &cfg.trame;
-            let point = (1.9 + 2.0 * TRAME_ONDE_MAX + 1.5) * c.taille;
-            e = e.max(self.trame.loupe.x.max(4.0) * 1.25 + TRAME_DEPLACE * TRAME_ONDE_MAX + point + 1.0);
-        }
-        let mut zone = (e > 0.0).then(|| autour(centre, e * scale));
-        if cfg.pendule.actif {
-            let c = &cfg.pendule;
-            let fil = if self.pendule.fil.x > 0.0 { self.pendule.fil.x } else { c.longueur };
-            let ancre = if self.pendule.poids.is_some() { self.pendule.ancre } else { cursor };
-            zone = crate::layer::union(zone, Some(autour(ancre, (fil * 1.15 + c.taille + 2.8) * scale)));
-        }
-        if cfg.pinceau.actif && !self.pinceau.trajet.is_empty() {
-            let demi = (0.6 + 1.2 * cfg.pinceau.largeur) * PINCEAU_PERLE.2 / 2.0 * scale + 2.0;
-            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-            for &(_, x, y) in &self.pinceau.trajet {
-                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    /// Demi-côté (px à 100 %) du carré autour du centre qui contient l'orbe, la ligne de voix ou la
+    /// trame.
+    pub(super) fn etendue(&self, i: usize, cfg: &Config) -> f32 {
+        match i {
+            ORBE => {
+                let c = &cfg.orbe;
+                (c.rayon + c.relief + ORBE_SOUFFLE.1 + 4.0) * (1.0 + ORBE_ECHO.1 * 1.5) + c.epaisseur + 1.0
             }
-            zone = crate::layer::union(zone, Some(((x0 - demi).floor() as i32, (y0 - demi).floor() as i32, (x1 + demi).ceil() as i32, (y1 + demi).ceil() as i32)));
+            VOIX => {
+                let c = &cfg.voix;
+                let large = SOUS_LE_POINTEUR.0 + c.largeur * VOIX_LARGE.1 / 2.0;
+                let haut = SOUS_LE_POINTEUR.1 + c.hauteur * (1.4 + 1.0 + VOIX_ONDES.0 + VOIX_ONDES.1);
+                large.max(haut) + c.epaisseur + 1.0
+            }
+            _ => {
+                let c = &cfg.trame;
+                let point = (1.9 + 2.0 * TRAME_ONDE_MAX + 1.5) * c.taille;
+                self.trame.loupe.x.max(4.0) * 1.25 + TRAME_DEPLACE * TRAME_ONDE_MAX + point + 1.0
+            }
         }
-        zone
+    }
+
+    /// Zone du pendule, autour de son point d'accroche (traits épaissis de `traits`).
+    pub(super) fn rect_pendule(&self, cursor: (f32, f32), scale: f32, traits: f32, cfg: &Config) -> Option<IRect> {
+        let c = &cfg.pendule;
+        let fil = if self.pendule.fil.x > 0.0 { self.pendule.fil.x } else { c.longueur };
+        let ancre = if self.pendule.poids.is_some() { self.pendule.ancre } else { cursor };
+        Some(autour(ancre, (fil * 1.15 + c.taille + 2.8) * scale * traits.max(1.0)))
+    }
+
+    /// Zone du trait de pinceau, le long du trajet du pointeur ; `None` sans trajet.
+    pub(super) fn rect_trait(&self, scale: f32, cfg: &Config) -> Option<IRect> {
+        if self.pinceau.trajet.is_empty() {
+            return None;
+        }
+        let demi = (0.6 + 1.2 * cfg.pinceau.largeur) * PINCEAU_PERLE.2 / 2.0 * scale + 2.0;
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for &(_, x, y) in &self.pinceau.trajet {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        Some(((x0 - demi).floor() as i32, (y0 - demi).floor() as i32, (x1 + demi).ceil() as i32, (y1 + demi).ceil() as i32))
+    }
+
+    pub(super) fn dessiner_trame(&self, p: &Partage, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, tete: Rgb) {
+        let (cx, cy) = p.centre;
+        let (tr, c) = (&self.trame, &cfg.trame);
+        let (pas, l) = (c.pas * scale, tr.loupe.x.max(4.0) * scale);
+        let marge = l * 1.25 + 1.0;
+        let cases = |m: f32| (((m - marge) / pas).floor() as i32, ((m + marge) / pas).ceil() as i32);
+        let ((i0, i1), (j0, j1)) = (cases(cx), cases(cy));
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let (mut x, mut y) = (i as f32 * pas, j as f32 * pas);
+                let (dx, dy) = (x - cx, y - cy);
+                let d = (dx * dx + dy * dy).sqrt();
+                // le vide sous le pointeur, puis la loupe qui s'estompe vers son bord
+                let vide = lisse(TRAME_VIDE.0 * scale, TRAME_VIDE.1 * scale, d);
+                let dedans = (1.0 - lisse(l * 0.35, l, d)) * vide;
+                let large = (1.0 - lisse(l * 0.3, l * 1.25, d)) * vide;
+                if large <= 0.01 {
+                    continue;
+                }
+                let (mut onde, mut px, mut py) = (0.0f32, 0.0f32, 0.0f32);
+                for v in &tr.vagues {
+                    let age = (t - v.ne) as f32;
+                    if age < 0.0 {
+                        continue;
+                    }
+                    let (vx, vy) = (x - v.x, y - v.y);
+                    let droit = (vx * vx + vy * vy).sqrt();
+                    let dist = if v.losange { (vx.abs() + vy.abs()) / 1.25 } else { droit };
+                    let f = gauss((dist - TRAME_VAGUE.0 * scale * age) / (TRAME_VAGUE.1 * scale)) * v.force * (1.0 - age / v.vie).max(0.0);
+                    onde += f;
+                    if droit > 1e-3 {
+                        px += vx / droit * f;
+                        py += vy / droit * f;
+                    }
+                }
+                let onde = onde.min(TRAME_ONDE_MAX);
+                let pousse = (px * px + py * py).sqrt();
+                if pousse > TRAME_ONDE_MAX {
+                    (px, py) = (px / pousse * TRAME_ONDE_MAX, py / pousse * TRAME_ONDE_MAX);
+                }
+                let eclair = tr.eclairs.iter().filter(|e| e.0 == i && e.1 == j).map(|e| (-(t - e.2) as f32 * 12.0).exp()).fold(0.0f32, f32::max);
+                x += px * TRAME_DEPLACE * scale - dx * 0.3 * p.montee * dedans;
+                y += py * TRAME_DEPLACE * scale - dy * 0.3 * p.montee * dedans;
+                let r = (dedans * (1.0 + 0.9 * p.basse) + 2.0 * onde * large + 1.5 * eclair * large) * c.taille * scale;
+                if r >= 0.25 {
+                    cv.circle(x, y, r, tete, (0.3 + 0.35 * r / scale).min(1.0));
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn dessiner(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
-        let (cx, cy) = p.centre;
-
-        if cfg.trame.actif {
-            let (tr, c) = (&self.trame, &cfg.trame);
-            let (pas, l) = (c.pas * scale, tr.loupe.x.max(4.0) * scale);
-            let marge = l * 1.25 + 1.0;
-            let cases = |m: f32| (((m - marge) / pas).floor() as i32, ((m + marge) / pas).ceil() as i32);
-            let ((i0, i1), (j0, j1)) = (cases(cx), cases(cy));
-            for j in j0..=j1 {
-                for i in i0..=i1 {
-                    let (mut x, mut y) = (i as f32 * pas, j as f32 * pas);
-                    let (dx, dy) = (x - cx, y - cy);
-                    let d = (dx * dx + dy * dy).sqrt();
-                    // le vide sous le pointeur, puis la loupe qui s'estompe vers son bord
-                    let vide = lisse(TRAME_VIDE.0 * scale, TRAME_VIDE.1 * scale, d);
-                    let dedans = (1.0 - lisse(l * 0.35, l, d)) * vide;
-                    let large = (1.0 - lisse(l * 0.3, l * 1.25, d)) * vide;
-                    if large <= 0.01 {
-                        continue;
-                    }
-                    let (mut onde, mut px, mut py) = (0.0f32, 0.0f32, 0.0f32);
-                    for v in &tr.vagues {
-                        let age = (t - v.ne) as f32;
-                        if age < 0.0 {
-                            continue;
-                        }
-                        let (vx, vy) = (x - v.x, y - v.y);
-                        let droit = (vx * vx + vy * vy).sqrt();
-                        let dist = if v.losange { (vx.abs() + vy.abs()) / 1.25 } else { droit };
-                        let f = gauss((dist - TRAME_VAGUE.0 * scale * age) / (TRAME_VAGUE.1 * scale)) * v.force * (1.0 - age / v.vie).max(0.0);
-                        onde += f;
-                        if droit > 1e-3 {
-                            px += vx / droit * f;
-                            py += vy / droit * f;
-                        }
-                    }
-                    let onde = onde.min(TRAME_ONDE_MAX);
-                    let pousse = (px * px + py * py).sqrt();
-                    if pousse > TRAME_ONDE_MAX {
-                        (px, py) = (px / pousse * TRAME_ONDE_MAX, py / pousse * TRAME_ONDE_MAX);
-                    }
-                    let eclair = tr.eclairs.iter().filter(|e| e.0 == i && e.1 == j).map(|e| (-(t - e.2) as f32 * 12.0).exp()).fold(0.0f32, f32::max);
-                    x += px * TRAME_DEPLACE * scale - dx * 0.3 * p.montee * dedans;
-                    y += py * TRAME_DEPLACE * scale - dy * 0.3 * p.montee * dedans;
-                    let r = (dedans * (1.0 + 0.9 * p.basse) + 2.0 * onde * large + 1.5 * eclair * large) * c.taille * scale;
-                    if r >= 0.25 {
-                        cv.circle(x, y, r, tete, (0.3 + 0.35 * r / scale).min(1.0));
-                    }
-                }
-            }
+    pub(super) fn dessiner_orbe(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
+        if self.orbe.contour.len() != ORBE_POINTS {
+            return;
         }
-
-        if cfg.orbe.actif && self.orbe.contour.len() == ORBE_POINTS {
-            let c = &cfg.orbe;
-            let mut tracer = |rayons: &[f32], echelle: f32, largeur: f32, rgb: Rgb, al: f32| {
-                pts.clear();
-                pts.extend((0..=ORBE_POINTS).map(|i| {
-                    let (sin, cos) = (-PI / 2.0 + i as f32 / ORBE_POINTS as f32 * TAU).sin_cos();
-                    let r = rayons[i % ORBE_POINTS] * echelle * scale;
-                    (cx + cos * r, cy + sin * r)
-                }));
-                cv.polyline(pts, largeur, rgb, al, true);
-            };
-            for (ne, force, rayons) in &self.orbe.echos {
-                let k = ((t - ne) / ORBE_ECHO.0) as f32;
-                if (0.0..1.0).contains(&k) && rayons.len() == ORBE_POINTS {
-                    tracer(rayons, 1.0 + ORBE_ECHO.1 * force * (1.0 - (1.0 - k).powi(3)), (1.3 * (1.0 - k) + 0.4) * scale, melange(tete, queue, k), 0.55 * (1.0 - k));
-                }
-            }
-            tracer(&self.orbe.contour, 1.0, c.epaisseur * scale, tete, 1.0);
-        }
-
-        if cfg.voix.actif && self.voix.visible > 0.01 {
-            let (v, c) = (&self.voix, &cfg.voix);
-            let (w, h) = (c.largeur * scale * v.large.x, c.hauteur * scale);
-            let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + (SOUS_LE_POINTEUR.1 + 1.4 * c.hauteur) * scale);
-            let [grave, medium, aigu] = v.niveaux;
-            let point = |i: usize| {
-                let u = i as f32 / VOIX_POINTS as f32;
-                let fenetre = (PI * u).sin().powi(2);
-                let onde = grave * (TAU * 1.5 * u + p.horloge * 5.0).sin() + VOIX_ONDES.0 * medium * (TAU * 3.0 * u - p.horloge * 8.0).sin() + VOIX_ONDES.1 * aigu * (TAU * 6.5 * u + p.horloge * 13.0).sin();
-                (ax + (u - 0.5) * w, ay + fenetre * h * onde)
-            };
-            let al = v.visible * (0.5 + 0.5 * (grave + medium + aigu).min(1.0));
-            let par = VOIX_POINTS / VOIX_MORCEAUX;
-            for m in 0..VOIX_MORCEAUX {
-                pts.clear();
-                pts.extend((m * par..=(m + 1) * par).map(point));
-                cv.polyline(pts, c.epaisseur * scale, melange(tete, queue, (m as f32 + 0.5) / VOIX_MORCEAUX as f32), al, true);
-            }
-        }
-
-        if cfg.pinceau.actif && self.pinceau.trajet.len() >= 2 {
-            let (pi, c) = (&self.pinceau, &cfg.pinceau);
-            let vie = pi.vie.x.max(0.05) as f64;
-            for (a, b) in pi.trajet.iter().zip(pi.trajet.iter().skip(1)) {
-                let duree = ((b.0 - a.0) as f32).max(1e-3);
-                let v = ((b.1 - a.1).powi(2) + (b.2 - a.2).powi(2)).sqrt() / duree / scale;
-                let vif = ((v - PINCEAU_VITESSE.0) / PINCEAU_VITESSE.1).clamp(0.0, 1.0).powf(0.8);
-                if vif < 0.02 {
-                    continue;
-                }
-                let k = (1.0 - (t - b.0) / vie).clamp(0.0, 1.0) as f32;
-                let profil = (PI * k.powf(0.6)).sin().max(0.0).powf(0.7);
-                let perle = pi.perles.iter().map(|&ne| PINCEAU_PERLE.0 * gauss((k - (1.0 - (t - ne) as f32 / PINCEAU_PERLE.1)) / 0.1)).sum::<f32>();
-                let largeur = (0.6 + c.largeur * vif * (0.6 + 0.6 * p.basse)) * profil * (1.0 + perle).min(PINCEAU_PERLE.2) * scale;
-                if largeur >= 0.4 {
-                    cv.line((a.1, a.2), (b.1, b.2), largeur, prisme(cfg, t, k), 1.0, true);
-                }
-            }
-        }
-
-        if let (true, Some((qx, qy))) = (cfg.pendule.actif, self.pendule.poids) {
-            let (pe, c) = (&self.pendule, &cfg.pendule);
-            let (ax, ay) = pe.ancre;
-            // le fil : droit quand il est tendu, il pend quand le poids est remonté
-            let (mx, my) = ((ax + qx) / 2.0, (ay + qy) / 2.0 + pe.mou * 0.6);
+        let ((cx, cy), c) = (p.centre, &cfg.orbe);
+        let mut tracer = |rayons: &[f32], echelle: f32, largeur: f32, rgb: Rgb, al: f32| {
             pts.clear();
-            pts.extend((0..=8).map(|i| {
-                let u = i as f32 / 8.0;
-                let (a, b, d) = ((1.0 - u).powi(2), 2.0 * u * (1.0 - u), u * u);
-                (a * ax + b * mx + d * qx, a * ay + b * my + d * qy)
+            pts.extend((0..=ORBE_POINTS).map(|i| {
+                let (sin, cos) = (-PI / 2.0 + i as f32 / ORBE_POINTS as f32 * TAU).sin_cos();
+                let r = rayons[i % ORBE_POINTS] * echelle * scale;
+                (cx + cos * r, cy + sin * r)
             }));
-            cv.polyline(pts, scale, queue, 0.75, true);
-            cv.circle(qx, qy, (c.taille + 1.8 * self.kick) * scale, tete, 1.0);
+            cv.polyline(pts, largeur, rgb, al, true);
+        };
+        for (ne, force, rayons) in &self.orbe.echos {
+            let k = ((t - ne) / ORBE_ECHO.0) as f32;
+            if (0.0..1.0).contains(&k) && rayons.len() == ORBE_POINTS {
+                tracer(rayons, 1.0 + ORBE_ECHO.1 * force * (1.0 - (1.0 - k).powi(3)), (1.3 * (1.0 - k) + 0.4) * scale, melange(tete, queue, k), 0.55 * (1.0 - k));
+            }
         }
+        tracer(&self.orbe.contour, 1.0, c.epaisseur * scale, tete, 1.0);
+    }
+
+    pub(super) fn dessiner_voix(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
+        if self.voix.visible <= 0.01 {
+            return;
+        }
+        let ((cx, cy), v, c) = (p.centre, &self.voix, &cfg.voix);
+        let (w, h) = (c.largeur * scale * v.large.x, c.hauteur * scale);
+        let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + (SOUS_LE_POINTEUR.1 + 1.4 * c.hauteur) * scale);
+        let [grave, medium, aigu] = v.niveaux;
+        let point = |i: usize| {
+            let u = i as f32 / VOIX_POINTS as f32;
+            let fenetre = (PI * u).sin().powi(2);
+            let onde = grave * (TAU * 1.5 * u + p.horloge * 5.0).sin() + VOIX_ONDES.0 * medium * (TAU * 3.0 * u - p.horloge * 8.0).sin() + VOIX_ONDES.1 * aigu * (TAU * 6.5 * u + p.horloge * 13.0).sin();
+            (ax + (u - 0.5) * w, ay + fenetre * h * onde)
+        };
+        let al = v.visible * (0.5 + 0.5 * (grave + medium + aigu).min(1.0));
+        let par = VOIX_POINTS / VOIX_MORCEAUX;
+        for m in 0..VOIX_MORCEAUX {
+            pts.clear();
+            pts.extend((m * par..=(m + 1) * par).map(point));
+            cv.polyline(pts, c.epaisseur * scale, melange(tete, queue, (m as f32 + 0.5) / VOIX_MORCEAUX as f32), al, true);
+        }
+    }
+
+    /// Trait de pinceau ; `teinte` : degrés ajoutés à la couleur de l'essaim, dont il prend le
+    /// dégradé de la tête à la queue.
+    pub(super) fn dessiner_trait(&self, p: &Partage, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, teinte: f32) {
+        if self.pinceau.trajet.len() < 2 {
+            return;
+        }
+        let (pi, c) = (&self.pinceau, &cfg.pinceau);
+        let vie = pi.vie.x.max(0.05) as f64;
+        for (a, b) in pi.trajet.iter().zip(pi.trajet.iter().skip(1)) {
+            let duree = ((b.0 - a.0) as f32).max(1e-3);
+            let v = ((b.1 - a.1).powi(2) + (b.2 - a.2).powi(2)).sqrt() / duree / scale;
+            let vif = ((v - PINCEAU_VITESSE.0) / PINCEAU_VITESSE.1).clamp(0.0, 1.0).powf(0.8);
+            if vif < 0.02 {
+                continue;
+            }
+            let k = (1.0 - (t - b.0) / vie).clamp(0.0, 1.0) as f32;
+            let profil = (PI * k.powf(0.6)).sin().max(0.0).powf(0.7);
+            let perle = pi.perles.iter().map(|&ne| PINCEAU_PERLE.0 * gauss((k - (1.0 - (t - ne) as f32 / PINCEAU_PERLE.1)) / 0.1)).sum::<f32>();
+            let largeur = (0.6 + c.largeur * vif * (0.6 + 0.6 * p.basse)) * profil * (1.0 + perle).min(PINCEAU_PERLE.2) * scale;
+            if largeur >= 0.4 {
+                cv.line((a.1, a.2), (b.1, b.2), largeur, prisme_decale(cfg, t, k, teinte), 1.0, true);
+            }
+        }
+    }
+
+    pub(super) fn dessiner_pendule(&self, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
+        let Some((qx, qy)) = self.pendule.poids else { return };
+        let (pe, c) = (&self.pendule, &cfg.pendule);
+        let (ax, ay) = pe.ancre;
+        // le fil : droit quand il est tendu, il pend quand le poids est remonté
+        let (mx, my) = ((ax + qx) / 2.0, (ay + qy) / 2.0 + pe.mou * 0.6);
+        pts.clear();
+        pts.extend((0..=8).map(|i| {
+            let u = i as f32 / 8.0;
+            let (a, b, d) = ((1.0 - u).powi(2), 2.0 * u * (1.0 - u), u * u);
+            (a * ax + b * mx + d * qx, a * ay + b * my + d * qy)
+        }));
+        cv.polyline(pts, scale, queue, 0.75, true);
+        cv.circle(qx, qy, (c.taille + 1.8 * self.kick * c.allure.reaction_kick) * scale, tete, 1.0);
     }
 }
 

@@ -358,6 +358,23 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   segments dessinés comme des traits : ni image ni flou, les deux moteurs dessinent comme
   d'habitude. Les ressorts des perles sont bornés et le bord de la grille est toujours hors du
   contour : la ligne reste dans la zone redessinée.
+  **Allure et modulations des figures** : chaque figure lit son allure (`config::Allure`,
+  aplatie dans sa section par `serde(flatten)`) et ses effets de modulation
+  (`modulation::Effets::figures`, gardés par `Swarm` et passés par `Effets::moduler_figures`).
+  `Partage::pour` lui donne la basse, la montée, le charleston et la caisse claire à la force de
+  ses réactions (plafonnés à 1 : les zones restent bornées), `Elan::de` ses coups (kicks ×
+  force, et 0 ou la force pour le kick, la caisse claire, le charleston et le drop) ; chaque
+  impulsion est multipliée par cette force. `Figures::poser` en fait une `Pose` par figure :
+  angle accumulé (rotation propre plus modulations, en tr/min, plus vitesse × 0,1, le tout ×
+  accélération), échelle (`echelle` × rayon modulé), épaisseur des traits (taille modulée),
+  décalage (`decalage_x` + décalage modulé × 30 px, `decalage_y`), opacité (`opacite` × opacité ×
+  lueur modulées) ; la teinte (`teinte` + teinte modulée) décale ses couleurs
+  (`render::prisme_decale`). Le dessin passe par `Posee`, un `Canvas` qui transforme les points
+  autour du centre, multiplie les rayons par l'échelle et les épaisseurs par celle des traits ;
+  une pose neutre dessine directement (au bit près comme avant). La zone de chaque figure est son
+  carré autour du centre, déplacé, agrandi par l'échelle et les traits, et par √2 si elle a
+  tourné. Le trait et le pendule, posés sur le trajet du pointeur, ne prennent ni échelle, ni
+  rotation, ni décalage.
 - **Équerres, halo et liseré** (`loin.rs`) : habillage de la fenêtre et de l'écran, hors des
   presets (`profils::SECTIONS` ne contient ni `equerres`, ni `halo`, ni `lisere` : appliquer un
   preset n'y touche pas, et aucun preset fourni ne les allume). Comme la bordure, il reste quand l'essaim n'est

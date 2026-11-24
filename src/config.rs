@@ -83,6 +83,21 @@ impl Orbite {
 }
 
 impl Config {
+    /// La figure `i` (dans l'ordre de `FIGURES`) : est-elle active, et son allure.
+    pub fn figure(&self, i: usize) -> (bool, &Allure) {
+        match i {
+            0 => (self.arcs.actif, &self.arcs.allure),
+            1 => (self.quatre_temps.actif, &self.quatre_temps.allure),
+            2 => (self.anneau.actif, &self.anneau.allure),
+            3 => (self.orbe.actif, &self.orbe.allure),
+            4 => (self.voix.actif, &self.voix.allure),
+            5 => (self.trame.actif, &self.trame.allure),
+            6 => (self.pinceau.actif, &self.pinceau.allure),
+            7 => (self.pendule.actif, &self.pendule.allure),
+            _ => (self.gouttes.actif, &self.gouttes.allure),
+        }
+    }
+
     /// Le trajet suit-il l'icône de l'application au premier plan (comètes ou satellites) ?
     pub fn suit_icone(&self) -> bool {
         self.orbite.forme == Forme::Icone || self.essaim.forme == FormeSatellites::Icone
@@ -98,12 +113,79 @@ impl Config {
     }
 }
 
+/// Les neuf figures autour du pointeur, dans l'ordre des effets de modulation qui les visent
+/// (`modulation::Effets::figures`) : leurs sections dans les réglages.
+pub const FIGURES: [&str; 9] = ["arcs", "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "gouttes"];
+
+/// Allure d'une figure, commune aux neuf (`figures.rs`) : les figures sont des alternatives à
+/// l'essaim, elles se règlent autant que lui. Toutes les valeurs par défaut laissent la figure
+/// telle qu'elle est dessinée.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Allure {
+    /// Échelle de toute la figure (0,5 à 2) ; sans effet sur le trait et le pendule.
+    pub echelle: f32,
+    /// Opacité (0,1 à 1).
+    pub opacite: f32,
+    /// Teinte : degrés ajoutés à celle de l'essaim (-180 à 180).
+    pub teinte: f32,
+    /// Rotation continue autour du pointeur (tours par minute, -30 à 30) ; sans effet sur le
+    /// trait et le pendule.
+    pub rotation: f32,
+    /// Place par rapport au pointeur (px à 100 %, -80 à 80) ; sans effet sur le trait et le pendule.
+    pub decalage_x: f32,
+    pub decalage_y: f32,
+    /// Force des réactions (0 : aucune, 1 : normale, 2 : double) au kick, à la caisse claire, au
+    /// charleston, à la basse, à la montée et au drop.
+    pub reaction_kick: f32,
+    pub reaction_caisse: f32,
+    pub reaction_charleston: f32,
+    pub reaction_basse: f32,
+    pub reaction_montee: f32,
+    pub reaction_drop: f32,
+}
+
+impl Default for Allure {
+    fn default() -> Self {
+        Self {
+            echelle: 1.0,
+            opacite: 1.0,
+            teinte: 0.0,
+            rotation: 0.0,
+            decalage_x: 0.0,
+            decalage_y: 0.0,
+            reaction_kick: 1.0,
+            reaction_caisse: 1.0,
+            reaction_charleston: 1.0,
+            reaction_basse: 1.0,
+            reaction_montee: 1.0,
+            reaction_drop: 1.0,
+        }
+    }
+}
+
+/// Bornes des réglages d'allure d'une figure.
+fn bornes_allure(key: &str) -> Option<(f64, f64)> {
+    Some(match key {
+        "echelle" => (0.5, 2.0),
+        "opacite" => (0.1, 1.0),
+        "teinte" => (-180.0, 180.0),
+        "rotation" => (-30.0, 30.0),
+        "decalage_x" | "decalage_y" => (-80.0, 80.0),
+        "reaction_kick" | "reaction_caisse" | "reaction_charleston" | "reaction_basse" | "reaction_montee" | "reaction_drop" => (0.0, 2.0),
+        _ => return None,
+    })
+}
+
 /// Arcs : deux arcs fins autour du pointeur, comme les anneaux d'une montre. Le grand mesure la
 /// basse, le petit les aigus (`figures.rs`).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Arcs {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Rayon du grand arc (px à 100 %, 10 à 80) ; le petit est aux deux tiers.
     pub rayon: f32,
     /// Épaisseur du trait du grand arc (0,5 à 6).
@@ -112,7 +194,7 @@ pub struct Arcs {
 
 impl Default for Arcs {
     fn default() -> Self {
-        Self { actif: false, rayon: 20.0, epaisseur: 2.1 }
+        Self { actif: false, allure: Allure::default(), rayon: 20.0, epaisseur: 2.1 }
     }
 }
 
@@ -122,6 +204,9 @@ impl Default for Arcs {
 #[serde(default)]
 pub struct QuatreTemps {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Rayon d'un point (px à 100 %, 1 à 5).
     pub taille: f32,
     /// Écart entre deux points (4 à 20).
@@ -130,7 +215,7 @@ pub struct QuatreTemps {
 
 impl Default for QuatreTemps {
     fn default() -> Self {
-        Self { actif: false, taille: 1.6, ecart: 7.5 }
+        Self { actif: false, allure: Allure::default(), taille: 1.6, ecart: 7.5 }
     }
 }
 
@@ -140,6 +225,9 @@ impl Default for QuatreTemps {
 #[serde(default)]
 pub struct Anneau {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Rayon de l'anneau (px à 100 %, 6 à 60).
     pub rayon: f32,
     /// Épaisseur de son trait au repos (0,5 à 6).
@@ -148,7 +236,7 @@ pub struct Anneau {
 
 impl Default for Anneau {
     fn default() -> Self {
-        Self { actif: false, rayon: 13.0, epaisseur: 1.4 }
+        Self { actif: false, allure: Allure::default(), rayon: 13.0, epaisseur: 1.4 }
     }
 }
 
@@ -158,6 +246,9 @@ impl Default for Anneau {
 #[serde(default)]
 pub struct Orbe {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Rayon de la ligne au repos (px à 100 %, 10 à 60).
     pub rayon: f32,
     /// Relief : ce qu'une bande à fond ajoute au rayon (2 à 30).
@@ -168,7 +259,7 @@ pub struct Orbe {
 
 impl Default for Orbe {
     fn default() -> Self {
-        Self { actif: false, rayon: 21.0, relief: 9.0, epaisseur: 1.6 }
+        Self { actif: false, allure: Allure::default(), rayon: 21.0, relief: 9.0, epaisseur: 1.6 }
     }
 }
 
@@ -178,6 +269,9 @@ impl Default for Orbe {
 #[serde(default)]
 pub struct Voix {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Largeur de la ligne (px à 100 %, 20 à 120).
     pub largeur: f32,
     /// Hauteur des grandes ondulations (2 à 20).
@@ -188,7 +282,7 @@ pub struct Voix {
 
 impl Default for Voix {
     fn default() -> Self {
-        Self { actif: false, largeur: 46.0, hauteur: 6.5, epaisseur: 1.7 }
+        Self { actif: false, allure: Allure::default(), largeur: 46.0, hauteur: 6.5, epaisseur: 1.7 }
     }
 }
 
@@ -198,6 +292,9 @@ impl Default for Voix {
 #[serde(default)]
 pub struct Trame {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Rayon de la loupe (px à 100 %, 20 à 120).
     pub rayon: f32,
     /// Pas de la grille (6 à 24).
@@ -208,7 +305,7 @@ pub struct Trame {
 
 impl Default for Trame {
     fn default() -> Self {
-        Self { actif: false, rayon: 46.0, pas: 10.0, taille: 1.0 }
+        Self { actif: false, allure: Allure::default(), rayon: 46.0, pas: 10.0, taille: 1.0 }
     }
 }
 
@@ -218,6 +315,9 @@ impl Default for Trame {
 #[serde(default)]
 pub struct Pinceau {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Largeur du trait à pleine vitesse (px à 100 %, 2 à 12).
     pub largeur: f32,
     /// Durée du trait (0,2 à 1 s).
@@ -226,7 +326,7 @@ pub struct Pinceau {
 
 impl Default for Pinceau {
     fn default() -> Self {
-        Self { actif: false, largeur: 5.5, duree: 0.42 }
+        Self { actif: false, allure: Allure::default(), largeur: 5.5, duree: 0.42 }
     }
 }
 
@@ -236,6 +336,9 @@ impl Default for Pinceau {
 #[serde(default)]
 pub struct Pendule {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Longueur du fil (px à 100 %, 8 à 60).
     pub longueur: f32,
     /// Rayon du poids (1 à 6).
@@ -244,7 +347,7 @@ pub struct Pendule {
 
 impl Default for Pendule {
     fn default() -> Self {
-        Self { actif: false, longueur: 22.0, taille: 2.6 }
+        Self { actif: false, allure: Allure::default(), longueur: 22.0, taille: 2.6 }
     }
 }
 
@@ -254,6 +357,9 @@ impl Default for Pendule {
 #[serde(default)]
 pub struct Gouttes {
     pub actif: bool,
+    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    #[serde(flatten)]
+    pub allure: Allure,
     /// Taille de l'ensemble (0,6 à 1,6 ; 1 : perles jusqu'à 35 px du pointeur).
     pub taille: f32,
     /// Épaisseur de la ligne (1 à 4).
@@ -262,7 +368,7 @@ pub struct Gouttes {
 
 impl Default for Gouttes {
     fn default() -> Self {
-        Self { actif: false, taille: 1.0, epaisseur: 1.4 }
+        Self { actif: false, allure: Allure::default(), taille: 1.0, epaisseur: 1.4 }
     }
 }
 
@@ -709,10 +815,23 @@ pub struct Essaim {
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Groupe {
+    /// Les comètes et les satellites (l'essaim).
     #[default]
     Tout,
     Cometes,
     Satellites,
+    /// Toutes les figures autour du pointeur, ou l'une d'elles.
+    Figures,
+    Arcs,
+    #[serde(rename = "quatre_temps")]
+    QuatreTemps,
+    Anneau,
+    Orbe,
+    Voix,
+    Trame,
+    Pinceau,
+    Pendule,
+    Gouttes,
 }
 
 impl Groupe {
@@ -722,7 +841,26 @@ impl Groupe {
             Self::Tout => true,
             Self::Cometes => !satellites,
             Self::Satellites => satellites,
+            _ => false,
         }
+    }
+
+    /// Vise-t-il la figure `i` (dans l'ordre de `FIGURES`) ?
+    pub fn vise_figure(self, i: usize) -> bool {
+        let seule = match self {
+            Self::Figures => return true,
+            Self::Arcs => 0,
+            Self::QuatreTemps => 1,
+            Self::Anneau => 2,
+            Self::Orbe => 3,
+            Self::Voix => 4,
+            Self::Trame => 5,
+            Self::Pinceau => 6,
+            Self::Pendule => 7,
+            Self::Gouttes => 8,
+            Self::Tout | Self::Cometes | Self::Satellites => return false,
+        };
+        seule == i
     }
 }
 
@@ -1235,6 +1373,12 @@ raideur = 19            # pulsation du ressort (6 à 30) : plus raide, il revien
 amorti = 0.26           # 0.1 = rebondit longtemps, 1 = revient sans dépasser
 etirement = 1           # étirement des têtes dans leur élan (0 = rondes, 2 = très étirées)
 
+# Figures autour du pointeur : des alternatives à l'essaim. En plus de ses réglages, chacune
+# accepte son allure (valeurs par défaut) : echelle = 1 (0.5 à 2), opacite = 1 (0.1 à 1),
+# teinte = 0 (degrés ajoutés, -180 à 180), rotation = 0 (tr/min, -30 à 30), decalage_x = 0 et
+# decalage_y = 0 (px, -80 à 80), et la force de ses réactions, de 0 à 2 : reaction_kick,
+# reaction_caisse, reaction_charleston, reaction_basse, reaction_montee, reaction_drop = 1.
+# Le trait (pinceau) et le pendule n'ont ni échelle, ni rotation, ni décalage.
 [arcs]
 actif = false           # deux arcs fins autour du pointeur : le grand mesure la basse, le petit les aigus
 rayon = 20              # rayon du grand arc (10 à 80)
@@ -1315,7 +1459,9 @@ duree = 3               # temps d'affichage en secondes (1.5 à 8)
 #              (1 = +400 %), taille (1 = +150 %), teinte (1 = +180° ; « sur tout » : tout ce
 #              qu'Essaim dessine), decalage (1 = 1,6 rayon vers la droite), luminosite (1 = +200 %),
 #              trainee (1 = +300 %), opacite (-1 = transparent)
-#   sur      : "tout", "cometes" ou "satellites"
+#   sur      : "tout" (comètes et satellites), "cometes", "satellites", "figures" (toutes les
+#              figures) ou une figure : "arcs", "quatre_temps", "anneau", "orbe", "voix", "trame",
+#              "pinceau", "pendule", "gouttes"
 #   quantite : de -1 à 1 (négatif : dans l'autre sens)
 #   seuil    : rien sous ce niveau de la source (0 à 0.95) ; lissage : 0 = aussitôt, 1 = doux
 #   inverser : la source à l'envers (1 - valeur ; stéréo : l'autre côté)
@@ -1511,6 +1657,7 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("rendu", "veille_apres") => (0.0, 3600.0),
         ("rendu", _) => (0.0, 500.0),
         ("bordure", _) => (0.0, 1.0),
+        (s, k) if FIGURES.contains(&s) && bornes_allure(k).is_some() => bornes_allure(k).unwrap_or((0.0, 1.0)),
         _ => (0.0, 1000.0),
     }
 }

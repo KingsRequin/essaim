@@ -1,7 +1,8 @@
 //! Modulations (`[modulations]`) : une source du son (basse, note grave ou aiguë, kick, caisse
 //! claire, charleston, montée, drop, stéréo, tempo, contretemps, brillance) agit sur un
 //! paramètre de l'essaim (rotation du trajet, vitesse, rayon, taille, teinte, décalage,
-//! luminosité, traînée, opacité), pour les comètes, les satellites ou les deux. Chaque source
+//! luminosité, traînée, opacité), pour les comètes, les satellites ou les deux, ou pour les
+//! figures autour du pointeur (toutes ou l'une d'elles : `Effets::figures`). Chaque source
 //! est ramenée de 0 à 1 (stéréo de -1 à 1) ; les coups (kick, caisse claire, charleston, drop,
 //! contretemps) sont des enveloppes qui montent d'un coup et retombent. Chaque modulation a son
 //! seuil, son lissage et peut prendre sa source à l'envers. Les réactions continues d'avant (la
@@ -130,13 +131,18 @@ impl Default for Effet {
     }
 }
 
-/// Effets des modulations : sur les comètes et sur les satellites, et teinte de tout ce qu'Essaim
-/// dessine (modulations de la teinte « sur tout »).
+/// Effets des modulations : sur les comètes et sur les satellites, sur chaque figure (dans
+/// l'ordre de `config::FIGURES`), et teinte de tout ce qu'Essaim dessine (modulations de la teinte
+/// « sur tout »).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Effets {
     pub groupes: [Effet; 2],
+    pub figures: [Effet; NB_FIGURES],
     pub teinte: f32,
 }
+
+/// Nombre de figures que les modulations peuvent viser.
+pub const NB_FIGURES: usize = crate::config::FIGURES.len();
 
 /// Effets de `liste`, `valeurs[i]` étant la valeur lissée de la modulation `i` (`visee`). Les
 /// rotations, vitesses, teintes et décalages s'additionnent ; rayon, taille, lueur, traînée et
@@ -155,10 +161,9 @@ pub fn effets(liste: &[Modulation], valeurs: &[f32]) -> Effets {
             r.teinte += v * TEINTE;
             continue;
         }
-        for (g, e) in r.groupes.iter_mut().enumerate() {
-            if !m.sur.inclut(g == 1) {
-                continue;
-            }
+        let groupes = r.groupes.iter_mut().enumerate().filter(|(g, _)| m.sur.inclut(*g == 1)).map(|(_, e)| e);
+        let figures = r.figures.iter_mut().enumerate().filter(|(i, _)| m.sur.vise_figure(*i)).map(|(_, e)| e);
+        for e in groupes.chain(figures) {
             match m.cible {
                 Cible::Rotation => e.rotation += v * ROTATION,
                 Cible::Vitesse => e.vitesse += v * VITESSE,
@@ -174,7 +179,7 @@ pub fn effets(liste: &[Modulation], valeurs: &[f32]) -> Effets {
             }
         }
     }
-    for e in &mut r.groupes {
+    for e in r.groupes.iter_mut().chain(&mut r.figures) {
         e.acceleration = e.acceleration.clamp(0.0, 5.0);
         e.rayon = e.rayon.clamp(0.1, 5.0);
         e.taille = e.taille.clamp(0.0, 4.0);
@@ -225,6 +230,27 @@ mod tests {
         let [c, s] = a_fond(&liste).groupes;
         assert_eq!((c.rayon, c.vitesse, c.taille, c.opacite), (0.1, -VITESSE, 1.0, 1.0));
         assert_eq!(s, Effet::default());
+    }
+
+    #[test]
+    fn les_figures_ont_leurs_modulations() {
+        use crate::config::FIGURES;
+        let orbe = FIGURES.iter().position(|&f| f == "orbe").unwrap();
+        let liste = [m(Source::Kick, Cible::Rayon, Groupe::Orbe, 0.25), m(Source::Kick, Cible::Opacite, Groupe::Figures, -0.5), m(Source::Kick, Cible::Taille, Groupe::Tout, 1.0)];
+        let e = a_fond(&liste);
+        for (i, f) in e.figures.iter().enumerate() {
+            // « tout » reste l'essaim : comètes et satellites
+            assert_eq!((f.opacite, f.taille), (0.5, 1.0), "{}", FIGURES[i]);
+            assert_eq!(f.rayon, if i == orbe { 2.0 } else { 1.0 }, "{}", FIGURES[i]);
+        }
+        assert_eq!((e.groupes[0].rayon, e.groupes[0].opacite, e.groupes[1].taille), (1.0, 1.0, 2.5));
+        // le groupe d'une figure ne touche ni les comètes ni les satellites
+        assert!(!Groupe::Orbe.inclut(false) && !Groupe::Figures.inclut(true));
+        assert!(Groupe::Figures.vise_figure(8) && !Groupe::Tout.vise_figure(0) && Groupe::Gouttes.vise_figure(8) && !Groupe::Gouttes.vise_figure(3));
+        // noms écrits dans les réglages
+        assert_eq!(serde_json::to_value(Groupe::QuatreTemps).unwrap(), "quatre_temps");
+        let g: Groupe = serde_json::from_value(serde_json::json!("pinceau")).unwrap();
+        assert_eq!(g, Groupe::Pinceau);
     }
 
     #[test]

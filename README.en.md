@@ -89,7 +89,7 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | ⚡ **Triggers** | When an event happens (kick, snare, hi-hat, drop, beat, off-beat, break, track change, click, right click), an action: flash, shockwave, shards, sparks, square, crack, implosion, satellites, explosion, burst, reversed rotation, border lighting up, orbit bounce, rotation push, brake; with a minimum delay and a chance ("one kick in three") |
 | 🎗️ **Ribbons and springs** | Comets as twisting ribbons, with no white head; or the whole swarm on springs: the orbit bounces on the kick instead of reversing, heads stretch as they speed up, satellites are born at the center |
 | 🎛️ **Modulations** | A part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, off-beat, tempo, brightness, stereo) drives the path rotation, speed, acceleration, radius, size, hue, offset, glow, trail or opacity, of the comets, the satellites or both; with a threshold, smoothing, and inverted if you like |
-| ◔ **Small figures** | Thin lines that leave the screen visible, alone or with the swarm: two arcs that gauge bass and treble, four dots counting the beats under the pointer, a ring that trails the pointer and beats on the kick, an orb (the spectrum as one closed line), a voice line, a dot grid swept by waves, a brush stroke when the mouse moves fast, a pendulum that jumps on the kick, outlined droplets that merge and split |
+| ◔ **Small figures** | Thin lines that leave the screen visible, alone or with the swarm: two arcs that gauge bass and treble, four dots counting the beats under the pointer, a ring that trails the pointer and beats on the kick, an orb (the spectrum as one closed line), a voice line, a dot grid swept by waves, a brush stroke when the mouse moves fast, a pendulum that jumps on the kick, outlined droplets that merge and split. Alternatives to the swarm: each has its own size, opacity, hue, rotation, position, strength of every reaction to the music, and its own modulations |
 | 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings; optionally, the title is written next to the pointer for a few seconds when the track changes |
 
 ### The mouse and the screen
@@ -132,7 +132,7 @@ install other people's.
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Settings tab: large preview, one sub-tab per effect, here the modulations"></td>
+<td width="50%" valign="top"><img src="docs/images/reglages.png" alt="Settings tab: large preview, sub-tabs grouped in collapsible families, here the modulations"></td>
 <td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Cursors tab: installed cursor schemes"></td>
 </tr>
 <tr>

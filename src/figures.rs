@@ -4,16 +4,23 @@
 //! contour dans `figures/gouttes.rs`.
 //! `Effets` les possède, leur passe le son et ajoute leur zone à celle du pointeur.
 //!
+//! Ce sont des alternatives à l'essaim : chacune a son allure (`config::Allure` : échelle,
+//! opacité, teinte, rotation, place, force de chaque réaction) et ses modulations
+//! (`modulation::Effets::figures`). Chaque figure entend le son à sa façon (`Partage::pour`,
+//! `Elan`) et se dessine à travers sa pose (`Pose`, `Posee`).
+//!
 //! Tout ce qui bouge passe par des ressorts bornés (`Ressort::vers`) : la zone de `rect` contient
 //! donc toujours le dessin. `ui/apercu.js` reproduit ces figures (mêmes formules) : les modifier
 //! ici oblige à les reporter là.
 
 use crate::audio::AudioView;
 use crate::canvas::{Canvas, Rgb};
-use crate::config::Config;
+use crate::config::{Allure, Config};
 use crate::layer::IRect;
-use crate::render::{prisme, ressort, Coups};
-use std::f32::consts::{PI, TAU};
+use crate::modulation::{Effet, NB_FIGURES};
+use crate::render::{prisme_decale, ressort, Coups};
+use std::cell::RefCell;
+use std::f32::consts::{PI, SQRT_2, TAU};
 
 mod gouttes;
 mod plus;
@@ -36,6 +43,160 @@ struct Partage {
     montee: f32,
     charleston: f32,
     caisse: f32,
+}
+
+impl Partage {
+    /// Ce qu'entend une figure d'allure `a` : la basse, la montée, le charleston et la caisse claire
+    /// à la force de ses réactions (jamais au-delà de 1 : la zone de chaque figure en dépend).
+    fn pour(self, a: &Allure) -> Partage {
+        let f = |v: f32, k: f32| (v * k).min(1.0);
+        Partage {
+            basse: f(self.basse, a.reaction_basse),
+            montee: f(self.montee, a.reaction_montee),
+            charleston: f(self.charleston, a.reaction_charleston),
+            caisse: f(self.caisse, a.reaction_caisse),
+            ..self
+        }
+    }
+}
+
+/// Coups de cette image tels qu'une figure les ressent : nombre de kicks et force de la réaction
+/// au kick ; puis kick, caisse claire, charleston et drop, chacun 0 s'il n'y en a pas, sinon la
+/// force de la réaction (1 : comme avant les réglages de réaction).
+#[derive(Clone, Copy, Default)]
+struct Elan {
+    kicks: u32,
+    fk: f32,
+    kick: f32,
+    caisse: f32,
+    aigus: f32,
+    drop: f32,
+}
+
+impl Elan {
+    fn de(c: &Coups, a: &Allure) -> Elan {
+        let si = |n: u32, k: f32| if n > 0 { k } else { 0.0 };
+        Elan { kicks: c.kicks, fk: a.reaction_kick, kick: si(c.kicks, a.reaction_kick), caisse: si(c.caisses, a.reaction_caisse), aigus: si(c.aigus, a.reaction_charleston), drop: si(c.drops, a.reaction_drop) }
+    }
+
+    /// Nombre de kicks à la force de la réaction.
+    fn kicks(&self) -> f32 {
+        self.kicks as f32 * self.fk
+    }
+}
+
+/// Numéros des figures, dans l'ordre de `config::FIGURES`.
+const ARCS: usize = 0;
+const QUATRE_TEMPS: usize = 1;
+const ANNEAU: usize = 2;
+const ORBE: usize = 3;
+const VOIX: usize = 4;
+const TRAME: usize = 5;
+const TRAIT: usize = 6;
+const PENDULE: usize = 7;
+const GOUTTES: usize = 8;
+/// Ordre du dessin (les premières dessous).
+const ORDRE: [usize; NB_FIGURES] = [GOUTTES, TRAME, ORBE, VOIX, TRAIT, PENDULE, ARCS, QUATRE_TEMPS, ANNEAU];
+
+/// Le trait suit le trajet du pointeur et le pendule y est accroché : ils ne tournent, ne
+/// grandissent ni ne se déplacent (seuls leur épaisseur, leur opacité et leur teinte changent).
+fn geometrique(i: usize) -> bool {
+    i != TRAIT && i != PENDULE
+}
+
+/// Part de la vitesse des modulations prise par la rotation d'une figure (à fond : 40 rad/s pour
+/// l'essaim, 4 pour une figure) ; décalage d'une figure par « rayon » de décalage (px à 100 %).
+const FIG_VITESSE: f32 = 0.1;
+const FIG_DECALAGE: f32 = 30.0;
+
+/// Pose d'une figure à cette image : autour de `centre`, tournée de `angle`, agrandie de `geo`
+/// (positions et rayons), traits épaissis de `traits`, déplacée de `decalage` (px écran), opacité
+/// multipliée par `alpha` (peut dépasser 1 : une lueur ravive ce qui est pâle).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pose {
+    centre: (f32, f32),
+    angle: f32,
+    geo: f32,
+    traits: f32,
+    decalage: (f32, f32),
+    alpha: f32,
+}
+
+impl Default for Pose {
+    fn default() -> Self {
+        Self { centre: (0.0, 0.0), angle: 0.0, geo: 1.0, traits: 1.0, decalage: (0.0, 0.0), alpha: 1.0 }
+    }
+}
+
+impl Pose {
+    /// La pose ne change rien : la figure est dessinée directement (au bit près comme avant).
+    fn neutre(&self) -> bool {
+        self.angle == 0.0 && self.geo == 1.0 && self.traits == 1.0 && self.decalage == (0.0, 0.0) && self.alpha == 1.0
+    }
+
+    fn point(&self, (x, y): (f32, f32)) -> (f32, f32) {
+        let (c, (sin, cos)) = (self.centre, self.angle.sin_cos());
+        let (dx, dy) = ((x - c.0) * self.geo, (y - c.1) * self.geo);
+        (c.0 + dx * cos - dy * sin + self.decalage.0, c.1 + dx * sin + dy * cos + self.decalage.1)
+    }
+
+    /// Zone d'une figure contenue dans le carré de demi-côté `e` px autour de `centre`, une fois posée.
+    fn autour(&self, centre: (f32, f32), e: f32) -> IRect {
+        let tourne = if self.angle != 0.0 { SQRT_2 } else { 1.0 };
+        autour((centre.0 + self.decalage.0, centre.1 + self.decalage.1), e * self.geo * self.traits.max(1.0) * tourne)
+    }
+}
+
+/// Dessin à travers la pose d'une figure.
+struct Posee<'a> {
+    cv: &'a mut dyn Canvas,
+    pose: Pose,
+    pts: &'a mut Vec<(f32, f32)>,
+}
+
+impl Posee<'_> {
+    fn alpha(&self, a: f32) -> f32 {
+        (a * self.pose.alpha).min(1.0)
+    }
+}
+
+impl Canvas for Posee<'_> {
+    fn line(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
+        let al = self.alpha(alpha);
+        self.cv.line(self.pose.point(a), self.pose.point(b), width * self.pose.traits, rgb, al, smooth);
+    }
+
+    fn polyline(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
+        let al = self.alpha(alpha);
+        self.pts.clear();
+        self.pts.extend(pts.iter().map(|&p| self.pose.point(p)));
+        self.cv.polyline(self.pts, width * self.pose.traits, rgb, al, smooth);
+    }
+
+    fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32) {
+        let ((x, y), al) = (self.pose.point((x, y)), self.alpha(alpha));
+        self.cv.circle(x, y, r * self.pose.geo, rgb, al);
+    }
+
+    fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32) {
+        let ((x, y), al) = (self.pose.point((x, y)), self.alpha(alpha));
+        self.cv.ring(x, y, r * self.pose.geo, width * self.pose.traits, rgb, al);
+    }
+
+    fn bande(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32) {
+        let al = self.alpha(alpha);
+        self.cv.bande(self.pose.point(a), self.pose.point(b), width * self.pose.traits, rgb, al);
+    }
+
+    fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32) {
+        let al = self.alpha(alpha);
+        self.cv.voile(zone, x, y, r, flou, rgb, al);
+    }
+
+    fn vignette(&mut self, img: &tiny_skia::Pixmap, id: u64, x: f32, y: f32, alpha: f32) {
+        let al = self.alpha(alpha);
+        self.cv.vignette(img, id, x, y, al);
+    }
 }
 
 /// Centre des figures : au bout d'un ressort accroché au pointeur (pulsation en rad/s,
@@ -137,7 +298,9 @@ struct Point {
 struct QuatreTemps {
     pts: [Point; 4],
     actif: Option<usize>,
+    /// Début et force de la vague du drop.
     vague: f64,
+    force: f32,
 }
 
 struct Anneau {
@@ -169,8 +332,16 @@ pub struct Figures {
     /// Orbe, ligne de voix, trame, trait de pinceau et pendule.
     plus: plus::Plus,
     gouttes: gouttes::Gouttes,
-    /// Points d'une ligne à tracer, gardés d'une image à l'autre (le dessin ne prend que `&self`).
-    tampon: std::cell::RefCell<Vec<(f32, f32)>>,
+    /// Effets des modulations sur chaque figure (donnés avant chaque image), angle de chacune,
+    /// sa pose et sa teinte (degrés ajoutés) à cette image.
+    mods: [Effet; NB_FIGURES],
+    angles: [f32; NB_FIGURES],
+    poses: [Pose; NB_FIGURES],
+    teintes: [f32; NB_FIGURES],
+    /// Points d'une ligne à tracer, gardés d'une image à l'autre (le dessin ne prend que `&self`),
+    /// et ceux de cette ligne une fois posée.
+    tampon: RefCell<Vec<(f32, f32)>>,
+    tampon_pose: RefCell<Vec<(f32, f32)>>,
 }
 
 impl Figures {
@@ -188,12 +359,22 @@ impl Figures {
             mesure: 0.0,
             tempo: 0.0,
             arcs: Arcs::default(),
-            temps: QuatreTemps { pts: [point; 4], actif: None, vague: f64::NEG_INFINITY },
+            temps: QuatreTemps { pts: [point; 4], actif: None, vague: f64::NEG_INFINITY, force: 1.0 },
             anneau: Anneau { echelle: Ressort::en(1.0), carre: 0.0, echos: Vec::new() },
             plus: plus::Plus::new(),
             gouttes: gouttes::Gouttes::new(),
+            mods: [Effet::default(); NB_FIGURES],
+            angles: [0.0; NB_FIGURES],
+            poses: [Pose::default(); NB_FIGURES],
+            teintes: [0.0; NB_FIGURES],
             tampon: Default::default(),
+            tampon_pose: Default::default(),
         }
+    }
+
+    /// Effets des modulations sur chaque figure, pour les images qui suivent.
+    pub fn moduler(&mut self, mods: &[Effet; NB_FIGURES]) {
+        self.mods = *mods;
     }
 
     /// Une figure est-elle active ?
@@ -234,7 +415,7 @@ impl Figures {
         self.montee += (au.tension.clamp(0.0, 1.0) - self.montee) * (dt * RETOMBEE.2).min(1.0);
         let basse = au.bass.clamp(0.0, 1.0);
         self.basse += (basse - self.basse) * (1.0 - (-dt * 10.0).exp());
-        let (kicks, caisse, drop) = (coups.kicks, coups.caisses > 0, coups.drops > 0);
+        let drop = coups.drops > 0;
         // tempo : les temps se comptent depuis le dernier drop ; sans tempo régulier, ce qui le
         // montre s'efface
         if coups.temps {
@@ -247,21 +428,26 @@ impl Figures {
         if au.bpm.is_some() {
             self.mesure = ((self.compte % 4) as f32 + au.phase.clamp(0.0, 1.0)) / 4.0;
         }
-        let partage = self.partage(cursor);
-        self.plus.avance(&partage, t, dt, cursor, scale, son, cfg);
-        self.gouttes.avance(&partage, t, dt, son, cfg);
+        // chaque figure entend le son à la force de ses réactions
+        let base = self.partage(cursor);
+        let ecoutes: [(Partage, Elan); NB_FIGURES] = std::array::from_fn(|i| {
+            let a = cfg.figure(i).1;
+            (base.pour(a), Elan::de(coups, a))
+        });
+        self.plus.avance(&ecoutes, t, dt, cursor, scale, son, cfg);
+        let (p, el) = &ecoutes[GOUTTES];
+        self.gouttes.avance(p, el, t, dt, cfg);
+        self.poser(dt, scale, cfg);
 
         if cfg.arcs.actif {
-            let a = &mut self.arcs;
-            for _ in 0..kicks {
-                a.cran += ARC_CRAN;
-                a.bond.v += ARC_BOND;
+            let ((p, el), a) = (&ecoutes[ARCS], &mut self.arcs);
+            if el.kicks > 0 {
+                a.cran += ARC_CRAN * el.kicks();
+                a.bond.v += ARC_BOND * el.kicks();
             }
-            if caisse {
-                a.recul.v -= ARC_RECUL;
-            }
-            if drop {
-                a.plein = 1.0;
+            a.recul.v -= ARC_RECUL * el.caisse;
+            if el.drop > 0.0 {
+                a.plein = a.plein.max(el.drop.min(1.0));
             }
             a.plein *= (-dt * 1.6).exp();
             // l'angle reste petit : le cran et l'arc reculent ensemble d'un tour
@@ -272,13 +458,13 @@ impl Figures {
             a.tour.vers(a.cran, (14.0, 0.4), dt, (-TAU, 2.0 * TAU));
             a.bond.vers(0.0, (18.0, 0.3), dt, ARC_BORNES);
             a.recul.vers(0.0, (12.0, 0.35), dt, (-PI, PI));
-            let aigu = (0.9 * self.charleston + 0.8 * self.montee + 0.45 * self.caisse).min(1.0).max(a.plein);
-            a.grave = self.basse.max(a.plein);
+            let aigu = (0.9 * p.charleston + 0.8 * p.montee + 0.45 * p.caisse).min(1.0).max(a.plein);
+            a.grave = p.basse.max(a.plein);
             a.aigu += (aigu - a.aigu) * (1.0 - (-dt * if aigu > a.aigu { 30.0 } else { 6.0 }).exp());
         }
 
         if cfg.quatre_temps.actif {
-            let q = &mut self.temps;
+            let (el, q) = (&ecoutes[QUATRE_TEMPS].1, &mut self.temps);
             let actif = au.bpm.map(|_| (self.compte % 4) as usize);
             if actif != q.actif {
                 q.actif = actif;
@@ -287,18 +473,16 @@ impl Figures {
                 }
             }
             if let Some(p) = q.actif.map(|i| &mut q.pts[i]) {
-                p.saut.v -= 150.0 * kicks.min(1) as f32;
-                if caisse {
-                    p.tiret.v += 60.0;
-                }
+                p.saut.v -= 150.0 * el.kick;
+                p.tiret.v += 60.0 * el.caisse;
             }
-            if drop {
-                q.vague = t;
+            if el.drop > 0.0 {
+                (q.vague, q.force) = (t, el.drop);
                 q.pts.iter_mut().for_each(|p| p.arme = true);
             }
             for (i, p) in q.pts.iter_mut().enumerate() {
                 if p.arme && t >= q.vague + i as f64 * VAGUE {
-                    p.saut.v -= 230.0;
+                    p.saut.v -= 230.0 * q.force;
                     p.arme = false;
                 }
                 p.saut.vers(0.0, (20.0, 0.3), dt, SAUT_BORNES);
@@ -308,17 +492,17 @@ impl Figures {
         }
 
         if cfg.anneau.actif {
-            let a = &mut self.anneau;
-            a.echelle.v += 5.5 * kicks as f32;
-            if caisse {
-                a.carre = 1.0;
+            let ((p, el), a) = (&ecoutes[ANNEAU], &mut self.anneau);
+            a.echelle.v += 5.5 * el.kicks as f32 * el.fk;
+            if el.caisse > 0.0 {
+                a.carre = a.carre.max(el.caisse.min(1.0));
             }
-            if drop {
-                a.echelle.v += 10.0;
+            if el.drop > 0.0 {
+                a.echelle.v += 10.0 * el.drop;
                 a.echos.push(t);
             }
             a.carre *= (-dt * 6.0).exp();
-            a.echelle.vers(1.0 - 0.42 * self.montee, (18.0, 0.28), dt, ANNEAU_BORNES);
+            a.echelle.vers(1.0 - 0.42 * p.montee, (18.0, 0.28), dt, ANNEAU_BORNES);
             a.echos.retain(|&ne| t - ne < ANNEAU_ECHO.0);
         }
     }
@@ -328,104 +512,175 @@ impl Figures {
         Partage { centre: self.centre.unwrap_or(cursor), horloge: self.horloge, basse: self.basse, montee: self.montee, charleston: self.charleston, caisse: self.caisse }
     }
 
+    /// Pose de chaque figure à cette image : son allure (`[…] echelle`, `rotation`…) et ses
+    /// modulations. Une figure tourne de sa rotation propre, plus celle des modulations, le tout
+    /// multiplié par leur accélération.
+    fn poser(&mut self, dt: f32, scale: f32, cfg: &Config) {
+        let centre = self.centre.unwrap_or_default();
+        for i in 0..NB_FIGURES {
+            let (actif, a) = cfg.figure(i);
+            let m = self.mods[i];
+            if !actif {
+                (self.angles[i], self.poses[i], self.teintes[i]) = (0.0, Pose::default(), 0.0);
+                continue;
+            }
+            let geo = geometrique(i);
+            if geo {
+                let w = ((a.rotation + m.rotation) * TAU / 60.0 + m.vitesse * FIG_VITESSE) * m.acceleration;
+                if w != 0.0 && w.is_finite() {
+                    self.angles[i] = (self.angles[i] + w * dt).rem_euclid(TAU);
+                }
+            }
+            self.poses[i] = Pose {
+                centre,
+                angle: if geo { self.angles[i] } else { 0.0 },
+                geo: if geo { a.echelle * m.rayon } else { 1.0 },
+                traits: m.taille,
+                decalage: if geo { ((a.decalage_x + m.decalage * FIG_DECALAGE) * scale, a.decalage_y * scale) } else { (0.0, 0.0) },
+                alpha: a.opacite * m.opacite * m.luminosite,
+            };
+            self.teintes[i] = a.teinte + m.teinte;
+        }
+    }
+
+    /// Demi-côté (px à 100 %) du carré autour du centre qui contient la figure `i` (sauf le trait
+    /// et le pendule, qui ont leur propre zone).
+    fn etendue(&self, i: usize, cfg: &Config) -> f32 {
+        match i {
+            ARCS => cfg.arcs.rayon + ARC_BORNES.1 + cfg.arcs.epaisseur,
+            QUATRE_TEMPS => {
+                let q = &cfg.quatre_temps;
+                let r = q.taille * TAILLE_BORNES.1 * POINT_ACTIF;
+                let large = SOUS_LE_POINTEUR.0 + 1.5 * q.ecart + TIRET_BORNES.1 * 1.1 + r + 1.0;
+                let haut = SOUS_LE_POINTEUR.1 + SAUT_BORNES.1.max(-SAUT_BORNES.0) + r;
+                large.max(haut)
+            }
+            ANNEAU => cfg.anneau.rayon * ANNEAU_BORNES.1 * (1.0 + ANNEAU_ECHO.1) + 4.0 * cfg.anneau.epaisseur + 4.0,
+            GOUTTES => self.gouttes.etendue(cfg),
+            _ => self.plus.etendue(i, cfg),
+        }
+    }
+
     /// Zone écran qui contient les figures (autour de leur centre, ou de `cursor` avant la
     /// première image) ; `None` si aucune n'est active.
     pub fn rect(&self, cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
-        let mut e = 0.0f32;
-        if cfg.arcs.actif {
-            e = e.max(cfg.arcs.rayon + ARC_BORNES.1 + cfg.arcs.epaisseur);
-        }
-        if cfg.quatre_temps.actif {
-            let q = &cfg.quatre_temps;
-            let r = q.taille * TAILLE_BORNES.1 * POINT_ACTIF;
-            let large = SOUS_LE_POINTEUR.0 + 1.5 * q.ecart + TIRET_BORNES.1 * 1.1 + r + 1.0;
-            let haut = SOUS_LE_POINTEUR.1 + SAUT_BORNES.1.max(-SAUT_BORNES.0) + r;
-            e = e.max(large).max(haut);
-        }
-        if cfg.anneau.actif {
-            let a = &cfg.anneau;
-            e = e.max(a.rayon * ANNEAU_BORNES.1 * (1.0 + ANNEAU_ECHO.1) + 4.0 * a.epaisseur + 4.0);
-        }
-        let zone = (e > 0.0).then(|| autour(self.centre.unwrap_or(cursor), e * scale));
         let centre = self.centre.unwrap_or(cursor);
-        let zone = crate::layer::union(zone, self.gouttes.rect(centre, scale, cfg));
-        crate::layer::union(zone, self.plus.rect(centre, cursor, scale, cfg))
+        let mut zone = None;
+        for i in 0..NB_FIGURES {
+            if !cfg.figure(i).0 {
+                continue;
+            }
+            let pose = &self.poses[i];
+            let r = match i {
+                TRAIT => self.plus.rect_trait(scale * pose.traits.max(1.0), cfg),
+                PENDULE => self.plus.rect_pendule(cursor, scale, pose.traits, cfg),
+                _ => Some(pose.autour(centre, self.etendue(i, cfg) * scale)),
+            };
+            zone = crate::layer::union(zone, r);
+        }
+        zone
     }
 
-    /// Dessine les figures actives autour de leur centre.
+    /// Dessine les figures actives autour de leur centre, chacune dans sa pose et sa teinte.
     pub fn dessiner(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32) {
-        let Some((cx, cy)) = self.centre else { return };
-        // deux couleurs : celle des têtes de l'essaim et celle des queues de traînée
-        let (tete, queue) = (prisme(cfg, t, 1.0), prisme(cfg, t, 0.0));
-        let mut pts = self.tampon.borrow_mut();
-        self.gouttes.dessiner(&self.partage((cx, cy)), cv, cfg, scale, (tete, queue));
-        self.plus.dessiner(&self.partage((cx, cy)), cv, &mut pts, t, cfg, scale, (tete, queue));
+        let Some(centre) = self.centre else { return };
+        let (mut pts, mut pts_pose) = (self.tampon.borrow_mut(), self.tampon_pose.borrow_mut());
+        for i in ORDRE {
+            let (actif, a) = cfg.figure(i);
+            if !actif {
+                continue;
+            }
+            // deux couleurs : celle des têtes de l'essaim et celle des queues de traînée
+            let teinte = self.teintes[i];
+            let couleurs = (prisme_decale(cfg, t, 1.0, teinte), prisme_decale(cfg, t, 0.0, teinte));
+            let p = self.partage(centre).pour(a);
+            let pose = self.poses[i];
+            if pose.neutre() {
+                self.dessiner_figure(i, &p, cv, &mut pts, t, cfg, scale, couleurs, teinte);
+            } else {
+                let mut posee = Posee { cv: &mut *cv, pose, pts: &mut pts_pose };
+                self.dessiner_figure(i, &p, &mut posee, &mut pts, t, cfg, scale, couleurs, teinte);
+            }
+        }
+    }
 
-        if cfg.arcs.actif {
-            let (a, c) = (&self.arcs, &cfg.arcs);
-            let mut arc = |r: f32, depart: f32, ouverture: f32, largeur: f32, rgb| {
-                let r = r.max(2.0);
-                let n = ((ouverture * r / (3.0 * scale)).ceil() as usize).clamp(2, 96);
+    #[allow(clippy::too_many_arguments)]
+    fn dessiner_figure(&self, i: usize, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb), teinte: f32) {
+        let (cx, cy) = p.centre;
+        match i {
+            GOUTTES => self.gouttes.dessiner(p, cv, cfg, scale, (tete, queue)),
+            TRAME => self.plus.dessiner_trame(p, cv, t, cfg, scale, tete),
+            ORBE => self.plus.dessiner_orbe(p, cv, pts, t, cfg, scale, (tete, queue)),
+            VOIX => self.plus.dessiner_voix(p, cv, pts, cfg, scale, (tete, queue)),
+            TRAIT => self.plus.dessiner_trait(p, cv, t, cfg, scale, teinte),
+            PENDULE => self.plus.dessiner_pendule(cv, pts, cfg, scale, (tete, queue)),
+            ARCS => {
+                let (a, c) = (&self.arcs, &cfg.arcs);
+                let mut arc = |r: f32, depart: f32, ouverture: f32, largeur: f32, rgb| {
+                    let r = r.max(2.0);
+                    let n = ((ouverture * r / (3.0 * scale)).ceil() as usize).clamp(2, 96);
+                    pts.clear();
+                    pts.extend((0..=n).map(|i| {
+                        let (sin, cos) = (depart + ouverture * i as f32 / n as f32).sin_cos();
+                        (cx + cos * r, cy + sin * r)
+                    }));
+                    cv.polyline(pts, largeur, rgb, 1.0, true);
+                };
+                let grand = ARC_GRAND_OUVERTURE.0 + ARC_GRAND_OUVERTURE.1 * a.grave.clamp(0.0, 1.0);
+                let petit = ARC_PETIT_OUVERTURE.0 + ARC_PETIT_OUVERTURE.1 * a.aigu.clamp(0.0, 1.0);
+                arc((c.rayon + a.bond.x) * scale, -PI / 2.0 + a.tour.x + self.horloge * 0.25, grand, c.epaisseur * scale, tete);
+                arc((c.rayon * ARC_PETIT.0 + a.bond.x * 0.5) * scale, PI / 2.0 + a.recul.x - self.horloge * 0.4, petit, c.epaisseur * ARC_PETIT.1 * scale, queue);
+            }
+            QUATRE_TEMPS => {
+                if self.tempo <= 0.01 {
+                    return;
+                }
+                let (q, c) = (&self.temps, &cfg.quatre_temps);
+                let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + SOUS_LE_POINTEUR.1 * scale);
+                let ecart = c.ecart * scale * (1.0 - 0.35 * p.montee);
+                for (i, pt) in q.pts.iter().enumerate() {
+                    let actif = q.actif == Some(i);
+                    let x = ax + (i as f32 - 1.5) * ecart + (self.horloge * 40.0 + i as f32 * 2.0).sin() * 0.8 * p.montee * scale;
+                    let y = ay + pt.saut.x * scale;
+                    let r = c.taille * scale * pt.taille.x * if actif { POINT_ACTIF } else { 1.0 };
+                    let l = pt.tiret.x.max(0.0) * 1.1 * scale;
+                    let al = self.tempo * if actif { 1.0 } else { POINT_ETEINT };
+                    if l > 0.3 {
+                        cv.line((x - l, y), (x + l, y), 2.0 * r, tete, al, true);
+                    } else {
+                        cv.circle(x, y, r, tete, al);
+                    }
+                }
+            }
+            _ => {
+                let (a, c) = (&self.anneau, &cfg.anneau);
+                let r = c.rayon * scale * a.echelle.x;
+                for &ne in &a.echos {
+                    let k = ((t - ne) / ANNEAU_ECHO.0) as f32;
+                    if (0.0..1.0).contains(&k) {
+                        cv.ring(cx, cy, r * (1.0 + ANNEAU_ECHO.1 * (1.0 - (1.0 - k).powi(3))), 1.2 * scale, queue, 0.7 * (1.0 - k));
+                    }
+                }
+                // étiré dans le sens de sa vitesse ; carré un instant sur la caisse claire
+                // (superellipse : un cercle à l'exposant 2, presque un carré à 8)
+                let v = (self.vitesse.0.powi(2) + self.vitesse.1.powi(2)).sqrt();
+                let e = (v / (ANNEAU_ETIRE.1 * scale)).min(ANNEAU_ETIRE.0);
+                let (sin, cos) = if v > 1.0 { (self.vitesse.1 / v, self.vitesse.0 / v) } else { (0.0, 1.0) };
+                let (ra, rb, puissance) = (r * (1.0 + e), r * (1.0 - e), 2.0 / (2.0 + 6.0 * a.carre.clamp(0.0, 1.0)));
+                let point = |angle: f32| {
+                    let (st, ct) = angle.sin_cos();
+                    let (x, y) = (ra * ct.signum() * ct.abs().powf(puissance), rb * st.signum() * st.abs().powf(puissance));
+                    (cx + x * cos - y * sin, cy + x * sin + y * cos)
+                };
                 pts.clear();
-                pts.extend((0..=n).map(|i| {
-                    let (sin, cos) = (depart + ouverture * i as f32 / n as f32).sin_cos();
-                    (cx + cos * r, cy + sin * r)
-                }));
-                cv.polyline(&pts, largeur, rgb, 1.0, true);
-            };
-            let grand = ARC_GRAND_OUVERTURE.0 + ARC_GRAND_OUVERTURE.1 * a.grave.clamp(0.0, 1.0);
-            let petit = ARC_PETIT_OUVERTURE.0 + ARC_PETIT_OUVERTURE.1 * a.aigu.clamp(0.0, 1.0);
-            arc((c.rayon + a.bond.x) * scale, -PI / 2.0 + a.tour.x + self.horloge * 0.25, grand, c.epaisseur * scale, tete);
-            arc((c.rayon * ARC_PETIT.0 + a.bond.x * 0.5) * scale, PI / 2.0 + a.recul.x - self.horloge * 0.4, petit, c.epaisseur * ARC_PETIT.1 * scale, queue);
-        }
-
-        if cfg.quatre_temps.actif && self.tempo > 0.01 {
-            let (q, c) = (&self.temps, &cfg.quatre_temps);
-            let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + SOUS_LE_POINTEUR.1 * scale);
-            let ecart = c.ecart * scale * (1.0 - 0.35 * self.montee);
-            for (i, p) in q.pts.iter().enumerate() {
-                let actif = q.actif == Some(i);
-                let x = ax + (i as f32 - 1.5) * ecart + (self.horloge * 40.0 + i as f32 * 2.0).sin() * 0.8 * self.montee * scale;
-                let y = ay + p.saut.x * scale;
-                let r = c.taille * scale * p.taille.x * if actif { POINT_ACTIF } else { 1.0 };
-                let l = p.tiret.x.max(0.0) * 1.1 * scale;
-                let al = self.tempo * if actif { 1.0 } else { POINT_ETEINT };
-                if l > 0.3 {
-                    cv.line((x - l, y), (x + l, y), 2.0 * r, tete, al, true);
-                } else {
-                    cv.circle(x, y, r, tete, al);
+                pts.extend((0..=48).map(|i| point(i as f32 / 48.0 * TAU)));
+                // le trait s'épaissit avec la basse et la montée (au plus trois fois l'épaisseur réglée)
+                cv.polyline(pts, c.epaisseur * (1.0 + 1.07 * p.basse + 0.86 * p.montee) * scale, tete, 1.0, true);
+                // le point du tempo : un tour par mesure de quatre temps, plus gros sur le charleston
+                if self.tempo > 0.01 {
+                    let (x, y) = point(-PI / 2.0 + self.mesure * TAU);
+                    cv.circle(x, y, (1.9 + 1.9 * p.charleston) * scale, queue, self.tempo);
                 }
-            }
-        }
-
-        if cfg.anneau.actif {
-            let (a, c) = (&self.anneau, &cfg.anneau);
-            let r = c.rayon * scale * a.echelle.x;
-            for &ne in &a.echos {
-                let k = ((t - ne) / ANNEAU_ECHO.0) as f32;
-                if (0.0..1.0).contains(&k) {
-                    cv.ring(cx, cy, r * (1.0 + ANNEAU_ECHO.1 * (1.0 - (1.0 - k).powi(3))), 1.2 * scale, queue, 0.7 * (1.0 - k));
-                }
-            }
-            // étiré dans le sens de sa vitesse ; carré un instant sur la caisse claire
-            // (superellipse : un cercle à l'exposant 2, presque un carré à 8)
-            let v = (self.vitesse.0.powi(2) + self.vitesse.1.powi(2)).sqrt();
-            let e = (v / (ANNEAU_ETIRE.1 * scale)).min(ANNEAU_ETIRE.0);
-            let (sin, cos) = if v > 1.0 { (self.vitesse.1 / v, self.vitesse.0 / v) } else { (0.0, 1.0) };
-            let (ra, rb, puissance) = (r * (1.0 + e), r * (1.0 - e), 2.0 / (2.0 + 6.0 * a.carre.clamp(0.0, 1.0)));
-            let point = |angle: f32| {
-                let (st, ct) = angle.sin_cos();
-                let (x, y) = (ra * ct.signum() * ct.abs().powf(puissance), rb * st.signum() * st.abs().powf(puissance));
-                (cx + x * cos - y * sin, cy + x * sin + y * cos)
-            };
-            pts.clear();
-            pts.extend((0..=48).map(|i| point(i as f32 / 48.0 * TAU)));
-            // le trait s'épaissit avec la basse et la montée (au plus trois fois l'épaisseur réglée)
-            cv.polyline(&pts, c.epaisseur * (1.0 + 1.07 * self.basse + 0.86 * self.montee) * scale, tete, 1.0, true);
-            // le point du tempo : un tour par mesure de quatre temps, plus gros sur le charleston
-            if self.tempo > 0.01 {
-                let (x, y) = point(-PI / 2.0 + self.mesure * TAU);
-                cv.circle(x, y, (1.9 + 1.9 * self.charleston) * scale, queue, self.tempo);
             }
         }
     }
@@ -492,8 +747,38 @@ mod tests {
         (cfg.trame.rayon, cfg.trame.pas, cfg.trame.taille) = (120.0, 6.0, 3.0);
         (cfg.pinceau.largeur, cfg.pinceau.duree) = (12.0, 1.0);
         (cfg.pendule.longueur, cfg.pendule.taille) = (60.0, 6.0);
+        tiennent_dans_leur_zone(&cfg, &[Effet::default(); NB_FIGURES]);
+        // allure poussée au bout de ses bornes (sauf l'échelle, déjà au plus grand avec ces
+        // réglages) et modulations à fond : la zone suit toujours
+        for i in 0..NB_FIGURES {
+            let a = allure_mut(&mut cfg, i);
+            (a.echelle, a.rotation, a.decalage_x, a.decalage_y, a.opacite, a.teinte) = (1.4, -30.0, 80.0, -80.0, 0.5, 120.0);
+            (a.reaction_kick, a.reaction_caisse, a.reaction_charleston, a.reaction_basse, a.reaction_montee, a.reaction_drop) = (2.0, 2.0, 2.0, 2.0, 2.0, 2.0);
+        }
+        let fort = Effet { rotation: 90.0, vitesse: 40.0, decalage: 1.6, rayon: 1.5, taille: 3.0, luminosite: 3.0, ..Effet::default() };
+        tiennent_dans_leur_zone(&cfg, &[fort; NB_FIGURES]);
+    }
+
+    fn allure_mut(cfg: &mut Config, i: usize) -> &mut Allure {
+        match i {
+            ARCS => &mut cfg.arcs.allure,
+            QUATRE_TEMPS => &mut cfg.quatre_temps.allure,
+            ANNEAU => &mut cfg.anneau.allure,
+            ORBE => &mut cfg.orbe.allure,
+            VOIX => &mut cfg.voix.allure,
+            TRAME => &mut cfg.trame.allure,
+            TRAIT => &mut cfg.pinceau.allure,
+            PENDULE => &mut cfg.pendule.allure,
+            _ => &mut cfg.gouttes.allure,
+        }
+    }
+
+    /// Musique chargée, pointeur qui file : à chaque image, aucun pixel peint hors de `rect`.
+    fn tiennent_dans_leur_zone(cfg: &Config, mods: &[Effet; NB_FIGURES]) {
+        let cfg = cfg.clone();
         for (scale, dt) in [(1.0f32, 1.0 / 120.0), (1.5, 1.0 / 20.0)] {
             let mut f = Figures::new();
+            f.moduler(mods);
             let (mut t, mut peints) = (0.0f64, 0usize);
             for i in 0..(4.0 / dt) as usize {
                 let cursor = (700.0 + 300.0 * (t as f32 * 5.0).sin(), 700.0 + 120.0 * (t as f32 * 3.0).cos());
@@ -516,6 +801,46 @@ mod tests {
             }
             assert!(peints > 5000, "{peints} pixels peints");
         }
+    }
+
+    #[test]
+    fn une_reaction_a_zero_ne_reagit_plus_et_l_allure_se_voit() {
+        let mut cfg = Config::default();
+        cfg.arcs.actif = true;
+        cfg.arcs.allure.reaction_kick = 0.0;
+        let mut f = Figures::new();
+        let kick = Coups { kicks: 1, ..Default::default() };
+        for i in 0..30 {
+            avancer(&mut f, i as f64 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &kick, &cfg);
+        }
+        assert_eq!((f.arcs.cran, f.arcs.bond.x), (0.0, 0.0), "le kick fait encore bouger les arcs");
+        // réaction double : le bond part deux fois plus fort
+        cfg.arcs.allure.reaction_kick = 2.0;
+        let mut g = Figures::new();
+        avancer(&mut g, 0.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &kick, &cfg);
+        cfg.arcs.allure.reaction_kick = 1.0;
+        let mut h = Figures::new();
+        avancer(&mut h, 0.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &kick, &cfg);
+        assert!((g.arcs.cran - 2.0 * h.arcs.cran).abs() < 1e-6 && g.arcs.bond.x > h.arcs.bond.x);
+        // décalée de 60 px à droite, à moitié transparente : le dessin a bougé et pâli
+        let image = |f: &Figures, cfg: &Config| {
+            let mut pm = Pixmap::new(600, 600).unwrap();
+            f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 0.0, cfg, 1.0);
+            pm
+        };
+        let droite = |pm: &Pixmap| pm.data().chunks_exact(4).enumerate().filter(|(j, p)| p[3] > 0 && j % 600 > 340).count();
+        let opaque = |pm: &Pixmap| pm.data().chunks_exact(4).map(|p| p[3]).max().unwrap_or(0);
+        let avant = image(&h, &cfg);
+        (cfg.arcs.allure.decalage_x, cfg.arcs.allure.opacite) = (60.0, 0.5);
+        avancer(&mut h, 1.0 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
+        let apres = image(&h, &cfg);
+        assert!(droite(&avant) == 0 && droite(&apres) > 20, "{} → {}", droite(&avant), droite(&apres));
+        assert!(opaque(&apres) < 160 && opaque(&avant) > 200, "{} → {}", opaque(&avant), opaque(&apres));
+        // une modulation de la teinte change la couleur, pas la place
+        cfg.arcs.allure = Allure::default();
+        h.moduler(&[Effet { teinte: 180.0, ..Effet::default() }; NB_FIGURES]);
+        avancer(&mut h, 2.0 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
+        assert!(h.poses[ARCS].neutre() && h.teintes[ARCS] == 180.0);
     }
 
     #[test]
