@@ -15,11 +15,13 @@ montre plus la réalité se refait.
 cargo test --release
 cargo clippy --all-targets -- -D warnings
 cargo build --release
-node --check ui/app.js; node --check ui/apercu.js; node --check ui/lancement.js
+node scripts/verifier-ui.mjs
 ```
 
 Les scripts de `ui/` sont embarqués tels quels : aucune commande cargo ne les lit, et une seule
-erreur de syntaxe laisse la fenêtre des réglages vide (0.8.0). Un nouveau `.js` s'ajoute ici.
+erreur de syntaxe laisse la fenêtre des réglages vide (0.8.0), comme un nom déclaré au premier
+niveau dans deux scripts (ils partagent la page ; 0.21.0). `scripts/verifier-ui.mjs` vérifie les
+deux. Un nouveau `.js` s'ajoute à sa liste `SCRIPTS`.
 
 Lancer cargo depuis le dépôt : `.cargo/config.toml` (local, non suivi) y choisit le dossier de
 compilation et remplace `audio-commun` de GitHub par le dossier voisin. Consignes propres au PC
