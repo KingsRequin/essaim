@@ -82,6 +82,8 @@ const etat = {
   teinte: null,
   dernierSon: -1e9,
   demo: { kicks: 0, prochain: 0 },
+  sourceSon: null, // son donné aux aperçus : "musique", "demo" ou "muet" (écoute coupée)
+  prisme: null, // Prisme (éclairage RGB) est-il là ? null : l'appli ne le dit pas
   survol: null,
   menu: null, // tuile dont le menu « Gérer » est ouvert
   renomme: null, // tuile en cours de renommage
@@ -96,6 +98,7 @@ const etat = {
   morceau: null, // morceau en cours { titre, artiste } (API média de Windows), ou null
   lecture: null, // le morceau joue (vrai), est en pause (faux) ; null : aucune session
   pistes: null, // compteur des changements de piste de l'appli (rafale dans le grand aperçu)
+  listePresets: "", // noms et dates des presets au dernier état (la grille n'est refaite que s'ils changent)
   raison: "", // ce qui retient l'essaim (« Plein écran », « Ne pas déranger », « Batterie : 30 i/s »…)
   recente: "", // dernière application vue au premier plan, proposée pour la liste des pauses
 };
@@ -110,8 +113,26 @@ function musique() {
   return etat.lecture === true || performance.now() - etat.dernierSon < 2500;
 }
 
+// Écoute coupée (« Écoute » inactive) : un son muet, compteurs figés, sans tempo ni basse.
+const SON_MUET = Object.freeze({ kicks: 0, basse: 0, hauteur: 50, aigus: 0, brillance: 0, caisses: 0, drops: 0, tension: 0, balance: 0, bpm: null, phase: 0, relais: false });
+const sourceSon = () => (etat.reglages && !etat.reglages.audio.actif ? "muet" : musique() ? "musique" : "demo");
+
+// Au passage d'une source à l'autre, les compteurs (kicks, caisses, drops, aigus) sautent : chaque
+// aperçu repart d'une écoute neuve, qui prend les nouveaux compteurs pour point de départ au lieu
+// d'y voir jusqu'à quatre coups d'un coup.
+function nouvelleEcoute() {
+  const tous = [grand, loupe.apercu, image.apercu, ...comparaison.apercus, ...[...tuiles.values()].map((t) => t.apercu)];
+  for (const ap of tous) if (ap && ap.ecoute) ap.ecoute = new ap.ecoute.constructor();
+}
+
 function sonPourApercus(maintenant) {
-  if (musique()) {
+  const source = sourceSon();
+  if (source !== etat.sourceSon) {
+    if (etat.sourceSon !== null) nouvelleEcoute();
+    etat.sourceSon = source;
+  }
+  if (source === "muet") return SON_MUET;
+  if (source === "musique") {
     const s = etat.son;
     // relais du tempo (break sans kick) : la phase avance d'elle-même entre deux messages
     if (s.relais && s.bpm) return { ...s, phase: (s.phase + ((maintenant - s.recu) / 1000) * (s.bpm / 60)) % 1 };
@@ -182,7 +203,7 @@ function recevoirSon(m) {
     }
   } else {
     $("detail-niveau").textContent = "silence";
-    $("detail-note").textContent = "aperçus en démo";
+    $("detail-note").textContent = sourceSon() === "muet" ? "aperçus muets" : "aperçus en démo";
   }
   for (const [coup, id] of [[kick, "temoin"], [aigus, "temoin-aigus"]]) {
     if (!coup || !actif || animationsReduites()) continue;
@@ -217,25 +238,76 @@ const SECTIONS_PRESET = [
 const HORS_PRESET = new Set(["souris.avec_preset", "audio.sortie", "audio.applis", "projecteur.secousse", "projecteur.sensibilite"]);
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
-const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
+// point d'un trajet : fini et pas démesuré (comme Config::clamped)
+const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every((v) => Number.isFinite(v) && Math.abs(v) < 1e6);
+const POINTS_MAX = 2000; // par trajet ou par contour (comme Config::clamped)
+// comme contours::CONTOURS_MAX (nom distinct du CONTOURS_MAX d'apercu.js, chargé dans la même page)
+const CONTOURS_DISTANTS_MAX = 24;
+// Réglages entiers du moteur (u32 dans config.rs) : un nombre distant y est arrondi.
+const ENTIERS = new Set(["orbite.nombre", "orbite.anneaux", "essaim.maximum", "essaim.fixes", "couleur.palette", "spectre.bandes"]);
+// Bornes sûres des réglages sans glissière (comme config::limits) : l'allure du trait et du
+// pendule (échelle, rotation, décalage, sans glissière), puis la borne de la section.
+const BORNES_ALLURE = {
+  echelle: [0.5, 2], opacite: [0.1, 1], teinte: [-180, 180], rotation: [-30, 30], decalage_x: [-80, 80], decalage_y: [-80, 80],
+  reaction_kick: [0, 2], reaction_caisse: [0, 2], reaction_charleston: [0, 2], reaction_basse: [0, 2], reaction_montee: [0, 2], reaction_drop: [0, 2],
+};
+const BORNES_SECTION = { orbite: [0, 100], essaim: [0, 10], couleur: [0, 720], bordure: [0, 1], rendu: [0, 500] };
+// Champs numériques d'une modulation ou d'un déclencheur (comme Config::clamped) ; `nombre` et
+// `nombre_max` sont entiers.
+const BORNES_ELEMENT = { quantite: [-1, 1], seuil: [0, 0.95], lissage: [0, 1], force: [0, 3], nombre: [0, 40], nombre_max: [0, 40], delai: [0, 10], probabilite: [0, 1] };
+
+// Bornes d'un réglage numérique : celles de sa glissière (alignées sur config::limits), sinon
+// les bornes sûres ci-dessus.
+let bornesGlissieres = null; // « section.cle » → [min, max]
+function bornesReglage(section, cle) {
+  if (!bornesGlissieres) {
+    bornesGlissieres = new Map();
+    for (const d of ELEMENTS) if (typeof d.min === "number" && typeof d.max === "number") bornesGlissieres.set(d.section + "." + d.cle, [d.min, d.max]);
+  }
+  return bornesGlissieres.get(section + "." + cle)
+    || (section in NOMS_FIGURES && BORNES_ALLURE[cle])
+    || BORNES_SECTION[section] || [0, 1000];
+}
+
 // Modulation ou déclencheur d'un preset distant : textes, nombres finis, booléen (une source,
 // une cible, un événement ou une action inconnus, d'une version plus récente, sont acceptés :
 // Essaim les ignore).
 const elementValide = (m) => estObjet(m)
   && ["source", "cible", "sur", "quand", "faire"].every((k) => m[k] === undefined || typeof m[k] === "string")
-  && ["quantite", "seuil", "lissage", "force", "nombre", "nombre_max", "delai", "probabilite"].every((k) => m[k] === undefined || Number.isFinite(m[k]))
+  && Object.keys(BORNES_ELEMENT).every((k) => m[k] === undefined || Number.isFinite(m[k]))
   && (m.inverser === undefined || typeof m.inverser === "boolean");
-
-// Valeur distante acceptable à la place de `defaut` : même type (nombre fini, booléen, texte,
-// liste) ; une forme inconnue ou un trajet mal formé est refusé.
-function valeurValide(cle, v, defaut) {
-  if (typeof defaut === "number") return Number.isFinite(v);
-  if (typeof defaut === "boolean") return typeof v === "boolean";
-  if (typeof defaut === "string") return typeof v === "string" && (cle !== "forme" || FORMES_CONNUES.has(v));
-  if (Array.isArray(defaut)) {
-    return Array.isArray(v) && (cle !== "trace" || v.every(pointValide)) && (cle !== "liste" || (v.length <= 24 && v.every(elementValide)));
+// Ses nombres ramenés dans leurs bornes (des étincelles par millions figeraient les aperçus).
+function elementBorne(m) {
+  const r = { ...m };
+  for (const [k, [a, b]] of Object.entries(BORNES_ELEMENT)) {
+    if (typeof r[k] === "number") r[k] = k === "nombre" || k === "nombre_max" ? Math.round(borne(r[k], a, b)) : borne(r[k], a, b);
   }
-  return false;
+  return r;
+}
+
+// Valeur distante prise à la place de `defaut`, ou undefined si elle est refusée : même type
+// (nombre fini, booléen, texte, liste) ; un nombre est ramené dans les bornes du réglage (arrondi
+// s'il est entier), une liste tronquée à son maximum ; une forme inconnue ou un trajet mal formé
+// est refusé.
+function valeurDistante(section, cle, v, defaut) {
+  if (typeof defaut === "number") {
+    if (!Number.isFinite(v)) return undefined;
+    const [a, b] = bornesReglage(section, cle);
+    const x = borne(v, a, b);
+    return ENTIERS.has(section + "." + cle) ? Math.round(x) : x;
+  }
+  if (typeof defaut === "boolean") return typeof v === "boolean" ? v : undefined;
+  if (typeof defaut === "string") return typeof v === "string" && (cle !== "forme" || FORMES_CONNUES.has(v)) ? v : undefined;
+  if (!Array.isArray(defaut) || !Array.isArray(v)) return undefined;
+  if (cle === "trace") return v.every(pointValide) ? v.slice(0, POINTS_MAX) : undefined;
+  if (cle === "contours") {
+    return v.every((c) => Array.isArray(c) && c.every(pointValide)) ? v.slice(0, CONTOURS_DISTANTS_MAX).map((c) => c.slice(0, POINTS_MAX)) : undefined;
+  }
+  if (cle === "liste") {
+    const max = section === "modulations" ? MODULATIONS_MAX : DECLENCHEURS_MAX;
+    return v.every(elementValide) ? v.slice(0, max).map(elementBorne) : undefined;
+  }
+  return v;
 }
 
 // Réglages d'un preset distant posés sur `base` : seules les clés connues de `base`, de même
@@ -259,7 +331,9 @@ function fusion(base, partiel) {
     if (!estObjet(distant)) return null;
     r[s] = { ...sec };
     for (const [k, defaut] of Object.entries(sec)) {
-      if (!HORS_PRESET.has(s + "." + k) && k in distant && valeurValide(k, distant[k], defaut)) r[s][k] = distant[k];
+      if (HORS_PRESET.has(s + "." + k) || !(k in distant)) continue;
+      const v = valeurDistante(s, k, distant[k], defaut);
+      if (v !== undefined) r[s][k] = v;
     }
   }
   return r;
@@ -418,7 +492,9 @@ function creerTuile(p) {
   Object.assign(image, { alt: "", loading: "lazy", decoding: "async", hidden: true });
   canvas.after(image);
   const apercu = new window.Apercu(canvas);
-  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, canvas, image, p, signature: signature(p), pret: false, erreur: false, confirmer: 0 };
+  // boutons d'action gardés d'un affichage à l'autre (seuls leurs attributs changent) ; menu « Gérer »
+  const menu = el("div", "menu-tuile");
+  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, canvas, image, p, signature: null, pret: false, erreur: false, confirmer: 0, boutons: new Map(), menu };
   image.addEventListener("error", () => { t.imageKo = true; image.hidden = true; canvas.hidden = false; });
   bouton.addEventListener("click", () => { if (etat.renomme !== t.p.id) choisir(t.p); });
   bouton.addEventListener("mouseenter", () => { etat.survol = p.id; montrerLoupe(t); });
@@ -472,18 +548,35 @@ function renommer(t) {
 }
 
 // Signature des réglages d'un preset : une vignette n'est préchauffée de nouveau que si elle change
-// (tousLesPresets recrée les objets à chaque message).
-const signature = (p) => JSON.stringify(p.reglages);
+// (tousLesPresets recrée les objets à chaque message). Gardée par objet de réglages : un même
+// message n'est sérialisé qu'une fois, quel que soit le nombre d'affichages.
+const signatures = new WeakMap();
+function signature(p) {
+  let s = signatures.get(p.reglages);
+  if (s === undefined) { s = JSON.stringify(p.reglages); signatures.set(p.reglages, s); }
+  return s;
+}
 
-function majTuile(t, p, rang) {
-  const sig = signature(p);
+// Habillage hors presets (fenêtre, écran, étiquette du morceau) : il reste quand on applique un
+// preset, donc les vignettes, la loupe et la comparaison le montrent tel qu'il est en place.
+const HABILLAGE = ["equerres", "halo", "lisere", "etiquette"];
+function avecHabillage(r) {
+  if (!etat.reglages || !r) return r;
+  const plus = {};
+  for (const s of HABILLAGE) if (etat.reglages[s]) plus[s] = etat.reglages[s];
+  return { ...r, ...plus };
+}
+const signatureHabillage = () => JSON.stringify(HABILLAGE.map((s) => (etat.reglages ? etat.reglages[s] : null)));
+
+function majTuile(t, p, rang, habillage) {
+  const sig = signature(p) + "|" + habillage;
   if (sig !== t.signature) { t.signature = sig; t.pret = false; t.erreur = false; }
   t.p = p;
   if ((p.image || "") !== t.image.getAttribute("src") && (p.image || t.image.hasAttribute("src"))) {
     t.imageKo = false;
     if (p.image) t.image.src = p.image; else t.image.removeAttribute("src");
   }
-  t.apercu.regler(p.reglages);
+  t.apercu.regler(avecHabillage(p.reglages));
   t.numero.textContent = deux(rang);
   t.nom.textContent = p.nom;
   const proche = etat.proche && p.origine !== "commu" && etat.proche.nom === p.nom;
@@ -499,66 +592,105 @@ function majTuile(t, p, rang) {
   else t.bouton.removeAttribute("title");
 
   // actions : favori, et un menu « Gérer » selon l'origine
-  remplacer(t.actions, actionsTuile(t, p));
+  remplacer(t.actions, actionsTuile(t));
 }
 
-// Actions d'une tuile : favori, comparer, et un menu « Gérer » selon l'origine.
-function actionsTuile(t, p) {
-  const cle = (nom) => p.id + "|" + nom;
-  const fav = puce("Favori", () => {
+// Attributs d'un élément mis à jour seulement s'ils changent (null : retiré).
+function attributs(e, liste) {
+  for (const [k, v] of Object.entries(liste)) {
+    if (v === null) e.removeAttribute(k);
+    else if (e.getAttribute(k) !== String(v)) e.setAttribute(k, v);
+  }
+  return e;
+}
+
+// Actions d'une tuile : favori, comparer, et un menu « Gérer » selon l'origine. Chaque bouton est
+// créé une fois (son action lit le preset au moment du clic) ; ensuite seuls son texte et ses
+// attributs changent.
+const ACTIONS_TUILE = {
+  favori: (p) => {
     if (etat.favoris.has(p.id)) etat.favoris.delete(p.id); else etat.favoris.add(p.id);
     memoire.ecrire("favoris", [...etat.favoris]);
     dessinerPresets();
-  }, "", cle("favori"));
-  fav.setAttribute("aria-pressed", etat.favoris.has(p.id));
-  fav.setAttribute("aria-label", `Favori : ${p.nom}`);
-  const comp = puce(etat.comparer === p.id ? "Comparer…" : "Comparer", () => comparer(p), "", cle("comparer"));
-  comp.setAttribute("aria-pressed", etat.comparer === p.id);
-  comp.title = "Compare deux presets côte à côte, avec leurs réglages différents";
+  },
+  comparer: (p) => comparer(p),
+  installer: (p) => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }),
+  gerer: (p) => { etat.menu = etat.menu === p.id ? null : p.id; dessinerPresets(); },
+  dupliquer: (p) => envoyer({ cmd: "dupliquer", nom: p.nom }),
+  renommer: (p, t) => renommer(t),
+  exporter: (p) => envoyer({ cmd: "exporter", nom: p.nom }),
+  supprimer: (p, t) => {
+    if (t.confirmer > performance.now()) {
+      envoyer({ cmd: "supprimer", nom: p.nom });
+      t.confirmer = 0;
+    } else {
+      t.confirmer = performance.now() + 4000;
+      setTimeout(dessinerPresets, 4100);
+    }
+    dessinerPresets();
+  },
+};
+function actionsTuile(t) {
+  const p = t.p;
+  const bouton = (nom, texte, attrs = {}) => {
+    let b = t.boutons.get(nom);
+    if (!b) {
+      b = puce("", () => ACTIONS_TUILE[nom](t.p, t), "", p.id + "|" + nom);
+      t.boutons.set(nom, b);
+    }
+    if (b.textContent !== texte) b.textContent = texte;
+    return attributs(b, attrs);
+  };
+  const fav = bouton("favori", "Favori", { "aria-pressed": etat.favoris.has(p.id), "aria-label": `Favori : ${p.nom}` });
+  const comp = bouton("comparer", etat.comparer === p.id ? "Comparer…" : "Comparer", {
+    "aria-pressed": etat.comparer === p.id, title: "Compare deux presets côte à côte, avec leurs réglages différents",
+  });
   if (p.origine === "commu") {
     const fait = installe(p.nom);
-    const b = puce(fait ? "Installé" : "+ Installer", () => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }), "", cle("installer"));
-    if (fait) { b.setAttribute("aria-pressed", "true"); b.disabled = true; }
+    const b = bouton("installer", fait ? "Installé" : "+ Installer", { "aria-pressed": fait ? "true" : null });
+    b.disabled = fait;
     return [fav, comp, b];
   }
   const ouvert = etat.menu === p.id;
-  const gerer = puce(ouvert ? "Gérer ▴" : "Gérer ▾", () => { etat.menu = ouvert ? null : p.id; dessinerPresets(); }, "", cle("gerer"));
-  gerer.setAttribute("aria-expanded", ouvert);
+  const gerer = bouton("gerer", ouvert ? "Gérer ▴" : "Gérer ▾", { "aria-expanded": ouvert });
   if (!ouvert) return [fav, comp, gerer];
-  const menu = el("div", "menu-tuile");
-  menu.append(puce("Dupliquer", () => envoyer({ cmd: "dupliquer", nom: p.nom }), "", cle("dupliquer")));
+  const items = [bouton("dupliquer", "Dupliquer")];
   if (p.origine === "mien") {
-    menu.append(puce("Renommer", () => renommer(t), "", cle("renommer")), puce("Exporter", () => envoyer({ cmd: "exporter", nom: p.nom }), "", cle("exporter")));
     const confirmer = t.confirmer > performance.now();
-    menu.append(puce(confirmer ? "Confirmer la suppression" : "Supprimer", () => {
-      if (t.confirmer > performance.now()) {
-        envoyer({ cmd: "supprimer", nom: p.nom });
-        t.confirmer = 0;
-      } else {
-        t.confirmer = performance.now() + 4000;
-        setTimeout(dessinerPresets, 4100);
-      }
-      dessinerPresets();
-    }, confirmer ? "danger" : "", cle("supprimer")));
+    const suppr = bouton("supprimer", confirmer ? "Confirmer la suppression" : "Supprimer");
+    suppr.classList.toggle("danger", confirmer);
+    items.push(bouton("renommer", "Renommer"), bouton("exporter", "Exporter"), suppr);
   }
-  return [fav, comp, gerer, menu];
+  remplacer(t.menu, items);
+  return [fav, comp, gerer, t.menu];
 }
+
+// Boutons des sources et du filtre par forme : créés une fois chacun, gardés ensuite.
+const boutonsSources = new Map(); // id → { b, compte }
+const boutonsFormes = new Map(); // id → bouton
 
 function dessinerSources(liste) {
   const sources = [["tout", "Tout"], ["fourni", "Fournis"], ["mien", "Mes presets"], ["favoris", "Favoris"], ["commu", "Communauté (GitHub)"]];
   remplacer($("sources"), sources.map(([id, libelle]) => {
-    const b = el("button", "ligne");
-    b.dataset.cle = id;
-    b.setAttribute("aria-pressed", etat.source === id);
+    let s = boutonsSources.get(id);
+    if (!s) {
+      const b = el("button", "ligne");
+      b.dataset.cle = id;
+      const compte = el("span", "compte");
+      b.append(el("span", "", libelle), compte);
+      b.addEventListener("click", () => {
+        etat.source = id;
+        if (id === "commu" || id === "tout") chargerCommu(false);
+        dessinerPresets();
+      });
+      s = { b, compte };
+      boutonsSources.set(id, s);
+    }
+    attributs(s.b, { "aria-pressed": etat.source === id });
     const n = id === "tout" ? liste.length : id === "favoris" ? liste.filter((p) => etat.favoris.has(p.id)).length : liste.filter((p) => p.origine === id).length;
     const compte = id === "commu" && etat.commu.etat !== "ok" ? (etat.commu.etat === "erreur" ? "—" : "··") : deux(n);
-    b.append(el("span", "", libelle), el("span", "compte", compte));
-    b.addEventListener("click", () => {
-      etat.source = id;
-      if (id === "commu" || id === "tout") chargerCommu(false);
-      dessinerPresets();
-    });
-    return b;
+    if (s.compte.textContent !== compte) s.compte.textContent = compte;
+    return s.b;
   }));
 }
 
@@ -613,14 +745,17 @@ function dessinerPresets() {
     note.append(lien);
   }
 
+  const habillage = signatureHabillage();
+  const rangs = new Map(liste.map((p, i) => [p, i + 1]));
   const enfants = montres.map((p) => {
     let t = tuiles.get(p.id);
     if (!t) { t = creerTuile(p); tuiles.set(p.id, t); }
-    if (etat.renomme !== p.id) majTuile(t, p, liste.indexOf(p) + 1);
+    if (etat.renomme !== p.id) majTuile(t, p, rangs.get(p), habillage);
     return t.racine;
   });
+  const ids = new Set(liste.map((p) => p.id));
   for (const [id, t] of tuiles) {
-    if (!liste.some((p) => p.id === id)) { observateur.unobserve(t.racine); tuiles.delete(id); visibles.delete(id); }
+    if (!ids.has(id)) { observateur.unobserve(t.racine); tuiles.delete(id); visibles.delete(id); }
   }
   remplacer($("grille"), enfants);
 
@@ -658,13 +793,16 @@ function dessinerFiltreFormes(liste) {
   if (etat.filtreForme && !presentes.has(etat.filtreForme)) etat.filtreForme = null;
   const choix = [["", "Toutes"], ...FORMES_REGLAGE.filter(([id]) => presentes.has(id))];
   remplacer($("filtre-formes"), choix.map(([id, libelle]) => {
-    const b = el("button", "puce petite forme");
-    b.dataset.cle = id || "toutes";
-    if (id) b.append(picto(id));
-    b.append(document.createTextNode(id ? NOMS_FORMES[id] : libelle));
-    b.setAttribute("aria-pressed", (etat.filtreForme || "") === id);
-    b.addEventListener("click", () => { etat.filtreForme = id || null; dessinerPresets(); });
-    return b;
+    let b = boutonsFormes.get(id);
+    if (!b) {
+      b = el("button", "puce petite forme");
+      b.dataset.cle = id || "toutes";
+      if (id) b.append(picto(id));
+      b.append(document.createTextNode(id ? NOMS_FORMES[id] : libelle));
+      b.addEventListener("click", () => { etat.filtreForme = id || null; dessinerPresets(); });
+      boutonsFormes.set(id, b);
+    }
+    return attributs(b, { "aria-pressed": (etat.filtreForme || "") === id });
   }));
 }
 
@@ -818,7 +956,7 @@ const decrire = (controle, ...ids) => controle.setAttribute("aria-describedby", 
 
 // Chaque réglage : bornes de la glissière, affichage (aff) et lecture d'une valeur tapée (vers,
 // dans l'unité affichée ; par défaut le nombre lui-même).
-const tpm = { aff: (v) => String(Math.round((v * 60) / (2 * Math.PI))), vers: (x) => (x * 2 * Math.PI) / 60 };
+const tpm = { aff: (v) => Math.round((v * 60) / (2 * Math.PI)) + " tr/min", vers: (x) => (x * 2 * Math.PI) / 60 };
 const pourcent = { aff: (v) => Math.round(v * 100) + " %", vers: (x) => x / 100 };
 // Délai de veille en secondes : « jamais » (0), « 45 s », « 5 min », « 1,5 min » ; une valeur
 // tapée en minutes (« 5 min ») est convertie.
@@ -867,6 +1005,14 @@ const FIGURES_REGLAGES = [
   ["trame", "Trame"], ["pinceau", "Trait"], ["pendule", "Pendule"], ["gouttes", "Gouttes"],
 ];
 const NOMS_FIGURES = Object.fromEntries(FIGURES_REGLAGES);
+// Cibles qui ne font rien selon « sur » : la traînée sur une figure ; sur le trait et le pendule
+// (ni rayon, ni rotation, ni place), en plus, ce qui fait tourner, grandir ou déplacer.
+const SANS_EFFET_FIGURE = new Set(["trainee"]);
+const SANS_EFFET_TRAIT = new Set(["trainee", "rotation", "vitesse", "acceleration", "rayon", "decalage"]);
+function ciblesPour(sur) {
+  const sans = sur === "pinceau" || sur === "pendule" ? SANS_EFFET_TRAIT : sur === "figures" || sur in NOMS_FIGURES ? SANS_EFFET_FIGURE : null;
+  return sans ? CIBLES_MOD.filter(([id]) => !sans.has(id)) : CIBLES_MOD;
+}
 const GROUPES = [
   ["tout", "L'essaim"], ["cometes", "Comètes"], ["satellites", "Satellites"], ["figures", "Toutes les figures"],
   ...FIGURES_REGLAGES.map(([id, nom]) => [id, "Figure : " + nom]),
@@ -957,23 +1103,24 @@ function reactionsAvant(p) {
   return { basse, mods, decl, particules: { rebonds: v("scintillement", "rebonds", true), taille: v("clic", "taille", 1) } };
 }
 
-// Allure commune des figures (comme config::Allure) : l'échelle et l'opacité avec les réglages
-// courants, le reste sous « + Avancé ». Le trait et le pendule (`geo` faux) ne tournent, ne
-// grandissent ni ne se déplacent.
+// Allure commune des figures (comme config::Allure) : l'opacité avec les réglages courants, le
+// reste sous « + Avancé » (l'échelle aussi : elle agrandit ce que « Rayon » ou « Taille », juste
+// au-dessus, règlent déjà). Le trait et le pendule (`geo` faux) ne tournent, ne grandissent ni
+// ne se déplacent.
 const enPourcent = (v) => Math.round(v * 100) + " %";
 // `nom` : titre des groupes quand un panneau montre deux figures ; `cache(r)` : réglages cachés
 // quand la figure est éteinte (panneau « Anneau », deux formes).
-function allureBase(s, geo = true, cache) {
-  return [
-    ...(geo ? [{ libelle: "Échelle", section: s, cle: "echelle", min: 0.5, max: 2, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) }] : []),
-    { libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent },
-  ].map((d) => ({ ...d, cache }));
+function allureBase(s, cache) {
+  return [{ libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent, cache }];
 }
 function allureAvance(s, geo = true, nom, cache) {
   const reaction = (libelle, cle) => ({ libelle, section: s, cle: "reaction_" + cle, min: 0, max: 2, pas: 0.05, aff: enPourcent });
   const titre = (t) => (nom ? nom + " · " + t.charAt(0).toLowerCase() + t.slice(1) : t);
+  // deux figures dans le panneau : chaque bouton nomme la sienne (« l'anneau lisse »)
+  const quoi = nom ? "l'" + NOMS_FIGURES[s].toLowerCase() : null;
   return [
     { groupe: titre(geo ? "Couleur et place" : "Couleur") },
+    ...(geo ? [{ libelle: "Échelle", section: s, cle: "echelle", min: 0.5, max: 2, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) }] : []),
     { libelle: "Teinte", section: s, cle: "teinte", min: -180, max: 180, pas: 5, aff: (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v)) + "°" },
     ...(geo ? [
       { libelle: "Rotation", section: s, cle: "rotation", min: -30, max: 30, pas: 0.5, aff: (v) => virgule(+v, 1) + " tr/min" },
@@ -983,8 +1130,8 @@ function allureAvance(s, geo = true, nom, cache) {
     { groupe: titre("Réactions à la musique (0 % : aucune, 200 % : double)") },
     reaction("Kick", "kick"), reaction("Caisse claire", "caisse"), reaction("Charleston", "charleston"),
     reaction("Basse", "basse"), reaction("Montée", "montee"), reaction("Drop", "drop"),
-    { copierAllure: s },
-    { moduler: s },
+    { copierAllure: s, quoi },
+    { moduler: s, quoi, geo },
   ].map((d) => ({ ...d, cache }));
 }
 
@@ -1035,9 +1182,10 @@ const PANNEAUX = [
     id: "orbite", famille: "L'essaim", titre: "Orbite",
     note: "Le trajet autour du pointeur, que suivent les comètes et les satellites : sa taille, sa vitesse, sa rotation. Ce que le son y change (basse, note grave, montée, stéréo…) est dans Modulations.",
     base: [
-      { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
-      { libelle: "Tours / min", section: "orbite", cle: "vitesse_base", min: 0, max: 15, pas: 0.1, ...tpm },
-      { libelle: "Rotation du trajet (tr/min)", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
+      // les comètes et les satellites avancent sur le trajet ; le trajet lui-même tourne
+      { libelle: "Vitesse sur le trajet", section: "orbite", cle: "vitesse_base", min: 0, max: 100, pas: 0.1, ...tpm },
+      { libelle: "Rotation de la forme", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => Math.round(v) + " tr/min" },
       { choix: "Ce qui tourne avec le trajet", section: "orbite", cle: "rotation_sur", si: SI.rotation, valeurs: [["tout", "Comètes et satellites"], ["cometes", "Comètes"], ["satellites", "Satellites"]] },
       { quand: ["inversion"], libelle: "Sens inversé quand" },
     ],
@@ -1051,7 +1199,7 @@ const PANNEAUX = [
     base: [
       { trajet: "Trajet des comètes", section: "orbite", cle: "forme", liste: FORMES_REGLAGE },
       { libelle: "Comètes", section: "orbite", cle: "nombre", min: 1, max: 8, pas: 1, aff: (v) => String(v) },
-      { libelle: "Traînée", section: "orbite", cle: "trainee", min: 0.05, max: 2, pas: 0.05, aff: (v) => virgule(+v, 2) + " s" },
+      { libelle: "Traînée", section: "orbite", cle: "trainee", min: 0.01, max: 3, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
     ],
     avance: [
       { libelle: "Anneaux de comètes", section: "orbite", cle: "anneaux", min: 1, max: 4, pas: 1, aff: (v) => String(v) },
@@ -1084,23 +1232,24 @@ const PANNEAUX = [
     note: "Les petites traînées qui naissent sur les événements (le kick, par défaut) et vivent quelques secondes, et les satellites permanents, là même sans musique.",
     base: [
       { trajet: "Trajet des satellites", section: "essaim", cle: "forme", liste: FORMES_SATELLITES },
-      { libelle: "Satellites au plus", section: "essaim", cle: "maximum", min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
+      // les permanents ne comptent pas dans ce maximum
+      { libelle: "Ajoutés en même temps, au plus", section: "essaim", cle: "maximum", min: 0, max: 64, pas: 1, aff: (v) => deux(v) },
       { libelle: "Permanents", section: "essaim", cle: "fixes", min: 0, max: 32, pas: 1, aff: (v) => String(v) },
       { quand: ["satellites"], libelle: "Ajoutés quand" },
       { rangee: "Liens", puces: [["Constellation", "essaim", "constellation", "De fines lignes relient les satellites et les comètes proches"]] },
     ],
     avance: [
-      { libelle: "Durée de vie", section: "essaim", cle: "duree", min: 0.5, max: 10, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+      { libelle: "Durée de vie", section: "essaim", cle: "duree", min: 0.1, max: 30, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
     ],
   },
   {
     id: "couleur", famille: "L'essaim", titre: "Couleur",
-    note: "Une teinte fixe ou qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau, l'éclairage de Prisme. Pour qu'elle glisse avec la musique : une modulation de la teinte.",
+    note: "Une teinte fixe ou qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau. Pour qu'elle glisse avec la musique : une modulation de la teinte.",
     base: [{ special: "couleur" }],
     avance: [
       { libelle: "Teinte de départ", section: "couleur", cle: "teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
-      { libelle: "Défilement de la teinte", section: "couleur", cle: "vitesse_teinte", min: 0, max: 360, pas: 1, aff: (v) => (+v === 0 ? "fixe" : Math.round(v) + "°/s") },
-      { libelle: "Écart tête-queue", section: "couleur", cle: "ecart_teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
+      { libelle: "Défilement de la teinte", section: "couleur", cle: "vitesse_teinte", min: 0, max: 720, pas: 1, aff: (v) => (+v === 0 ? "fixe" : Math.round(v) + "°/s") },
+      { libelle: "Écart tête-queue", section: "couleur", cle: "ecart_teinte", min: 0, max: 720, pas: 1, aff: (v) => Math.round(v) + "°" },
       { libelle: "Teintes de la palette", section: "couleur", cle: "palette", min: 1, max: 3, pas: 1, aff: (v) => (+v === 1 ? "une" : String(v)) },
       { libelle: "Écart entre les teintes", section: "couleur", cle: "ecart_palette", si: SI.palette, min: 0, max: 180, pas: 1, aff: (v) => Math.round(v) + "°" },
     ],
@@ -1109,7 +1258,7 @@ const PANNEAUX = [
     id: "eclat", famille: "Les effets", titre: "Éclat", voyant: (r) => fait(r, "eclat", "explosion", "rafale") && r.eclat.taille > 0,
     note: "Un halo blanc et un anneau coloré sous le pointeur, qui font aussi briller les têtes. Avec Ressorts : un anneau épais qui sort en dépassant, sans halo. Bridé en mode sans flashs.",
     base: [
-      { libelle: "Taille de l'éclat", section: "eclat", cle: "taille", min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
+      { libelle: "Taille de l'éclat", section: "eclat", cle: "taille", min: 0, max: 20, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
       { quand: ["eclat"], libelle: "Quand" },
     ],
   },
@@ -1130,7 +1279,7 @@ const PANNEAUX = [
     base: [
       { quand: ["fissure"], libelle: "Quand" },
       { libelle: "Taille", section: "fissures", cle: "taille", min: 0.2, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
-      { libelle: "Durée", section: "fissures", cle: "duree", min: 0.2, max: 15, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
+      { libelle: "Durée", section: "fissures", cle: "duree", min: 0.2, max: 30, pas: 0.1, aff: (v) => virgule(+v, 1) + " s" },
     ],
   },
   {
@@ -1140,7 +1289,7 @@ const PANNEAUX = [
       {
         rangee: "Retrouver le pointeur", puces: [
           ["Projecteur", "projecteur", "actif", "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver"],
-          ["Réticule", "reticule", "actif", "Deux fines lignes croisées centrées sur le pointeur, qui s'illuminent sur le kick"],
+          ["Réticule", "reticule", "actif", "Deux fines lignes croisées centrées sur le pointeur, qui s'illuminent sur les éclats"],
         ],
       },
       {
@@ -1160,14 +1309,15 @@ const PANNEAUX = [
       { libelle: "Vide du réticule", section: "reticule", cle: "vide", si: SI.reticule, min: 4, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
     ],
   },
+  // un effet, pas une figure (sans allure) : à ne pas confondre avec l'anneau spectre des figures
   {
-    id: "spectre", famille: "Figures", titre: "Spectre", actif: ["spectre", "actif"],
-    note: "Un anneau de barres autour du pointeur, une par bande de fréquences, plus longues quand la bande est forte.",
+    id: "spectre", famille: "Les effets", titre: "Barres de spectre", actif: ["spectre", "actif"], si: SI.spectre,
+    note: "Un anneau de barres autour du pointeur, une par bande de fréquences, plus longues quand la bande est forte. Il demande « Écoute » active.",
     base: [
       { libelle: "Bandes", section: "spectre", cle: "bandes", min: 8, max: 32, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Rayon", section: "spectre", cle: "rayon", min: 10, max: 150, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Hauteur des barres", section: "spectre", cle: "hauteur", min: 4, max: 100, pas: 1, aff: (v) => String(Math.round(v)) },
-      { rangee: "Silence", puces: [["Masquer sans musique", "spectre", "masquer_sans_musique", "L'anneau s'efface quand plus aucun son ne joue, et revient avec la musique"]] },
+      { rangee: "Silence", puces: [["Masquer sans musique", "spectre", "masquer_sans_musique", "Les barres s'effacent quand plus aucun son ne joue, et reviennent avec la musique"]] },
     ],
   },
   {
@@ -1203,12 +1353,12 @@ const PANNEAUX = [
       { titre: "Lisse", cache: (r) => !r.anneau.actif },
       { libelle: "Rayon", section: "anneau", cle: "rayon", min: 6, max: 60, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.anneau.actif },
       { libelle: "Épaisseur", section: "anneau", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1), cache: (r) => !r.anneau.actif },
-      ...allureBase("anneau", true, (r) => !r.anneau.actif),
+      ...allureBase("anneau", (r) => !r.anneau.actif),
       { titre: "Spectre", cache: (r) => !r.orbe.actif },
       { libelle: "Rayon", section: "orbe", cle: "rayon", min: 10, max: 60, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.orbe.actif },
       { libelle: "Relief", section: "orbe", cle: "relief", min: 2, max: 30, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.orbe.actif },
       { libelle: "Épaisseur", section: "orbe", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1), cache: (r) => !r.orbe.actif },
-      ...allureBase("orbe", true, (r) => !r.orbe.actif),
+      ...allureBase("orbe", (r) => !r.orbe.actif),
     ],
     avance: [...allureAvance("anneau", true, "Lisse", (r) => !r.anneau.actif), ...allureAvance("orbe", true, "Spectre", (r) => !r.orbe.actif)],
   },
@@ -1240,7 +1390,7 @@ const PANNEAUX = [
     base: [
       { libelle: "Largeur à pleine vitesse", section: "pinceau", cle: "largeur", min: 2, max: 12, pas: 0.5, aff: (v) => virgule(+v, 1) },
       { libelle: "Durée", section: "pinceau", cle: "duree", min: 0.2, max: 1, pas: 0.02, aff: (v) => virgule(+v, 2) + " s" },
-      ...allureBase("pinceau", false),
+      ...allureBase("pinceau"),
     ],
     avance: allureAvance("pinceau", false),
   },
@@ -1250,7 +1400,7 @@ const PANNEAUX = [
     base: [
       { libelle: "Longueur du fil", section: "pendule", cle: "longueur", min: 8, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Taille du poids", section: "pendule", cle: "taille", min: 1, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
-      ...allureBase("pendule", false),
+      ...allureBase("pendule"),
     ],
     avance: allureAvance("pendule", false),
   },
@@ -1275,15 +1425,15 @@ const PANNEAUX = [
     ],
   },
   {
-    id: "equerres", famille: "Fenêtre et écran", titre: "Équerres", actif: ["equerres", "actif"],
-    note: "Quatre petites équerres aux coins de la fenêtre au premier plan, à l'extérieur de son cadre, aux couleurs de l'essaim. Elles s'écartent sur le kick, leurs bras s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre. Comme la bordure, elles accompagnent l'essaim quel que soit le preset : elles ne font pas partie des presets et restent quand tu en changes. Dans l'aperçu, la fenêtre est le cadre de l'aperçu.",
+    id: "equerres", famille: "Fenêtre et écran", titre: "Équerres", actif: ["equerres", "actif"], horsPresets: true,
+    note: "Quatre petites équerres aux coins de la fenêtre au premier plan, à l'extérieur de son cadre, aux couleurs de l'essaim. Elles s'écartent sur le kick, leurs bras s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre. Comme le halo et le liseré, et contrairement à la bordure, elles ne font pas partie des presets : elles restent quand tu en changes. Dans l'aperçu, la fenêtre est le cadre de l'aperçu.",
     base: [
       { libelle: "Longueur des bras", section: "equerres", cle: "bras", min: 4, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Épaisseur", section: "equerres", cle: "epaisseur", min: 1, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
     ],
   },
   {
-    id: "halo", famille: "Fenêtre et écran", titre: "Halo de fenêtre", actif: ["halo", "actif"], si: SI.son,
+    id: "halo", famille: "Fenêtre et écran", titre: "Halo de fenêtre", actif: ["halo", "actif"], si: SI.son, horsPresets: true,
     note: "La lumière court le long du cadre de la fenêtre au premier plan : elle entre par le bord le plus proche du pointeur, s'élargit avec la basse, chaque kick en fait partir deux éclats le long du cadre, un drop l'embrase en entier. Elle déborde un peu vers l'intérieur de la fenêtre, jamais plus que la profondeur réglée, et s'efface quand plus rien ne joue. Comme les équerres, le halo ne fait pas partie des presets et reste quand tu en changes.",
     base: [
       { libelle: "Profondeur", section: "halo", cle: "profondeur", min: 6, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
@@ -1291,7 +1441,7 @@ const PANNEAUX = [
     ],
   },
   {
-    id: "lisere", famille: "Fenêtre et écran", titre: "Liseré", actif: ["lisere", "actif"], si: SI.son,
+    id: "lisere", famille: "Fenêtre et écran", titre: "Liseré", actif: ["lisere", "actif"], si: SI.son, horsPresets: true,
     note: "Un filet de lumière au bord bas de l'écran du pointeur, à son aplomb, aux couleurs de l'essaim. Il s'élargit avec la basse, chaque kick y court vers les deux côtés, un drop allume tout le bord ; il s'efface quand plus rien ne joue. Il ne fait pas partie des presets et reste quand tu en changes. Dans l'aperçu, l'écran est le cadre de l'aperçu.",
     base: [
       { libelle: "Épaisseur", section: "lisere", cle: "epaisseur", min: 1, max: 8, pas: 0.5, aff: (v) => virgule(+v, 1) },
@@ -1315,13 +1465,13 @@ const PANNEAUX = [
       { libelle: "Sensibilité au kick", section: "audio", cle: "sensibilite_kick", min: 1, max: 10, pas: 0.5, aff: (v) => virgule(+v, 1) },
     ],
     avance: [
-      { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
+      { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 1, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
       { sorties: true },
       { applisSon: true },
     ],
   },
   {
-    id: "etiquette", famille: "Écoute", titre: "Étiquette du morceau", actif: ["etiquette", "actif"],
+    id: "etiquette", famille: "Écoute", titre: "Étiquette du morceau", actif: ["etiquette", "actif"], horsPresets: true,
     note: "Quand le morceau change, son titre et son artiste s'écrivent à côté du pointeur, soulignés d'un filet qui bat avec le kick, puis s'effacent. Le reste du temps, rien. Ce n'est pas une allure de l'essaim : l'étiquette ne fait pas partie des presets et reste quand tu en changes. Dans l'aperçu, « Piste » la montre avec un titre d'exemple.",
     base: [
       { libelle: "Taille du texte", section: "etiquette", cle: "taille", min: 9, max: 20, pas: 1, aff: (v) => String(Math.round(v)) },
@@ -1329,11 +1479,17 @@ const PANNEAUX = [
     ],
   },
   {
-    id: "machine", famille: "Cet ordinateur", titre: "Cet ordinateur", compact: true,
-    note: "Le dessin de l'essaim sur ce PC : ces réglages ne font pas partie des presets. Mises à jour, démarrage, pauses et captures sont dans la vue Application (l'engrenage, en haut).",
+    id: "machine", famille: "Cet ordinateur", titre: "Cet ordinateur", compact: true, horsPresets: true,
+    note: "Le dessin de l'essaim sur ce PC : ces réglages ne font pas partie des presets. Mises à jour et démarrage sont dans la vue Application (l'engrenage, en haut).",
+    // ailleurs, propres à ce PC eux aussi : un bouton y mène
+    liens: [
+      ["Pauses", "application", "groupe-pauses"],
+      ["Captures et stream", "application", "groupe-captures"],
+      ["Pause selon l'application (Auto)", "auto", "bloc-pauses"],
+    ],
     base: [
-      { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 240, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
-      { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 120, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
+      { libelle: "Images par seconde", section: "rendu", cle: "cadence", min: 0, max: 500, pas: 1, aff: (v) => (+v === 0 ? "écran" : String(v)) },
+      { libelle: "Images par seconde au repos", section: "rendu", cle: "cadence_repos", min: 0, max: 500, pas: 1, aff: (v) => (+v === 0 ? "aucun repos" : String(v)) },
       // masqué tant que l'appli ne fournit pas ce réglage
       { libelle: "Mise en veille après", section: "rendu", cle: "veille_apres", cache: (r) => typeof r.rendu.veille_apres !== "number", min: 0, max: 3600, pas: 10, ...dureeVeille },
       {
@@ -1365,7 +1521,7 @@ const APPLICATION = {
     { groupe: "Démarrage" },
     { demarrage: true },
     { accueil: true },
-    { groupe: "Pauses" },
+    { groupe: "Pauses", id: "groupe-pauses" },
     {
       bascule: "Pause quand Windows ne veut pas être dérangé", section: "pause", cle: "ne_pas_deranger",
       note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
@@ -1375,7 +1531,7 @@ const APPLICATION = {
       valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
       note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",
     },
-    { groupe: "Captures et stream" },
+    { groupe: "Captures et stream", id: "groupe-captures" },
     {
       bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
       note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
@@ -1409,12 +1565,13 @@ const choix = []; // { section, cle, valeur, bouton } : réglages à quelques va
 const formes = []; // { section, cle, id, b }
 const conditionnels = []; // { si, cache, els } : estompés (si) ou masqués (cache) selon les réglages
 const panneaux = []; // { def, onglet, section, corps, voyant }
-// familles de la liste des sous-onglets : en-tête repliable, compte des effets actifs ; ouvertes
-// (gardées d'une ouverture à l'autre)
-const familles = new Map(); // nom → { bouton, compte, onglets }
+// familles de la liste des sous-onglets : en-tête repliable, compte des effets actifs, liste de
+// leurs onglets ; ouvertes (gardées d'une ouverture à l'autre)
+const familles = new Map(); // nom → { bouton, signe, compte, compteLu, liste }
 const famillesOuvertes = new Set(memoire.lire("familles", ["L'essaim"]));
 const avances = []; // { bouton, signe, zone }
 let teintes = [];
+let boutonPrisme = null; // bascule « Synchro Prisme », cachée tant que Prisme n'est pas signalé
 
 function hslCss(h) {
   const c = 1 - Math.abs(2 * 0.66 - 1), x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = 0.66 - c / 2;
@@ -1529,15 +1686,18 @@ function rangeeCouleur() {
     });
     return { h, b };
   });
-  // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet
+  // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet ; montrée
+  // seulement quand l'appli dit que Prisme (outil d'éclairage RGB, rarement installé) est là
+  boutonPrisme = bascule("Synchro Prisme", "couleur", "synchro_prisme", null, "Prend la teinte de l'éclairage RGB de Prisme quand il tourne");
+  boutonPrisme.hidden = etat.prisme !== true;
   return {
     teintes: teintes.map((t) => t.b),
     sources: [
       bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
       bascule("Couleur de l'application", "couleur", "application"),
       bascule("Couleur du site (navigateur)", "couleur", "site"),
-      bascule("Couleur de la pochette", "couleur", "pochette", null, "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application, le site et Prisme"),
-      bascule("Synchro Prisme", "couleur", "synchro_prisme", null, "Prend la teinte de l'éclairage RGB de Prisme quand il tourne"),
+      bascule("Couleur de la pochette", "couleur", "pochette", null, "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application et le site"),
+      boutonPrisme,
     ],
   };
 }
@@ -1615,10 +1775,10 @@ function construireAvance(def, zone) {
   let els = null;
   if (def.copierAllure) {
     const l = el("div", "ligne-avance");
-    const b = el("button", "puce debut", "Copier sur toutes les figures");
+    const b = el("button", "puce debut", def.quoi ? `Copier ${def.quoi} sur toutes les figures` : "Copier sur toutes les figures");
     b.type = "button";
     b.addEventListener("click", () => copierAllure(def.copierAllure));
-    const note = el("p", "note", "Donne la teinte, l'opacité et les réactions de cette figure aux huit autres ; l'échelle, la rotation et le décalage restent propres à chacune.");
+    const note = el("p", "note", `Donne la teinte, l'opacité et les réactions de ${def.quoi || "cette figure"} aux huit autres figures ; l'échelle, la rotation et le décalage restent propres à chacune.`);
     note.id = "note-copier-" + def.copierAllure;
     decrire(b, note.id);
     l.append(b, note);
@@ -1627,17 +1787,24 @@ function construireAvance(def, zone) {
   } else if (def.moduler) {
     // une modulation de plus, sur cette figure, puis le panneau des modulations
     const l = el("div", "ligne-avance");
-    const b = el("button", "puce debut", "+ Moduler cette figure");
+    const b = el("button", "puce debut", def.quoi ? `+ Moduler ${def.quoi}` : "+ Moduler cette figure");
     b.type = "button";
+    // le trait et le pendule (`geo` faux) n'ont ni rayon, ni rotation, ni place : la basse change leur taille
     b.addEventListener("click", () => {
       montrerPanneau("modulations");
-      ajouterModulation({ source: "basse", cible: "rayon", sur: def.moduler, quantite: 0.1 });
+      ajouterModulation({ source: "basse", cible: def.geo ? "rayon" : "taille", sur: def.moduler, quantite: 0.1 });
     });
-    l.append(b, el("p", "note", "Une source du son fait varier la figure : son rayon, l'épaisseur de ses traits, sa rotation, sa teinte, sa place, son opacité… Voir « Modulations »."));
+    const note = el("p", "note", def.geo
+      ? "Une source du son fait varier la figure : son rayon, l'épaisseur de ses traits, sa rotation, sa teinte, sa place, son opacité… Voir « Modulations »."
+      : "Une source du son fait varier la figure : sa taille, sa teinte, sa lueur, son opacité… Voir « Modulations ».");
+    note.id = "note-moduler-" + def.moduler;
+    decrire(b, note.id);
+    l.append(b, note);
     zone.append(l);
     els = [l];
   } else if (def.groupe) {
     const g = el("div", "t-label groupe-avance", def.groupe);
+    if (def.id) g.id = def.id;
     zone.append(g);
     els = [g];
   } else if (def.choix || def.rangee) {
@@ -1712,23 +1879,53 @@ function construireAvance(def, zone) {
   if (els && (def.si || def.cache)) conditionnels.push({ si: def.si, cache: def.cache, els });
 }
 
+// Va à un réglage d'une autre vue (liens du panneau « Cet ordinateur ») : la vue, puis le groupe,
+// qui prend le focus (les lecteurs d'écran le lisent).
+function allerA(vue, id) {
+  montrerVue(vue);
+  requestAnimationFrame(() => {
+    const cible = $(id);
+    if (!cible || cible.hidden) return;
+    cible.tabIndex = -1;
+    cible.scrollIntoView({ block: "start" });
+    cible.focus({ preventScroll: true });
+  });
+}
+
 function construireReglages() {
   const nav = $("sous-onglets"), zone = $("panneaux");
-  let famille = null;
+  let famille = null, liste = null, nFamilles = 0;
   for (const p of PANNEAUX) {
     if (p.famille !== famille) {
       famille = p.famille;
-      // en-tête repliable ; une famille d'un seul panneau (Cet ordinateur) n'en a pas
+      // chaque famille : une liste d'onglets (tablist) ; repliable par son en-tête, qui la nomme,
+      // sauf une famille d'un seul panneau (Cet ordinateur), nommée par aria-label
+      const n = nFamilles++;
+      liste = el("div", "onglets-famille");
+      liste.id = "famille-" + n;
+      liste.setAttribute("role", "tablist");
+      liste.setAttribute("aria-orientation", "vertical");
       if (PANNEAUX.filter((x) => x.famille === famille).length > 1) {
         const nom = famille;
         const b = el("button", "t-label famille");
         b.type = "button";
+        b.id = "tete-famille-" + n;
+        b.setAttribute("aria-controls", liste.id);
+        const signe = el("span", "signe", "");
+        signe.setAttribute("aria-hidden", "true");
+        // compte des effets actifs : chiffre à l'écran, phrase pour les lecteurs d'écran
         const compte = el("span", "compte-famille");
-        b.append(el("span", "signe", ""), el("span", "", nom), compte);
+        compte.setAttribute("aria-hidden", "true");
+        const compteLu = el("span", "sr");
+        b.append(signe, el("span", "", nom), compte, compteLu);
         b.addEventListener("click", () => basculerFamille(nom));
+        liste.setAttribute("aria-labelledby", b.id);
         nav.append(b);
-        familles.set(nom, { bouton: b, compte, onglets: [] });
+        familles.set(nom, { bouton: b, signe, compte, compteLu, liste });
+      } else {
+        liste.setAttribute("aria-label", famille);
       }
+      nav.append(liste);
     }
     // onglet : nom, et voyant de l'effet (allumé s'il est actif) ou nombre de modulations
     const o = el("button", "sous-onglet");
@@ -1740,8 +1937,7 @@ function construireReglages() {
     const voyant = p.actif || p.voyant ? el("span", "voyant") : p.id === "modulations" || p.id === "declencheurs" ? el("span", "compte") : null;
     if (voyant) { voyant.setAttribute("aria-hidden", "true"); o.append(voyant); }
     o.addEventListener("click", () => montrerPanneau(p.id));
-    nav.append(o);
-    if (familles.has(p.famille)) familles.get(p.famille).onglets.push(o);
+    liste.append(o);
 
     const sec = el("section", "panneau-reglages");
     sec.id = "panneau-" + p.id;
@@ -1749,13 +1945,35 @@ function construireReglages() {
     sec.setAttribute("aria-labelledby", o.id);
     sec.hidden = true;
     const tete = el("div", "tete-panneau");
-    tete.append(el("h2", "t-titre", p.titre));
+    const titres = el("div", "titres-panneau");
+    titres.append(el("h2", "t-titre", p.titre));
+    // réglages propres à cet ordinateur, ou habillage qui reste d'un preset à l'autre
+    if (p.horsPresets) {
+      const h = el("span", "hors-presets", "hors presets");
+      h.title = "Ne fait pas partie des presets : reste tel quel quand tu en changes";
+      titres.append(h);
+    }
+    tete.append(titres);
     if (p.actif) {
       const b = bascule("Actif", p.actif[0], p.actif[1]);
       b.setAttribute("aria-label", p.titre + " : actif");
       tete.append(b);
     }
     sec.append(tete, el("p", "note intro", p.note));
+    if (p.liens) {
+      const g = el("div", "groupe-puces liens-panneau");
+      g.setAttribute("role", "group");
+      const nom = el("span", "t-label", "Aussi propres à ce PC");
+      nom.id = "liens-" + p.id;
+      g.setAttribute("aria-labelledby", nom.id);
+      g.append(nom, ...p.liens.map(([libelle, vue, id]) => {
+        const b = el("button", "puce petite", libelle + " →");
+        b.type = "button";
+        b.addEventListener("click", () => allerA(vue, id));
+        return b;
+      }));
+      sec.append(g);
+    }
     const corps = el("div", "corps-panneau");
     if (p.compact) {
       const lignes = el("div", "avance");
@@ -1812,11 +2030,13 @@ function majFamilles() {
   for (const [nom, f] of familles) {
     const ouverte = famillesOuvertes.has(nom) || (ici && ici.famille === nom);
     f.bouton.setAttribute("aria-expanded", ouverte);
-    f.bouton.querySelector(".signe").textContent = ouverte ? "−" : "+";
-    for (const o of f.onglets) o.hidden = !ouverte;
+    f.signe.textContent = ouverte ? "−" : "+";
+    f.liste.hidden = !ouverte;
     const actifs = panneaux.filter((p) => p.def.famille === nom && p.voyant && p.voyant.classList.contains("allume")).length;
+    const phrase = actifs ? `${actifs} actif${actifs > 1 ? "s" : ""}` : "";
     f.compte.textContent = actifs ? String(actifs) : "";
-    f.bouton.title = ouverte ? "Replier" : "Déplier" + (actifs ? ` (${actifs} actif${actifs > 1 ? "s" : ""})` : "");
+    f.compteLu.textContent = phrase ? ", " + phrase : "";
+    f.bouton.title = ouverte ? "Replier" : "Déplier" + (phrase ? ` (${phrase})` : "");
   }
 }
 
@@ -1922,12 +2142,19 @@ function construireDeclencheurs(corps) {
   blocListe(corps, "liste-declencheurs", "+ Ajouter un déclencheur", ajouterDeclencheur, IDEES_DECLENCHEURS, { quand: "kick", faire: "onde" });
 }
 
-function choixMod(options, valeur, libelle, change) {
+// `tous` : liste complète, quand `options` n'en propose qu'une partie (cibles selon « sur »).
+function choixMod(options, valeur, libelle, change, tous = options) {
   const s = el("select", "choix");
   s.setAttribute("aria-label", libelle);
   s.replaceChildren(...options.map(([id, nom]) => { const o = el("option", "", nom); o.value = id; return o; }));
-  // valeur d'une version plus récente : gardée, affichée telle quelle
-  if (!options.some(([id]) => id === valeur)) { const o = el("option", "", String(valeur)); o.value = valeur; s.append(o); }
+  // valeur gardée même si elle n'est pas proposée : connue mais sans effet ici (signalée), ou
+  // d'une version plus récente (affichée telle quelle)
+  if (!options.some(([id]) => id === valeur)) {
+    const connue = tous.find(([id]) => id === valeur);
+    const o = el("option", "", connue ? connue[1] + " (sans effet ici)" : String(valeur));
+    o.value = valeur;
+    s.append(o);
+  }
   s.value = valeur;
   s.addEventListener("change", () => change(s.value));
   return s;
@@ -1955,7 +2182,7 @@ function ligneModulation(m, i) {
   const regle = (champ) => (v) => { regler("modulations", "liste", autres(champ, v)); majNomActif(); };
   const n = i + 1;
   const source = choixMod(SOURCES_MOD, m.source, `Modulation ${n} : source`, changer("source"));
-  const cible = choixMod(CIBLES_MOD, m.cible, `Modulation ${n} : paramètre`, changer("cible"));
+  const cible = choixMod(ciblesPour(m.sur || "tout"), m.cible, `Modulation ${n} : paramètre`, changer("cible"), CIBLES_MOD);
   const sur = choixMod(GROUPES, m.sur || "tout", `Modulation ${n} : sur`, changer("sur"));
   const plage = el("input");
   Object.assign(plage, { type: "range", min: -100, max: 100, step: 1, value: Math.round((m.quantite || 0) * 100) });
@@ -2197,23 +2424,41 @@ function majApplisSon() {
   const cle = JSON.stringify([liste, choisies]);
   if (groupe.dataset.cle === cle) return;
   groupe.dataset.cle = cle;
-  if (!liste.length) { groupe.replaceChildren(el("span", "note", "Aucune application n'a de son ouvert en ce moment.")); return; }
-  groupe.replaceChildren(...liste.map(([exe, nom, joue]) => {
-    const b = el("button", "puce", nom);
-    if (joue) b.append(el("span", "joue", " ▶ en lecture"));
-    b.type = "button";
+  if (!liste.length) { remplacer(groupe, [videApplisSon]); return; }
+  // un bouton par application, gardé d'une fois à l'autre (le focus clavier reste sur celui qu'on
+  // vient de cocher) ; seuls son texte et son état changent
+  remplacer(groupe, liste.map(([exe, nom, joue]) => {
+    const id = nomExe(exe);
+    let b = boutonsApplisSon.get(id);
+    if (!b) {
+      b = el("button", "puce");
+      b.type = "button";
+      b.dataset.cle = id;
+      b.addEventListener("click", () => {
+        const actuelles = val("audio", "applis") || [];
+        const deja = actuelles.some((c) => nomExe(c) === id);
+        regler("audio", "applis", deja ? actuelles.filter((c) => nomExe(c) !== id) : actuelles.concat([b.dataset.exe]));
+        majApplisSon();
+      });
+      boutonsApplisSon.set(id, b);
+    }
+    b.dataset.exe = exe;
+    const contenu = [nom];
+    if (joue) {
+      // « ▶ » décoratif : les lecteurs d'écran lisent « en lecture »
+      const marque = el("span", "joue", " ");
+      const fleche = el("span", "", "▶");
+      fleche.setAttribute("aria-hidden", "true");
+      marque.append(fleche, " en lecture");
+      contenu.push(marque);
+    }
+    b.replaceChildren(...contenu);
     b.title = exe + (joue ? " : joue en ce moment" : "");
-    const coche = choisies.some((c) => nomExe(c) === nomExe(exe));
-    b.setAttribute("aria-pressed", coche);
-    b.addEventListener("click", () => {
-      const actuelles = val("audio", "applis") || [];
-      const deja = actuelles.some((c) => nomExe(c) === nomExe(exe));
-      regler("audio", "applis", deja ? actuelles.filter((c) => nomExe(c) !== nomExe(exe)) : actuelles.concat([exe]));
-      majApplisSon();
-    });
-    return b;
+    return attributs(b, { "aria-pressed": choisies.some((c) => nomExe(c) === id) });
   }));
 }
+const boutonsApplisSon = new Map(); // nom de l'exe (minuscules) → bouton
+const videApplisSon = el("span", "note", "Aucune application n'a de son ouvert en ce moment.");
 
 function majSorties(choix = $("sortie-son")) {
   if (!choix || !etat.reglages) return;
@@ -2257,13 +2502,13 @@ function majReglages() {
     for (const e of c.els) { e.hidden = cache; e.classList.toggle("estompe", estompe); }
   }
   // panneau d'un effet coupé : estompé (il reste réglable), voyant de son onglet éteint
+  // (éteint : effet coupé par sa bascule, ou sans ce dont il a besoin, `si`)
   for (const p of panneaux) {
-    if (p.def.si) p.corps.classList.toggle("eteint", !p.def.si(etat.reglages));
-    if (p.def.voyant) p.voyant.classList.toggle("allume", !!p.def.voyant(etat.reglages));
-    if (!p.def.actif) continue;
-    const actif = p.def.present ? !!p.def.present(etat.reglages) : !!val(p.def.actif[0], p.def.actif[1]);
-    p.corps.classList.toggle("eteint", !actif);
-    p.voyant.classList.toggle("allume", actif);
+    const r = etat.reglages;
+    if (p.def.voyant) p.voyant.classList.toggle("allume", !!p.def.voyant(r));
+    const actif = !p.def.actif || (p.def.present ? !!p.def.present(r) : !!val(p.def.actif[0], p.def.actif[1]));
+    if (p.def.actif) p.voyant.classList.toggle("allume", actif);
+    p.corps.classList.toggle("eteint", !actif || (!!p.def.si && !p.def.si(r)));
   }
   majFamilles();
   majModulations();
@@ -2282,8 +2527,11 @@ function majReglages() {
     }
   }
   const c = etat.reglages.couleur;
+  // sans Prisme, sa synchro ne change rien à la teinte
+  const prisme = etat.prisme === true;
+  if (boutonPrisme) boutonPrisme.hidden = !prisme;
   for (const t of teintes) {
-    t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.pochette && !c.synchro_prisme && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
+    t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.pochette && !(prisme && c.synchro_prisme) && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
   }
   $("avec-preset").setAttribute("aria-pressed", !!val("souris", "avec_preset"));
   const d = $("demarrage");
@@ -2394,6 +2642,11 @@ function recevoirCharge(m) {
     etat.pistes = m.pistes;
   }
   etat.raison = typeof m.raison === "string" ? m.raison.slice(0, 60) : "";
+  // Prisme là ou non (absent d'une appli qui ne le signale pas : la synchro reste cachée)
+  if (typeof m.prisme === "boolean" && m.prisme !== etat.prisme) {
+    etat.prisme = m.prisme;
+    majReglages();
+  }
   $("pause").setAttribute("aria-pressed", etat.pause);
   $("pause").textContent = etat.pause ? "En pause" : "Pause";
   majEtatEssaim();
@@ -2685,7 +2938,7 @@ function montrerLoupe(t) {
     $("nom-loupe").textContent = t.p.nom;
     loupe.p = t.p;
     loupe.apercu = new window.Apercu($("toile-loupe"));
-    loupe.apercu.regler(t.p.reglages);
+    loupe.apercu.regler(avecHabillage(t.p.reglages));
     loupe.apercu.teinteImposee = teinteImposee(t.p.reglages);
     loupe.apercu.curseur = flecheJeu((t.p.reglages.souris && t.p.reglages.souris.jeu) || etat.curseurs);
     d.hidden = false;
@@ -2737,7 +2990,10 @@ function ecartsEntre(a, b) {
   for (const s of SECTIONS_PRESET) {
     const x = a[s] || {}, y = b[s] || {};
     for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
-      if (HORS_PRESET.has(s + "." + k) || k === "trace" || memeValeur(x[k], y[k])) continue;
+      // les trajets d'une image (points, contours) ne se lisent pas en liste ; la synchro Prisme
+      // ne compte que si Prisme est là
+      if (HORS_PRESET.has(s + "." + k) || k === "trace" || k === "contours" || memeValeur(x[k], y[k])) continue;
+      if (s + "." + k === "couleur.synchro_prisme" && etat.prisme !== true) continue;
       const [libelle, aff] = libelleReglage(s, k);
       lignes.push([libelle, valeurLisible(x[k], aff, s), valeurLisible(y[k], aff, s)]);
     }
@@ -2767,7 +3023,7 @@ function ouvrirComparaison(a, b) {
     const d = el("div", "cote");
     const canvas = el("canvas", "scene");
     const ap = new window.Apercu(canvas);
-    ap.regler(p.reglages);
+    ap.regler(avecHabillage(p.reglages));
     ap.teinteImposee = teinteImposee(p.reglages);
     suivreSouris(canvas, ap);
     comparaison.apercus.push(ap);
@@ -3237,6 +3493,7 @@ function montrerVue(v, focus) {
     onglet.tabIndex = v === id ? 0 : -1;
   }
   if (focus) $("onglet-" + v).focus();
+  if (v === "presets") dessinerPresets();
   if (v === "reglages") requestAnimationFrame(() => grand.dimensionner());
   if (v === "curseurs" && !etat.jeux) envoyer({ cmd: "jeux" });
   if (v === "auto") { envoyer({ cmd: "applis" }); dessinerAuto(); }
@@ -3331,10 +3588,22 @@ window.essaim = {
           chargerCommu(false);
           if (!memoire.lire("accueil", false)) ouvrirAccueil();
         }
+        if (typeof m.prisme === "boolean") etat.prisme = m.prisme;
+        // config.toml illisible (faute de frappe) : Essaim tourne avec les réglages d'avant, la
+        // page montre les valeurs par défaut ; on le dit une fois par erreur
+        if (m.illisible && m.illisible !== etat.illisible) {
+          bandeau(`config.toml est illisible : la page montre les valeurs par défaut. ${m.illisible}`, { libelle: "Ouvrir le fichier", faire: () => envoyer({ cmd: "ouvrir_config" }) });
+        }
+        etat.illisible = m.illisible || null;
         grand.regler(etat.reglages);
         apercuChange();
         majReglages();
-        dessinerPresets();
+        // la grille n'est refaite que si elle est affichée ou si la liste des presets a changé
+        // (un état arrive toutes les 0,7 s pendant qu'une glissière bouge) ; sinon, en revenant
+        // sur la vue Presets
+        const liste = JSON.stringify(etat.presets.map((p) => [p.nom, p.fourni, p.date]));
+        if (etat.vue === "presets" || liste !== etat.listePresets) dessinerPresets();
+        etat.listePresets = liste;
         dessinerCurseurs();
         if (etat.vue === "auto") dessinerAuto();
         if (premier) annoncerPrete();
@@ -3380,7 +3649,6 @@ window.essaim = {
         fermerPanneau();
         etat.source = "mien";
         montrerVue("presets");
-        dessinerPresets();
         break;
       case "refus":
         $("erreur-panneau").textContent = m.texte;
@@ -3610,7 +3878,13 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "/" && etat.vue === "presets") { e.preventDefault(); $("recherche").focus(); return; }
   if (etat.vue === "presets" && deplacerDansLaGrille(e)) e.preventDefault();
 });
-window.addEventListener("resize", () => { for (const t of tuiles.values()) t.pret = false; });
+// Fenêtre redimensionnée : les vignettes figées sont redessinées une fois, à la fin du
+// redimensionnement (et non à chaque événement).
+let finRedimension = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(finRedimension);
+  finRedimension = setTimeout(() => { for (const t of tuiles.values()) t.pret = false; }, 200);
+});
 
 dessinerModes();
 majLecture();

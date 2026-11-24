@@ -4,7 +4,8 @@
 //! profils de l'utilisateur, un fichier `%APPDATA%\Essaim\profils\<nom>.toml` chacun.
 //! Appliquer un profil réécrit ses réglages dans `config.toml` (commentaires gardés). Les choix
 //! propres à la machine ou à la main de l'utilisateur n'en font pas partie : `[rendu]`,
-//! `[souris] avec_preset`, `[audio] sortie` et `applis`, `[projecteur] secousse`, `sensibilite`.
+//! `[souris] avec_preset`, `[audio] sortie` et `applis`, `[projecteur] actif`, `secousse`,
+//! `sensibilite` (le projecteur sert à retrouver la souris : un preset ne le coupe pas).
 //! L'habillage de la fenêtre et de l'écran (`[equerres]`, `[lisere]`) non plus : un preset est
 //! une allure de l'essaim autour du pointeur ; l'habillage, une fois choisi, reste d'un preset à
 //! l'autre et en prend les couleurs.
@@ -22,7 +23,7 @@ const SECTIONS: [&str; 26] = [
 /// Le réglage `[section] key` fait-il partie des profils ?
 pub fn in_profile(section: &str, key: &str) -> bool {
     SECTIONS.contains(&section)
-        && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie") | ("audio", "applis") | ("projecteur", "secousse") | ("projecteur", "sensibilite"))
+        && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie") | ("audio", "applis") | ("projecteur", "actif") | ("projecteur", "secousse") | ("projecteur", "sensibilite"))
 }
 
 pub struct Profile {
@@ -326,7 +327,8 @@ pub fn curseurs_du_preset(preset: &Config) -> Result<(), String> {
 /// Applique le preset `nom` (et ses curseurs), puis fait relire la config.
 pub fn appliquer(nom: &str) -> Result<(), String> {
     let liste = list();
-    let p = liste.iter().find(|p| p.name == nom).ok_or_else(|| format!("aucun preset « {nom} »"))?;
+    // même règle que partout : casse et espaces autour du nom ignorés (règles écrites à la main)
+    let p = liste.iter().find(|p| meme_nom(&p.name, nom)).ok_or_else(|| format!("aucun preset « {nom} »"))?;
     apply(p)?;
     config::request_reload();
     curseurs_du_preset(&p.cfg)

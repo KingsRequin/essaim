@@ -113,6 +113,21 @@ impl Config {
     }
 }
 
+/// Lecture tolérante d'une valeur à choix (forme…) : une valeur inconnue, écrite par une version
+/// plus récente, donne la valeur par défaut au lieu de rendre tout le fichier ou le preset
+/// illisible.
+fn tolerant<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let v = toml::Value::deserialize(d)?;
+    Ok(T::deserialize(v).unwrap_or_else(|e| {
+        log::warn!("config : valeur inconnue ({e}), valeur par défaut utilisée");
+        T::default()
+    }))
+}
+
 /// Les neuf figures autour du pointeur, dans l'ordre des effets de modulation qui les visent
 /// (`modulation::Effets::figures`) : leurs sections dans les réglages.
 pub const FIGURES: [&str; 9] = ["arcs", "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "gouttes"];
@@ -778,6 +793,7 @@ pub struct Orbite {
     pub rayon: f32,
     pub cometes: bool,
     /// Trajet des comètes.
+    #[serde(deserialize_with = "tolerant")]
     pub forme: Forme,
     /// Comètes par anneau, réparties sur le trajet.
     pub nombre: u32,
@@ -808,6 +824,7 @@ pub struct Essaim {
     /// Satellites permanents, présents même sans musique.
     pub fixes: u32,
     /// Trajet des satellites ; par défaut celui des comètes.
+    #[serde(deserialize_with = "tolerant")]
     pub forme: FormeSatellites,
     /// Constellation : fines lignes entre les satellites et les comètes proches.
     pub constellation: bool,
@@ -834,6 +851,10 @@ pub enum Groupe {
     Pinceau,
     Pendule,
     Gouttes,
+    /// Groupe inconnu (modulation d'une version plus récente) : la modulation ne vise rien, mais
+    /// le fichier reste lisible.
+    #[serde(other)]
+    Aucun,
 }
 
 impl Groupe {
@@ -860,7 +881,7 @@ impl Groupe {
             Self::Pinceau => 6,
             Self::Pendule => 7,
             Self::Gouttes => 8,
-            Self::Tout | Self::Cometes | Self::Satellites => return false,
+            Self::Tout | Self::Cometes | Self::Satellites | Self::Aucun => return false,
         };
         seule == i
     }
@@ -1900,7 +1921,19 @@ fn set_in_doc(
     };
     let mut v: toml_edit::Value = match (old, value) {
         (serde_json::Value::Bool(_), serde_json::Value::Bool(b)) => (*b).into(),
-        (serde_json::Value::String(_), serde_json::Value::String(v)) => v.as_str().into(),
+        (serde_json::Value::String(_), serde_json::Value::String(v)) => {
+            // les formes se lisent avec indulgence (`tolerant`) : à l'écriture, une forme inconnue
+            // est refusée
+            let connue = match (section, key) {
+                ("orbite", "forme") => serde_json::from_value::<Forme>(value.clone()).is_ok(),
+                ("essaim", "forme") => serde_json::from_value::<FormeSatellites>(value.clone()).is_ok(),
+                _ => true,
+            };
+            if !connue {
+                return Err(format!("[{section}] {key} : « {v} » inconnu"));
+            }
+            v.as_str().into()
+        }
         // 4 décimales : un f32 élargi (3.4000000953…) s'écrit 3.4
         (serde_json::Value::Number(o), serde_json::Value::Number(n)) if o.is_f64() => {
             ((n.as_f64().unwrap_or(0.0) * 1e4).round() / 1e4).into()
@@ -2356,6 +2389,24 @@ mod tests {
         assert_eq!((c.equerres.actif, c.equerres.bras, c.lisere.actif, c.lisere.epaisseur), (true, 18.0, true, 5.0));
         assert_eq!((c.halo.actif, c.halo.profondeur), (true, 20.0));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn une_forme_ou_un_groupe_inconnu_ne_rend_pas_le_fichier_illisible() {
+        let c = super::de_texte(
+            "[orbite]
+forme = \"rond\"
+[essaim]
+forme = \"spirale_future\"
+[modulations]
+liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite = 0.5 }]
+",
+        )
+        .unwrap();
+        assert_eq!(c.orbite.forme, super::Forme::Cercle);
+        assert_eq!(c.essaim.forme, super::FormeSatellites::Cometes);
+        assert_eq!(c.modulations.liste[0].sur, super::Groupe::Aucun);
+        assert!(!super::Groupe::Aucun.inclut(false) && !super::Groupe::Aucun.inclut(true));
     }
 
     #[test]

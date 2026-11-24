@@ -499,6 +499,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .sous-onglets .famille:first-child { padding-top: var(--esp-2); }
 .sous-onglets .famille:hover { color: var(--encre); }
 .sous-onglets .famille .signe { width: 1ch; font-weight: 900; color: var(--signal-texte); }
+/* onglets d'une famille (une liste par famille, cachée quand elle est repliée) */
+.onglets-famille { display: flex; flex-direction: column; }
 .puce .joue { color: var(--signal-texte); font-weight: 800; }
 .sous-onglets .famille .compte-famille { margin-left: auto; font-weight: 900; color: var(--signal-texte); font-variant-numeric: tabular-nums; }
 .sous-onglet[aria-selected="true"] { color: var(--encre); box-shadow: inset var(--trait-souligne) 0 0 0 var(--signal); }
@@ -511,6 +513,14 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   border-top: var(--trait-epais) solid var(--encre); padding-top: var(--esp-3);
 }
 .tete-panneau .t-titre { margin: 0; font-size: 30px; }
+.titres-panneau { display: flex; align-items: center; flex-wrap: wrap; gap: var(--esp-3); }
+/* panneau hors presets (habillage, étiquette, réglages de la machine) : petite étiquette carrée */
+.hors-presets {
+  font-size: var(--texte-mini); font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap;
+  color: var(--encre-2); padding: var(--esp-1) var(--esp-2); box-shadow: inset 0 0 0 var(--trait-fin) var(--bord-controle);
+}
+/* liens vers des réglages de la machine rangés dans d'autres vues */
+.liens-panneau { align-items: center; margin: 0 0 var(--esp-4); }
 .note.intro { max-width: 760px; margin: var(--esp-2) 0 var(--esp-4); font-size: 13px; }
 .panneau-reglages .reglages { border-top: var(--trait-fin) solid var(--filet); }
 .panneau-reglages .avance { margin-top: var(--esp-2); }

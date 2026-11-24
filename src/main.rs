@@ -178,6 +178,8 @@ fn main() {
     // Quoi qu'il arrive, la bordure des fenêtres doit revenir (y compris celle laissée colorée
     // par une instance tuée).
     bordure::restore();
+    // plantage hors Rust (exception non gérée) : la couleur est rendue aussi
+    bordure::installer_filtre_plantage();
     // Plantage du fil principal : la bordure est rendue. Celui d'un autre fil (réglages, mises à
     // jour…) ne l'est pas : le fil principal continue de colorer, et lui retirer la couleur et
     // le témoin la laisserait sans filet si Essaim était tué ensuite.
@@ -411,37 +413,48 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         if !win::pump() {
             break;
         }
-        match win::take_command() {
-            win::CMD_QUIT => break,
-            win::CMD_REDEMARRER if maj::prete().is_some() => {
-                relancer = true;
-                break;
-            }
-            win::CMD_PAUSE => {
-                user_paused = !user_paused;
-                charge::publier_pause(user_paused);
-                log::info!("{}", if user_paused { "pause" } else { "reprise" });
-            }
-            win::CMD_CONFIG => reglages::open(shared.clone()),
-            win::CMD_STREAM => stream::ouvrir(shared.clone()),
-            win::CMD_PROJECTEUR => effets.demander_projecteur(),
-            c @ (win::CMD_SUIVANT | win::CMD_PRECEDENT) => {
-                let pas = if c == win::CMD_SUIVANT { 1 } else { -1 };
-                if let Some(nom) = profils::voisin(&conf.cfg, pas) {
-                    match profils::appliquer(&nom) {
-                        Ok(()) => win::bulle(&format!("Preset « {nom} »")),
-                        Err(e) => log::warn!("raccourci : preset « {nom} » non appliqué ({e})"),
+        // toutes les commandes arrivées depuis le dernier tour (menu, raccourcis), dans l'ordre
+        let mut sortir = false;
+        while let c @ 1.. = win::take_command() {
+            match c {
+                win::CMD_QUIT => {
+                    sortir = true;
+                    break;
+                }
+                win::CMD_REDEMARRER if maj::prete().is_some() => {
+                    relancer = true;
+                    sortir = true;
+                    break;
+                }
+                win::CMD_PAUSE => {
+                    user_paused = !user_paused;
+                    charge::publier_pause(user_paused);
+                    log::info!("{}", if user_paused { "pause" } else { "reprise" });
+                }
+                win::CMD_CONFIG => reglages::open(shared.clone()),
+                win::CMD_STREAM => stream::ouvrir(shared.clone()),
+                win::CMD_PROJECTEUR => effets.demander_projecteur(),
+                c @ (win::CMD_SUIVANT | win::CMD_PRECEDENT) => {
+                    let pas = if c == win::CMD_SUIVANT { 1 } else { -1 };
+                    if let Some(nom) = profils::voisin(&conf.cfg, pas) {
+                        match profils::appliquer(&nom) {
+                            Ok(()) => win::bulle(&format!("Preset « {nom} »")),
+                            Err(e) => log::warn!("raccourci : preset « {nom} » non appliqué ({e})"),
+                        }
                     }
                 }
-            }
-            c if c >= win::CMD_PRESET => {
-                if let Some(p) = profils::list().get(c - win::CMD_PRESET) {
-                    if let Err(e) = profils::appliquer(&p.name) {
-                        log::warn!("menu : preset « {} » non appliqué ({e})", p.name);
+                c if c >= win::CMD_PRESET => {
+                    if let Some(p) = profils::list().get(c - win::CMD_PRESET) {
+                        if let Err(e) = profils::appliquer(&p.name) {
+                            log::warn!("menu : preset « {} » non appliqué ({e})", p.name);
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
+        }
+        if sortir {
+            break;
         }
         while let Ok(c) = ipc_rx.try_recv() {
             match c {
@@ -456,9 +469,11 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             }
         }
         if win::take_display_changed() {
-            log::info!("écrans modifiés : calques refaits");
             monitors = win::monitors();
-            backend.reset_layers();
+            // seuls les calques des écrans disparus ou déplacés sont refaits : un calque refait
+            // sous la souris lui ferait perdre son curseur
+            let refaits = backend.ecrans_changes(&monitors);
+            log::info!("écrans modifiés : {refaits} calque(s) refait(s)");
             effets.oublier_loin();
         }
         let now = Instant::now();
@@ -593,7 +608,6 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 Some(pos) => {
                     cracks.clear();
                     let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
-                    last = now;
                     lire_fenetre(&mut effets, cfg);
                     habillage_seul(&mut effets, &mut backend, &monitors, &shared, cfg, t, dt, pos);
                     cleared = false;
@@ -606,6 +620,12 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 }
                 None => {}
             }
+            // les coups joués pendant ce temps ne partent pas en rafale à la reprise, et
+            // l'essaim ne glisse pas depuis l'ancienne place du pointeur ; le premier pas de la
+            // reprise part d'ici
+            swarm.oublier_coups(&au);
+            effets.oublier_coups(&shared);
+            last = now;
             // à la reprise, un bouton tenu pendant la pause ne compte pas comme un clic, et le
             // compte à rebours de la veille profonde repart de zéro
             (was_down, droit_avant) = (down, droit);
@@ -614,7 +634,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 profond = false;
                 charge::publier_veille(false);
             }
-            win::attendre(Duration::from_millis(if active { 16 } else { 100 }));
+            // l'habillage se redessine à 60 i/s ; sans lui, rien n'est dessiné : une lecture
+            // toutes les 40 ms suffit (clics, retour du pointeur)
+            let habille = active && masque.is_some() && effets.habillage(cfg);
+            win::attendre(if !active { Duration::from_millis(100) } else if habille { Duration::from_millis(16) } else { VEILLE_LECTURE });
             continue;
         };
         cleared = false;
@@ -706,7 +729,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             if cracks.len() >= MAX_CRACKS {
                 cracks.remove(0);
             }
-            cracks.push(Crack::new(x, y, t, cfg.fissures.taille * force * scale, &mut rng));
+            cracks.push(Crack::new(x, y, t, cfg.fissures.taille * force * scale, &mut rng).a_l_echelle(scale));
         }
         render::set_decalage(swarm.teinte_globale());
         if let Some(c) = icone_appli.suivre(cfg.suit_icone()) {

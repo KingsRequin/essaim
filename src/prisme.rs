@@ -4,7 +4,8 @@
 //! éteintes ou blanches → pas de teinte (Essaim reprend sa teinte qui tourne seule).
 //!
 //! Le client ne tourne que si la synchro est voulue, et se reconnecte toutes les 5 s si Prisme
-//! est absent.
+//! est absent. Synchro coupée, une simple connexion TCP toutes les 5 s dit si Prisme est là
+//! (`present`) : la fenêtre des réglages ne propose la synchro qu'alors.
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -14,6 +15,13 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message;
 
 const URL: &str = "ws://127.0.0.1:28650";
+const ADRESSE: ([u8; 4], u16) = ([127, 0, 0, 1], 28650);
+/// Prisme joignable (dernier essai) : la synchro n'est proposée qu'alors.
+static PRESENT: AtomicBool = AtomicBool::new(false);
+
+pub fn present() -> bool {
+    PRESENT.load(Ordering::Relaxed)
+}
 /// Dernière teinte nette tenue pendant ce délai (flashs blancs, creux sombres, LED éteintes).
 const HOLD: Duration = Duration::from_secs(4);
 
@@ -55,12 +63,21 @@ pub fn start() -> Arc<PrismeHue> {
     let s = shared.clone();
     let _ = std::thread::Builder::new().name("essaim-prisme".into()).spawn(move || loop {
         if !s.wanted.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_secs(1));
+            let ouvert = std::net::TcpStream::connect_timeout(&ADRESSE.into(), Duration::from_millis(200)).is_ok();
+            PRESENT.store(ouvert, Ordering::Relaxed);
+            // reprend vite si la synchro est demandée entre deux essais
+            for _ in 0..5 {
+                if s.wanted.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
             continue;
         }
         if let Err(e) = session(&s) {
             log::debug!("synchro Prisme : {e}");
         }
+        PRESENT.store(false, Ordering::Relaxed);
         if s.connected.swap(false, Ordering::Relaxed) {
             log::info!("synchro Prisme : déconnecté");
         }
@@ -76,6 +93,7 @@ fn session(s: &PrismeHue) -> anyhow::Result<()> {
     }
     ws.send(Message::Text(r#"{"id":1,"cmd":"preview","enabled":true}"#.into()))?;
     s.connected.store(true, Ordering::Relaxed);
+    PRESENT.store(true, Ordering::Relaxed);
     log::info!("synchro Prisme : connecté");
     while s.wanted.load(Ordering::Relaxed) {
         match ws.read() {

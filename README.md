@@ -84,8 +84,8 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | ✨ **Aigus** | Charleston et cymbales font jaillir des étincelles |
 | 🟦 **Caisse claire** | Un carré lumineux s'ouvre sous le pointeur sur chaque caisse claire ou clap |
 | 🚀 **Montée et drop** | L'essaim se resserre et accélère pendant la montée, puis explose au drop |
-| ⏱️ **Tempo** | L'essaim continue de pulser pendant les breaks sans grosse caisse ; en option, les têtes pulsent sur les contretemps |
-| 🎧 **Stéréo** | En option, l'essaim penche vers le côté qui joue le plus fort |
+| ⏱️ **Tempo** | L'essaim continue de pulser pendant les breaks sans grosse caisse ; avec une modulation, les têtes pulsent aussi sur les contretemps |
+| 🎧 **Stéréo** | Avec une modulation (idée *Penche vers le côté qui joue*), l'essaim penche vers le côté qui joue le plus fort |
 | ⚡ **Déclencheurs** | Quand un événement arrive (kick, caisse claire, charleston, drop, temps, contretemps, break, changement de piste, clic, clic droit), une action : éclat, onde, éclats, étincelles, carré, fissure, implosion, satellites, explosion, rafale, inversion du sens, bordure qui s'illumine, rebond de l'orbite, poussée de la rotation, coup de frein ; avec un délai minimal et une chance (« un kick sur trois ») |
 | 🎗️ **Rubans et ressorts** | Les comètes en rubans vrillés, sans tête blanche ; ou tout l'essaim sur ressorts : l'orbite rebondit au kick au lieu de changer de sens, les têtes s'étirent dans leur élan, les satellites naissent du centre |
 | 🎛️ **Modulations** | Un élément du son (basse, note grave ou aiguë, kick, caisse claire, charleston, montée, drop, contretemps, tempo, brillance, stéréo) fait varier la rotation du trajet, la vitesse, l'accélération, le rayon, la taille, la teinte, le décalage, la lueur, la traînée ou l'opacité, des comètes, des satellites ou des deux ; avec un seuil, un lissage, et à l'envers si on veut |

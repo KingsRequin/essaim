@@ -78,7 +78,7 @@ pub(crate) fn builtins() -> Vec<Profile> {
             (c.orbite.rayon, c.orbite.anneaux, c.orbite.vitesse_base, c.orbite.trainee) = (18.0, 3, 1.0, 1.2);
             c.essaim.maximum = 0;
             teinte(c, 185.0, 6.0, 60.0);
-            (c.eclat.taille, c.bordure.repos, c.projecteur.actif) = (0.0, 0.4, false);
+            (c.eclat.taille, c.bordure.repos) = (0.0, 0.4);
             c.modulations.liste = vec![
                 ml(S::Tempo, Ci::Rayon, G::Tout, 0.03, 1.0),
                 ml(S::Basse, Ci::Luminosite, G::Tout, 0.35, 1.0),
@@ -93,7 +93,7 @@ pub(crate) fn builtins() -> Vec<Profile> {
             c.essaim.maximum = 0;
             (c.reticule.actif, c.reticule.taille, c.reticule.opacite) = (true, 28.0, 0.8);
             teinte(c, 355.0, 0.0, 25.0);
-            (c.eclat.taille, c.particules.taille, c.bordure.active, c.projecteur.actif) = (1.6, 0.5, false, false);
+            (c.eclat.taille, c.particules.taille, c.bordure.active) = (1.6, 0.5, false);
             c.modulations.liste = vec![m(S::Kick, Ci::Rayon, G::Tout, 0.1), m(S::Basse, Ci::Vitesse, G::Tout, 0.1), ml(S::Caisse, Ci::Luminosite, G::Tout, 0.5, 0.0)];
             c.declencheurs.liste = vec![d(E::Kick, A::Eclat, 0.6), d(E::Clic, A::Onde, 0.4)];
         }),

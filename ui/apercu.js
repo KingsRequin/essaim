@@ -1,7 +1,8 @@
 // Aperçu d'un preset : le même calcul que l'essaim autour du pointeur (src/render.rs et
 // src/modulation.rs), dessiné dans un canevas. Les événements du son (kick, caisse claire, drop…)
 // et de la souris font agir les déclencheurs ; les modulations font varier rotation, vitesse,
-// rayon… Le pointeur est au centre. Toute formule de render.rs (Swarm::update, agir,
+// rayon… Le pointeur de l'essaim est au centre ; les petites figures suivent la souris quand elle
+// survole le grand aperçu. Toute formule de render.rs (Swarm::update, agir,
 // Swarm::draw, draw_trail…) est reprise ici telle quelle : la modifier là oblige à la reporter ici.
 "use strict";
 
@@ -42,15 +43,20 @@ const SAT_RESSORT = [10, 16, 0.3], SAT_ENTREE_SORTIE = [0.3, 0.35], SAT_FONTE = 
 const ETIREMENT = [0.02, 8.7], ANNEAU_RESSORTS = [5, 4.5], VRILLE = [0.58, 2.4, 1.4], RUBAN_MORCEAU = 2;
 // Petites figures (arcs, quatre temps, anneau) : comme les constantes de src/figures.rs.
 const FIG_RETOMBEE = [10, 8, 6], TEMPO_FONDU = [0.15, 0.8], SOUS_LE_POINTEUR = [7, 27];
+// Centre des figures : au bout d'un ressort accroché au pointeur (pulsation, amortissement),
+// jamais à plus de FIG_RETARD_MAX px (à 100 %) de lui (figures::SUIVI, figures::RETARD_MAX).
+const FIG_SUIVI = [14, 0.55], FIG_RETARD_MAX = 40;
 const ARC_CRAN = 0.6, ARC_BOND = 90, ARC_RECUL = 13, ARC_BORNES = [-4, 8], ARC_PETIT = [0.675, 0.76];
 const ARC_GRAND_OUVERTURE = [0.14, 5.5], ARC_PETIT_OUVERTURE = [0.12, 4.8];
 const SAUT_BORNES = [-12, 6], TAILLE_BORNES = [0.3, 1.8], TIRET_BORNES = [-1, 5], POINT_ACTIF = 1.45, POINT_ETEINT = 0.4, VAGUE = 0.06;
-const ANNEAU_BORNES = [0.2, 1.7], ANNEAU_ECHO = [0.42, 1.2];
+// Anneau : bornes de son échelle, écho (durée, élargissement), étirement au plus et vitesse qui
+// le donne (px/s à 100 %) ; il s'étire aussi avec son retard (Apercu.etirementFigures).
+const ANNEAU_BORNES = [0.2, 1.7], ANNEAU_ECHO = [0.42, 1.2], ANNEAU_ETIRE = [0.45, 900];
 // Orbe, ligne de voix, trame, trait de pinceau et pendule : comme les constantes de src/figures/plus.rs.
 const ORBE_POINTS = 96, ORBE_SOUFFLE = [-6, 12], ORBE_ECHO = [0.45, 0.32], ORBE_ELAN = 110;
 const VOIX_POINTS = 40, VOIX_MORCEAUX = 8, VOIX_ATTENTE = 1.5, VOIX_FONDU = [0.15, 0.8], VOIX_LARGE = [0.5, 1.6], VOIX_ONDES = [0.62, 0.4];
 const TRAME_VIDE = [7, 16], TRAME_VAGUE = [220, 10], TRAME_ONDE_MAX = 2.5, TRAME_DEPLACE = 3, TRAME_LOUPE_MAX = 1.5, TRAME_VAGUES_MAX = 12;
-const PINCEAU_VITESSE = [120, 700], PINCEAU_PERLE = [1.4, 0.4, 2.4], PENDULE_GRAVITE = 900, PENDULE_FREIN = 1.8, PENDULE_SAUT = [250, 200];
+const PINCEAU_PAS = 0.5, PINCEAU_VITESSE = [120, 700], PINCEAU_PERLE = [1.4, 0.4, 2.4], PENDULE_GRAVITE = 900, PENDULE_FREIN = 1.8, PENDULE_SAUT = [250, 200];
 // Gouttes en contour : comme les constantes de src/figures/gouttes.rs.
 const GOUTTE_DEMI = 72, GOUTTE_NOEUDS = 73, GOUTTE_NOYAU = [8, 2.5, 4], GOUTTE_NOYAU_ELAN = [40, 70], GOUTTE_NOYAU_BORNES = [2, 18];
 const GOUTTE_PERLES = [[17, 2.1, 4.8], [23, -1.6, 4.2], [29, 1.2, 5.2], [34, -0.9, 4.2]];
@@ -334,6 +340,8 @@ function vers(r, cible, [w, z], dt, [lo, hi]) {
 // État des petites figures (comme figures::Figures::new).
 function nouvellesFigures() {
   return {
+    // centre (null avant la première image) et sa vitesse, écart au pointeur et retard au plus (px)
+    centre: null, vitesse: [0, 0], retard: [0, 0], retardMax: FIG_RETARD_MAX,
     horloge: 0, charleston: 0, caisse: 0, montee: 0, basse: 0, compte: 0, mesure: 0, tempo: 0,
     arcs: { tour: [0, 0], cran: 0, bond: [0, 0], recul: [0, 0], grave: 0, aigu: 0, plein: 0 },
     // vague du drop : son début et sa force
@@ -345,7 +353,7 @@ function nouvellesFigures() {
     voix: { niveaux: [0, 0, 0], large: [1, 0], silence: VOIX_ATTENTE, visible: 0 },
     trame: { loupe: [0, 0], vagues: [], eclairs: [] },
     pinceau: { trajet: [], perles: [], vie: [0, 0] },
-    pendule: { poids: null, vitesse: [0, 0], fil: [0, 0], mou: 0, cote: 1 },
+    pendule: { poids: null, vitesse: [0, 0], fil: [0, 0], ancre: [0, 0], mou: 0, cote: 1 },
     // figures/gouttes.rs
     gouttes: { noyau: [GOUTTE_NOYAU[0], 0], perles: [0, 1, 2, 3].map((i) => ({ angle: i * 2.4, ecart: [0, 0] })), bulles: [], segments: [] },
     // loin.rs
@@ -551,11 +559,15 @@ const entre = (a, b) => a + Math.random() * (b - a);
 // Ajoute la position courante (comme render::push_trail) : le dernier point suit la tête ; un
 // nouveau point fixe n'est ajouté que tous les PAS_TRAINEE ou tous les `ecart` pixels, mesurés
 // depuis l'avant-dernier.
+// Au-delà de VIE_FINE, pas et écart sont multipliés par vie / VIE_FINE (une traînée de 12 s ne
+// compte pas plus de points qu'une de 3 s) ; TRAINEE_POINTS_MAX borne le reste.
+const VIE_FINE = 3, TRAINEE_POINTS_MAX = 4000;
 function pousser(tr, t, x, y, vie, ecart) {
-  const n = tr.length, p = n >= 2 ? tr[n - 2] : null;
-  if (p && t - p[0] < PAS_TRAINEE && (p[1] - x) ** 2 + (p[2] - y) ** 2 < ecart * ecart) tr[n - 1] = [t, x, y];
+  const n = tr.length, p = n >= 2 ? tr[n - 2] : null, k = Math.max(1, vie / VIE_FINE), pas = PAS_TRAINEE * k, gap = ecart * k;
+  if (p && t - p[0] < pas && (p[1] - x) ** 2 + (p[2] - y) ** 2 < gap * gap) tr[n - 1] = [t, x, y];
   else tr.push([t, x, y]);
   while (tr.length && t - tr[0][0] > vie) tr.shift();
+  if (tr.length > TRAINEE_POINTS_MAX) tr.splice(0, tr.length - TRAINEE_POINTS_MAX);
 }
 
 // Pas intermédiaires pour un déplacement d'angle `da` sur un rayon de `r` px (comme
@@ -624,6 +636,8 @@ class Apercu {
     this.particules = [];
     // fissures (l'aperçu les dessine, plus simplement que render::Crack)
     this.fissures = [];
+    // part fractionnaire des grains du sillage, reportée à l'image suivante (Swarm::reste_sillage)
+    this.resteSillage = 0;
     this.prochaineCouleur = 0;
     // souris sur le canevas (pixels du canevas), pour le sillage
     this.pointeur = null;
@@ -662,7 +676,8 @@ class Apercu {
   }
 
   // Souris sur le canevas (coordonnées de la fenêtre), ou `survoler(null)` quand elle en sort.
-  // L'essaim reste au centre ; seul le sillage suit la souris.
+  // L'essaim reste au centre ; le sillage, le trait, le pendule et le centre des figures suivent
+  // la souris.
   survoler(clientX, clientY) {
     if (clientX === null) {
       this.pointeur = this.pointeurAvant = null;
@@ -686,15 +701,30 @@ class Apercu {
     this.avancerFigures(dt, son, this.coupsImage);
   }
 
-  // Petites figures (comme figures::Figures::avance) ; dans l'aperçu, le pointeur ne bouge pas :
-  // leur centre est celui du canevas.
+  // Le pointeur des figures : la souris sur le canevas, sinon son centre.
+  pointeurFigures() {
+    return this.pointeur || [this.canvas.width / 2, this.canvas.height / 2];
+  }
+
+  // Petites figures (comme figures::Figures::avance) ; leur centre suit le pointeur des figures
+  // au bout d'un ressort, avec un retard borné.
   avancerFigures(dt, son, coups) {
-    const c = this.reglages, f = this.figures, t = this.t;
+    const c = this.reglages, f = this.figures, t = this.t, S = this.echelle || 1;
     this.etiquette.kick = coups.kicks > 0 ? 1 : this.etiquette.kick * Math.exp(-dt * 7);
     const actives = FIGURES.map((s) => !!(c[s] && c[s].actif));
     const plus = [F_ORBE, F_VOIX, F_TRAME, F_TRAIT, F_PENDULE].some((i) => actives[i]);
     const loin = ['equerres', 'halo', 'lisere'].some((s) => c[s] && c[s].actif);
     if (!actives.some(Boolean) && !loin) { this.figures = nouvellesFigures(); return; }
+    // centre : au bout d'un ressort accroché au pointeur, retard borné (en butée, l'élan est perdu)
+    const cur = this.pointeurFigures(), [px, py] = f.centre || cur;
+    let [ex, vx] = ressort(px - cur[0], f.vitesse[0], FIG_SUIVI[0], FIG_SUIVI[1], dt);
+    let [ey, vy] = ressort(py - cur[1], f.vitesse[1], FIG_SUIVI[0], FIG_SUIVI[1], dt);
+    const d = Math.hypot(ex, ey), lim = FIG_RETARD_MAX * S;
+    if (d > lim) { ex = (ex / d) * lim; ey = (ey / d) * lim; vx = vy = 0; }
+    f.vitesse = [vx, vy];
+    f.centre = [cur[0] + ex, cur[1] + ey];
+    f.retard = [ex, ey];
+    f.retardMax = lim;
     f.horloge = reste(f.horloge + dt, TAU * 40);
     f.charleston = coups.aigus > 0 ? 1 : f.charleston * Math.exp(-dt * FIG_RETOMBEE[0]);
     f.caisse = coups.caisses > 0 ? 1 : f.caisse * Math.exp(-dt * FIG_RETOMBEE[1]);
@@ -786,12 +816,12 @@ class Apercu {
     });
   }
 
-  // Orbe, ligne de voix, trame, trait de pinceau et pendule (comme figures::plus::Plus::avance) ;
-  // dans l'aperçu, leur centre est celui du canevas et le trait suit la souris sur le canevas.
+  // Orbe, ligne de voix, trame, trait de pinceau et pendule (comme figures::plus::Plus::avance) :
+  // la trame autour du centre des figures, le trait et le pendule au pointeur des figures.
   // `ecoutes` : ce que chaque figure entend, à la force de ses réactions.
   avancerPlus(dt, son, coups, ecoutes) {
     const c = this.reglages, f = this.figures, t = this.t, S = this.echelle || 1;
-    const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+    const [cx, cy] = f.centre, cur = this.pointeurFigures();
     const orbe = c.orbe || {}, voix = c.voix || {}, trame = c.trame || {}, pinceau = c.pinceau || {}, pendule = c.pendule || {};
     f.kick = coups.kicks > 0 ? 1 : f.kick * Math.exp(-dt * 7);
     if (orbe.actif) {
@@ -841,9 +871,10 @@ class Apercu {
       pi.vie[1] += 5.2 * duree * el.drop;
       vers(pi.vie, duree, [9, 0.45], dt, [duree * 0.5, duree * 2.2]);
       pi.perles = pi.perles.filter((ne) => t - ne < 0.5);
-      // le pointeur de l'aperçu : la souris sur le canevas, sinon son centre (rien à tracer)
-      const [x, y] = this.pointeur || [cx, cy];
-      pi.trajet.push([t, x, y]);
+      // la souris sur le canevas, sinon son centre (rien à tracer)
+      // un point n'est ajouté que si le pointeur a bougé d'au moins PINCEAU_PAS (comme plus.rs)
+      const dernier = pi.trajet[pi.trajet.length - 1];
+      if (!dernier || Math.hypot(dernier[1] - cur[0], dernier[2] - cur[1]) >= PINCEAU_PAS) pi.trajet.push([t, cur[0], cur[1]]);
       pi.trajet = pi.trajet.filter((q) => t - q[0] <= pi.vie[0]);
     } else {
       f.pinceau.trajet = [];
@@ -853,8 +884,8 @@ class Apercu {
       if (pe.fil[0] <= 0) pe.fil = [longueur, 0];
       pe.fil[1] += 7.3 * longueur * el.drop;
       vers(pe.fil, longueur * (1 + 0.32 * p.basse - 0.6 * p.montee), [12, 0.4], dt, [4, longueur * 2]);
-      const l = pe.fil[0] * S;
-      let [qx, qy] = pe.poids || [cx, cy + l];
+      const l = pe.fil[0] * S, [ax, ay] = cur;
+      let [qx, qy] = pe.poids || [ax, ay + l];
       if (el.kick > 0) { pe.vitesse[1] -= PENDULE_SAUT[0] * S * el.kick; pe.vitesse[0] += entre(-70, 70) * S * el.kick; }
       if (el.caisse > 0) { pe.cote = -pe.cote; pe.vitesse[0] += PENDULE_SAUT[1] * pe.cote * S * el.caisse; }
       if (el.drop > 0) pe.vitesse[1] -= 1.5 * PENDULE_SAUT[0] * S * el.drop;
@@ -863,15 +894,29 @@ class Apercu {
       pe.vitesse = [pe.vitesse[0] * frein, (pe.vitesse[1] + PENDULE_GRAVITE * S * dt) * frein];
       qx += pe.vitesse[0] * dt;
       qy += pe.vitesse[1] * dt;
-      const dx = qx - cx, dy = qy - cy, d = Math.hypot(dx, dy);
-      if (d > l) { qx = cx + (dx / d) * l; qy = cy + (dy / d) * l; }
+      const dx = qx - ax, dy = qy - ay, d = Math.hypot(dx, dy);
+      if (d > l) { qx = ax + (dx / d) * l; qy = ay + (dy / d) * l; }
       pe.vitesse = [(qx - avant[0]) / dt, (qy - avant[1]) / dt];
-      if (![qx, qy, pe.vitesse[0], pe.vitesse[1]].every(Number.isFinite)) { qx = cx; qy = cy + l; pe.vitesse = [0, 0]; }
+      if (![qx, qy, pe.vitesse[0], pe.vitesse[1]].every(Number.isFinite)) { qx = ax; qy = ay + l; pe.vitesse = [0, 0]; }
       pe.poids = [qx, qy];
+      pe.ancre = [ax, ay];
       pe.mou = Math.max(0, l - Math.min(d, l));
     } else if (!pendule.actif) {
       f.pendule.poids = null;
     }
+  }
+
+  // Étirement de l'anneau et de l'orbe (comme figures::Figures::etirement) : [étirement (0 à
+  // ANNEAU_ETIRE[0]), cosinus, sinus de sa direction], le plus grand de celui de la vitesse du
+  // centre et de celui de son retard sur le pointeur.
+  etirementFigures(S) {
+    const f = this.figures, [vx, vy] = f.vitesse, [rx, ry] = f.retard;
+    const v = Math.hypot(vx, vy), d = Math.hypot(rx, ry);
+    const parVitesse = Math.min(v / (ANNEAU_ETIRE[1] * S), ANNEAU_ETIRE[0]);
+    const parRetard = Math.min(1, d / Math.max(1, f.retardMax)) * ANNEAU_ETIRE[0];
+    if (parRetard > parVitesse && d > 0.5) return [parRetard, -rx / d, -ry / d];
+    if (v > 1) return [parVitesse, vx / v, vy / v];
+    return [0, 1, 0];
   }
 
   // Rayons de l'orbe (comme figures::plus::Plus::rayons), en px à 100 % ; `p` : ce qu'entend l'orbe.
@@ -902,7 +947,7 @@ class Apercu {
     else if (i === F_ORBE) this.dessinerOrbe(g, cx, cy, S, tete, queue);
     else if (i === F_VOIX) this.dessinerVoix(g, cx, cy, S, tete, queue);
     else if (i === F_TRAIT) this.dessinerTrait(g, S, p, teinte);
-    else if (i === F_PENDULE) this.dessinerPendule(g, cx, cy, S, tete, queue);
+    else if (i === F_PENDULE) this.dessinerPendule(g, S, tete, queue);
     else if (i === F_ARCS) {
       const a = f.arcs, arcs = c.arcs, rayon = regle(arcs.rayon, 10, 80, 20), epais = regle(arcs.epaisseur, 0.5, 6, 2.1);
       const arc = (r, depart, ouverture, largeur, rgb) => {
@@ -918,13 +963,16 @@ class Apercu {
       if (f.tempo <= 0.01) return;
       const q = f.temps, quatre = c.quatre_temps, taille = regle(quatre.taille, 1, 5, 1.6), ax = cx + SOUS_LE_POINTEUR[0] * S, ay = cy + SOUS_LE_POINTEUR[1] * S;
       const ecart = regle(quatre.ecart, 4, 20, 7.5) * S * (1 - 0.35 * p.montee);
+      const pose = f.poses[F_QUATRE], tiret = pose ? (pose.traits > 1e-3 ? pose.geo / pose.traits : 0) : 1;
       q.pts.forEach((pt, j) => {
         const actif = q.actif === j;
         const x = ax + (j - 1.5) * ecart + Math.sin(f.horloge * 40 + j * 2) * 0.8 * p.montee * S, y = ay + pt.saut[0] * S;
         const r = taille * S * pt.taille[0] * (actif ? POINT_ACTIF : 1), l = Math.max(0, pt.tiret[0]) * 1.1 * S, al = f.tempo * (actif ? 1 : POINT_ETEINT);
-        if (l > 0.3) {
+        if (l > 0.3 && tiret > 0) {
           g.strokeStyle = plein(tete, al);
-          g.lineWidth = 2 * r;
+          // le tiret, un point allongé, garde l'échelle du point (`geo`) et non celle des traits
+          // (comme figures.rs : 2·r·geo/traits, que la pose multiplie par `traits`)
+          g.lineWidth = 2 * r * tiret;
           g.beginPath();
           g.moveTo(x - l, y);
           g.lineTo(x + l, y);
@@ -947,11 +995,14 @@ class Apercu {
         g.arc(cx, cy, r * (1 + ANNEAU_ECHO[1] * (1 - (1 - k) ** 3)), 0, TAU);
         g.stroke();
       }
-      // carré un instant sur la caisse claire (superellipse : cercle à 2, presque carré à 8)
+      // étiré dans le sens où il file ; carré un instant sur la caisse claire (superellipse :
+      // cercle à 2, presque carré à 8)
+      const [e, cos, sin] = this.etirementFigures(S), ra = r * (1 + e), rb = r * (1 - e);
       const puissance = 2 / (2 + 6 * Math.min(1, Math.max(0, a.carre)));
       const point = (th) => {
         const ct = Math.cos(th), st = Math.sin(th);
-        return [cx + r * Math.sign(ct) * Math.abs(ct) ** puissance, cy + r * Math.sign(st) * Math.abs(st) ** puissance];
+        const x = ra * Math.sign(ct) * Math.abs(ct) ** puissance, y = rb * Math.sign(st) * Math.abs(st) ** puissance;
+        return [cx + x * cos - y * sin, cy + x * sin + y * cos];
       };
       g.beginPath();
       for (let j = 0; j <= 48; j++) {
@@ -1007,15 +1058,22 @@ class Apercu {
     }
   }
 
-  // Orbe (comme figures::plus::Plus::dessiner_orbe).
+  // Orbe (comme figures::plus::Plus::dessiner_orbe), étirée comme l'anneau.
   dessinerOrbe(g, cx, cy, S, tete, queue) {
     const o = this.figures.orbe, t = this.t;
     if (o.contour.length !== ORBE_POINTS) return;
+    const [e, ec, es] = this.etirementFigures(S);
     const tracer = (rayons, echelle, largeur, rgb, al) => {
       g.beginPath();
       for (let i = 0; i <= ORBE_POINTS; i++) {
-        const a = -Math.PI / 2 + (i / ORBE_POINTS) * TAU, r = rayons[i % ORBE_POINTS] * echelle * S;
-        if (i) g.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); else g.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+        const th = -Math.PI / 2 + (i / ORBE_POINTS) * TAU, r = rayons[i % ORBE_POINTS] * echelle * S;
+        let x = Math.cos(th) * r, y = Math.sin(th) * r;
+        if (e !== 0) {
+          // étirée le long de (ec, es), resserrée en travers
+          const a = (x * ec + y * es) * (1 + e), b = (-x * es + y * ec) * (1 - e);
+          [x, y] = [a * ec - b * es, a * es + b * ec];
+        }
+        if (i) g.lineTo(cx + x, cy + y); else g.moveTo(cx + x, cy + y);
       }
       g.strokeStyle = plein(rgb, al);
       g.lineWidth = largeur;
@@ -1074,17 +1132,17 @@ class Apercu {
   }
 
   // Pendule (comme figures::plus::Plus::dessiner_pendule) : le poids grossit au kick, à la force de
-  // la réaction au kick.
-  dessinerPendule(g, cx, cy, S, tete, queue) {
+  // la réaction au kick ; le fil part de son ancre (le pointeur des figures).
+  dessinerPendule(g, S, tete, queue) {
     const f = this.figures, pe = f.pendule, pendule = this.reglages.pendule;
     if (!pe.poids) return;
-    const [qx, qy] = pe.poids;
+    const [qx, qy] = pe.poids, [ax, ay] = pe.ancre;
     // le fil : droit quand il est tendu, il pend quand le poids est remonté
     g.strokeStyle = plein(queue, 0.75);
     g.lineWidth = S;
     g.beginPath();
-    g.moveTo(cx, cy);
-    g.quadraticCurveTo((cx + qx) / 2, (cy + qy) / 2 + pe.mou * 0.6, qx, qy);
+    g.moveTo(ax, ay);
+    g.quadraticCurveTo((ax + qx) / 2, (ay + qy) / 2 + pe.mou * 0.6, qx, qy);
     g.stroke();
     g.fillStyle = plein(tete);
     g.beginPath();
@@ -1197,7 +1255,7 @@ class Apercu {
       go.noyau[1] += GOUTTE_NOYAU_ELAN[1] * el.drop;
       for (const q of go.perles) q.ecart[1] += GOUTTE_PERLE_ELAN[1] * el.drop;
       for (let i = 0; i < GOUTTE_BULLES; i++) {
-        const a = (i * TAU) / GOUTTE_BULLES + tire([-0.3, 0.3]), v = tire(GOUTTE_BULLE_VITESSE) * el.drop;
+        const a = (i * TAU) / GOUTTE_BULLES + tire([-0.3, 0.3]), v = tire(GOUTTE_BULLE_VITESSE) * Math.min(el.drop, 1);
         go.bulles.push({ x: 0, y: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: tire(GOUTTE_BULLE_RAYON), ne: t, vie: tire(GOUTTE_BULLE_VIE) });
       }
       go.bulles = go.bulles.slice(-2 * GOUTTE_BULLES);
@@ -1279,12 +1337,13 @@ class Apercu {
     g.stroke();
   }
 
-  // Dessin des équerres, du halo et du liseré, puis des figures autour de (cx, cy) (comme
-  // figures::Figures::dessiner) : chacune dans sa pose (tournée, agrandie et déplacée autour du
-  // centre, traits épaissis, opacité) et sa teinte, ajoutée à celle de l'essaim.
-  dessinerFigures(g, cx, cy, S, tete, queue) {
+  // Dessin des figures autour de leur centre (comme figures::Figures::dessiner) : chacune dans sa
+  // pose (tournée, agrandie et déplacée autour du centre, traits épaissis, opacité) et sa teinte,
+  // ajoutée à celle de l'essaim.
+  dessinerFigures(g, S) {
     const c = this.reglages, f = this.figures, t = this.t;
-    this.dessinerLoin(g, S, tete, queue);
+    if (!f.centre) return;
+    const [cx, cy] = f.centre;
     for (const i of ORDRE_FIGURES) {
       const sec = c[FIGURES[i]];
       if (!sec || !sec.actif) continue;
@@ -1304,8 +1363,8 @@ class Apercu {
     }
   }
 
-  // Repère de place (grand aperçu, panneau d'une figure active) : une croix au pointeur et, en
-  // pointillés fins, le cadre de la zone de la figure une fois posée (échelle, décalage ; si elle
+  // Repère de place (grand aperçu, panneau d'une figure active) : une croix au pointeur de l'essaim
+  // et, en pointillés fins, le cadre de la zone de la figure une fois posée (échelle, décalage ; si elle
   // tourne, le carré que balaie sa zone). Dessiné par-dessus l'image déjà faite, sans rien changer
   // au calcul : ni les vignettes ni l'export GIF (pris avant) ne l'ont. `couleur` : couleur CSS.
   dessinerRepere(section, couleur) {
@@ -1337,9 +1396,11 @@ class Apercu {
         }
         z = [z[0] * a.echelle + a.decalage_x, z[1] * a.echelle + a.decalage_y, z[2] * a.echelle + a.decalage_x, z[3] * a.echelle + a.decalage_y];
       }
+      // autour du centre des figures, qui suit la souris avec du retard ; le pendule, à son ancre
+      const [zx, zy] = (geometrique(i) && this.figures.centre) || this.pointeurFigures();
       g.setLineDash([3 * d, 3 * d]);
-      const x0 = net(cx + z[0] * S), y0 = net(cy + z[1] * S);
-      g.strokeRect(x0, y0, net(cx + z[2] * S) - x0, net(cy + z[3] * S) - y0);
+      const x0 = net(zx + z[0] * S), y0 = net(zy + z[1] * S);
+      g.strokeRect(x0, y0, net(zx + z[2] * S) - x0, net(zy + z[3] * S) - y0);
     }
     g.restore();
   }
@@ -1363,10 +1424,14 @@ class Apercu {
   sillage(dt) {
     const c = this.reglages, S = this.echelle || 1, cur = this.pointeur, avant = this.pointeurAvant;
     this.pointeurAvant = cur;
-    if (!c.sillage || !c.sillage.actif || !cur || !avant || !(dt > 0)) return;
+    if (!c.sillage || !c.sillage.actif || !cur || !avant || !(dt > 0)) { this.resteSillage = 0; return; }
     const dx = cur[0] - avant[0], dy = cur[1] - avant[1], dist = Math.hypot(dx, dy);
-    if (!(dist / Math.max(dt, 1e-3) > 700 * S && dist < 600 * S)) return;
-    const n = Math.min(14, Math.round((Math.min(10, Math.max(1, c.sillage.densite)) * dist) / (60 * S)));
+    if (!(dist / Math.max(dt, 1e-3) > 700 * S && dist < 600 * S)) { this.resteSillage = 0; return; }
+    // la part fractionnaire des grains passe à l'image suivante (comme `reste_sillage`) : à haute
+    // cadence, chaque image n'en voit qu'une fraction ; au plus 14 grains par image
+    this.resteSillage = (this.resteSillage || 0) + (Math.min(10, Math.max(1, c.sillage.densite)) * dist) / (60 * S);
+    const n = Math.min(14, Math.max(0, Math.floor(this.resteSillage)));
+    this.resteSillage = Math.min(this.resteSillage - n, 1);
     for (let i = 0; i < n; i++) {
       const f = (i + Math.random()) / Math.max(n, 1);
       const a = entre(0, TAU), v = entre(5, 30) * S;
@@ -1600,7 +1665,14 @@ class Apercu {
   // chance (comme Swarm::declencher).
   declencher(nom, p, t) {
     const liste = (this.reglages.declencheurs || {}).liste || [];
-    if (this.derniers.length !== liste.length) this.derniers = liste.map(() => -Infinity);
+    // délais rattachés à chaque déclencheur (quand, faire), pas à sa place : une liste changée
+    // (ajout, retrait, ordre, autre preset) les remet tous à zéro ; seuls force ou délai changés,
+    // on les garde (comme `cles_declencheurs` de Swarm::declencher)
+    const cles = liste.map((d) => `${d.quand}\u0000${d.faire}`);
+    if (!this.clesDeclencheurs || cles.length !== this.clesDeclencheurs.length || cles.some((k, i) => k !== this.clesDeclencheurs[i])) {
+      this.clesDeclencheurs = cles;
+      this.derniers = cles.map(() => -Infinity);
+    }
     liste.forEach((d, i) => {
       if (d.quand !== nom || ((d.delai || 0) > 0 && t - this.derniers[i] < d.delai)) return;
       if ((d.probabilite ?? 1) < 1 && Math.random() >= d.probabilite) return;
@@ -1696,8 +1768,8 @@ class Apercu {
     if (force > 0) this.env = Math.max(this.env, force);
   }
 
-  // Dessin, dans l'ordre de Swarm::draw ; le pointeur (absent du vrai essaim : c'est celui de
-  // Windows) est ajouté au centre, par-dessus.
+  // Dessin, dans l'ordre de l'écran (main.rs, puis Swarm::draw pour l'essaim) ; le pointeur (absent
+  // du vrai essaim : c'est celui de Windows) est ajouté au centre, par-dessus.
   dessiner() {
     if (!this.reglages) return;
     const g = this.ctx, c = this.reglages, t = this.t, S = this.echelle || 1;
@@ -1753,7 +1825,6 @@ class Apercu {
     };
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
     const lueur = 0.4 + 0.6 * this.env, tete = couleur(1), duree = Math.max(0.1, c.essaim.duree);
-    // anneau de spectre puis réticule, sous l'essaim (comme Effets::dessiner)
     const trait = (a, b, largeur, rgb, al) => {
       g.strokeStyle = rgba(rgb, al);
       g.lineWidth = largeur;
@@ -1762,8 +1833,29 @@ class Apercu {
       g.lineTo(b[0], b[1]);
       g.stroke();
     };
-    this.dessinerFigures(g, cx, cy, S, tete, couleur(0));
-    this.dessinerEtiquette(g, cx, cy, S, tete);
+    // dans l'ordre de l'écran (main.rs) : équerres, halo et liseré, fissures, figures, spectre et
+    // réticule (Effets::dessiner), l'essaim, puis l'étiquette par-dessus tout
+    this.dessinerLoin(g, S, tete, couleur(0));
+    // fissures : trait sombre, reflet, lueur colorée au début, fondu sur la fin
+    const vieFissure = Math.max(0.2, (c.fissures || {}).duree || 3);
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    for (const f of this.fissures) {
+      const age = t - f.ne, al = Math.min(1, vieFissure - age), lueurF = Math.max(0, 1 - age / 0.45, this.env * 0.6);
+      // largeurs à l'échelle de l'écran (Crack::a_l_echelle) : éclat 3,5 puis 1,2, reflet décalé de
+      // 0,8, au moins 0,5 de large
+      for (const [rgb, largeur, a, d] of [[[20, 20, 28], 2.4 * S, 0.8, 0], [tete, 3.5 * S, 0.3 * lueurF, 0], [tete, 1.2 * S, lueurF, 0], [[170, 185, 250], Math.max(0.84 * S, 0.5 * S), 0.25, 0.8 * S]]) {
+        g.strokeStyle = rgba(rgb, a * al);
+        g.lineWidth = largeur;
+        for (const b of f.branches) {
+          g.beginPath();
+          g.moveTo(b[0][0] + d, b[0][1] + d);
+          for (const q of b.slice(1)) g.lineTo(q[0] + d, q[1] + d);
+          g.stroke();
+        }
+      }
+    }
+    this.dessinerFigures(g, S);
     g.lineCap = "round";
     g.lineJoin = "round";
     const sp = c.spectre;
@@ -1782,21 +1874,6 @@ class Apercu {
         const a = [cx + dx * vide, cy + dy * vide], b = [cx + dx * long, cy + dy * long];
         if (env > 0.02) trait(a, b, (re.epaisseur + RETICULE_LUEUR) * S, tete, 0.3 * env * re.opacite);
         trait(a, b, re.epaisseur * S, tete, re.opacite * (0.6 + 0.4 * env));
-      }
-    }
-    // fissures, sous l'essaim : trait sombre, reflet, lueur colorée au début, fondu sur la fin
-    const vieFissure = Math.max(0.2, (c.fissures || {}).duree || 3);
-    for (const f of this.fissures) {
-      const age = t - f.ne, al = Math.min(1, vieFissure - age), lueurF = Math.max(0, 1 - age / 0.45, this.env * 0.6);
-      for (const [rgb, largeur, a] of [[[20, 20, 28], 2.4 * S, 0.8], [tete, 3.2 * S, 0.5 * lueurF], [[170, 185, 250], 0.9 * S, 0.5]]) {
-        g.strokeStyle = rgba(rgb, a * al);
-        g.lineWidth = largeur;
-        for (const b of f.branches) {
-          g.beginPath();
-          g.moveTo(b[0][0], b[0][1]);
-          for (const q of b.slice(1)) g.lineTo(q[0], q[1]);
-          g.stroke();
-        }
       }
     }
     const tetes = [];
@@ -1930,6 +2007,7 @@ class Apercu {
       }
     }
     for (const h of tetes) if (h.devant) dessinerTete(h);
+    this.dessinerEtiquette(g, cx, cy, S, tete);
     // le pointeur, au centre : le curseur Windows du preset (point chaud au centre), sinon un point
     const cur = this.curseur;
     if (cur) {

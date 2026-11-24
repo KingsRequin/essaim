@@ -127,7 +127,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
   mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
   précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
-  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`). Avec `[couleur] pochette`, la
+  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`, montrée seulement quand Prisme
+  répond). Avec `[couleur] pochette`, la
   teinte dominante de la pochette du morceau qui joue (Spotify, navigateur… : tout ce que montre
   le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
   sans morceau, on retombe sur eux, dans cet ordre. Pour que la teinte glisse avec la musique :
@@ -390,12 +391,13 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *02 Réglages* : des sous-onglets rangés par familles repliables (seule celle du panneau
     ouvert est dépliée d'office ; l'en-tête compte les effets actifs) : *L'essaim* (*Orbite*,
     *Comètes*, *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*,
-    *Particules*, *Fissures*, *Réticule et projecteur*), *Figures* (*Spectre*, *Arcs*,
+    *Particules*, *Fissures*, *Réticule et projecteur*, *Barres de spectre*), *Figures* (*Arcs*,
     *Quatre temps*, *Anneau* (formes lisse et spectre), *Ligne de voix*, *Trame*, *Trait*, *Pendule*,
-    *Gouttes* ; sous *+ Avancé*, leur teinte, rotation, place et réactions, et un bouton qui
-    leur ajoute une modulation), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
+    *Gouttes* ; sous *+ Avancé*, leur échelle, teinte, rotation, place et réactions, et un bouton
+    qui leur ajoute une modulation ; seuls les paramètres qui agissent sur la figure sont proposés), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* (*Écoute*, *Étiquette du morceau*) et
-    *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
+    *Cet ordinateur* (le dessin de l'essaim sur ce PC ; liens vers les pauses, la capture et les
+    pauses par application) ; les panneaux hors presets le disent dans leur en-tête ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un
     réglage sans effet (densité du sillage sans sillage…), est estompé mais reste réglable. Chaque
@@ -406,7 +408,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *+* : seuil, lissage, à l'envers) ; des idées à ajouter d'un clic. Sous l'aperçu, *Simuler* :
     une montée suivie du drop (4 s), un kick, une caisse claire, un temps, un changement de piste,
     pour voir les réactions sans attendre la musique ; tant qu'un morceau joue, l'aperçu suit le
-    vrai son, même entre deux coups. *Image…* ouvre
+    vrai son, même entre deux coups ; écoute coupée, les aperçus restent muets. *Image…* ouvre
     *Trajet d'une image* : une image (choisie, ou glissée sur la fenêtre : PNG, JPEG, GIF, WebP,
     BMP, SVG, ICO, 20 Mo au plus), ou un texte, un emoji ; ses contours s'affichent sur l'image et
     l'essaim les parcourt dans un aperçu. *Seuil* (calculé : *Auto*), *Inverser* (la forme est de
@@ -457,7 +459,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
-    respirent au tempo) ; *Viseur* (réticule) ; *Spectre* (anneau de spectre) ; *Comète* (une
+    respirent au tempo) ; *Viseur* (réticule) ; *Spectre* (barres de spectre) ; *Comète* (une
     comète qui traîne derrière la souris) ; *Néon* (Lissajous magenta et vert) ; *Arcade* (carré
     vert phosphore) ; *Orage* (astroïde bleu, fissures au hasard) ; *Delta* (triangle qui pivote au
     kick) ; *Ruche* (hexagone ambre relié) ; *Huit* (penche du côté qui joue) ; *Spirale* (quatre

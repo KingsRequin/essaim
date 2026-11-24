@@ -203,7 +203,11 @@ impl Fenetre {
 
     fn etat(&mut self) {
         self.dates = dates();
-        let cfg = Config::read(&config::path()).unwrap_or_default();
+        // un fichier illisible (faute de frappe) : la page le dit, au lieu de montrer et
+        // d'enregistrer des réglages par défaut sans rapport avec ce qui tourne
+        let lu = Config::read(&config::path());
+        let illisible = lu.as_ref().err().map(|e| e.to_string());
+        let cfg = lu.unwrap_or_default();
         let liste = profils::list();
         let actif = liste.iter().find(|p| profils::same(&p.cfg, &cfg)).map(|p| p.name.clone());
         // sans preset identique : le plus proche, s'il ne diffère que de quelques réglages
@@ -228,6 +232,8 @@ impl Fenetre {
             "defauts": Config::default(),
             "demarrage": demarrage_actif(),
             "version": env!("CARGO_PKG_VERSION"),
+            "illisible": illisible,
+            "prisme": crate::prisme::present(),
         }));
     }
 
@@ -298,7 +304,13 @@ impl Fenetre {
                 self.etat();
             }
             Demande::Enregistrer { nom, publier } => {
-                let mut cfg = Config::read(&config::path()).unwrap_or_default();
+                let mut cfg = match Config::read(&config::path()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.erreur(&format!("Preset non enregistré : config.toml est illisible ({e}). Corrige le fichier d'abord."));
+                        return;
+                    }
+                };
                 // le preset garde le jeu de curseurs installé en ce moment
                 cfg.souris.jeu = crate::souris::actuel();
                 match profils::save(&nom, &cfg) {
@@ -322,7 +334,9 @@ impl Fenetre {
                 Err(e) => self.erreur(&format!("{}.", majuscule(&e))),
             },
             Demande::Installer { nom, reglages, appliquer } => {
-                let cfg = serde_json::from_value::<Config>(reglages).map_err(|e| format!("preset illisible ({e})"));
+                // comme un fichier importé : réglages d'avant convertis, puis bornés (sinon le
+                // même preset, réinstallé, ne serait plus reconnu)
+                let cfg = config_distante(reglages);
                 // un preset de l'utilisateur du même nom (à la casse près) n'est pas écrasé
                 match cfg.and_then(|cfg| profils::ajouter(&nom, &cfg).map(|n| (n, cfg))) {
                     Ok((nom, cfg)) => {
@@ -428,7 +442,9 @@ impl Fenetre {
                 self.importer(&presets);
             }
             Demande::Contours { largeur, hauteur, pixels, seuil, inverser, tous } => {
-                let px = depuis_base64(&pixels).filter(|px| largeur * hauteur <= 1024 * 1024 && px.len() == largeur * hauteur * 4);
+                // dimensions bornées avant de les multiplier (pas de débordement)
+                let taille = (largeur <= 4096 && hauteur <= 4096).then(|| largeur * hauteur).filter(|&n| n <= 1024 * 1024);
+                let px = depuis_base64(&pixels).filter(|px| taille.is_some_and(|n| px.len() == n * 4));
                 match px {
                     Some(px) => {
                         let r = crate::contours::contours(&px, largeur, hauteur, &crate::contours::Options { seuil, inverser, tous });
@@ -612,6 +628,7 @@ impl Fenetre {
                 "lecture": crate::media::en_lecture(),
                 "pistes": crate::media::pistes(),
                 "raison": crate::charge::raison(),
+                "prisme": crate::prisme::present(),
             }));
             if dates() != self.dates {
                 self.etat();
@@ -1097,6 +1114,15 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
         }
         DefWindowProcW(hwnd, msg, wp, lp)
     }
+}
+
+/// Réglages d'un preset reçus de la page (bibliothèque) : convertis comme un fichier importé
+/// (`migration::migrer` : réactions d'avant les modulations), puis bornés (`clamped`).
+fn config_distante(reglages: Value) -> Result<Config, String> {
+    let mut t: toml::Table = toml::Table::try_from(reglages).map_err(|e| format!("preset illisible ({e})"))?;
+    crate::migration::migrer(&mut t);
+    use serde::Deserialize;
+    Config::deserialize(t).map(Config::clamped).map_err(|e| format!("preset illisible ({e})"))
 }
 
 #[cfg(test)]

@@ -84,8 +84,8 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | ✨ **Highs** | Hi-hats and cymbals throw sparks |
 | 🟦 **Snare** | A glowing square opens under the pointer on every snare or clap |
 | 🚀 **Build-up and drop** | The swarm tightens and speeds up during the build-up, then bursts on the drop |
-| ⏱️ **Tempo** | The swarm keeps pulsing through breaks without a kick drum; optionally, the heads pulse on the off-beats |
-| 🎧 **Stereo** | Optionally, the swarm leans towards the louder side |
+| ⏱️ **Tempo** | The swarm keeps pulsing through breaks without a kick drum; with a modulation, the heads also pulse on the off-beats |
+| 🎧 **Stereo** | With a modulation (idea *Penche vers le côté qui joue*), the swarm leans towards the louder side |
 | ⚡ **Triggers** | When an event happens (kick, snare, hi-hat, drop, beat, off-beat, break, track change, click, right click), an action: flash, shockwave, shards, sparks, square, crack, implosion, satellites, explosion, burst, reversed rotation, border lighting up, orbit bounce, rotation push, brake; with a minimum delay and a chance ("one kick in three") |
 | 🎗️ **Ribbons and springs** | Comets as twisting ribbons, with no white head; or the whole swarm on springs: the orbit bounces on the kick instead of reversing, heads stretch as they speed up, satellites are born at the center |
 | 🎛️ **Modulations** | A part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, off-beat, tempo, brightness, stereo) drives the path rotation, speed, acceleration, radius, size, hue, offset, glow, trail or opacity, of the comets, the satellites or both; with a threshold, smoothing, and inverted if you like |

@@ -267,6 +267,9 @@ fn ecrire_alias(section: &str, cle: &str, valeur: &Value) -> Result<(), String> 
                 l.remove(i);
             }
             (Some(i), false) => l[i].quantite = q,
+            // liste pleine : la modulation d'avant n'est pas ajoutée (elle ferait tomber la
+            // dernière de l'utilisateur à la relecture)
+            (None, false) if l.len() >= crate::config::MODULATIONS_MAX => {}
             (None, false) => l.insert(0, Modulation { source, cible, sur: Groupe::Tout, quantite: q, ..Default::default() }),
             (None, true) => {}
         }
