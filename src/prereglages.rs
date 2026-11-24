@@ -830,6 +830,46 @@ pub(crate) fn builtins() -> Vec<Profile> {
             c.gouttes.actif = true;
             teinte(c, 6.0, 0.0, 30.0);
         }),
+        // figures combinées, avec leur allure et leurs modulations : de vraies alternatives à
+        // l'essaim
+        // montre : les arcs tournent lentement autour des quatre temps ; le kick épaissit les
+        // arcs, la montée accélère leur rotation
+        make("Montre", |c| {
+            figure_seule(c);
+            (c.arcs.actif, c.quatre_temps.actif) = (true, true);
+            (c.arcs.rayon, c.arcs.allure.rotation, c.arcs.allure.reaction_kick) = (24.0, 4.0, 0.6);
+            c.quatre_temps.allure.teinte = 40.0;
+            c.modulations.liste = vec![ml(S::Kick, Ci::Taille, G::Arcs, 0.5, 0.1), ml(S::Montee, Ci::Acceleration, G::Arcs, 0.8, 0.5)];
+            teinte(c, 205.0, 0.0, 40.0);
+        }),
+        // respiration : l'orbe enfle doucement sur la basse et vire de teinte sur le drop
+        make("Respiration", |c| {
+            figure_seule(c);
+            c.orbe.actif = true;
+            (c.orbe.allure.echelle, c.orbe.allure.reaction_kick) = (0.9, 0.5);
+            c.modulations.liste = vec![ml(S::Basse, Ci::Rayon, G::Orbe, 0.08, 0.7), ml(S::Drop, Ci::Teinte, G::Orbe, 0.35, 0.3), ml(S::Montee, Ci::Rotation, G::Orbe, 0.2, 0.5)];
+            teinte(c, 165.0, 6.0, 50.0);
+        }),
+        // planète : un anneau suiveur décalé sur le côté, avec son pendule ; l'anneau tourne au
+        // drop et s'éloigne avec la stéréo
+        make("Planète", |c| {
+            figure_seule(c);
+            (c.anneau.actif, c.pendule.actif) = (true, true);
+            (c.anneau.rayon, c.anneau.allure.decalage_x, c.anneau.allure.decalage_y) = (9.0, 26.0, -18.0);
+            (c.pendule.longueur, c.pendule.allure.teinte) = (18.0, 150.0);
+            c.modulations.liste = vec![m(S::Stereo, Ci::Decalage, G::Anneau, 0.4), ml(S::Drop, Ci::Rotation, G::Anneau, 0.5, 0.3)];
+            teinte(c, 30.0, 0.0, 0.0);
+        }),
+        // duo : une petite trame et la ligne de voix, dans deux teintes ; la trame réagit fort
+        // au kick, la voix pâlit sans charleston
+        make("Duo", |c| {
+            figure_seule(c);
+            (c.trame.actif, c.voix.actif) = (true, true);
+            (c.trame.rayon, c.trame.allure.echelle, c.trame.allure.reaction_kick) = (36.0, 0.9, 1.5);
+            (c.voix.allure.teinte, c.voix.allure.decalage_y) = (120.0, 8.0);
+            c.modulations.liste = vec![Modulation { inverser: true, ..ml(S::Charleston, Ci::Opacite, G::Voix, -0.4, 0.6) }];
+            teinte(c, 275.0, 0.0, 0.0);
+        }),
     ]
 }
 
@@ -1013,7 +1053,12 @@ mod tests {
     #[test]
     fn modulations_variees() {
         let seules: Vec<Profile> = builtins().into_iter().filter(|p| !p.cfg.orbite.cometes && p.cfg.essaim.maximum + p.cfg.essaim.fixes as usize == 0).collect();
-        assert!(seules.iter().all(|p| p.cfg.modulations.liste.is_empty() && crate::figures::Figures::actives(&p.cfg)), "figure seule avec des modulations, ou sans figure");
+        // une figure seule ne module que ses figures (ni comètes ni satellites à moduler)
+        let pour_figures = |m: &Modulation| (0..crate::config::FIGURES.len()).any(|i| m.sur.vise_figure(i));
+        assert!(seules.iter().all(|p| p.cfg.modulations.liste.iter().all(pour_figures) && crate::figures::Figures::actives(&p.cfg)), "figure seule qui module l'essaim, ou sans figure");
+        // les presets de figures combinées montrent l'allure et les modulations des figures
+        let combinees: Vec<&Profile> = seules.iter().filter(|p| !p.cfg.modulations.liste.is_empty()).collect();
+        assert!(combinees.len() >= 4 && combinees.iter().all(|p| (0..crate::config::FIGURES.len()).filter(|&i| p.cfg.figure(i).0).count() >= 1));
         let b: Vec<Profile> = builtins().into_iter().filter(|p| seules.iter().all(|s| s.name != p.name)).collect();
         let mods: Vec<&Modulation> = b.iter().flat_map(|p| &p.cfg.modulations.liste).collect();
         let sources = [S::Basse, S::Grave, S::Aigu, S::Kick, S::Caisse, S::Charleston, S::Montee, S::Drop, S::Stereo, S::Tempo, S::Contretemps, S::Brillance];

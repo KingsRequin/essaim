@@ -36,7 +36,7 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
 - **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
 - **À ta façon.** 14 formes de trajet, les contours d'une image, d'un texte, d'un emoji ou de
-  l'icône de l'appli au premier plan ; 52 presets fournis, animés en
+  l'icône de l'appli au premier plan ; 56 presets fournis, animés en
   direct ; des déclencheurs (« au drop, une fissure », « sur la caisse claire, des étincelles ») et
   des modulations (« la rotation s'emballe au drop », « l'orbite s'ouvre sur les graves ») pour
   faire ton propre essaim ; des règles « si l'artiste est… alors tel preset » ; chaque réglage
@@ -126,7 +126,7 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 À l'ouverture, le logo s'assemble en orbes, puis le nom file prendre sa place dans
 l'en-tête pendant que la fenêtre se dessine (un clic l'abrège).
 
-**Les presets.** Une grille de 52 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette, rubans, ressorts…), chacun animé
+**Les presets.** Une grille de 56 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette, rubans, ressorts…), chacun animé
 en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
 filtre par forme. Publie-les dans la
 [bibliothèque communautaire](https://github.com/KingsRequin/essaim-presets) et installe ceux des

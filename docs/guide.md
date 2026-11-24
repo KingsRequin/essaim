@@ -450,7 +450,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (52), chacun avec sa forme, ses couleurs, ses effets et ses propres
+  - Préréglages fournis (56), chacun avec sa forme, ses couleurs, ses effets et ses propres
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
@@ -475,7 +475,10 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Ressorts* (l'essaim par défaut, mais l'orbite bondit au kick sans changer de sens et freine
     sur la caisse claire) ; *Rubans* (trois rubans vrillés, sans tête, dans trois teintes fixes) ;
     *Arcs*, *Quatre temps*, *Anneau*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*, *Pendule* et
-    *Gouttes* (chacun une petite figure seule, sans comètes ni satellites).
+    *Gouttes* (chacun une petite figure seule, sans comètes ni satellites) ; *Montre* (des arcs
+    qui tournent autour des quatre temps), *Respiration* (une orbe qui enfle sur la basse et vire
+    au drop), *Planète* (un anneau décalé et son pendule, qui suit la stéréo) et *Duo* (une
+    trame et la ligne de voix) : des figures combinées, avec leur allure et leurs modulations.
     Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
     curseurs, ni à la secousse du projecteur et à sa sensibilité.

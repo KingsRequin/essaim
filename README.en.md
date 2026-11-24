@@ -38,7 +38,7 @@ throw sparks, and on the drop, everything bursts.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
 - **Your way.** 14 path shapes, the outlines of an image, a text, an emoji or the icon of the
-  app in front; 52 bundled presets, animated live;
+  app in front; 56 bundled presets, animated live;
   triggers ("on the drop, a crack", "on the snare, sparks") and modulations ("the rotation spins
   up on the drop", "the orbit opens on low notes") to build your own swarm; "if the artist is…
   then this preset" rules; every setting applied instantly, with its cost shown.
@@ -124,7 +124,7 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 When it opens, the logo assembles out of orbs, then the name slides into the header
 while the window draws itself (a click skips it).
 
-**Presets.** A grid of 52 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art, ribbons, springs…), each animated live with
+**Presets.** A grid of 56 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art, ribbons, springs…), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
 Publish them to the [community library](https://github.com/KingsRequin/essaim-presets) and
 install other people's.
