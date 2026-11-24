@@ -732,6 +732,50 @@ pub(crate) fn builtins() -> Vec<Profile> {
                 d(E::ClicDroit, A::Implosion, 1.0),
             ];
         }),
+        // ressorts : l'essaim par défaut, mais tout a de l'élan : l'orbite bondit au kick sans
+        // changer de sens, freine sur la caisse claire, les têtes s'étirent
+        make("Ressorts", |c| {
+            (c.orbite.nombre, c.orbite.vitesse_base, c.orbite.trainee, c.orbite.inertie) = (3, 3.2, 0.24, 0.3);
+            (c.essaim.duree, c.eclat.taille, c.ressorts.actif) = (2.2, 4.4, true);
+            c.modulations.liste = vec![
+                m(S::Basse, Ci::Vitesse, G::Tout, 0.2),
+                m(S::Grave, Ci::Rayon, G::Tout, 0.09),
+                ml(S::Montee, Ci::Acceleration, G::Tout, 0.45, 0.0),
+                ml(S::Montee, Ci::Rayon, G::Tout, -0.125, 0.4),
+            ];
+            c.declencheurs.liste = vec![
+                d(E::Kick, A::Rebond, 1.0),
+                d(E::Kick, A::Poussee, 1.0),
+                d(E::Kick, A::Eclat, 0.8),
+                sats(E::Kick, 2, 3),
+                d(E::Kick, A::Bordure, 1.0),
+                d(E::Caisse, A::Frein, 1.0),
+                d(E::Charleston, A::Rebond, 0.15),
+                d(E::Drop, A::Rebond, 2.2),
+                d(E::Drop, A::Poussee, 2.0),
+                d(E::Drop, A::Eclat, 1.0),
+                sats(E::Drop, 6, 6),
+                d(E::Clic, A::Rebond, 1.0),
+                d(E::Clic, A::Onde, 1.0),
+                d(E::ClicDroit, A::Implosion, 1.0),
+            ];
+        }),
+        // rubans : trois rubans vrillés, sans tête, dans trois teintes fixes ; ils enflent au
+        // kick, leur vrille avance d'un cran sur la caisse claire
+        make("Rubans", |c| {
+            (c.orbite.forme, c.orbite.rayon, c.orbite.nombre, c.orbite.vitesse_base, c.orbite.trainee) = (Forme::Ellipse, 24.0, 3, 2.0, 0.8);
+            (c.orbite.rotation, c.orbite.inertie, c.essaim.maximum, c.eclat.taille, c.rubans.actif) = (4.0, 0.4, 0, 0.0, true);
+            teinte(c, 251.0, 0.0, 45.0);
+            (c.couleur.palette, c.couleur.ecart_palette) = (3, 59.0);
+            c.modulations.liste = vec![
+                m(S::Basse, Ci::Vitesse, G::Cometes, 0.085),
+                m(S::Basse, Ci::Taille, G::Cometes, 0.4),
+                ml(S::Kick, Ci::Taille, G::Cometes, 0.35, 0.0),
+                ml(S::Montee, Ci::Rayon, G::Tout, -0.125, 0.4),
+                ml(S::Montee, Ci::Acceleration, G::Tout, 0.6, 0.0),
+            ];
+            c.declencheurs.liste = vec![d(E::Kick, A::Bordure, 0.8), d(E::Drop, A::Rebond, 1.2), d(E::Clic, A::Onde, 0.8), d(E::ClicDroit, A::Implosion, 0.8)];
+        }),
     ]
 }
 

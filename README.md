@@ -36,7 +36,7 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
 - **Léger.** Dessiné par la carte graphique : 0,31 ms de calcul par image au banc d'essai, environ
   3 % d'un cœur du processeur en usage. Il s'endort quand un jeu ou une vidéo passe en plein écran.
 - **À ta façon.** 14 formes de trajet, les contours d'une image, d'un texte, d'un emoji ou de
-  l'icône de l'appli au premier plan ; 41 presets fournis, animés en
+  l'icône de l'appli au premier plan ; 43 presets fournis, animés en
   direct ; des déclencheurs (« au drop, une fissure », « sur la caisse claire, des étincelles ») et
   des modulations (« la rotation s'emballe au drop », « l'orbite s'ouvre sur les graves ») pour
   faire ton propre essaim ; des règles « si l'artiste est… alors tel preset » ; chaque réglage
@@ -86,7 +86,8 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | 🚀 **Montée et drop** | L'essaim se resserre et accélère pendant la montée, puis explose au drop |
 | ⏱️ **Tempo** | L'essaim continue de pulser pendant les breaks sans grosse caisse ; en option, les têtes pulsent sur les contretemps |
 | 🎧 **Stéréo** | En option, l'essaim penche vers le côté qui joue le plus fort |
-| ⚡ **Déclencheurs** | Quand un événement arrive (kick, caisse claire, charleston, drop, temps, contretemps, break, changement de piste, clic, clic droit), une action : éclat, onde, éclats, étincelles, carré, fissure, implosion, satellites, explosion, rafale, inversion du sens, bordure qui s'illumine ; avec un délai minimal et une chance (« un kick sur trois ») |
+| ⚡ **Déclencheurs** | Quand un événement arrive (kick, caisse claire, charleston, drop, temps, contretemps, break, changement de piste, clic, clic droit), une action : éclat, onde, éclats, étincelles, carré, fissure, implosion, satellites, explosion, rafale, inversion du sens, bordure qui s'illumine, rebond de l'orbite, poussée de la rotation, coup de frein ; avec un délai minimal et une chance (« un kick sur trois ») |
+| 🎗️ **Rubans et ressorts** | Les comètes en rubans vrillés, sans tête blanche ; ou tout l'essaim sur ressorts : l'orbite rebondit au kick au lieu de changer de sens, les têtes s'étirent dans leur élan, les satellites naissent du centre |
 | 🎛️ **Modulations** | Un élément du son (basse, note grave ou aiguë, kick, caisse claire, charleston, montée, drop, contretemps, tempo, brillance, stéréo) fait varier la rotation du trajet, la vitesse, l'accélération, le rayon, la taille, la teinte, le décalage, la lueur, la traînée ou l'opacité, des comètes, des satellites ou des deux ; avec un seuil, un lissage, et à l'envers si on veut |
 | 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
 
@@ -123,7 +124,7 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 À l'ouverture, le logo s'assemble en orbes, puis le nom file prendre sa place dans
 l'en-tête pendant que la fenêtre se dessine (un clic l'abrège).
 
-**Les presets.** Une grille de 41 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette…), chacun animé
+**Les presets.** Une grille de 43 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette, rubans, ressorts…), chacun animé
 en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
 filtre par forme. Publie-les dans la
 [bibliothèque communautaire](https://github.com/KingsRequin/essaim-presets) et installe ceux des

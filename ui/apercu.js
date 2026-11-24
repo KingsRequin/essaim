@@ -35,6 +35,11 @@ const BANDES_MAX = 32;
 const MODULATION = {
   rotation: 90, vitesse: 40, acceleration: 2, rayon: 4, taille: 1.5, teinte: 180, decalage: 1.6, luminosite: 2, trainee: 3, opacite: 1,
 };
+// Ressorts et rubans : comme REBOND, POUSSEE, FREIN, TREMBLE, SAT_RESSORT, SAT_ENTREE_SORTIE,
+// SAT_FONTE, SAT_TRAIL_RESSORTS, ETIREMENT, ANNEAU_RESSORTS, VRILLE et RUBAN_MORCEAU de render.rs.
+const REBOND = 6.67, POUSSEE = [5, 4], FREIN = [0.8, 9], TREMBLE = [0.053, 46];
+const SAT_RESSORT = [10, 16, 0.3], SAT_ENTREE_SORTIE = [0.3, 0.35], SAT_FONTE = 0.6, SAT_TRAIL_RESSORTS = 0.68;
+const ETIREMENT = [0.02, 8.7], ANNEAU_RESSORTS = [5, 4.5], VRILLE = [0.58, 2.4, 1.4], RUBAN_MORCEAU = 2;
 const RETOMBEE = [7, 8, 10, 0.9, 10];
 const SUIVI_MONTEE = 6;
 const LISSAGE = 0.35;
@@ -87,6 +92,34 @@ function effetsModulations(liste, valeurs) {
     e.opacite = borne(e.opacite, 0, 1);
   }
   return r;
+}
+
+// Ressort amorti avancé de dt (comme render::ressort) : x son écart à la cible, v sa vitesse, w sa
+// pulsation, z son amortissement ; en petits pas (w × pas ≤ 0,25). Renvoie [x, v].
+function ressort(x, v, w, z, dt) {
+  const n = Math.min(16, Math.max(1, Math.ceil((w * dt) / 0.25))), h = dt / n;
+  for (let i = 0; i < n; i++) {
+    v += (-w * w * x - 2 * z * w * v) * h;
+    x += v * h;
+  }
+  return Number.isFinite(x) && Number.isFinite(v) ? [x, v] : [0, 0];
+}
+
+// Sortie avec dépassement, de 0 à 1 (comme render::depasse).
+function depasse(k) {
+  const c = 1.70158, u = Math.min(1, Math.max(0, k)) - 1;
+  return 1 + (c + 1) * u * u * u + c * u * u;
+}
+
+// Étirement d'une tête en mode ressorts (comme render::etirement) : de la tête au bout de son
+// étirement, à l'opposé de sa vitesse. `S` : l'échelle de l'aperçu.
+function etirement(tr, S, force) {
+  const n = tr.length;
+  if (n < 2 || !(force > 0)) return [0, 0];
+  const a = tr[n - 2], b = tr[n - 1], dx = b[1] - a[1], dy = b[2] - a[2], dt = b[0] - a[0], d = Math.hypot(dx, dy);
+  if (dt < 1e-4 || d < 1e-3) return [0, 0];
+  const l = Math.min((d / dt) * ETIREMENT[0], ETIREMENT[1] * S) * Math.min(2, force);
+  return [(-dx / d) * l, (-dy / d) * l];
 }
 
 // Événements du son depuis la lecture précédente (comme render::Ecoute) : kicks, caisses
@@ -301,6 +334,15 @@ class Apercu {
     this.angles = [];
     this.rot = 0;
     this.rotSats = 0;
+    // ressorts (render::Swarm) : écart et vitesse du ressort du rayon de chaque groupe, rayon visé
+    // et facteur du rayon à l'image précédente, poussée de la rotation, coup de frein ; vrille des
+    // rubans (saut visé, saut lissé)
+    this.rebond = [[0, 0], [0, 0]];
+    this.cibles = [1, 1];
+    this.facteurs = [1, 1];
+    this.pousse = 0;
+    this.frein = 0;
+    this.vrille = [0, 0];
     // modulations : enveloppes des coups et montée suivie (modulation::Sources), valeur lissée de
     // chaque modulation, effets sur les comètes et les satellites à cette image et à la
     // précédente, teinte de tout ce qui est dessiné
@@ -418,10 +460,16 @@ class Apercu {
     }
   }
 
-  // Satellites nés à `t` (comme Swarm::ajouter_satellites), dans la limite du maximum.
+  // Satellites nés à `t` (comme Swarm::ajouter_satellites), dans la limite du maximum. En mode
+  // ressorts, chacun naît au centre, au bout d'un ressort à lui.
   ajouterSatellites(n, t, maximum) {
+    const ressorts = !!(this.reglages.ressorts || {}).actif;
     for (let j = 0; j < n && this.sats.length < maximum; j++) {
-      this.sats.push({ a: entre(0, TAU), r: entre(0.75, SAT_R_MAX), mul: entre(0.7, 1.3), ne: t, trainee: [], couleur: this.prochaineCouleur++ });
+      const r = entre(0.75, SAT_R_MAX);
+      this.sats.push({
+        a: entre(0, TAU), r, mul: entre(0.7, 1.3), ne: t, trainee: [], couleur: this.prochaineCouleur++,
+        rr: ressorts ? 0 : r, rv: 0, w: ressorts ? entre(SAT_RESSORT[0], SAT_RESSORT[1]) : SAT_RESSORT[0],
+      });
     }
   }
 
@@ -473,6 +521,28 @@ class Apercu {
     this.teinte = effets.teinte;
     // vitesse du trajet de chaque groupe, accélérée (montée…), lissée
     this.spd = this.spd.map((v, g) => finiOu(v + (o.vitesse_base * this.mods[g].acceleration - v) * Math.min(dt * 10, 1), o.vitesse_base));
+    // ressorts : la poussée et le frein retombent ; le rayon de chaque groupe est son rayon modulé
+    // plus l'écart d'un ressort, que les rebonds lancent ; en mode ressorts, tout le rayon passe
+    // par ce ressort (il suit sa cible, tremblement de la montée compris)
+    const re = c.ressorts || {}, ru = c.rubans || {};
+    this.pousse *= Math.exp(-dt * POUSSEE[1]);
+    this.frein *= Math.exp(-dt * FREIN[1]);
+    const raideur = Math.min(30, Math.max(6, finiOu(+re.raideur, 19))), amorti = Math.min(1, Math.max(0.1, finiOu(+re.amorti, 0.26)));
+    const facteursAvant = this.facteurs;
+    this.facteurs = [0, 1].map((g) => {
+      let [ecart, v] = this.rebond[g], cible = this.mods[g].rayon;
+      if (re.actif) {
+        cible += TREMBLE[0] * Math.min(1, Math.max(0, son.tension || 0)) * Math.sin(t * TREMBLE[1]);
+        ecart += this.cibles[g] - cible;
+      }
+      this.rebond[g] = ressort(ecart, v, raideur, amorti, dt);
+      this.cibles[g] = cible;
+      return Math.max(0.05, cible + this.rebond[g][0]);
+    });
+    // vrille des rubans : un cran de plus à chaque caisse claire, rejoint en douceur
+    if (coups.caisses > 0 && ru.actif) this.vrille[0] += VRILLE[2];
+    this.vrille[1] += (this.vrille[0] - this.vrille[1]) * (1 - Math.exp(-dt * 12));
+    if (this.vrille[1] > TAU) this.vrille = [this.vrille[0] - TAU, this.vrille[1] - TAU];
     // comètes : `nombre` par anneau, réparties sur le trajet ; plusieurs contours (une image, une
     // icône, un texte) : un anneau par contour, à sa place
     const contoursCometes = contoursDe(o, o.forme), nContours = Math.max(1, contoursCometes.length);
@@ -490,7 +560,7 @@ class Apercu {
       const base = (g === 1 ? sur !== "cometes" : sur !== "satellites") ? o.rotation || 0 : 0;
       const drot = finiOu(pasRotation(finiOu(rot, 0), base + this.mods[g].rotation, dt), 0);
       return {
-        rot0: finiOu(rot, 0), drot, rayon0: rayon * this.modsAvant[g].rayon, rayon: rayon * this.mods[g].rayon,
+        rot0: finiOu(rot, 0), drot, rayon0: rayon * facteursAvant[g], rayon: rayon * this.facteurs[g],
         dx0: this.modsAvant[g].decalage * rayon, dx: this.mods[g].decalage * rayon,
       };
     };
@@ -526,16 +596,26 @@ class Apercu {
     if (this.fixes.length !== e.fixes) {
       this.fixes = Array.from({ length: e.fixes }, (_, j) => {
         const u = (j * 0.618034) % 1;
-        return { a: j * 2.399963, r: 0.6 + u * (SAT_R_MAX - 0.6), mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [], couleur: j };
+        const r = 0.6 + u * (SAT_R_MAX - 0.6);
+        return { a: j * 2.399963, r, mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [], couleur: j, rr: r, rv: 0, w: SAT_RESSORT[0] };
       });
     }
     // satellites : sur le trajet des comètes, ou le leur, à des distances variées
     const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
-    const vieSats = SAT_TRAINEE * this.mods[1].trainee;
+    const vieSats = SAT_TRAINEE * this.mods[1].trainee * (re.actif ? SAT_TRAIL_RESSORTS : 1);
     // plusieurs contours : chaque satellite suit l'un d'eux, de près
     const listeSats = contoursDe(o, forme), contoursSats = Math.max(1, listeSats.length);
     for (const s of this.sats.concat(this.fixes)) {
-      const contour = contoursSats > 1 ? (s.couleur || 0) % contoursSats : 0, rel = contoursSats > 1 ? 1 + (s.r - 1.3) * 0.25 : s.r;
+      // mode ressorts : le satellite est au bout de son propre ressort, un peu en retard
+      if (re.actif) {
+        const [ecart, v] = ressort(finiOu(s.rr, s.r) - s.r, s.rv || 0, s.w || SAT_RESSORT[0], SAT_RESSORT[2], dt);
+        s.rr = Math.max(0, s.r + ecart);
+        s.rv = v;
+      } else {
+        s.rr = s.r;
+        s.rv = 0;
+      }
+      const contour = contoursSats > 1 ? (s.couleur || 0) % contoursSats : 0, rel = contoursSats > 1 ? 1 + (s.r - 1.3) * 0.25 : s.rr;
       const a0 = s.a, da = wSats * s.mul * dt;
       s.a = reste(a0 + da, TAU);
       const n = sousPas(da, poses[1].rayon * rel * longueurParRadian(listeSats, contour), finSats);
@@ -546,9 +626,10 @@ class Apercu {
     }
   }
 
-  // Vitesse sur le trajet du groupe g, sans le sens (comme Swarm::vitesse).
+  // Vitesse sur le trajet du groupe g, sans le sens (comme Swarm::vitesse) : la poussée s'y
+  // ajoute, le coup de frein en retire une part.
   vitesse(g) {
-    return Math.max(0, this.spd[g] + this.mods[g].vitesse * this.mods[g].acceleration);
+    return Math.max(0, this.spd[g] + this.mods[g].vitesse * this.mods[g].acceleration + this.pousse) * (1 - FREIN[0] * this.frein);
   }
 
   // Enveloppes des coups (`coups` : nouveaux kicks, caisses claires, attaques des aigus, drops,
@@ -616,6 +697,9 @@ class Apercu {
       case "eclat": this.eclater(Math.min(1, force)); break;
       case "satellites": this.ajouterSatellites(Math.floor(entre(lo, hi + 0.999)), t, maximum); break;
       case "inversion": this.dir = -this.dir; break;
+      case "rebond": for (const r of this.rebond) r[1] += REBOND * force; break;
+      case "poussee": this.pousse += POUSSEE[0] * force; break;
+      case "frein": this.frein = Math.max(this.frein, Math.min(1, force)); break;
       case "onde": this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: 0.55, taille: 46 * taille * S, genre: "onde" }); break;
       case "eclats":
         for (let i = 0; i < 16; i++) {
@@ -723,6 +807,20 @@ class Apercu {
         i = fin;
       }
     };
+    // traînée en ruban (render::draw_ruban) : large au milieu, affinée aux deux bouts, sa largeur
+    // ondulant le long de la traînée ; par morceaux de RUBAN_MORCEAU segments
+    const ruban = (tr, vie, large, fin, al, j, plus, [profondeur, phase]) => {
+      if (tr.length < 2) return;
+      const q = tr.map((p) => Math.min(1, Math.max(0, 1 - (t - p[0]) / vie)));
+      for (let i = 0; i + 1 < tr.length;) {
+        const bout = Math.min(i + RUBAN_MORCEAU, tr.length - 1), k = (q[i] + q[bout]) * 0.5;
+        const profil = Math.max(0, Math.sin(Math.PI * k ** 0.75)) ** 0.8, onde = 0.5 + 0.5 * Math.sin(5.5 * k + phase);
+        g.strokeStyle = rgba(teinte(k, j, plus), al);
+        g.lineWidth = Math.max(fin, large * profil * (1 - profondeur * (1 - onde)));
+        ligne(tr, i, bout);
+        i = bout;
+      }
+    };
     const disque = (x, y, r, rgb, a) => {
       g.fillStyle = rgba(rgb, a);
       g.beginPath();
@@ -776,20 +874,40 @@ class Apercu {
     const tetes = [];
     // modulations : taille (têtes et traînées), teinte, lueur, traînée et opacité de chaque groupe
     const [mc, ms] = this.mods;
+    // mode ressorts : têtes étirées dans leur élan, satellites qui entrent en dépassant leur taille
+    // et sortent en fondant, traînées de satellites plus courtes
+    const ressorts = c.ressorts || {}, rubans = c.rubans || {};
+    const queue = (tr) => (ressorts.actif ? etirement(tr, S, finiOu(+ressorts.etirement, 1)) : [0, 0]);
+    const vieSats = SAT_TRAINEE * ms.trainee * (ressorts.actif ? SAT_TRAIL_RESSORTS : 1);
     // satellites (sans halo) ; les permanents restent à 0,8
     for (const s of this.sats.concat(this.fixes)) {
-      const k = Number.isFinite(s.ne) ? 1 - (t - s.ne) / duree : 0.8, al = Math.min(1, k * 1.5) * ms.opacite;
-      trainee(s.trainee, SAT_TRAINEE * ms.trainee, 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
+      let k = 0.8;
+      if (Number.isFinite(s.ne)) {
+        const age = t - s.ne;
+        k = 1 - age / duree;
+        if (ressorts.actif) {
+          const entree = age < SAT_ENTREE_SORTIE[0] ? depasse(age / SAT_ENTREE_SORTIE[0]) : 1;
+          k = (1 - (SAT_FONTE * age) / duree) * entree * Math.min(1, Math.max(0, (duree - age) / SAT_ENTREE_SORTIE[1])) ** 2;
+        }
+      }
+      const al = Math.min(1, k * 1.5) * ms.opacite;
+      trainee(s.trainee, vieSats, 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
       const p = s.trainee[s.trainee.length - 1];
-      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * ms.taille, al, lueur: ms.luminosite, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0, ms.teinte) });
+      if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * ms.taille, al, lueur: ms.luminosite, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0, ms.teinte), queue: queue(s.trainee) });
     }
     // les comètes (devant : sous le centre de l'orbite, comme vues de biais), chacune dans une
-    // teinte de la palette
+    // teinte de la palette. En rubans : une traînée large, vrillée, sans tête
     if (c.orbite.cometes) {
+      const vie = Math.max(0.01, c.orbite.trainee) * mc.trainee, phase = reste(-VRILLE[1] * t, TAU) + this.vrille[1];
       this.trainees.forEach((tr, i) => {
-        trainee(tr, Math.max(0.01, c.orbite.trainee) * mc.trainee, 3.5 * S * mc.taille, mc.opacite, true, i, mc.teinte);
+        if (rubans.actif) {
+          const large = Math.min(14, Math.max(1, finiOu(+rubans.largeur, 4))) * S * mc.taille;
+          ruban(tr, vie, large, 0.6 * S, mc.opacite, i, mc.teinte, [VRILLE[0] * Math.min(1, Math.max(0, finiOu(+rubans.vrille, 1))), phase + 2 * i]);
+        } else {
+          trainee(tr, vie, 3.5 * S * mc.taille, mc.opacite, true, i, mc.teinte);
+        }
         const p = tr[tr.length - 1];
-        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * mc.taille, al: mc.opacite, lueur: mc.luminosite, devant: p[2] > cy, rgb: teinte(1, i, mc.teinte) });
+        if (p) tetes.push({ x: p[1], y: p[2], s: 2.4 * S * mc.taille, al: mc.opacite, lueur: mc.luminosite, devant: p[2] > cy, rgb: teinte(1, i, mc.teinte), queue: queue(tr), cachee: !!rubans.actif });
       });
     }
     // constellation : fines lignes entre les têtes proches (comme render::liens), sous les têtes
@@ -811,21 +929,41 @@ class Apercu {
       }
     }
     const dessinerTete = (h) => {
+      if (h.cachee) return;
+      if (Math.abs(h.queue[0]) + Math.abs(h.queue[1]) > 0.5) {
+        // tête étirée : les mêmes quatre couches, en traits aux bouts ronds
+        const a = [h.x, h.y], b = [h.x + h.queue[0], h.y + h.queue[1]];
+        trait(a, b, h.s * 5.2, h.rgb, 0.12 * h.al * lueur * h.lueur);
+        trait(a, b, h.s * 3.2, h.rgb, 0.3 * h.al * lueur * h.lueur);
+        trait(a, b, h.s * 2, h.rgb, h.al);
+        trait(a, [h.x + h.queue[0] * 0.55, h.y + h.queue[1] * 0.55], h.s * 0.9, [255, 255, 255], h.al);
+        return;
+      }
       disque(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * lueur * h.lueur);
       disque(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * lueur * h.lueur);
       disque(h.x, h.y, h.s, h.rgb, h.al);
       disque(h.x, h.y, h.s * 0.45, [255, 255, 255], h.al);
     };
     for (const h of tetes) if (!h.devant) dessinerTete(h);
-    // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
     const eclat = c.eclat.taille * S;
     if (this.env > 0.02 && c.eclat.taille > 0) {
-      disque(cx, cy, eclat * (2 + 2.5 * this.env), [255, 255, 255], 0.35 * this.env);
-      g.strokeStyle = rgba(tete, 0.8 * this.env);
-      g.lineWidth = 1.5 * S;
-      g.beginPath();
-      g.arc(cx, cy, eclat * (2.5 + 5 * (1 - this.env)), 0, TAU);
-      g.stroke();
+      if (ressorts.actif) {
+        // mode ressorts : un anneau épais qui sort en dépassant puis s'affine, sans halo blanc
+        const k = Math.min(1, Math.max(0, -Math.log(Math.min(1, this.env)) / 3.78));
+        g.strokeStyle = rgba(tete, 0.9 * (1 - k));
+        g.lineWidth = (ANNEAU_RESSORTS[1] * (1 - k) ** 2 + 0.6) * S;
+        g.beginPath();
+        g.arc(cx, cy, Math.max(1, eclat * ANNEAU_RESSORTS[0] * depasse(k)), 0, TAU);
+        g.stroke();
+      } else {
+        // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
+        disque(cx, cy, eclat * (2 + 2.5 * this.env), [255, 255, 255], 0.35 * this.env);
+        g.strokeStyle = rgba(tete, 0.8 * this.env);
+        g.lineWidth = 1.5 * S;
+        g.beginPath();
+        g.arc(cx, cy, eclat * (2.5 + 5 * (1 - this.env)), 0, TAU);
+        g.stroke();
+      }
     }
     // particules : étincelles, ondes de choc, poussière du sillage
     const poussiere = couleur(0.5);

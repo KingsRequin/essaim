@@ -57,9 +57,13 @@ l'ordre de la liste.
   choc), `eclats` (seize étincelles projetées), `fissure`, `implosion` (une onde qui se referme,
   douze étincelles aspirées), `carre` (posé sur la pointe, qui s'ouvre), `etincelles` (`nombre`,
   depuis les têtes), `explosion` (éclat, satellites, grande onde, gerbe d'étincelles depuis le
-  centre), `rafale` (éclat, satellites, grande onde).
-- `force` : pour un éclat ou la bordure, de 0 à 1 ; pour une onde, des éclats, une fissure, un
-  carré, une implosion, de 0,2 à 3 (la taille). `delai` : secondes au moins entre deux fois ;
+  centre), `rafale` (éclat, satellites, grande onde), `rebond` (le rayon de l'orbite part vers
+  l'extérieur, dépasse et revient, comme au bout d'un ressort), `poussee` (la rotation prend de
+  la vitesse, +5 radians/s à la force 1, qui retombe en un quart de seconde), `frein` (la
+  rotation perd d'un coup jusqu'à 80 % de sa vitesse, puis repart).
+- `force` : pour un éclat, la bordure ou le frein, de 0 à 1 ; pour une onde, des éclats, une
+  fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour un rebond ou une poussée, de
+  0,2 à 3 (l'élan). `delai` : secondes au moins entre deux fois ;
   `probabilite` : la chance de se déclencher à chaque événement (0,33 : un sur trois).
 - Un événement ou une action inconnus (preset d'une version plus récente) ne font rien.
 
@@ -125,6 +129,21 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   plusieurs teintes, chacune décalée de `ecart_palette` degrés (120 : trois teintes à égale
   distance) de la teinte de base, qu'elle soit fixe, qui défile ou imposée (application, pochette…).
   Un satellite garde sa teinte toute sa vie.
+- **Rubans** (`[rubans]`, éteints par défaut) : les traînées des comètes deviennent des rubans,
+  larges au milieu (`largeur`, 1 à 14, 4 par défaut), affinés aux deux bouts, sans tête. Leur
+  largeur ondule le long de la traînée comme un ruban qui tourne (`vrille`, 0 = plat, 1 par
+  défaut), et chaque caisse claire fait avancer cette vrille d'un cran. Leur longueur est la
+  traînée des comètes, leurs teintes celles de la palette (une teinte fixe et un *écart
+  tête-queue* donnent un dégradé le long du ruban) ; une modulation de la taille les fait enfler.
+- **Ressorts** (`[ressorts]`, éteints par défaut) : tout prend de l'élan. Le rayon de l'orbite
+  passe par un ressort (`raideur`, 6 à 30, 19 par défaut ; `amorti`, 0,1 = rebondit longtemps,
+  1 = revient sans dépasser, 0,26 par défaut) : ce que les modulations lui demandent, il le fait
+  en dépassant un peu, et il tremble pendant une montée. Les têtes s'étirent à l'opposé de leur
+  vitesse (`etirement`, 0 à 2), les satellites naissent au centre et rejoignent leur orbite chacun
+  au bout de son ressort, entrent en dépassant leur taille et sortent en fondant ; l'éclat devient
+  un anneau épais qui sort en dépassant puis s'affine, sans halo blanc. Les traînées des
+  satellites sont d'un tiers plus courtes (sans inversion du sens, elles restent déployées). Les
+  actions `rebond`, `poussee` et `frein` des déclencheurs marchent aussi sans ce mode.
 - **Constellation** (`[essaim] constellation`) : de fines lignes relient les têtes (satellites et
   comètes) plus proches que 1,1 fois le rayon de l'orbite, d'autant plus vives qu'elles sont
   proches (160 lignes au plus).
@@ -258,7 +277,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
     montre côte à côte avec la liste de leurs réglages différents.
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
-    *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
+    *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
     *Spectre*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
@@ -316,7 +335,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (41), chacun avec sa forme, ses couleurs, ses effets et ses propres
+  - Préréglages fournis (43), chacun avec sa forme, ses couleurs, ses effets et ses propres
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
@@ -337,7 +356,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     chaque temps) ; *Fantôme* (presque invisible sans basse) ; *Anaglyphe* (comètes rouges et
     satellites cyan écartés par la stéréo) ; *Sub* (tout suit la basse) ; *Nuée* (des dizaines de
     satellites) ; *Vortex* (implosions, tout est aspiré) ; *Artifice* (gerbes d'éclats) ;
-    *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort).
+    *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort) ;
+    *Ressorts* (l'essaim par défaut, mais l'orbite bondit au kick sans changer de sens et freine
+    sur la caisse claire) ; *Rubans* (trois rubans vrillés, sans tête, dans trois teintes fixes).
     Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
     curseurs, ni à la secousse du projecteur et à sa sensibilité.

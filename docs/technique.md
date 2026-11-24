@@ -303,6 +303,27 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   début et à la fin de l'image) : le trajet des comètes et celui des satellites tournent chacun
   de leur côté (`[orbite] rotation_sur`). Une modulation de la taille élargit la marge de
   `Swarm::bounds`.
+- **Ressorts** (`[ressorts]`, `render.rs`) : le rayon de chaque groupe est son rayon modulé plus
+  l'écart d'un ressort amorti (`render::ressort` : Euler semi-implicite en petits pas,
+  pulsation × pas ≤ 0,25, stable jusqu'à 20 images/s au ressort le plus raide). L'action `rebond`
+  lui donne un élan (6,67 rayons/s à la force 1 : +25 % de rayon au sommet avec les réglages par
+  défaut). En mode ressorts (`actif`), le ressort suit la cible elle-même (modulations, plus un
+  tremblement de 5 % à 46 rad/s pendant une montée) : tout changement de rayon dépasse puis
+  revient. Sans rebond ni mode ressorts, l'écart reste exactement nul : les presets d'avant ne
+  changent pas (`presets_comme_avant`). `poussee` ajoute 5 radians/s par unité de force (retombée
+  4 par seconde), `frein` retire jusqu'à 80 % de la vitesse (retombée 9 par seconde) ; tous deux
+  passent par `Swarm::vitesse`. En mode ressorts encore : chaque satellite naît au centre, au
+  bout d'un ressort à lui (pulsation tirée de 10 à 16 rad/s, seulement dans ce mode pour ne pas
+  décaler la suite des tirages des autres presets) ; sa taille entre avec dépassement en 0,3 s,
+  fond de 60 % sur sa vie et sort en 0,35 s ; les têtes sont des traits aux bouts ronds, longs de
+  20 ms de trajet (8,7 px au plus à 100 %, fois `etirement`) ; l'éclat est un anneau de 5 tailles
+  d'éclat qui sort avec dépassement, dont l'avancée se lit sur `env` (de 1 à 0,02 en 0,42 s).
+- **Rubans** (`[rubans]`, `render::draw_ruban`) : la traînée d'une comète tracée par morceaux de
+  deux segments, chacun de la largeur de son milieu : `largeur` × sin(π k^0,75)^0,8 (k : 0 en
+  queue, 1 en tête), fois la vrille 1 − 0,58 × `vrille` × (1 − onde), onde = ½ + ½ sin(5,5 k +
+  phase). La phase défile à 2,4 rad/s et saute de 1,4 rad à chaque caisse claire (rejointe en
+  douceur). La tête n'est pas dessinée (elle compte encore pour la constellation). La largeur suit
+  la modulation de la taille et tient dans la marge de `Swarm::bounds`.
 - **Réglages d'avant** (`migration.rs`) : les réactions fixes d'Essaim 0.3 et 0.4 (`[musique]`,
   `[clic]`, `[scintillement]`, `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`,
   `[audio] pulsation_tempo`, `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`,
@@ -393,3 +414,8 @@ la fenêtre (`ui/lancement.js`), jouée sur fond noir par `scripts/images-readme
 photographiée image par image (`rendre.py logo`). Les captures de la
 fenêtre (`presets.png`, `reglages.png`, `curseurs.png`) sont faites à la main, fenêtre en
 1440 × 900.
+
+Pour juger l'allure d'un preset fourni dans le vrai moteur, sans lancer l'appli : le test
+`exporter_planche` dessine six instants du son d'essai (kick, groove, montée, drop, après le
+drop, break) à 200 % sur fond sombre :
+`ESSAIM_PLANCHE=<dossier> ESSAIM_PRESET=Rubans cargo test --release exporter_planche -- --ignored`.

@@ -205,8 +205,8 @@ const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE]
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Icône de l'appli" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
-  "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "audio", "bordure", "souris",
-  "modulations", "declencheurs",
+  "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "audio",
+  "bordure", "souris", "modulations", "declencheurs",
 ];
 // Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
 // (comme profils::in_profile).
@@ -751,6 +751,10 @@ const IMPACT = {
   "orbite.inertie": [1, "estime"],
   "essaim.constellation": [2, "estime"], "couleur.palette": [1, "estime"], "couleur.ecart_palette": [1, "estime"],
   "orbite.rotation_sur": [1, "estime"],
+  // rubans et ressorts : hors du banc (un ruban large pose plus de pastilles qu'une traînée fine)
+  "rubans.actif": [2, "estime"], "rubans.largeur": [2, "estime"], "rubans.vrille": [1, "estime"],
+  "ressorts.actif": [1, "estime"], "ressorts.raideur": [1, "estime"], "ressorts.amorti": [1, "estime"], "ressorts.etirement": [1, "estime"],
+  "action.rebond": [1, "estime"], "action.poussee": [1, "estime"], "action.frein": [1, "estime"],
   // actions des déclencheurs (estimé : une particule de plus ou de moins pèse peu, une gerbe d'étincelles un peu plus)
   "action.eclat": [1, "estime"], "action.satellites": [2, "estime"], "action.inversion": [1, "estime"], "action.bordure": [1, "estime"],
   "action.onde": [1, "estime"], "action.eclats": [2, "estime"], "action.fissure": [2, "estime"], "action.implosion": [1, "estime"],
@@ -808,6 +812,10 @@ const SI = {
   reticule: (r) => !!(r.reticule && r.reticule.actif),
   spectre: (r) => !!(r.spectre && r.spectre.actif) && r.audio.actif,
   palette: (r) => (r.couleur.palette || 1) > 1,
+  rubans: (r) => !!(r.rubans && r.rubans.actif) && r.orbite.cometes,
+  ressorts: (r) => !!(r.ressorts && r.ressorts.actif),
+  // le ressort sert : mode ressorts, ou au moins un rebond dans les déclencheurs
+  ressort: (r) => !!(r.ressorts && r.ressorts.actif) || fait(r, "rebond"),
   // le trajet tourne : rotation réglée, ou modulée
   rotation: (r) => r.orbite.rotation !== 0 || modsDe(r).some((m) => m.cible === "rotation" && m.quantite),
 };
@@ -846,13 +854,16 @@ const EVENEMENTS = [
 const ACTIONS = [
   ["eclat", "Éclat"], ["satellites", "Satellites"], ["inversion", "Inversion du sens"], ["bordure", "Bordure qui s'illumine"], ["onde", "Onde"],
   ["eclats", "Éclats"], ["fissure", "Fissure"], ["implosion", "Implosion"], ["carre", "Carré"], ["etincelles", "Étincelles"],
-  ["explosion", "Explosion"], ["rafale", "Rafale"],
+  ["explosion", "Explosion"], ["rafale", "Rafale"], ["rebond", "Rebond de l'orbite"], ["poussee", "Poussée de la rotation"], ["frein", "Coup de frein"],
 ];
 const NOMS_EVENEMENTS = Object.fromEntries(EVENEMENTS);
 const NOMS_ACTIONS = Object.fromEntries(ACTIONS);
-// force : réglable, et son affichage (éclat et bordure : 0 à 100 % ; tailles : × 0,2 à 3) ;
-// nombre : satellites, étincelles
-const ACTION_FORCE = { eclat: "pourcent", bordure: "pourcent", onde: "fois", eclats: "fois", fissure: "fois", implosion: "fois", carre: "fois", etincelles: "fois", explosion: "fois", rafale: "fois" };
+// force : réglable, et son affichage (éclat, bordure et frein : 0 à 100 % ; tailles, rebond et
+// poussée : × 0,2 à 3) ; nombre : satellites, étincelles
+const ACTION_FORCE = {
+  eclat: "pourcent", bordure: "pourcent", onde: "fois", eclats: "fois", fissure: "fois", implosion: "fois", carre: "fois", etincelles: "fois", explosion: "fois", rafale: "fois",
+  rebond: "fois", poussee: "fois", frein: "pourcent",
+};
 const ACTION_NOMBRE = new Set(["satellites", "etincelles", "explosion", "rafale"]);
 const IMPACT_ACTION = { etincelles: 2, explosion: 2, eclats: 2, fissure: 2 };
 const DECLENCHEURS_MAX = 24;
@@ -863,6 +874,8 @@ const IDEES_DECLENCHEURS = [
   ["Carré sur les contretemps", { quand: "contretemps", faire: "carre", force: 0.7 }],
   ["Éclats sur un kick sur trois", { quand: "kick", faire: "eclats", probabilite: 0.33 }],
   ["Bordure sur la caisse claire", { quand: "caisse", faire: "bordure", force: 0.6 }],
+  ["Rebond de l'orbite au kick", { quand: "kick", faire: "rebond" }],
+  ["Coup de frein sur la caisse claire", { quand: "caisse", faire: "frein" }],
 ];
 
 // Réactions d'avant (comme migration::Ancien), pour un preset de la communauté écrit avant les
@@ -902,8 +915,9 @@ function reactionsAvant(p) {
 }
 
 // Panneaux de l'onglet Réglages, un par effet, rangés par familles (`famille`). `actif` :
-// bascule de l'effet (section, clé) ; `voyant` : l'effet est-il là (sans bascule) ; `si` : le
-// panneau est estompé sans… ; `base` : réglages courants ; `avance` : les autres, sous
+// bascule de l'effet (section, clé) ; `present` : avec une bascule, l'effet est-il là (par
+// défaut : la bascule) ; `voyant` : l'effet est-il là (sans bascule) ; `si` : le panneau est
+// estompé sans… ; `base` : réglages courants ; `avance` : les autres, sous
 // « + Avancé » ; `compact` : la base en lignes (réglages de la machine). Éléments : réglage
 // numérique ({ libelle, section, cle, min, max, pas, aff }), rangée de bascules ({ rangee,
 // puces: [[libellé, section, clé, info], …] }), trajet ({ trajet, section, cle, liste }), choix
@@ -938,6 +952,28 @@ const PANNEAUX = [
     ],
   },
   {
+    id: "rubans", famille: "L'essaim", titre: "Rubans", actif: ["rubans", "actif"], present: SI.rubans,
+    note: "Les traînées des comètes deviennent des rubans : larges au milieu, affinés aux deux bouts, sans tête. Leur longueur est la traînée des comètes, leurs teintes celles de la palette ; une modulation de la taille les fait enfler (au kick, avec la basse). La caisse claire fait avancer leur vrille d'un cran.",
+    base: [
+      { libelle: "Largeur", section: "rubans", cle: "largeur", min: 1, max: 14, pas: 0.5, aff: (v) => virgule(+v, 1) },
+      { libelle: "Vrille", section: "rubans", cle: "vrille", min: 0, max: 1, pas: 0.05, aff: (v) => (+v === 0 ? "plat" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
+    ],
+  },
+  {
+    id: "ressorts", famille: "L'essaim", titre: "Ressorts", actif: ["ressorts", "actif"], present: (r) => SI.ressorts(r) || fait(r, "rebond", "poussee", "frein"),
+    note: "Tout prend de l'élan : l'orbite part, dépasse et revient au lieu de changer d'un coup, les têtes s'étirent dans leur course, les satellites naissent du centre et l'éclat devient un anneau épais, sans halo blanc. Les trois actions ci-dessous marchent aussi sans ce mode.",
+    base: [
+      { quand: ["rebond"], libelle: "L'orbite rebondit quand" },
+      { quand: ["poussee"], libelle: "La rotation est poussée quand" },
+      { quand: ["frein"], libelle: "Coup de frein quand" },
+      { libelle: "Étirement des têtes", section: "ressorts", cle: "etirement", si: SI.ressorts, min: 0, max: 2, pas: 0.1, aff: (v) => (+v === 0 ? "aucun" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
+    ],
+    avance: [
+      { libelle: "Raideur du ressort", section: "ressorts", cle: "raideur", si: SI.ressort, min: 6, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Amorti", section: "ressorts", cle: "amorti", si: SI.ressort, min: 0.1, max: 1, pas: 0.02, aff: (v) => (+v >= 1 ? "sans rebond" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
+    ],
+  },
+  {
     id: "satellites", famille: "L'essaim", titre: "Satellites",
     note: "Les petites traînées qui naissent sur les événements (le kick, par défaut) et vivent quelques secondes, et les satellites permanents, là même sans musique.",
     base: [
@@ -965,7 +1001,7 @@ const PANNEAUX = [
   },
   {
     id: "eclat", famille: "Les effets", titre: "Éclat", voyant: (r) => fait(r, "eclat", "explosion", "rafale") && r.eclat.taille > 0,
-    note: "Un halo blanc et un anneau coloré sous le pointeur, qui font aussi briller les têtes. Bridé en mode sans flashs.",
+    note: "Un halo blanc et un anneau coloré sous le pointeur, qui font aussi briller les têtes. Avec Ressorts : un anneau épais qui sort en dépassant, sans halo. Bridé en mode sans flashs.",
     base: [
       { libelle: "Taille de l'éclat", section: "eclat", cle: "taille", min: 0, max: 12, pas: 0.1, aff: (v) => (+v === 0 ? "—" : virgule(+v, 1)) },
       { quand: ["eclat"], libelle: "Quand" },
@@ -1867,7 +1903,7 @@ function majReglages() {
     if (p.def.si) p.corps.classList.toggle("eteint", !p.def.si(etat.reglages));
     if (p.def.voyant) p.voyant.classList.toggle("allume", !!p.def.voyant(etat.reglages));
     if (!p.def.actif) continue;
-    const actif = !!val(p.def.actif[0], p.def.actif[1]);
+    const actif = p.def.present ? !!p.def.present(etat.reglages) : !!val(p.def.actif[0], p.def.actif[1]);
     p.corps.classList.toggle("eteint", !actif);
     p.voyant.classList.toggle("allume", actif);
   }
@@ -1918,6 +1954,9 @@ function surprise() {
   });
   c.eclat.taille = +r(1.5, 6).toFixed(1);
   c.orbite.rotation_sur = parmi(["tout", "tout", "cometes", "satellites"]);
+  // de temps en temps, des rubans ou des ressorts (si l'appli les connaît)
+  if (c.rubans) Object.assign(c.rubans, { actif: Math.random() < 0.15, largeur: ri(3, 7), vrille: +r(0.4, 1).toFixed(2) });
+  if (c.ressorts) c.ressorts.actif = Math.random() < 0.25;
   // réactions de toujours, plus ou moins fortes, et une fois sur trois une idée en plus pour les
   // modulations et pour les déclencheurs
   const avant = reactionsAvant({ orbite: { vitesse_basse: +r(4, 20).toFixed(1), eloignement_grave: +r(0.4, 2).toFixed(1) }, musique: { contretemps: Math.random() < 0.25 } });

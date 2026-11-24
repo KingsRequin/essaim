@@ -19,6 +19,8 @@ pub struct Config {
     pub projecteur: Projecteur,
     pub reticule: Reticule,
     pub spectre: Spectre,
+    pub rubans: Rubans,
+    pub ressorts: Ressorts,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -109,6 +111,45 @@ pub struct Sillage {
 impl Default for Sillage {
     fn default() -> Self {
         Self { actif: false, densite: 5.0 }
+    }
+}
+
+/// Rubans : les traînées des comètes deviennent des rubans larges, affinés aux deux bouts, qui se
+/// vrillent ; les comètes n'ont alors plus de tête.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Rubans {
+    pub actif: bool,
+    /// Largeur d'un ruban à son plus large (px à 100 %, 1 à 14).
+    pub largeur: f32,
+    /// Vrille : 0 = ruban plat, 1 = sa largeur ondule le long de la traînée, comme un ruban qui tourne.
+    pub vrille: f32,
+}
+
+impl Default for Rubans {
+    fn default() -> Self {
+        Self { actif: false, largeur: 4.0, vrille: 1.0 }
+    }
+}
+
+/// Ressorts : le rayon de l'orbite passe par un ressort (il part, dépasse, revient), les têtes
+/// s'étirent dans leur élan, les satellites naissent du centre et l'éclat devient un anneau épais.
+/// Les actions `rebond`, `poussee` et `frein` des déclencheurs agissent même sans ce mode.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Ressorts {
+    pub actif: bool,
+    /// Raideur du ressort : sa pulsation (radians/s, 6 à 30). Plus raide, il revient plus vite.
+    pub raideur: f32,
+    /// Amortissement (0,1 à 1) : 0,1 rebondit longtemps, 1 revient sans dépasser.
+    pub amorti: f32,
+    /// Étirement des têtes dans le sens de leur vitesse (0 = rondes, 2 = très étirées).
+    pub etirement: f32,
+}
+
+impl Default for Ressorts {
+    fn default() -> Self {
+        Self { actif: false, raideur: 19.0, amorti: 0.26, etirement: 1.0 }
     }
 }
 
@@ -680,6 +721,12 @@ pub enum Action {
     Explosion,
     /// Rafale : éclat, satellites et grande onde.
     Rafale,
+    /// Rebond de l'orbite : son rayon part vers l'extérieur, dépasse et revient (`[ressorts]`).
+    Rebond,
+    /// Poussée : la rotation prend de la vitesse, qui retombe.
+    Poussee,
+    /// Coup de frein : la rotation ralentit d'un coup, puis repart.
+    Frein,
     #[serde(other)]
     Aucune,
 }
@@ -922,6 +969,17 @@ taille = 1.0            # taille des ondes, des éclats et des implosions (0.3 �
 actif = false           # poussière derrière la souris quand elle file vite
 densite = 5             # 1 à 10
 
+[rubans]
+actif = false           # les traînées des comètes deviennent des rubans, sans tête
+largeur = 4             # largeur d'un ruban à son plus large (1 à 14)
+vrille = 1              # 0 = ruban plat, 1 = il se vrille
+
+[ressorts]
+actif = false           # l'orbite rebondit, les têtes s'étirent, les satellites naissent du centre
+raideur = 19            # pulsation du ressort (6 à 30) : plus raide, il revient plus vite
+amorti = 0.26           # 0.1 = rebondit longtemps, 1 = revient sans dépasser
+etirement = 1           # étirement des têtes dans leur élan (0 = rondes, 2 = très étirées)
+
 [modulations]
 # Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
 # satellites ou tout (16 au plus) :
@@ -951,8 +1009,9 @@ liste = [
 #   quand    : kick, caisse, charleston (aigus), drop, temps, break (temps sans kick),
 #              contretemps, piste (changement de piste), clic, clic_droit
 #   faire    : eclat, satellites, inversion (du sens), bordure, onde, eclats, fissure, implosion,
-#              carre, etincelles, explosion, rafale
-#   force    : 0 à 3 (éclat et bordure : 0 à 1) ; nombre, nombre_max : satellites, étincelles
+#              carre, etincelles, explosion, rafale, rebond (de l'orbite), poussee (de la
+#              rotation), frein
+#   force    : 0 à 3 (éclat, bordure et frein : 0 à 1) ; nombre, nombre_max : satellites, étincelles
 #   delai    : secondes au moins entre deux fois ; probabilite : chance à chaque fois (0 à 1)
 # Par défaut, les réactions de toujours.
 liste = [
@@ -1082,6 +1141,11 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("spectre", "bandes") => (8.0, 32.0),
         ("spectre", "rayon") => (10.0, 150.0),
         ("spectre", "hauteur") => (4.0, 100.0),
+        ("rubans", "largeur") => (1.0, 14.0),
+        ("rubans", "vrille") => (0.0, 1.0),
+        ("ressorts", "raideur") => (6.0, 30.0),
+        ("ressorts", "amorti") => (0.1, 1.0),
+        ("ressorts", "etirement") => (0.0, 2.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -1664,6 +1728,38 @@ mod tests {
         // la secousse et sa sensibilité sont propres à l'utilisateur : hors presets
         assert!(!crate::profils::in_profile("projecteur", "secousse") && !crate::profils::in_profile("projecteur", "sensibilite"));
         assert!(crate::profils::in_profile("projecteur", "taille") && crate::profils::in_profile("reticule", "vide"));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn rubans_et_ressorts_lus_bornes_et_gardes_dans_les_presets() {
+        use super::Action;
+        // fichier par défaut : mêmes valeurs que les réglages par défaut, effets éteints
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        let d = super::Config::default();
+        assert_eq!((c.rubans.actif, c.ressorts.actif), (false, false));
+        assert_eq!((c.rubans.largeur, c.rubans.vrille), (d.rubans.largeur, d.rubans.vrille));
+        assert_eq!((c.ressorts.raideur, c.ressorts.amorti, c.ressorts.etirement), (d.ressorts.raideur, d.ressorts.amorti, d.ressorts.etirement));
+        // valeurs absurdes ramenées dans leurs bornes
+        let texte = "[rubans]\nlargeur = 400\nvrille = -3\n[ressorts]\nraideur = 0\namorti = 9\netirement = 50";
+        let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
+        assert_eq!((c.rubans.largeur, c.rubans.vrille), (14.0, 0.0));
+        assert_eq!((c.ressorts.raideur, c.ressorts.amorti, c.ressorts.etirement), (6.0, 1.0, 2.0));
+        // les trois actions des ressorts se lisent ; une action d'une version plus récente ne fait rien
+        let c = super::de_texte("[declencheurs]\nliste = [{ quand = \"kick\", faire = \"rebond\" }, { quand = \"kick\", faire = \"poussee\" }, { quand = \"caisse\", faire = \"frein\" }, { quand = \"kick\", faire = \"demain\" }]").unwrap();
+        let actions: Vec<Action> = c.declencheurs.liste.iter().map(|d| d.faire).collect();
+        assert_eq!(actions, [Action::Rebond, Action::Poussee, Action::Frein, Action::Aucune]);
+        // config d'avant ces sections : écrire un réglage les ajoute ; ils font partie des presets
+        let p = std::env::temp_dir().join(format!("essaim-test-rubans-{}.toml", std::process::id()));
+        std::fs::write(&p, "[orbite]\nrayon = 30\n").unwrap();
+        super::set_value_in(&p, "rubans", "actif", &serde_json::json!(true)).unwrap();
+        super::set_value_in(&p, "ressorts", "raideur", &serde_json::json!(24)).unwrap();
+        assert!(super::set_value_in(&p, "ressorts", "amorti", &serde_json::json!(0.0)).is_err());
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!((c.orbite.rayon, c.rubans.actif, c.ressorts.raideur), (30.0, true, 24.0));
+        for (s, k) in [("rubans", "actif"), ("rubans", "largeur"), ("ressorts", "actif"), ("ressorts", "etirement")] {
+            assert!(crate::profils::in_profile(s, k), "[{s}] {k}");
+        }
         let _ = std::fs::remove_file(&p);
     }
 
