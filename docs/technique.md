@@ -350,9 +350,9 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   segments dessinés comme des traits : ni image ni flou, les deux moteurs dessinent comme
   d'habitude. Les ressorts des perles sont bornés et le bord de la grille est toujours hors du
   contour : la ligne reste dans la zone redessinée.
-- **Équerres et liseré** (`loin.rs`) : habillage de la fenêtre et de l'écran, hors des presets
-  (`profils::SECTIONS` ne contient ni `equerres` ni `lisere` : appliquer un preset n'y touche
-  pas, et aucun preset fourni ne les allume). Comme la bordure, il reste quand l'essaim n'est
+- **Équerres, halo et liseré** (`loin.rs`) : habillage de la fenêtre et de l'écran, hors des
+  presets (`profils::SECTIONS` ne contient ni `equerres`, ni `halo`, ni `lisere` : appliquer un
+  preset n'y touche pas, et aucun preset fourni ne les allume). Comme la bordure, il reste quand l'essaim n'est
   pas dessiné : pointeur masqué par la frappe et veille profonde passent par
   `main::habillage_seul`, une image sans zone d'essaim (`layer::AUCUNE`) où seul `Loin` avance
   et dessine ; il n'est jamais estompé avec l'essaim (dessiné hors du fondu de veille). Pause et
@@ -369,7 +369,12 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   repos, plus rien n'est redessiné, et ce qui est affiché reste en place. Une teinte qui glisse
   ne compte que quand l'écart se voit (`EQUERRE_NUANCE`) : une dizaine de fois par seconde. Le
   liseré donne sa bande à chaque image tant qu'il y a du son, puis une dernière fois pour
-  s'effacer.
+  s'effacer. Le halo et le liseré sont le même filet de lumière (`Filet` : lueur près du
+  pointeur, éclats qui en partent au kick, embrasement au drop, présence qui s'efface sans son),
+  posé sur un segment pour l'un, sur le tour du cadre pour l'autre (`Cadre` : abscisse le long
+  du cadre, point le plus proche du pointeur, chemin le plus court entre deux abscisses). Le
+  moteur n'a pas de pastille floue : la lueur du halo est faite de quatre nappes de traits de
+  plus en plus pâles vers l'intérieur. Ses zones sont quatre bandes le long du cadre.
 - **Réglages d'avant** (`migration.rs`) : les réactions fixes d'Essaim 0.3 et 0.4 (`[musique]`,
   `[clic]`, `[scintillement]`, `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`,
   `[audio] pulsation_tempo`, `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`,

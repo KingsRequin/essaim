@@ -776,6 +776,7 @@ const IMPACT = {
   // loin du pointeur : leur zone agrandit celle que le moteur redessine
   "equerres.actif": [2, "estime"], "equerres.bras": [1, "estime"], "equerres.epaisseur": [1, "estime"],
   "lisere.actif": [3, "estime"], "lisere.epaisseur": [1, "estime"],
+  "halo.actif": [3, "estime"], "halo.profondeur": [2, "estime"], "halo.epaisseur": [1, "estime"],
   // actions des déclencheurs (estimé : une particule de plus ou de moins pèse peu, une gerbe d'étincelles un peu plus)
   "action.eclat": [1, "estime"], "action.satellites": [2, "estime"], "action.inversion": [1, "estime"], "action.bordure": [1, "estime"],
   "action.onde": [1, "estime"], "action.eclats": [2, "estime"], "action.fissure": [2, "estime"], "action.implosion": [1, "estime"],
@@ -792,6 +793,7 @@ const PRECISIONS = {
   "trame.rayon": "Une loupe plus grande, ce sont plus de points à dessiner et une zone plus large redessinée à chaque image.",
   "trame.pas": "Un pas plus serré multiplie les points : quatre fois plus à moitié pas.",
   "equerres.actif": "Quand les équerres bougent (un kick, la basse), le moteur redessine un rectangle qui va du pointeur aux coins de la fenêtre ; au repos, rien.",
+  "halo.actif": "Tant que la musique joue, le moteur redessine à chaque image le rectangle de la fenêtre au premier plan (et jusqu'au pointeur). Léger avec la carte graphique, lourd avec le dessin par le processeur ; les équerres en sont la version économe.",
   "lisere.actif": "Tant que la musique joue, le moteur redessine un rectangle qui va du pointeur au bord bas de l'écran. Léger avec la carte graphique, lourd avec le dessin par le processeur.",
   "action.fissure": "Une fissure redessine sa zone de l'écran pendant qu'elle s'efface.",
   "essaim.constellation": "Une ligne par paire de têtes proches, 160 au plus.",
@@ -1166,7 +1168,7 @@ const PANNEAUX = [
     ],
   },
   // Habillage de la fenêtre au premier plan et de l'écran : loin du pointeur, aux couleurs de
-  // l'essaim. La bordure est réglée par le preset ; équerres et liseré sont hors des presets.
+  // l'essaim. La bordure est réglée par le preset ; équerres, halo et liseré sont hors des presets.
   {
     id: "bordure", famille: "Fenêtre et écran", titre: "Bordure", actif: ["bordure", "active"],
     note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11). Pas en mode sans flashs.",
@@ -1181,6 +1183,14 @@ const PANNEAUX = [
     base: [
       { libelle: "Longueur des bras", section: "equerres", cle: "bras", min: 4, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Épaisseur", section: "equerres", cle: "epaisseur", min: 1, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "halo", famille: "Fenêtre et écran", titre: "Halo de fenêtre", actif: ["halo", "actif"], si: SI.son,
+    note: "La lumière court le long du cadre de la fenêtre au premier plan : elle entre par le bord le plus proche du pointeur, s'élargit avec la basse, chaque kick en fait partir deux éclats le long du cadre, un drop l'embrase en entier. Elle déborde un peu vers l'intérieur de la fenêtre, jamais plus que la profondeur réglée, et s'efface quand plus rien ne joue. Comme les équerres, le halo ne fait pas partie des presets et reste quand tu en changes.",
+    base: [
+      { libelle: "Profondeur", section: "halo", cle: "profondeur", min: 6, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Épaisseur", section: "halo", cle: "epaisseur", min: 1, max: 4, pas: 0.1, aff: (v) => virgule(+v, 1) },
     ],
   },
   {

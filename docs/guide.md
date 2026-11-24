@@ -222,8 +222,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   pointeur).
   Ces neuf figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
   pointeur dégagé, et s'utilisent seules ou avec l'essaim.
-- **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres et le liseré ne
-  sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
+- **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres, le halo et le
+  liseré ne sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
   pas partie des presets : une fois allumés, ils restent quand on change de preset (la bordure,
   elle, est réglée par le preset). Comme elle, ils restent affichés quand la frappe masque le
   pointeur et quand l'essaim s'éteint (veille) ; ils s'effacent en pause et en plein écran.
@@ -234,13 +234,20 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   serre contre la fenêtre, un drop les écarte en grand. Le cadre est relu quatre fois par
   seconde ; pas d'équerres sur le bureau, la barre des tâches, une fenêtre en plein écran ou une
   fenêtre d'Essaim.
+- **Halo de fenêtre** (`[halo]`) : la lumière court le long du cadre de la fenêtre au premier
+  plan (`epaisseur` du trait, 1 à 4). Elle entre par le bord le plus proche du pointeur,
+  s'élargit avec la basse ; chaque kick en fait partir deux éclats le long du cadre, la caisse
+  claire le fait frissonner, une montée le charge, un drop l'embrase en entier. Elle déborde vers
+  l'intérieur de la fenêtre, en nappes de plus en plus pâles, jamais au-delà de `profondeur`
+  (6 à 30, 14 par défaut) ; rien ailleurs sur le contenu. Elle s'efface après 1,5 s sans son.
+  Les équerres en sont la version économe : le halo fait redessiner toute la fenêtre.
 - **Liseré** (`[lisere]`) : un filet de lumière au bord bas de l'écran du pointeur (`epaisseur`,
   1 à 8, 3 par défaut), à son aplomb. Il s'élargit avec la basse, chaque kick y court vers la
   gauche et la droite, une montée charge tout le bord, un drop l'allume en entier. Il s'efface
   après 1,5 s sans son.
-  Ces deux figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
-  du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le liseré tant que la
-  musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.
+  Ces trois figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
+  du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le halo et le liseré
+  tant que la musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs.
@@ -343,7 +350,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
     *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*,
     *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*,
-    *Pendule*, *Gouttes*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Liseré*),
+    *Pendule*, *Gouttes*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet

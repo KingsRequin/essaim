@@ -466,8 +466,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         if now >= next_fs {
             next_fs = now + Duration::from_millis(250);
             let fs = cur.as_ref().is_some_and(|c| win::fullscreen_under(c.pos.0, c.pos.1));
-            // cadre de la fenêtre au premier plan : murs des rebonds, coins des équerres
-            effets.fenetre = if conf.cfg.particules.rebonds || conf.cfg.equerres.actif { win::cadre_premier_plan() } else { None };
+            // cadre de la fenêtre au premier plan : murs des rebonds, coins des équerres, halo
+            let voulu = conf.cfg.particules.rebonds || conf.cfg.equerres.actif || conf.cfg.halo.actif;
+            effets.fenetre = if voulu { win::cadre_premier_plan() } else { None };
             murs = effets.fenetre.filter(|_| conf.cfg.particules.rebonds);
             if fs != fs_paused {
                 fs_paused = fs;

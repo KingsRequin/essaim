@@ -31,6 +31,7 @@ pub struct Config {
     pub pendule: Pendule,
     pub gouttes: Gouttes,
     pub equerres: Equerres,
+    pub halo: Halo,
     pub lisere: Lisere,
     pub audio: Audio,
     pub rendu: Rendu,
@@ -280,6 +281,25 @@ pub struct Equerres {
 impl Default for Equerres {
     fn default() -> Self {
         Self { actif: false, bras: 10.0, epaisseur: 2.0 }
+    }
+}
+
+/// Halo de fenêtre : la lumière court le long du cadre de la fenêtre au premier plan, depuis le
+/// bord le plus proche du pointeur, et déborde un peu vers l'intérieur ; effacé sans son.
+/// Habillage de la fenêtre, hors des presets comme les équerres.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Halo {
+    pub actif: bool,
+    /// Profondeur de la lueur vers l'intérieur de la fenêtre (px à 100 %, 6 à 30).
+    pub profondeur: f32,
+    /// Épaisseur du trait le long du cadre (1 à 4).
+    pub epaisseur: f32,
+}
+
+impl Default for Halo {
+    fn default() -> Self {
+        Self { actif: false, profondeur: 14.0, epaisseur: 2.0 }
     }
 }
 
@@ -1251,6 +1271,11 @@ actif = false           # quatre petites équerres aux coins de la fenêtre au p
 bras = 10               # longueur des bras au repos (4 à 30)
 epaisseur = 2           # épaisseur du trait (1 à 5)
 
+[halo]
+actif = false           # la lumière court le long du cadre de la fenêtre au premier plan ; effacé sans son
+profondeur = 14         # jusqu'où la lueur entre dans la fenêtre (6 à 30)
+epaisseur = 2           # épaisseur du trait le long du cadre (1 à 4)
+
 [lisere]
 actif = false           # un filet de lumière au bord bas de l'écran, sous le pointeur ; effacé sans son
 epaisseur = 3           # épaisseur du filet (1 à 8)
@@ -1443,6 +1468,8 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("equerres", "bras") => (4.0, 30.0),
         ("equerres", "epaisseur") => (1.0, 5.0),
         ("lisere", "epaisseur") => (1.0, 8.0),
+        ("halo", "profondeur") => (6.0, 30.0),
+        ("halo", "epaisseur") => (1.0, 4.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -2111,11 +2138,14 @@ mod tests {
     #[test]
     fn habillage_de_la_fenetre_hors_des_presets() {
         let (c, d): (super::Config, _) = (toml::from_str(super::DEFAULT_FILE).unwrap(), super::Config::default());
-        assert_eq!((c.equerres.actif, c.lisere.actif), (false, false));
+        assert_eq!((c.equerres.actif, c.halo.actif, c.lisere.actif), (false, false, false));
         assert_eq!((c.equerres.bras, c.equerres.epaisseur, c.lisere.epaisseur), (d.equerres.bras, d.equerres.epaisseur, d.lisere.epaisseur));
-        let c = toml::from_str::<super::Config>("[equerres]\nbras = 400\nepaisseur = 0\n[lisere]\nepaisseur = 90").unwrap().clamped();
+        assert_eq!((c.halo.profondeur, c.halo.epaisseur), (d.halo.profondeur, d.halo.epaisseur));
+        let c = toml::from_str::<super::Config>("[equerres]\nbras = 400\nepaisseur = 0\n[lisere]\nepaisseur = 90\n[halo]\nprofondeur = 1\nepaisseur = 9").unwrap().clamped();
         assert_eq!((c.equerres.bras, c.equerres.epaisseur, c.lisere.epaisseur), (30.0, 1.0, 8.0));
-        for (s, k) in [("equerres", "actif"), ("equerres", "bras"), ("equerres", "epaisseur"), ("lisere", "actif"), ("lisere", "epaisseur")] {
+        assert_eq!((c.halo.profondeur, c.halo.epaisseur), (6.0, 4.0));
+        let hors = [("equerres", "actif"), ("equerres", "bras"), ("equerres", "epaisseur"), ("lisere", "actif"), ("lisere", "epaisseur"), ("halo", "actif"), ("halo", "profondeur"), ("halo", "epaisseur")];
+        for (s, k) in hors {
             assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
         }
         assert!(crate::prereglages::builtins().iter().all(|p| !crate::loin::Loin::actives(&p.cfg)));
@@ -2124,6 +2154,7 @@ mod tests {
         let p = dir.join("config.toml");
         let mut cfg = super::Config::default();
         (cfg.equerres.actif, cfg.equerres.bras, cfg.lisere.actif, cfg.lisere.epaisseur) = (true, 18.0, true, 5.0);
+        (cfg.halo.actif, cfg.halo.profondeur) = (true, 20.0);
         super::apply_keys_in(&p, &cfg, |_, _| true).unwrap();
         let mut preset = super::Config::default();
         preset.orbite.rayon = 40.0;
@@ -2131,6 +2162,7 @@ mod tests {
         let c = super::Config::read(&p).unwrap();
         assert_eq!(c.orbite.rayon, 40.0);
         assert_eq!((c.equerres.actif, c.equerres.bras, c.lisere.actif, c.lisere.epaisseur), (true, 18.0, true, 5.0));
+        assert_eq!((c.halo.actif, c.halo.profondeur), (true, 20.0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

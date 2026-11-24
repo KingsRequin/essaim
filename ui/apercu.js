@@ -109,7 +109,56 @@ function contourGouttes(gouttes) {
 
 // Équerres et liseré : comme les constantes de src/loin.rs.
 const EQUERRE_ECART = 4, EQUERRE_ELAN = [110, 260], EQUERRE_BASSE = 1.3, EQUERRE_ELAN_BRAS = 38, EQUERRE_BORNES = [[0, 26], [0.4, 3.2]];
-const LISERE_PAS = 6, LISERE_LUEUR = [36, 0.26], LISERE_KICK = [1, 0.6, 560], LISERE_DROP = [2, 1.1, 760], LISERE_ECLAT = 40, LISERE_ATTENTE = 1.5, LISERE_FONDU = [0.15, 0.8];
+const FILET_PAS = 6, FILET_CRANS = 16, FILET_LUEUR = [0.1, 0.75], FILET_PLEIN = [0.8, 0.25], FILET_KICK = [1, 0.6, 560], FILET_DROP = [2, 1.1, 760], FILET_ECLAT = 40, FILET_ECLATS_MAX = 8;
+const FILET_ATTENTE = 1.5, FILET_FONDU = [0.15, 0.8], LISERE_LUEUR = [36, 0.26];
+const HALO_LUEUR = 0.11, HALO_FRISSON = 0.2, HALO_NAPPES = 4, HALO_OPACITE = 0.45;
+
+// Suites de pas voisins de même force et de même teinte (comme loin::suites), et trait à bouts
+// droits (comme Canvas::bande) : des traits bout à bout ne se recouvrent pas.
+function suitesFilet(long, pas, niveau, trace) {
+  const n = Math.ceil(long / pas), cran = (v) => Math.round(Math.min(1, Math.max(0, v)) * FILET_CRANS);
+  let cours = null;
+  for (let i = 0; i <= n; i++) {
+    const a = Math.min(long, i * pas);
+    let cle = null;
+    if (i < n) {
+      const [f, k] = niveau((a + Math.min(long, (i + 1) * pas)) / 2);
+      cle = [f < 0.03 ? 0 : Math.max(1, cran(f)), cran(k)];
+    }
+    if (cours && cle && cours[1][0] === cle[0] && cours[1][1] === cle[1]) continue;
+    if (cours && cours[1][0] > 0) trace(cours[0], a, cours[1][0] / FILET_CRANS, cours[1][1] / FILET_CRANS);
+    cours = cle && [a, cle];
+  }
+}
+function bande(g, a, b, largeur, couleur) {
+  g.lineCap = "butt";
+  g.lineWidth = largeur;
+  g.strokeStyle = couleur;
+  g.beginPath();
+  g.moveTo(a[0], a[1]);
+  g.lineTo(b[0], b[1]);
+  g.stroke();
+  g.lineCap = "round";
+}
+
+// Filet de lumière du liseré et du halo (comme loin::Filet) : état, avance, force en un point.
+const nouveauFilet = () => ({ eclats: [], embrase: 0, silence: FILET_ATTENTE, presence: 0 });
+function avancerFilet(fl, t, dt, u, kick, drop, son) {
+  if (kick) fl.eclats.push({ u, ne: t, force: FILET_KICK[0], vie: FILET_KICK[1], vitesse: FILET_KICK[2] });
+  if (drop) { fl.eclats.push({ u, ne: t, force: FILET_DROP[0], vie: FILET_DROP[1], vitesse: FILET_DROP[2] }); fl.embrase = 1; }
+  fl.eclats = fl.eclats.filter((e) => t - e.ne < e.vie).slice(-FILET_ECLATS_MAX);
+  fl.embrase *= Math.exp(-dt * 1.5);
+  fl.silence = son || fl.eclats.length > 0 || fl.embrase > 0.02 ? 0 : fl.silence + dt;
+  fl.presence = fl.silence >= FILET_ATTENTE ? Math.max(0, fl.presence - dt / FILET_FONDU[1]) : Math.min(1, fl.presence + dt / FILET_FONDU[0]);
+}
+function forceFilet(fl, t, S, basse, montee, lueur, auPointeur, ecart) {
+  let f = (FILET_LUEUR[0] + FILET_LUEUR[1] * basse) * Math.exp(-((auPointeur / lueur) ** 2)) + FILET_PLEIN[0] * fl.embrase + FILET_PLEIN[1] * montee;
+  for (const e of fl.eclats) {
+    const age = t - e.ne;
+    f += e.force * Math.max(0, 1 - age / e.vie) ** 1.2 * Math.exp(-(((ecart(e.u) - e.vitesse * S * age) / (FILET_ECLAT * S)) ** 2));
+  }
+  return f;
+}
 const RETOMBEE = [7, 8, 10, 0.9, 10];
 const SUIVI_MONTEE = 6;
 const LISSAGE = 0.35;
@@ -200,7 +249,7 @@ function nouvellesFigures() {
     // figures/gouttes.rs
     gouttes: { noyau: [GOUTTE_NOYAU[0], 0], perles: [0, 1, 2, 3].map((i) => ({ angle: i * 2.4, ecart: [0, 0] })), bulles: [], segments: [] },
     // loin.rs
-    loin: { kick: 0, ecart: [EQUERRE_ECART, 0], bras: [1, 0], diagonales: [0, 0], tour: 0, eclats: [], embrase: 0, silence: LISERE_ATTENTE, presence: 0 },
+    loin: { kick: 0, ecart: [EQUERRE_ECART, 0], bras: [1, 0], diagonales: [0, 0], tour: 0, halo: nouveauFilet(), frisson: 0, lisere: nouveauFilet() },
   };
 }
 
@@ -537,7 +586,7 @@ class Apercu {
     const c = this.reglages, f = this.figures, t = this.t;
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
     const plus = ['orbe', 'voix', 'trame', 'pinceau', 'pendule'].some((s) => c[s] && c[s].actif);
-    const loin = ['equerres', 'lisere'].some((s) => c[s] && c[s].actif);
+    const loin = ['equerres', 'halo', 'lisere'].some((s) => c[s] && c[s].actif);
     const gouttes = !!(c.gouttes && c.gouttes.actif);
     if (!arcs.actif && !quatre.actif && !anneau.actif && !plus && !loin && !gouttes) { this.figures = nouvellesFigures(); return; }
     f.horloge = reste(f.horloge + dt, TAU * 40);
@@ -820,11 +869,11 @@ class Apercu {
     }
   }
 
-  // Équerres et liseré (comme loin::Loin::avance). Dans l'aperçu, la fenêtre et l'écran sont le
-  // cadre de l'aperçu : équerres à ses coins, liseré à son bord bas.
+  // Équerres, halo et liseré (comme loin::Loin::avance). Dans l'aperçu, la fenêtre et l'écran sont
+  // le cadre de l'aperçu : équerres à ses coins, halo le long de la fenêtre, liseré à son bord bas.
   avancerLoin(dt, coups) {
     const c = this.reglages, f = this.figures, l = f.loin, t = this.t;
-    const equerres = c.equerres || {}, lisere = c.lisere || {};
+    const equerres = c.equerres || {}, halo = c.halo || {}, lisere = c.lisere || {};
     const kicks = coups.kicks, caisse = coups.caisses > 0, drop = coups.drops > 0;
     l.kick = kicks > 0 ? 1 : l.kick * Math.exp(-dt * 7);
     if (equerres.actif) {
@@ -835,36 +884,39 @@ class Apercu {
       vers(l.ecart, EQUERRE_ECART * (1 - 0.75 * f.montee) + Math.sin(t * 44) * 0.9 * f.montee, [17, 0.3], dt, EQUERRE_BORNES[0]);
       vers(l.bras, 1 + EQUERRE_BASSE * f.basse, [14, 0.4], dt, EQUERRE_BORNES[1]);
     }
-    if (lisere.actif) {
-      const x = this.canvas.width / 2;
-      if (kicks > 0) l.eclats.push({ x, ne: t, force: LISERE_KICK[0], vie: LISERE_KICK[1], vitesse: LISERE_KICK[2] });
-      if (drop) { l.eclats.push({ x, ne: t, force: LISERE_DROP[0], vie: LISERE_DROP[1], vitesse: LISERE_DROP[2] }); l.embrase = 1; }
-      l.eclats = l.eclats.filter((e) => t - e.ne < e.vie).slice(-8);
-      l.embrase *= Math.exp(-dt * 1.5);
-      const sonLa = f.basse > 0.02 || l.eclats.length > 0 || l.embrase > 0.02 || f.montee > 0.02;
-      l.silence = sonLa ? 0 : l.silence + dt;
-      l.presence = l.silence >= LISERE_ATTENTE ? Math.max(0, l.presence - dt / LISERE_FONDU[1]) : Math.min(1, l.presence + dt / LISERE_FONDU[0]);
+    const sonLa = f.basse > 0.02 || f.montee > 0.02;
+    if (halo.actif) {
+      // le pointeur de l'aperçu est au centre : au plus près du haut de la fenêtre, en son milieu
+      const [x0, , x1] = this.fenetreApercu();
+      l.frisson = caisse ? 1 : l.frisson * Math.exp(-dt * 12);
+      avancerFilet(l.halo, t, dt, (x1 - x0) / 2, kicks > 0, drop, sonLa || l.frisson > 0.02);
     } else {
-      l.eclats = [];
-      l.embrase = 0;
-      l.presence = 0;
-      l.silence = LISERE_ATTENTE;
+      l.halo = nouveauFilet();
+      l.frisson = 0;
     }
+    if (lisere.actif) avancerFilet(l.lisere, t, dt, this.canvas.width / 2, kicks > 0, drop, sonLa);
+    else l.lisere = nouveauFilet();
   }
 
-  // Dessin des équerres et du liseré (comme loin::Loin::dessiner), dans le cadre de l'aperçu.
+  // La « fenêtre » de l'aperçu : son cadre, rentré de quoi laisser les équerres s'écarter.
+  fenetreApercu() {
+    const m = (EQUERRE_BORNES[0][1] + 6) * (this.echelle || 1);
+    return [m, m, this.canvas.width - m, this.canvas.height - m];
+  }
+
+  // Dessin des équerres, du halo et du liseré (comme loin::Loin::dessiner), dans le cadre de l'aperçu.
   dessinerLoin(g, S, tete, queue) {
     const c = this.reglages, f = this.figures, l = f.loin, t = this.t, w = this.canvas.width, h = this.canvas.height;
-    const equerres = c.equerres || {}, lisere = c.lisere || {};
+    const equerres = c.equerres || {}, halo = c.halo || {}, lisere = c.lisere || {};
     const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
     const plein = (rgb, a = 1) => `rgba(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])},${Math.max(0, Math.min(1, a))})`;
+    const [x0, y0, x1, y1] = this.fenetreApercu();
     if (equerres.actif) {
-      // la « fenêtre » : le cadre de l'aperçu, rentré de quoi laisser les équerres s'écarter
-      const m = (EQUERRE_BORNES[0][1] + 6) * S, e = l.ecart[0] * S, bras = borne(equerres.bras, 4, 30, 10) * l.bras[0] * S;
+      const e = l.ecart[0] * S, bras = borne(equerres.bras, 4, 30, 10) * l.bras[0] * S;
       g.lineWidth = borne(equerres.epaisseur, 1, 5, 2) * S;
       g.lineCap = "round";
       g.lineJoin = "round";
-      [[m, m, -1, -1, 0], [w - m, m, 1, -1, 1], [w - m, h - m, 1, 1, 0], [m, h - m, -1, 1, 1]].forEach(([x, y, sx, sy, diag]) => {
+      [[x0, y0, -1, -1, 0], [x1, y0, 1, -1, 1], [x1, y1, 1, 1, 0], [x0, y1, -1, 1, 1]].forEach(([x, y, sx, sy, diag]) => {
         const px = x + sx * e, py = y + sy * e;
         g.strokeStyle = plein(tete, 0.5 + 0.5 * Math.max(l.diagonales[diag], l.kick));
         g.beginPath();
@@ -874,28 +926,40 @@ class Apercu {
         g.stroke();
       });
     }
-    if (lisere.actif && l.presence > 0) {
-      const ep = borne(lisere.epaisseur, 1, 8, 3) * S, pas = LISERE_PAS * S, y = h - ep / 2, px = w / 2;
-      const lueur = LISERE_LUEUR[0] * S + LISERE_LUEUR[1] * w * f.basse;
-      g.lineWidth = ep;
-      g.lineCap = "butt";
-      for (let a = 0; a < w; a += pas) {
-        const b = Math.min(w, a + pas), milieu = (a + b) / 2;
-        let force = (0.1 + 0.75 * f.basse) * Math.exp(-(((milieu - px) / lueur) ** 2)) + 0.8 * l.embrase + 0.25 * f.montee;
-        for (const e of l.eclats) {
-          const age = t - e.ne;
-          force += e.force * Math.max(0, 1 - age / e.vie) ** 1.2 * Math.exp(-(((Math.abs(milieu - e.x) - e.vitesse * S * age) / (LISERE_ECLAT * S)) ** 2));
-        }
-        force *= l.presence;
-        if (force < 0.03) continue;
-        const k = 0.5 + 0.5 * Math.sin((milieu / w) * TAU + reste(t * 0.5, TAU));
-        g.strokeStyle = plein(tete.map((v, i) => v + (queue[i] - v) * k), Math.min(1, 0.15 + force));
-        g.beginPath();
-        g.moveTo(a, y);
-        g.lineTo(b, y);
-        g.stroke();
+    // filets : la teinte va de celle des têtes à celle des queues le long du filet, et glisse
+    const teinte = (part) => 0.5 + 0.5 * Math.sin(part * TAU + reste(t * 0.5, TAU));
+    const couleur = (k, alpha) => plein(tete.map((v, i) => v + (queue[i] - v) * k), alpha);
+    const pas = FILET_PAS * S;
+    g.lineCap = "round";
+    if (halo.actif && l.halo.presence > 0) {
+      const W = x1 - x0, H = y1 - y0, tour = 2 * (W + H), u = W / 2;
+      const ep = borne(halo.epaisseur, 1, 4, 2) * S, profondeur = borne(halo.profondeur, 6, 30, 14) * S;
+      const ecart = (a, b) => { const d = Math.abs(a - b) % tour; return Math.min(d, tour - d); };
+      // les quatre côtés : départ, direction, longueur, sens vers l'intérieur, abscisse du départ
+      const cotes = [[[x0, y0], [1, 0], W, [0, 1], 0], [[x1, y0], [0, 1], H, [-1, 0], W], [[x1, y1], [-1, 0], W, [0, -1], W + H], [[x0, y1], [0, -1], H, [1, 0], 2 * W + H]];
+      for (const [depart, dir, long, dedans, u0] of cotes) {
+        const point = (s, r) => [depart[0] + dir[0] * s + dedans[0] * r, depart[1] + dir[1] * s + dedans[1] * r];
+        const niveau = (s) => {
+          const m = u0 + s;
+          const force = forceFilet(l.halo, t, S, f.basse, f.montee, HALO_LUEUR * tour, ecart(m, u), (v) => ecart(m, v)) + HALO_FRISSON * l.frisson;
+          return [force * l.halo.presence, teinte(m / tour)];
+        };
+        suitesFilet(long, pas, niveau, (a, b, force, k) => {
+          bande(g, point(a, ep / 2), point(b, ep / 2), ep, couleur(k, Math.min(1, 0.15 + force)));
+          const fond = profondeur;
+          for (let n = 0; n < HALO_NAPPES; n++) {
+            // coupée en onglet aux coins : les nappes de deux côtés ne s'y superposent pas
+            const r = (n + 0.5) / HALO_NAPPES, rentre = ep + r * fond, a1 = Math.max(a, rentre), b1 = Math.min(b, long - rentre);
+            if (b1 > a1) bande(g, point(a1, rentre), point(b1, rentre), fond / HALO_NAPPES + 1, couleur(k, HALO_OPACITE * force * (1 - r) * (1 - r)));
+          }
+        });
       }
-      g.lineCap = "round";
+    }
+    if (lisere.actif && l.lisere.presence > 0) {
+      const ep = borne(lisere.epaisseur, 1, 8, 3) * S, y = h - ep / 2, px = w / 2;
+      const lueur = LISERE_LUEUR[0] * S + LISERE_LUEUR[1] * w * f.basse;
+      const niveau = (m) => [forceFilet(l.lisere, t, S, f.basse, f.montee, lueur, m - px, (u) => Math.abs(m - u)) * l.lisere.presence, teinte(m / w)];
+      suitesFilet(w, pas, niveau, (a, b, force, k) => bande(g, [a, y], [b, y], ep, couleur(k, Math.min(1, 0.15 + force))));
     }
   }
 

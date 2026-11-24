@@ -12,6 +12,17 @@ pub trait Canvas {
     fn polyline(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool);
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32);
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32);
+    /// Trait à bouts droits : deux traits tracés bout à bout se rejoignent sans se recouvrir
+    /// (filets de lumière). Par défaut, un trait à bouts ronds raccourci d'un quart de sa largeur
+    /// à chaque bout : les pastilles de la carte graphique, posées tous les demi-largeurs, gardent
+    /// alors leur pas d'un trait au suivant.
+    fn bande(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32) {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let long = dx.hypot(dy);
+        let r = (width / 4.0).min(long / 2.0);
+        let (ux, uy) = if long > 1e-3 { (dx / long * r, dy / long * r) } else { (0.0, 0.0) };
+        self.line((a.0 + ux, a.1 + uy), (b.0 - ux, b.1 - uy), width, rgb, alpha, false);
+    }
     /// Voile de couleur `rgb` et d'opacité `alpha` sur le rectangle `zone` (gauche, haut, droite,
     /// bas, écran), percé d'un disque clair de rayon `r` centré en (x, y) dont le bord s'adoucit
     /// sur `flou` px vers l'extérieur (projecteur « retrouver la souris »).
@@ -43,11 +54,15 @@ pub(crate) fn circle(pm: &mut Pixmap, x: f32, y: f32, r: f32, p: &Paint) {
 }
 
 pub(crate) fn segment(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32, p: &Paint) {
+    trait_droit(pm, a, b, width, LineCap::Round, p);
+}
+
+fn trait_droit(pm: &mut Pixmap, a: (f32, f32), b: (f32, f32), width: f32, bouts: LineCap, p: &Paint) {
     let mut pb = PathBuilder::new();
     pb.move_to(a.0, a.1);
     pb.line_to(b.0, b.1);
     if let Some(path) = pb.finish() {
-        let s = Stroke { width, line_cap: LineCap::Round, ..Stroke::default() };
+        let s = Stroke { width, line_cap: bouts, ..Stroke::default() };
         pm.stroke_path(&path, p, &s, Transform::identity(), None);
     }
 }
@@ -107,6 +122,11 @@ impl Canvas for PixCanvas<'_> {
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32) {
         let (x, y) = self.at((x, y));
         circle(self.pm, x, y, r, &paint(rgb, alpha));
+    }
+
+    fn bande(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32) {
+        let (a, b) = (self.at(a), self.at(b));
+        trait_droit(self.pm, a, b, width, LineCap::Butt, &paint(rgb, alpha));
     }
 
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32) {
@@ -218,6 +238,10 @@ impl Canvas for Fondu<'_> {
 
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32) {
         self.cv.circle(x, y, r, rgb, alpha * self.k);
+    }
+
+    fn bande(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32) {
+        self.cv.bande(a, b, width, rgb, alpha * self.k);
     }
 
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32) {
