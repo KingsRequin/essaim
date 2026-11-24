@@ -136,7 +136,8 @@ impl Plus {
             kick: 0.0,
             graine: 0x9e37_79b9,
             orbe: Orbe { souffle: Ressort::default(), contour: Vec::new(), echos: Vec::new() },
-            voix: Voix { niveaux: [0.0; 3], large: Ressort::en(1.0), silence: 0.0, visible: 0.0 },
+            // silencieuse au départ : la ligne n'apparaît qu'avec le son
+            voix: Voix { niveaux: [0.0; 3], large: Ressort::en(1.0), silence: VOIX_ATTENTE, visible: 0.0 },
             trame: Trame { loupe: Ressort::default(), vagues: Vec::new(), eclairs: Vec::new() },
             pinceau: Pinceau { trajet: VecDeque::new(), perles: Vec::new(), vie: Ressort::default() },
             pendule: Pendule { poids: None, vitesse: (0.0, 0.0), fil: Ressort::default(), ancre: (0.0, 0.0), mou: 0.0, cote: 1.0 },
@@ -234,6 +235,8 @@ impl Plus {
             // sans son, la ligne s'efface ; elle revient dès qu'il reprend
             v.silence = if v.niveaux.iter().sum::<f32>() < 0.03 { v.silence + dt } else { 0.0 };
             v.visible = if v.silence >= VOIX_ATTENTE { (v.visible - dt / VOIX_FONDU.1).max(0.0) } else { (v.visible + dt / VOIX_FONDU.0).min(1.0) };
+        } else {
+            (self.voix.silence, self.voix.visible) = (VOIX_ATTENTE, 0.0);
         }
 
         if cfg.trame.actif {

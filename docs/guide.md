@@ -215,6 +215,25 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   puis à droite ; le fil s'allonge avec la basse et se raccourcit pendant une montée.
   Ces huit figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
   pointeur dégagé, et s'utilisent seules ou avec l'essaim.
+- **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres et le liseré ne
+  sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
+  pas partie des presets : une fois allumés, ils restent quand on change de preset (la bordure,
+  elle, est réglée par le preset). Comme elle, ils restent affichés quand la frappe masque le
+  pointeur et quand l'essaim s'éteint (veille) ; ils s'effacent en pause et en plein écran.
+- **Équerres** (`[equerres]`) : quatre petites équerres aux coins de la fenêtre au premier plan,
+  à l'extérieur de son cadre (`bras`, 4 à 30, 10 par défaut ; `epaisseur`, 1 à 5) : rien autour du
+  pointeur, rien sur le contenu. Elles s'écartent sur le kick puis reviennent, leurs bras
+  s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre, une montée les
+  serre contre la fenêtre, un drop les écarte en grand. Le cadre est relu quatre fois par
+  seconde ; pas d'équerres sur le bureau, la barre des tâches, une fenêtre en plein écran ou une
+  fenêtre d'Essaim.
+- **Liseré** (`[lisere]`) : un filet de lumière au bord bas de l'écran du pointeur (`epaisseur`,
+  1 à 8, 3 par défaut), à son aplomb. Il s'élargit avec la basse, chaque kick y court vers la
+  gauche et la droite, une montée charge tout le bord, un drop l'allume en entier. Il s'efface
+  après 1,5 s sans son.
+  Ces deux figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
+  du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le liseré tant que la
+  musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs.
@@ -315,9 +334,10 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
     montre côte à côte avec la liste de leurs réglages différents.
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
-    *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
+    *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*,
     *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*,
-    *Pendule*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
+    *Pendule*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Liseré*),
+    *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un

@@ -11,6 +11,7 @@ use crate::audio::{AudioShared, BANDES_MAX};
 use crate::canvas::Canvas;
 use crate::config::Config;
 use crate::layer::IRect;
+use crate::loin::Loin;
 use crate::figures::{Figures, Son};
 use crate::render::{prisme, Ecoute};
 use std::f32::consts::{PI, TAU};
@@ -184,11 +185,21 @@ pub struct Effets {
     /// Petites figures autour du pointeur (`figures.rs`), et leur écoute des coups du son.
     figures: Figures,
     ecoute: Ecoute,
+    /// Figures loin du pointeur (`loin.rs`) ; cadre de la fenêtre au premier plan, que la boucle
+    /// principale donne avant chaque image.
+    loin: Loin,
+    pub fenetre: Option<(f32, f32, f32, f32)>,
+}
+
+/// Écran où se trouve le pointeur (le premier, s'il est hors de tous).
+fn ecran_du_pointeur(monitors: &[(isize, IRect)], cursor: (f32, f32)) -> Option<IRect> {
+    let (cx, cy) = (cursor.0 as i32, cursor.1 as i32);
+    monitors.iter().map(|m| m.1).find(|r| cx >= r.0 && cx < r.2 && cy >= r.1 && cy < r.3).or(monitors.first().map(|m| m.1))
 }
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default() }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -224,9 +235,7 @@ impl Effets {
                 return None;
             }
             let (r, a) = projecteur_forme(f, env, scale, p.taille);
-            let (cx, cy) = (cursor.0 as i32, cursor.1 as i32);
-            let ecran = monitors.iter().map(|m| m.1).find(|r| cx >= r.0 && cx < r.2 && cy >= r.1 && cy < r.3).or(monitors.first().map(|m| m.1))?;
-            Some((ecran, cursor, r, a))
+            Some((ecran_du_pointeur(monitors, cursor)?, cursor, r, a))
         });
         if self.voile.is_none() {
             self.projecteur = None;
@@ -252,7 +261,31 @@ impl Effets {
         // petites figures : elles écoutent les coups du son elles-mêmes
         let au = shared.view();
         let coups = self.ecoute.lire(&au);
-        self.figures.avance(t, dt, cursor, scale, &Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] }, cfg);
+        let son = Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] };
+        self.figures.avance(t, dt, cursor, scale, &son, cfg);
+        // équerres et liseré : aux coins de la fenêtre au premier plan, au bord de l'écran du pointeur
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre, ecran_du_pointeur(monitors, cursor));
+    }
+
+    /// Avance l'habillage seul (équerres, liseré), quand l'essaim n'est pas dessiné : pointeur
+    /// masqué par la frappe, veille profonde. Les coups du son sont lus ici aussi : ceux joués
+    /// entre-temps ne partent pas en rafale à la reprise.
+    #[allow(clippy::too_many_arguments)]
+    pub fn avance_habillage(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, shared: &AudioShared, cfg: &Config, monitors: &[(isize, IRect)]) {
+        let au = shared.view();
+        let coups = self.ecoute.lire(&au);
+        let son = Son { au: &au, coups: &coups, bandes: &[] };
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre, ecran_du_pointeur(monitors, cursor));
+    }
+
+    /// Y a-t-il un habillage à dessiner, ou encore affiché à effacer ?
+    pub fn habillage(&self, cfg: &Config) -> bool {
+        Loin::actives(cfg) || self.loin.affiche()
+    }
+
+    /// Les calques viennent d'être effacés ou refaits : l'habillage redonnera toutes ses zones.
+    pub fn oublier_loin(&mut self) {
+        self.loin.oublier();
     }
 
     /// Projecteur en cours (écran assombri à redessiner en entier à chaque image).
@@ -278,6 +311,16 @@ impl Effets {
             ((cursor.0 - e).floor() as i32, (cursor.1 - e).floor() as i32, (cursor.0 + e).ceil() as i32, (cursor.1 + e).ceil() as i32)
         });
         crate::layer::union(zone, self.figures.rect(cursor, scale, cfg))
+    }
+
+    /// Zones des équerres et du liseré à redessiner à cette image (vides si rien n'y change).
+    pub fn zones_loin(&self) -> impl Iterator<Item = IRect> + '_ {
+        self.loin.zones().iter().copied()
+    }
+
+    /// Équerres et liseré, sur tous les écrans (jamais estompés avec l'essaim).
+    pub fn dessiner_loin(&self, cv: &mut dyn Canvas, cfg: &Config, t: f64, scale: f32) {
+        self.loin.dessiner(cv, t, cfg, scale);
     }
 
     /// Voile du projecteur, sous tout le reste (fissures et essaim restent visibles par-dessus).

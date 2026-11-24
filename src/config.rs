@@ -29,6 +29,8 @@ pub struct Config {
     pub trame: Trame,
     pub pinceau: Pinceau,
     pub pendule: Pendule,
+    pub equerres: Equerres,
+    pub lisere: Lisere,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -89,6 +91,7 @@ impl Config {
         self.modulations.liste.iter().any(|m| matches!(m.source, Source::Caisse | Source::Montee | Source::Drop))
             || self.declencheurs.liste.iter().any(|d| matches!(d.quand, Evenement::Caisse | Evenement::Drop))
             || crate::figures::Figures::actives(self)
+            || crate::loin::Loin::actives(self)
     }
 }
 
@@ -239,6 +242,41 @@ pub struct Pendule {
 impl Default for Pendule {
     fn default() -> Self {
         Self { actif: false, longueur: 22.0, taille: 2.6 }
+    }
+}
+
+/// Équerres : quatre petites équerres aux coins de la fenêtre au premier plan, qui s'écartent sur
+/// le kick et s'allongent avec la basse (`loin.rs`). Habillage de la fenêtre, hors des presets
+/// (`profils::in_profile`) : il reste d'un preset à l'autre.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Equerres {
+    pub actif: bool,
+    /// Longueur des bras au repos (px à 100 %, 4 à 30).
+    pub bras: f32,
+    /// Épaisseur du trait (1 à 5).
+    pub epaisseur: f32,
+}
+
+impl Default for Equerres {
+    fn default() -> Self {
+        Self { actif: false, bras: 10.0, epaisseur: 2.0 }
+    }
+}
+
+/// Liseré : un filet de lumière au bord bas de l'écran du pointeur, à son aplomb, où courent les
+/// kicks ; effacé sans son. Habillage de l'écran, hors des presets comme les équerres.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Lisere {
+    pub actif: bool,
+    /// Épaisseur du filet (px à 100 %, 1 à 8).
+    pub epaisseur: f32,
+}
+
+impl Default for Lisere {
+    fn default() -> Self {
+        Self { actif: false, epaisseur: 3.0 }
     }
 }
 
@@ -1182,6 +1220,17 @@ actif = false           # un petit poids pendu au pointeur par un fil, qui saute
 longueur = 22           # longueur du fil (8 à 60)
 taille = 2.6            # rayon du poids (1 à 6)
 
+# Habillage de la fenêtre et de l'écran : hors des presets, il reste quand on en change et prend
+# les couleurs de l'essaim.
+[equerres]
+actif = false           # quatre petites équerres aux coins de la fenêtre au premier plan
+bras = 10               # longueur des bras au repos (4 à 30)
+epaisseur = 2           # épaisseur du trait (1 à 5)
+
+[lisere]
+actif = false           # un filet de lumière au bord bas de l'écran, sous le pointeur ; effacé sans son
+epaisseur = 3           # épaisseur du filet (1 à 8)
+
 [modulations]
 # Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
 # satellites ou tout (16 au plus) :
@@ -1365,6 +1414,9 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("pinceau", "duree") => (0.2, 1.0),
         ("pendule", "longueur") => (8.0, 60.0),
         ("pendule", "taille") => (1.0, 6.0),
+        ("equerres", "bras") => (4.0, 30.0),
+        ("equerres", "epaisseur") => (1.0, 5.0),
+        ("lisere", "epaisseur") => (1.0, 8.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -2021,6 +2073,34 @@ mod tests {
         for s in ["orbe", "voix", "trame", "pinceau", "pendule"] {
             assert!(crate::profils::in_profile(s, "actif"), "[{s}] actif");
         }
+    }
+
+    /// Équerres et liseré : éteints par défaut, bornés, et hors des presets. Appliquer un preset
+    /// ne les éteint pas et ne touche pas à leurs réglages ; aucun preset fourni ne les allume.
+    #[test]
+    fn habillage_de_la_fenetre_hors_des_presets() {
+        let (c, d): (super::Config, _) = (toml::from_str(super::DEFAULT_FILE).unwrap(), super::Config::default());
+        assert_eq!((c.equerres.actif, c.lisere.actif), (false, false));
+        assert_eq!((c.equerres.bras, c.equerres.epaisseur, c.lisere.epaisseur), (d.equerres.bras, d.equerres.epaisseur, d.lisere.epaisseur));
+        let c = toml::from_str::<super::Config>("[equerres]\nbras = 400\nepaisseur = 0\n[lisere]\nepaisseur = 90").unwrap().clamped();
+        assert_eq!((c.equerres.bras, c.equerres.epaisseur, c.lisere.epaisseur), (30.0, 1.0, 8.0));
+        for (s, k) in [("equerres", "actif"), ("equerres", "bras"), ("equerres", "epaisseur"), ("lisere", "actif"), ("lisere", "epaisseur")] {
+            assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
+        }
+        assert!(crate::prereglages::builtins().iter().all(|p| !crate::loin::Loin::actives(&p.cfg)));
+        // l'utilisateur les a allumés et réglés ; un preset (qui les ignore) est appliqué par-dessus
+        let dir = dossier("habillage");
+        let p = dir.join("config.toml");
+        let mut cfg = super::Config::default();
+        (cfg.equerres.actif, cfg.equerres.bras, cfg.lisere.actif, cfg.lisere.epaisseur) = (true, 18.0, true, 5.0);
+        super::apply_keys_in(&p, &cfg, |_, _| true).unwrap();
+        let mut preset = super::Config::default();
+        preset.orbite.rayon = 40.0;
+        super::apply_keys_in(&p, &preset, crate::profils::in_profile).unwrap();
+        let c = super::Config::read(&p).unwrap();
+        assert_eq!(c.orbite.rayon, 40.0);
+        assert_eq!((c.equerres.actif, c.equerres.bras, c.lisere.actif, c.lisere.epaisseur), (true, 18.0, true, 5.0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

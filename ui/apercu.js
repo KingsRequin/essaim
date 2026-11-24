@@ -51,6 +51,9 @@ const ORBE_POINTS = 96, ORBE_SOUFFLE = [-6, 12], ORBE_ECHO = [0.45, 0.32], ORBE_
 const VOIX_POINTS = 40, VOIX_MORCEAUX = 8, VOIX_ATTENTE = 1.5, VOIX_FONDU = [0.15, 0.8], VOIX_LARGE = [0.5, 1.6], VOIX_ONDES = [0.62, 0.4];
 const TRAME_VIDE = [7, 16], TRAME_VAGUE = [220, 10], TRAME_ONDE_MAX = 2.5, TRAME_DEPLACE = 3, TRAME_LOUPE_MAX = 1.5, TRAME_VAGUES_MAX = 12;
 const PINCEAU_VITESSE = [120, 700], PINCEAU_PERLE = [1.4, 0.4, 2.4], PENDULE_GRAVITE = 900, PENDULE_FREIN = 1.8, PENDULE_SAUT = [250, 200];
+// Équerres et liseré : comme les constantes de src/loin.rs.
+const EQUERRE_ECART = 4, EQUERRE_ELAN = [110, 260], EQUERRE_BASSE = 1.3, EQUERRE_ELAN_BRAS = 38, EQUERRE_BORNES = [[0, 26], [0.4, 3.2]];
+const LISERE_PAS = 6, LISERE_LUEUR = [36, 0.26], LISERE_KICK = [1, 0.6, 560], LISERE_DROP = [2, 1.1, 760], LISERE_ECLAT = 40, LISERE_ATTENTE = 1.5, LISERE_FONDU = [0.15, 0.8];
 const RETOMBEE = [7, 8, 10, 0.9, 10];
 const SUIVI_MONTEE = 6;
 const LISSAGE = 0.35;
@@ -134,10 +137,12 @@ function nouvellesFigures() {
     // figures/plus.rs
     kick: 0,
     orbe: { souffle: [0, 0], contour: [], echos: [] },
-    voix: { niveaux: [0, 0, 0], large: [1, 0], silence: 0, visible: 0 },
+    voix: { niveaux: [0, 0, 0], large: [1, 0], silence: VOIX_ATTENTE, visible: 0 },
     trame: { loupe: [0, 0], vagues: [], eclairs: [] },
     pinceau: { trajet: [], perles: [], vie: [0, 0] },
     pendule: { poids: null, vitesse: [0, 0], fil: [0, 0], mou: 0, cote: 1 },
+    // loin.rs
+    loin: { kick: 0, ecart: [EQUERRE_ECART, 0], bras: [1, 0], diagonales: [0, 0], tour: 0, eclats: [], embrase: 0, silence: LISERE_ATTENTE, presence: 0 },
   };
 }
 
@@ -474,7 +479,8 @@ class Apercu {
     const c = this.reglages, f = this.figures, t = this.t;
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
     const plus = ['orbe', 'voix', 'trame', 'pinceau', 'pendule'].some((s) => c[s] && c[s].actif);
-    if (!arcs.actif && !quatre.actif && !anneau.actif && !plus) { this.figures = nouvellesFigures(); return; }
+    const loin = ['equerres', 'lisere'].some((s) => c[s] && c[s].actif);
+    if (!arcs.actif && !quatre.actif && !anneau.actif && !plus && !loin) { this.figures = nouvellesFigures(); return; }
     f.horloge = reste(f.horloge + dt, TAU * 40);
     f.charleston = coups.aigus > 0 ? 1 : f.charleston * Math.exp(-dt * FIG_RETOMBEE[0]);
     f.caisse = coups.caisses > 0 ? 1 : f.caisse * Math.exp(-dt * FIG_RETOMBEE[1]);
@@ -486,6 +492,7 @@ class Apercu {
     f.tempo = son.bpm ? Math.min(1, f.tempo + dt / TEMPO_FONDU[0]) : Math.max(0, f.tempo - dt / TEMPO_FONDU[1]);
     if (son.bpm) f.mesure = ((f.compte % 4) + Math.min(1, Math.max(0, son.phase || 0))) / 4;
     if (plus) this.avancerPlus(dt, son, coups, true);
+    if (loin) this.avancerLoin(dt, coups);
     if (arcs.actif) {
       const a = f.arcs;
       for (let i = 0; i < kicks; i++) { a.cran += ARC_CRAN; a.bond[1] += ARC_BOND; }
@@ -558,6 +565,9 @@ class Apercu {
       vers(v.large, 1, [12, 0.35], dt, VOIX_LARGE);
       v.silence = v.niveaux[0] + v.niveaux[1] + v.niveaux[2] < 0.03 ? v.silence + dt : 0;
       v.visible = v.silence >= VOIX_ATTENTE ? Math.max(0, v.visible - dt / VOIX_FONDU[1]) : Math.min(1, v.visible + dt / VOIX_FONDU[0]);
+    } else {
+      f.voix.silence = VOIX_ATTENTE;
+      f.voix.visible = 0;
     }
     if (trame.actif) {
       const tr = f.trame, rayon = borne(trame.rayon, 20, 120, 46), pas = borne(trame.pas, 6, 24, 10) * S;
@@ -749,12 +759,92 @@ class Apercu {
     }
   }
 
+  // Équerres et liseré (comme loin::Loin::avance). Dans l'aperçu, la fenêtre et l'écran sont le
+  // cadre de l'aperçu : équerres à ses coins, liseré à son bord bas.
+  avancerLoin(dt, coups) {
+    const c = this.reglages, f = this.figures, l = f.loin, t = this.t;
+    const equerres = c.equerres || {}, lisere = c.lisere || {};
+    const kicks = coups.kicks, caisse = coups.caisses > 0, drop = coups.drops > 0;
+    l.kick = kicks > 0 ? 1 : l.kick * Math.exp(-dt * 7);
+    if (equerres.actif) {
+      if (kicks > 0) l.ecart[1] += EQUERRE_ELAN[0];
+      if (caisse) { l.tour ^= 1; l.diagonales[l.tour] = 1; }
+      if (drop) { l.ecart[1] += EQUERRE_ELAN[1]; l.bras[1] += EQUERRE_ELAN_BRAS; }
+      l.diagonales = l.diagonales.map((d) => d * Math.exp(-dt * 8));
+      vers(l.ecart, EQUERRE_ECART * (1 - 0.75 * f.montee) + Math.sin(t * 44) * 0.9 * f.montee, [17, 0.3], dt, EQUERRE_BORNES[0]);
+      vers(l.bras, 1 + EQUERRE_BASSE * f.basse, [14, 0.4], dt, EQUERRE_BORNES[1]);
+    }
+    if (lisere.actif) {
+      const x = this.canvas.width / 2;
+      if (kicks > 0) l.eclats.push({ x, ne: t, force: LISERE_KICK[0], vie: LISERE_KICK[1], vitesse: LISERE_KICK[2] });
+      if (drop) { l.eclats.push({ x, ne: t, force: LISERE_DROP[0], vie: LISERE_DROP[1], vitesse: LISERE_DROP[2] }); l.embrase = 1; }
+      l.eclats = l.eclats.filter((e) => t - e.ne < e.vie).slice(-8);
+      l.embrase *= Math.exp(-dt * 1.5);
+      const sonLa = f.basse > 0.02 || l.eclats.length > 0 || l.embrase > 0.02 || f.montee > 0.02;
+      l.silence = sonLa ? 0 : l.silence + dt;
+      l.presence = l.silence >= LISERE_ATTENTE ? Math.max(0, l.presence - dt / LISERE_FONDU[1]) : Math.min(1, l.presence + dt / LISERE_FONDU[0]);
+    } else {
+      l.eclats = [];
+      l.embrase = 0;
+      l.presence = 0;
+      l.silence = LISERE_ATTENTE;
+    }
+  }
+
+  // Dessin des équerres et du liseré (comme loin::Loin::dessiner), dans le cadre de l'aperçu.
+  dessinerLoin(g, S, tete, queue) {
+    const c = this.reglages, f = this.figures, l = f.loin, t = this.t, w = this.canvas.width, h = this.canvas.height;
+    const equerres = c.equerres || {}, lisere = c.lisere || {};
+    const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
+    const plein = (rgb, a = 1) => `rgba(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])},${Math.max(0, Math.min(1, a))})`;
+    if (equerres.actif) {
+      // la « fenêtre » : le cadre de l'aperçu, rentré de quoi laisser les équerres s'écarter
+      const m = (EQUERRE_BORNES[0][1] + 6) * S, e = l.ecart[0] * S, bras = borne(equerres.bras, 4, 30, 10) * l.bras[0] * S;
+      g.lineWidth = borne(equerres.epaisseur, 1, 5, 2) * S;
+      g.lineCap = "round";
+      g.lineJoin = "round";
+      [[m, m, -1, -1, 0], [w - m, m, 1, -1, 1], [w - m, h - m, 1, 1, 0], [m, h - m, -1, 1, 1]].forEach(([x, y, sx, sy, diag]) => {
+        const px = x + sx * e, py = y + sy * e;
+        g.strokeStyle = plein(tete, 0.5 + 0.5 * Math.max(l.diagonales[diag], l.kick));
+        g.beginPath();
+        g.moveTo(px - sx * bras, py);
+        g.lineTo(px, py);
+        g.lineTo(px, py - sy * bras);
+        g.stroke();
+      });
+    }
+    if (lisere.actif && l.presence > 0) {
+      const ep = borne(lisere.epaisseur, 1, 8, 3) * S, pas = LISERE_PAS * S, y = h - ep / 2, px = w / 2;
+      const lueur = LISERE_LUEUR[0] * S + LISERE_LUEUR[1] * w * f.basse;
+      g.lineWidth = ep;
+      g.lineCap = "butt";
+      for (let a = 0; a < w; a += pas) {
+        const b = Math.min(w, a + pas), milieu = (a + b) / 2;
+        let force = (0.1 + 0.75 * f.basse) * Math.exp(-(((milieu - px) / lueur) ** 2)) + 0.8 * l.embrase + 0.25 * f.montee;
+        for (const e of l.eclats) {
+          const age = t - e.ne;
+          force += e.force * Math.max(0, 1 - age / e.vie) ** 1.2 * Math.exp(-(((Math.abs(milieu - e.x) - e.vitesse * S * age) / (LISERE_ECLAT * S)) ** 2));
+        }
+        force *= l.presence;
+        if (force < 0.03) continue;
+        const k = 0.5 + 0.5 * Math.sin((milieu / w) * TAU + reste(t * 0.5, TAU));
+        g.strokeStyle = plein(tete.map((v, i) => v + (queue[i] - v) * k), Math.min(1, 0.15 + force));
+        g.beginPath();
+        g.moveTo(a, y);
+        g.lineTo(b, y);
+        g.stroke();
+      }
+      g.lineCap = "round";
+    }
+  }
+
   // Dessin des petites figures (comme figures::Figures::dessiner), autour de (cx, cy).
   dessinerFigures(g, cx, cy, S, tete, queue) {
     const c = this.reglages, f = this.figures, t = this.t;
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
     const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
     const plein = (rgb, a = 1) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${Math.max(0, Math.min(1, a))})`;
+    this.dessinerLoin(g, S, tete, queue);
     this.dessinerPlus(g, cx, cy, S, tete, queue);
     if (arcs.actif) {
       const a = f.arcs, rayon = borne(arcs.rayon, 10, 80, 20), epais = borne(arcs.epaisseur, 0.5, 6, 2.1);

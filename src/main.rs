@@ -26,6 +26,7 @@ mod figures;
 mod gpu;
 mod ipc;
 mod layer;
+mod loin;
 mod maj;
 mod media;
 mod migration;
@@ -207,6 +208,26 @@ fn main() {
         }
     }
     log::info!("arrêt");
+}
+
+/// Image de l'habillage seul (équerres, liseré), quand l'essaim n'est pas dessiné : pointeur
+/// masqué par la frappe, veille profonde. Comme la bordure, il reste en place. La zone de l'essaim
+/// de l'image précédente est effacée par le calque, le reste n'est redessiné que s'il change.
+#[allow(clippy::too_many_arguments)]
+fn habillage_seul(
+    effets: &mut effets::Effets,
+    backend: &mut backend::Backend,
+    monitors: &[(isize, layer::IRect)],
+    shared: &audio::AudioShared,
+    cfg: &config::Config,
+    t: f64,
+    dt: f32,
+    pos: (i32, i32),
+) {
+    let scale = win::scale_at(pos.0, pos.1);
+    effets.avance_habillage(t, dt, (pos.0 as f32, pos.1 as f32), scale, shared, cfg, monitors);
+    let zones: Vec<layer::IRect> = effets.zones_loin().collect();
+    backend.frame(monitors, layer::AUCUNE, &zones, &|cv, _| effets.dessiner_loin(cv, cfg, t, scale));
 }
 
 /// Bouton principal (`secondaire` = faux) ou secondaire de la souris enfoncé. Boutons inversés
@@ -422,6 +443,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             log::info!("écrans modifiés : calques refaits");
             monitors = win::monitors();
             backend.reset_layers();
+            effets.oublier_loin();
         }
         let now = Instant::now();
         let t = (now - start).as_secs_f64();
@@ -444,7 +466,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         if now >= next_fs {
             next_fs = now + Duration::from_millis(250);
             let fs = cur.as_ref().is_some_and(|c| win::fullscreen_under(c.pos.0, c.pos.1));
-            murs = if conf.cfg.particules.rebonds { win::cadre_premier_plan() } else { None };
+            // cadre de la fenêtre au premier plan : murs des rebonds, coins des équerres
+            effets.fenetre = if conf.cfg.particules.rebonds || conf.cfg.equerres.actif { win::cadre_premier_plan() } else { None };
+            murs = effets.fenetre.filter(|_| conf.cfg.particules.rebonds);
             if fs != fs_paused {
                 fs_paused = fs;
                 log::info!("{}", if fs { "plein écran : en veille" } else { "fin du plein écran" });
@@ -546,13 +570,27 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         for ev in ecoute_bordure.lire(&au).evenements().chain(souris.into_iter().filter(|e| e.1).map(|e| e.0)) {
             border.reagir(ev, declencheurs, doux, now);
         }
+        // pointeur masqué par la frappe : sa position, pour l'habillage qui continue
+        let masque = cur.as_ref().filter(|c| active && !c.showing).map(|c| c.pos);
         let Some(cur) = cur.filter(|c| active && c.showing) else {
             // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
             border.tick(active, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
-            if !cleared {
-                backend.clear();
-                cracks.clear();
-                cleared = true;
+            // l'habillage (équerres, liseré) continue comme elle ; tout le reste est effacé
+            match masque.filter(|_| effets.habillage(cfg)) {
+                Some(pos) => {
+                    cracks.clear();
+                    let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
+                    last = now;
+                    habillage_seul(&mut effets, &mut backend, &monitors, &shared, cfg, t, dt, pos);
+                    cleared = false;
+                }
+                None if !cleared => {
+                    backend.clear();
+                    cracks.clear();
+                    effets.oublier_loin();
+                    cleared = true;
+                }
+                None => {}
             }
             // à la reprise, un bouton tenu pendant la pause ne compte pas comme un clic, et le
             // compte à rebours de la veille profonde repart de zéro
@@ -588,14 +626,23 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let calme = now - last_move.max(last_sound).max(last_click);
         let endormi = cfg.rendu.veille_apres > 0 && calme >= Duration::from_secs(cfg.rendu.veille_apres.into());
         if endormi && eveil <= 0.0 {
+            // l'habillage (équerres, liseré) reste, comme la bordure : seul l'essaim s'éteint
+            let habille = effets.habillage(cfg);
             if !profond {
                 profond = true;
-                backend.clear();
+                if !habille {
+                    backend.clear();
+                }
                 cracks.clear();
                 charge::publier_veille(true);
                 log::info!("veille profonde : plus rien n'est dessiné");
             }
             border.tick(true, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
+            if habille {
+                let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
+                last = now;
+                habillage_seul(&mut effets, &mut backend, &monitors, &shared, cfg, t, dt, cur.pos);
+            }
             win::attendre(VEILLE_LECTURE);
             continue;
         }
@@ -672,6 +719,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         cracks.retain(|c| t - c.born <= life);
         if cfg.rendu.carte_graphique != backend.wants_gpu() && conf_gen != backend_gen {
             backend = backend::Backend::new(cfg.rendu.carte_graphique);
+            effets.oublier_loin();
         }
         backend_gen = conf_gen;
 
@@ -683,6 +731,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let swarm_rect = layer::union(Some(swarm_rect), effets.rect_pointeur(cursor, scale, cfg)).unwrap_or(swarm_rect);
         let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         crack_rects.extend(effets.rect_ecran());
+        // équerres et liseré : seulement quand leur dessin change
+        crack_rects.extend(effets.zones_loin());
         let rgb = render::prisme(cfg, t, 1.0);
         border.tick(true, &cfg.bordure, rgb, now);
         let env = swarm.env;
@@ -700,6 +750,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             }
         };
         let draw = |cv: &mut dyn canvas::Canvas, here: bool| {
+            // l'habillage ne s'estompe pas avec l'essaim : il reste pendant la veille
+            effets.dessiner_loin(cv, cfg, t, scale);
             if eveil < 1.0 {
                 dessiner(&mut canvas::Fondu { cv, k: eveil }, here);
             } else {

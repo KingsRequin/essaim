@@ -343,6 +343,26 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   s'étire pas : après chaque pas, le poids est ramené à la longueur du fil et sa vitesse
   recalculée d'après son vrai déplacement (le fil tendu l'entraîne), stable de 20 à 144 images/s
   (essai `le_pendule_reste_au_bout_de_son_fil`).
+- **Équerres et liseré** (`loin.rs`) : habillage de la fenêtre et de l'écran, hors des presets
+  (`profils::SECTIONS` ne contient ni `equerres` ni `lisere` : appliquer un preset n'y touche
+  pas, et aucun preset fourni ne les allume). Comme la bordure, il reste quand l'essaim n'est
+  pas dessiné : pointeur masqué par la frappe et veille profonde passent par
+  `main::habillage_seul`, une image sans zone d'essaim (`layer::AUCUNE`) où seul `Loin` avance
+  et dessine ; il n'est jamais estompé avec l'essaim (dessiné hors du fondu de veille). Pause et
+  plein écran effacent tout : la boucle le dit à `Loin` (`Effets::oublier_loin`, aussi quand les
+  calques sont refaits), qui redonne alors toutes ses zones ; en filet, les équerres au repos
+  les redonnent toutes les 3 s (un calque sans zone depuis 10 s est retiré). `Effets` possède
+  `Loin`, lui passe le son, le cadre de la fenêtre au premier plan (`win::cadre_premier_plan`,
+  relu toutes les 250 ms par la boucle principale, aussi pour les rebonds) et l'écran du pointeur. Leurs zones s'ajoutent à celles
+  des fissures (`Effets::zones_loin`), et ils sont dessinés sur tous les écrans
+  (`Effets::dessiner_loin`). `Backend::frame` redessine, par écran, un seul rectangle qui englobe
+  toutes les zones : une zone loin du pointeur l'agrandit d'autant. Les équerres ne donnent donc
+  leurs zones que quand leur dessin change (cadre, écart, bras, opacités et couleur comparés à
+  ceux de l'image précédente, au quart de pixel près ; anciennes et nouvelles zones ensemble) : au
+  repos, plus rien n'est redessiné, et ce qui est affiché reste en place. Une teinte qui glisse
+  ne compte que quand l'écart se voit (`EQUERRE_NUANCE`) : une dizaine de fois par seconde. Le
+  liseré donne sa bande à chaque image tant qu'il y a du son, puis une dernière fois pour
+  s'effacer.
 - **Réglages d'avant** (`migration.rs`) : les réactions fixes d'Essaim 0.3 et 0.4 (`[musique]`,
   `[clic]`, `[scintillement]`, `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`,
   `[audio] pulsation_tempo`, `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`,

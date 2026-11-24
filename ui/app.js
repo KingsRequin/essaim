@@ -206,7 +206,8 @@ const FORMES = [
 const FORMES_REGLAGE = [...FORMES, ["trace", "Image…"], ["icone", "Icône de l'appli"]];
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Icône de l'appli" };
-// Sections enregistrées dans un preset (comme profils::SECTIONS).
+// Sections enregistrées dans un preset (comme profils::SECTIONS). L'habillage de la fenêtre et
+// de l'écran (equerres, lisere) n'en fait pas partie : il reste d'un preset à l'autre.
 const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "arcs",
   "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "audio", "bordure", "souris", "modulations", "declencheurs",
@@ -771,6 +772,9 @@ const IMPACT = {
   "trame.actif": [2, "estime"], "trame.rayon": [3, "estime"], "trame.pas": [2, "estime"], "trame.taille": [1, "estime"],
   "pinceau.actif": [1, "estime"], "pinceau.largeur": [1, "estime"], "pinceau.duree": [1, "estime"],
   "pendule.actif": [1, "estime"], "pendule.longueur": [1, "estime"], "pendule.taille": [1, "estime"],
+  // loin du pointeur : leur zone agrandit celle que le moteur redessine
+  "equerres.actif": [2, "estime"], "equerres.bras": [1, "estime"], "equerres.epaisseur": [1, "estime"],
+  "lisere.actif": [3, "estime"], "lisere.epaisseur": [1, "estime"],
   // actions des déclencheurs (estimé : une particule de plus ou de moins pèse peu, une gerbe d'étincelles un peu plus)
   "action.eclat": [1, "estime"], "action.satellites": [2, "estime"], "action.inversion": [1, "estime"], "action.bordure": [1, "estime"],
   "action.onde": [1, "estime"], "action.eclats": [2, "estime"], "action.fissure": [2, "estime"], "action.implosion": [1, "estime"],
@@ -786,6 +790,8 @@ const PRECISIONS = {
   "orbe.actif": "Demande l'analyse du son en bandes, comme le spectre (16 bandes s'il est coupé).",
   "trame.rayon": "Une loupe plus grande, ce sont plus de points à dessiner et une zone plus large redessinée à chaque image.",
   "trame.pas": "Un pas plus serré multiplie les points : quatre fois plus à moitié pas.",
+  "equerres.actif": "Quand les équerres bougent (un kick, la basse), le moteur redessine un rectangle qui va du pointeur aux coins de la fenêtre ; au repos, rien.",
+  "lisere.actif": "Tant que la musique joue, le moteur redessine un rectangle qui va du pointeur au bord bas de l'écran. Léger avec la carte graphique, lourd avec le dessin par le processeur.",
   "action.fissure": "Une fissure redessine sa zone de l'écran pendant qu'elle s'efface.",
   "essaim.constellation": "Une ligne par paire de têtes proches, 160 au plus.",
 };
@@ -1047,14 +1053,6 @@ const PANNEAUX = [
     ],
   },
   {
-    id: "bordure", famille: "Les effets", titre: "Bordure", actif: ["bordure", "active"],
-    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11). Pas en mode sans flashs.",
-    base: [
-      { libelle: "Luminosité au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
-      { quand: ["bordure"], libelle: "S'illumine quand" },
-    ],
-  },
-  {
     id: "spectre", famille: "Les effets", titre: "Spectre", actif: ["spectre", "actif"],
     note: "Un anneau de barres autour du pointeur, une par bande de fréquences, plus longues quand la bande est forte.",
     base: [
@@ -1156,6 +1154,31 @@ const PANNEAUX = [
       { libelle: "Obscurité du projecteur", section: "projecteur", cle: "opacite", si: SI.projecteur, min: 0.2, max: 0.95, pas: 0.01, ...pourcent },
       { libelle: "Épaisseur du réticule", section: "reticule", cle: "epaisseur", si: SI.reticule, min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
       { libelle: "Vide du réticule", section: "reticule", cle: "vide", si: SI.reticule, min: 4, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+    ],
+  },
+  // Habillage de la fenêtre au premier plan et de l'écran : loin du pointeur, aux couleurs de
+  // l'essaim. La bordure est réglée par le preset ; équerres et liseré sont hors des presets.
+  {
+    id: "bordure", famille: "Fenêtre et écran", titre: "Bordure", actif: ["bordure", "active"],
+    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11). Pas en mode sans flashs.",
+    base: [
+      { libelle: "Luminosité au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
+      { quand: ["bordure"], libelle: "S'illumine quand" },
+    ],
+  },
+  {
+    id: "equerres", famille: "Fenêtre et écran", titre: "Équerres", actif: ["equerres", "actif"],
+    note: "Quatre petites équerres aux coins de la fenêtre au premier plan, à l'extérieur de son cadre, aux couleurs de l'essaim. Elles s'écartent sur le kick, leurs bras s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre. Comme la bordure, elles accompagnent l'essaim quel que soit le preset : elles ne font pas partie des presets et restent quand tu en changes. Dans l'aperçu, la fenêtre est le cadre de l'aperçu.",
+    base: [
+      { libelle: "Longueur des bras", section: "equerres", cle: "bras", min: 4, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Épaisseur", section: "equerres", cle: "epaisseur", min: 1, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "lisere", famille: "Fenêtre et écran", titre: "Liseré", actif: ["lisere", "actif"], si: SI.son,
+    note: "Un filet de lumière au bord bas de l'écran du pointeur, à son aplomb, aux couleurs de l'essaim. Il s'élargit avec la basse, chaque kick y court vers les deux côtés, un drop allume tout le bord ; il s'efface quand plus rien ne joue. Il ne fait pas partie des presets et reste quand tu en changes. Dans l'aperçu, l'écran est le cadre de l'aperçu.",
+    base: [
+      { libelle: "Épaisseur", section: "lisere", cle: "epaisseur", min: 1, max: 8, pas: 0.5, aff: (v) => virgule(+v, 1) },
     ],
   },
   {

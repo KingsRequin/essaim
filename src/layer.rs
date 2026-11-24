@@ -22,6 +22,9 @@ pub fn union(a: Option<IRect>, b: Option<IRect>) -> Option<IRect> {
     }
 }
 
+/// Zone vide : ne touche aucun écran (image sans essaim : l'habillage seul).
+pub const AUCUNE: IRect = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+
 pub fn intersects(a: IRect, b: IRect) -> bool {
     a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
