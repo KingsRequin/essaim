@@ -13,7 +13,7 @@
 use crate::config::{Action, Bordure, Declencheur, Evenement};
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
@@ -96,6 +96,55 @@ pub fn restore() {
     for h in list.into_iter().filter(|&h| h != 0) {
         let _ = set_color(HWND(h as *mut c_void), COLOR_DEFAULT);
     }
+}
+
+/// Filtre d'exceptions non gérées (`SetUnhandledExceptionFilter`) : `info` pointe sur
+/// `EXCEPTION_POINTERS` ; renvoie `EXCEPTION_CONTINUE_SEARCH` (0) pour laisser le plantage suivre
+/// son cours.
+type FiltreExceptions = unsafe extern "system" fn(info: *const c_void) -> i32;
+
+// Déclarés ici plutôt que par le paquet `windows` : le filtre ne doit rien allouer ni passer par
+// la conversion d'erreurs (`windows::core::Error`), et cela évite deux fonctions de plus au paquet.
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn SetUnhandledExceptionFilter(filtre: Option<FiltreExceptions>) -> Option<FiltreExceptions>;
+}
+#[link(name = "dwmapi", kind = "raw-dylib")]
+unsafe extern "system" {
+    #[link_name = "DwmSetWindowAttribute"]
+    fn dwm_attribut(hwnd: *mut c_void, attribut: u32, valeur: *const c_void, taille: u32) -> i32;
+}
+
+/// Filtre installé avant le nôtre (rappelé ensuite), en adresse.
+static FILTRE_PRECEDENT: AtomicUsize = AtomicUsize::new(0);
+
+/// Plantage hors Rust (violation d'accès, débordement de pile, erreur d'une bibliothèque) : rend
+/// sa couleur à la fenêtre colorée, sans allouer ni toucher au disque (le témoin `bordure.hwnd`
+/// reste pour le lancement suivant), puis passe la main au filtre précédent ou au système.
+unsafe extern "system" fn filtre_plantage(info: *const c_void) -> i32 {
+    let h = COLORED.swap(0, Ordering::Relaxed);
+    if h != 0 {
+        let c = COLOR_DEFAULT;
+        unsafe {
+            dwm_attribut(h as *mut c_void, DWMWA_BORDER_COLOR.0 as u32, &c as *const u32 as *const c_void, 4);
+        }
+    }
+    match FILTRE_PRECEDENT.load(Ordering::Relaxed) {
+        0 => 0,
+        // SAFETY : adresse d'un `FiltreExceptions` rendue par `SetUnhandledExceptionFilter`
+        p => unsafe { std::mem::transmute::<usize, FiltreExceptions>(p)(info) },
+    }
+}
+
+/// Installe le filtre des plantages hors Rust (les paniques ont leur propre gestionnaire) : la
+/// bordure colorée est rendue avant que le processus ne s'arrête. Une fois, au lancement.
+pub fn installer_filtre_plantage() {
+    // installé deux fois, il se rappellerait lui-même sans fin
+    static UNE_FOIS: std::sync::Once = std::sync::Once::new();
+    UNE_FOIS.call_once(|| {
+        let precedent = unsafe { SetUnhandledExceptionFilter(Some(filtre_plantage)) };
+        FILTRE_PRECEDENT.store(precedent.map_or(0, |f| f as usize), Ordering::Relaxed);
+    });
 }
 
 /// Fenêtre au premier plan si sa bordure peut être colorée.

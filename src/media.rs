@@ -5,8 +5,9 @@
 //!
 //! Tout se passe sur un fil à part (« essaim-media ») : les appels WinRT asynchrones y sont
 //! attendus (`join`), jamais sur le fil de rendu, qui ne lit que l'état publié ici. Mise à jour
-//! sur les événements de Windows (session courante, propriétés du morceau, lecture), et au moins
-//! toutes les secondes. Sans l'API (Windows N sans Media Feature Pack), rien ne change : c'est
+//! sur les événements de Windows (session courante, propriétés du morceau, lecture), et par une
+//! interrogation de secours toutes les 5 s (chaque seconde tant qu'une pochette ou une reprise
+//! de lecture est attendue). Sans l'API (Windows N sans Media Feature Pack), rien ne change : c'est
 //! noté une fois au journal.
 
 use crate::appli::teinte_dominante;
@@ -26,8 +27,12 @@ use windows::Media::Control::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
-/// Interrogation de secours quand aucun événement n'arrive.
-const INTERROGATION: Duration = Duration::from_secs(1);
+/// Interrogation de secours quand aucun événement n'arrive (les événements de Windows suffisent
+/// d'ordinaire : elle ne rattrape qu'un événement perdu).
+const INTERROGATION: Duration = Duration::from_secs(5);
+/// Interrogation rapprochée tant qu'une réponse est attendue sous peu : pochette pas encore
+/// arrivée, ou changement de piste vu en pause qui compte si la lecture reprend.
+const INTERROGATION_PROCHE: Duration = Duration::from_secs(1);
 /// Après un événement, on attend que les suivants (titre, puis pochette…) soient passés.
 const APAISEMENT: Duration = Duration::from_millis(150);
 /// Un changement de piste vu en pause compte si la lecture reprend dans ce délai (titre et
@@ -360,7 +365,8 @@ fn fil() {
             PISTES.fetch_add(1, Ordering::Relaxed);
         }
         // attente : un événement (puis la fin de sa rafale), ou l'interrogation de secours
-        let mut premier = match rx.recv_timeout(INTERROGATION) {
+        let attendu = (essais > 0 && pochette.is_none()) || suivi.differe.is_some();
+        let mut premier = match rx.recv_timeout(if attendu { INTERROGATION_PROCHE } else { INTERROGATION }) {
             Ok(s) => Some(s),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => return,

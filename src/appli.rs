@@ -4,10 +4,15 @@
 //! d'adresse, mesurée quand le titre de la fenêtre change et toutes les 3 s, sur un fil à part
 //! (la copie d'écran ne retarde pas l'image). La fenêtre au premier plan est lue à chaque image
 //! (`GetForegroundWindow`, sans hook), son titre toutes les 250 ms au plus.
+//!
+//! Tout le travail lent (extraction de l'icône, teinte, contours, copie d'écran) se fait sur le
+//! fil « essaim-teinte » ; le fil de rendu lui envoie des demandes et relit les réponses sans
+//! attendre. En attendant, la teinte et les contours précédents restent.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND};
@@ -32,10 +37,105 @@ const NAVIGATEURS: [&str; 13] = [
     "floorp.exe", "waterfox.exe", "thorium.exe", "chromium.exe",
 ];
 
+/// Travail confié au fil « essaim-teinte ».
+enum Travail {
+    /// Teinte du haut de la page affichée par la fenêtre de navigateur.
+    Page(isize),
+    /// Teinte de l'icône de l'exécutable.
+    TeinteIcone(String),
+    /// Contours de l'icône de l'exécutable.
+    Contours(String),
+}
+
+/// Réponse du fil, avec ce qui a été demandé.
+enum Resultat {
+    Page(isize, Option<f32>),
+    TeinteIcone(String, Option<f32>),
+    Contours(String, Vec<Vec<[f32; 2]>>),
+}
+
+impl Travail {
+    fn faire(self) -> Resultat {
+        match self {
+            Travail::Page(h) => Resultat::Page(h, teinte_page(HWND(h as *mut c_void))),
+            Travail::TeinteIcone(exe) => {
+                let t = icone(&exe).and_then(|px| teinte_dominante(&px));
+                Resultat::TeinteIcone(exe, t)
+            }
+            Travail::Contours(exe) => {
+                let o = crate::contours::Options { tous: true, ..Default::default() };
+                let c = icone_rgba(&exe, 128).map(|(px, l, h)| crate::contours::contours(&px, l, h, &o).contours).unwrap_or_default();
+                Resultat::Contours(exe, c)
+            }
+        }
+    }
+}
+
+type Demande = (Travail, Sender<Resultat>);
+
+/// Fil « essaim-teinte », lancé à la première demande et partagé : il traite les demandes une à
+/// une et répond à chacune par le canal joint.
+fn fil_teinte() -> Option<&'static Sender<Demande>> {
+    static FIL: OnceLock<Option<Sender<Demande>>> = OnceLock::new();
+    FIL.get_or_init(|| {
+        let (demandes, recues) = channel::<Demande>();
+        std::thread::Builder::new()
+            .name("essaim-teinte".into())
+            .spawn(move || {
+                for (travail, reponse) in recues {
+                    let _ = reponse.send(travail.faire());
+                }
+            })
+            .map_err(|e| log::warn!("teinte et contours des applications : fil impossible ({e}), calcul sur place"))
+            .ok()?;
+        Some(demandes)
+    })
+    .as_ref()
+}
+
+/// Boîte aux lettres d'un demandeur : ses demandes partent au fil, ses réponses y arrivent.
+struct Boite {
+    envoi: Sender<Resultat>,
+    recus: Receiver<Resultat>,
+}
+
+impl Default for Boite {
+    fn default() -> Self {
+        let (envoi, recus) = channel();
+        Self { envoi, recus }
+    }
+}
+
+impl Boite {
+    /// Confie `travail` au fil ; sans fil, le fait sur place (la réponse attend dans la boîte).
+    fn demander(&self, travail: Travail) {
+        let travail = match fil_teinte() {
+            Some(fil) => match fil.send((travail, self.envoi.clone())) {
+                Ok(()) => return,
+                Err(e) => e.0 .0,
+            },
+            None => travail,
+        };
+        let _ = self.envoi.send(travail.faire());
+    }
+
+    /// Réponses arrivées depuis le dernier appel, sans attendre.
+    fn recues(&self) -> std::sync::mpsc::TryIter<'_, Resultat> {
+        self.recus.try_iter()
+    }
+}
+
+/// Nom court (en minuscules) d'un exécutable.
+fn nom_exe(exe: &str) -> String {
+    exe.rsplit('\\').next().unwrap_or(exe).to_lowercase()
+}
+
 #[derive(Default)]
 pub struct TeinteAppli {
     fenetre: isize,
-    /// Teinte de l'icône de l'application au premier plan (aucune : grise).
+    /// Exécutable de la fenêtre au premier plan.
+    exe: String,
+    /// Teinte de l'icône de l'application au premier plan (aucune : grise, ou pas encore connue).
     icone: Option<f32>,
     navigateur: bool,
     /// Titre de la fenêtre du navigateur à la dernière lecture, et prochaine mesure de la page.
@@ -44,57 +144,58 @@ pub struct TeinteAppli {
     /// Dernière lecture du titre.
     titre_lu: Option<Instant>,
     teinte: Option<f32>,
+    /// Teinte de l'icône, par exécutable.
     cache: HashMap<String, Option<f32>>,
-    /// Fil de mesure de la page, lancé à la première mesure.
-    mesureur: Option<Mesureur>,
-}
-
-/// Lecture d'écran sur un fil à part : on lui envoie une fenêtre, il répond (fenêtre, teinte).
-struct Mesureur {
-    demandes: Sender<isize>,
-    reponses: Receiver<(isize, Option<f32>)>,
-    en_cours: bool,
-}
-
-impl Mesureur {
-    fn lancer() -> Option<Self> {
-        let (demandes, recues) = channel::<isize>();
-        let (envoi, reponses) = channel();
-        std::thread::Builder::new()
-            .name("essaim-teinte".into())
-            .spawn(move || {
-                for h in recues {
-                    if envoi.send((h, teinte_page(HWND(h as *mut c_void)))).is_err() {
-                        break;
-                    }
-                }
-            })
-            .map_err(|e| log::warn!("teinte du site : fil impossible ({e})"))
-            .ok()?;
-        Some(Self { demandes, reponses, en_cours: false })
-    }
+    /// Exécutables dont la teinte est demandée au fil.
+    demandees: HashSet<String>,
+    /// Une mesure de page est en cours sur le fil.
+    page_en_cours: bool,
+    boite: Boite,
 }
 
 impl TeinteAppli {
     /// Teinte (degrés) à suivre : celle du site dans un navigateur (`site`), sinon celle de
-    /// l'icône de l'application (`appli`). Essaim lui-même, une icône grise ou une page sans
-    /// couleur nette gardent la teinte précédente ; ailleurs, sans option qui s'applique, aucune.
+    /// l'icône de l'application (`appli`). Essaim lui-même, une icône grise ou pas encore lue, ou
+    /// une page sans couleur nette gardent la teinte précédente ; ailleurs, sans option qui
+    /// s'applique, aucune.
     pub fn courante(&mut self, appli: bool, site: bool, now: Instant) -> Option<f32> {
         let fg = unsafe { GetForegroundWindow() };
         if fg.0 as isize != self.fenetre {
             self.fenetre = fg.0 as isize;
-            let Some(exe) = executable(fg) else {
-                self.navigateur = false;
-                return self.teinte;
-            };
-            let nom = exe.rsplit('\\').next().unwrap_or(&exe).to_lowercase();
-            self.navigateur = NAVIGATEURS.contains(&nom.as_str());
-            self.icone = *self.cache.entry(exe.clone()).or_insert_with(|| {
-                let t = icone(&exe).and_then(|px| teinte_dominante(&px));
-                log::info!("teinte de {nom} : {}", t.map_or("grise, ignorée".into(), |h| format!("{h:.0}°")));
-                t
-            });
-            (self.titre, self.mesure, self.titre_lu) = (String::new(), Some(now + Duration::from_millis(300)), None);
+            match executable(fg) {
+                Some(exe) => {
+                    self.navigateur = NAVIGATEURS.contains(&nom_exe(&exe).as_str());
+                    self.icone = self.cache.get(&exe).copied().flatten();
+                    if !self.cache.contains_key(&exe) && self.demandees.insert(exe.clone()) {
+                        self.boite.demander(Travail::TeinteIcone(exe.clone()));
+                    }
+                    self.exe = exe;
+                    (self.titre, self.mesure, self.titre_lu) = (String::new(), Some(now + Duration::from_millis(300)), None);
+                }
+                None => self.navigateur = false,
+            }
+        }
+        // réponses du fil : teintes d'icônes (gardées par exécutable) et mesure de la page
+        // (ignorée si la fenêtre a changé entre-temps ou si le site n'est plus suivi)
+        let mut page = None;
+        for r in self.boite.recues() {
+            match r {
+                Resultat::TeinteIcone(exe, t) => {
+                    log::info!("teinte de {} : {}", nom_exe(&exe), t.map_or("grise, ignorée".into(), |h| format!("{h:.0}°")));
+                    if exe == self.exe {
+                        self.icone = t;
+                    }
+                    self.demandees.remove(&exe);
+                    self.cache.insert(exe, t);
+                }
+                Resultat::Page(h, t) => {
+                    self.page_en_cours = false;
+                    if h == self.fenetre {
+                        page = Some(t);
+                    }
+                }
+                Resultat::Contours(..) => {}
+            }
         }
         if site && self.navigateur {
             // nouvelle page (titre changé) : mesure un peu après, le temps qu'elle s'affiche
@@ -106,24 +207,17 @@ impl TeinteAppli {
                     self.mesure = Some(now + Duration::from_millis(700));
                 }
             }
-            if self.mesure.is_some_and(|m| now >= m) && !self.mesureur.as_ref().is_some_and(|m| m.en_cours) {
+            if self.mesure.is_some_and(|m| now >= m) && !self.page_en_cours {
                 self.mesure = Some(now + Duration::from_secs(3));
-                if self.mesureur.is_none() {
-                    self.mesureur = Mesureur::lancer();
-                }
-                if let Some(m) = &mut self.mesureur {
-                    m.en_cours = m.demandes.send(self.fenetre).is_ok();
-                }
+                self.page_en_cours = true;
+                self.boite.demander(Travail::Page(self.fenetre));
             }
-            // réponse du fil de mesure (ignorée si la fenêtre a changé entre-temps)
-            if let Some((h, page)) = self.mesureur.as_mut().and_then(|m| m.reponses.try_recv().ok().inspect(|_| m.en_cours = false)) {
-                if h == self.fenetre {
-                    if let Some(t) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
-                        log::info!("teinte du site : {t:.0}°");
-                    }
-                    if let Some(t) = page.or(if appli { self.icone } else { None }) {
-                        self.teinte = Some(t);
-                    }
+            if let Some(page) = page {
+                if let Some(t) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
+                    log::info!("teinte du site : {t:.0}°");
+                }
+                if let Some(t) = page.or(if appli { self.icone } else { None }) {
+                    self.teinte = Some(t);
                 }
             }
             return self.teinte;
@@ -210,11 +304,16 @@ pub struct IconeAppli {
     derniere: String,
     exe: String,
     cache: HashMap<String, Vec<Vec<[f32; 2]>>>,
+    /// Exécutables dont les contours sont demandés au fil.
+    demandes: HashSet<String>,
+    boite: Boite,
 }
 
 impl IconeAppli {
     /// Les contours, s'ils ont changé depuis l'appel précédent ; `actif` : le trajet suit l'icône
-    /// (sinon, seule l'application au premier plan est notée).
+    /// (sinon, seule l'application au premier plan est notée). Ceux d'une application encore
+    /// inconnue sont calculés sur le fil « essaim-teinte » : ils arrivent quelques images plus
+    /// tard, les précédents restent en attendant.
     pub fn suivre(&mut self, actif: bool) -> Option<Vec<Vec<[f32; 2]>>> {
         let fg = unsafe { GetForegroundWindow() };
         if fg.0 as isize != self.fenetre {
@@ -223,29 +322,30 @@ impl IconeAppli {
                 self.derniere = exe;
             }
         }
+        for r in self.boite.recues() {
+            if let Resultat::Contours(exe, c) = r {
+                log::info!("contour de l'icône de {} : {} forme(s)", nom_exe(&exe), c.len());
+                self.demandes.remove(&exe);
+                self.cache.insert(exe, c);
+            }
+        }
         if !actif || self.derniere.is_empty() || self.derniere == self.exe {
             return None;
         }
-        let exe = self.derniere.clone();
-        self.exe = exe.clone();
-        let contours = self
-            .cache
-            .entry(exe.clone())
-            .or_insert_with(|| {
-                let o = crate::contours::Options { tous: true, ..Default::default() };
-                let c = icone_rgba(&exe, 128).map(|(px, l, h)| crate::contours::contours(&px, l, h, &o).contours).unwrap_or_default();
-                log::info!("contour de l'icône de {} : {} forme(s)", exe.rsplit('\\').next().unwrap_or(&exe), c.len());
-                c
-            })
-            .clone();
-        (!contours.is_empty()).then_some(contours)
+        let Some(contours) = self.cache.get(&self.derniere) else {
+            if self.demandes.insert(self.derniere.clone()) {
+                self.boite.demander(Travail::Contours(self.derniere.clone()));
+            }
+            return None;
+        };
+        self.exe = self.derniere.clone();
+        (!contours.is_empty()).then(|| contours.clone())
     }
 }
 
 /// Nom (en minuscules) de l'exécutable de la fenêtre au premier plan ; aucun pour Essaim.
 pub fn nom_premier_plan() -> Option<String> {
-    let exe = executable(unsafe { GetForegroundWindow() })?;
-    Some(exe.rsplit('\\').next().unwrap_or(&exe).to_lowercase())
+    executable(unsafe { GetForegroundWindow() }).map(|exe| nom_exe(&exe))
 }
 
 /// Exécutables des fenêtres visibles (pour proposer des règles automatiques).
@@ -256,7 +356,7 @@ pub fn applis_ouvertes() -> Vec<String> {
         let liste = unsafe { &mut *(l.0 as *mut Vec<String>) };
         if unsafe { IsWindowVisible(h) }.as_bool() && !titre(h).is_empty() {
             if let Some(exe) = executable(h) {
-                let nom = exe.rsplit('\\').next().unwrap_or(&exe).to_lowercase();
+                let nom = nom_exe(&exe);
                 if !liste.contains(&nom) {
                     liste.push(nom);
                 }

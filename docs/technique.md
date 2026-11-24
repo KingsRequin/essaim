@@ -37,7 +37,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
   notée dans `bordure.hwnd` pour le cas où Essaim est tué ; ce témoin n'est réécrit que pour une
   nouvelle fenêtre colorée, et le hook de plantage ne rend la bordure que si c'est le fil
-  principal qui plante). Ignorées (`bordure::eligible`, aussi utilisé par
+  principal qui plante ; une exception non gérée hors Rust passe par un filtre,
+  `bordure::installer_filtre_plantage`, qui rend la couleur sans allouer ; seuls `abort` et
+  `__fastfail` y échappent, le témoin sert alors au lancement suivant). Ignorées (`bordure::eligible`, aussi utilisé par
   `win::cadre_premier_plan` pour le halo, les équerres et les rebonds) : fenêtres sans cadre ni
   barre de titre (barres et menus superposés, comme ceux d'Horizon), outils
   (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, calques et fenêtre de stream d'Essaim, plein
@@ -53,8 +55,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global), bouton principal et
   bouton secondaire (clic droit) ; boutons inversés (`SM_SWAPBUTTON`) : le principal est le droit.
 - **Rebonds** : cadre affiché de la fenêtre au premier plan (`DWMWA_EXTENDED_FRAME_BOUNDS`, relu
-  toutes les 250 ms avec le plein écran ; ni bureau, ni barre des tâches, ni fenêtre réduite, en
-  plein écran ou d'Essaim). Une étincelle ou un grain de poussière qui traverse un bord entre deux
+  à chaque image par `main::lire_fenetre` ; mêmes fenêtres que la bordure, `bordure::eligible` :
+  ni bureau, ni barre des tâches, ni barre ou menu sans cadre, ni fenêtre réduite ou en plein
+  écran, ni calque d'Essaim). Une étincelle ou un grain de poussière qui traverse un bord entre deux
   pas est réfléchi (vitesse × 0,7).
 - **Trajet d'une image** (`contours.rs`) : valeur de forme de chaque pixel (l'opacité si l'image a
   de la transparence, sinon la luminosité, du côté du seuil d'Otsu qui n'est pas le fond que
@@ -85,16 +88,21 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   déclencheurs ne font rien).
 - **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
-  (sinon elle resterait figée sur l'écran quitté). Calques refaits quand la configuration des
-  écrans change (`WM_DISPLAYCHANGE`).
+  (sinon elle resterait figée sur l'écran quitté). Quand la configuration des écrans change
+  (`WM_DISPLAYCHANGE`, `WM_DPICHANGED` ; pas la zone de travail, que la barre des tâches fait
+  bouger), seuls les calques des écrans disparus, déplacés ou redimensionnés sont refaits
+  (`Backend::ecrans_changes`) : un calque détruit sous la souris lui ferait perdre son curseur.
+  Pour la même raison, un calque n'est jamais caché : effacé, il reçoit une image transparente.
 - **Kick** : un seul par coup, même long et ondulant (type 808) : un kick est une attaque, et deux
   attaques doivent être séparées d'au moins `[audio] delai_kick` (0,1 s ; la double pédale du metal
   descend vers 0,08 s).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
   **Veille** : rien de neuf depuis `[rendu] veille_apres` (60 s) → fondu de 1 s, puis plus aucun
   dessin ; souris, son et clics restent lus toutes les 40 ms (réveil en 0,25 s au plus).
-- **Carte graphique** : en cas d'erreur, bascule sur le processeur et nouvel essai 10 s plus
-  tard, puis toutes les 30 s.
+- **Carte graphique** : en cas d'erreur, bascule sur le processeur ; nouvel essai 10 s plus tard,
+  puis attente triplée à chaque échec (10 min au plus, remise à 10 s après 5 min sans erreur).
+  Les calques processeur ne sont remplacés qu'après une image carte graphique réussie ; un calque
+  carte graphique est créé caché et montré une fois prêt.
 - **Pauses automatiques** (`pauses.rs`) : `SHQueryUserNotificationState` chaque seconde (pause
   sur `QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`, `QUNS_PRESENTATION_MODE` ; pas
   `QUNS_QUIET_TIME`, première heure d'un nouveau compte ; `QUNS_BUSY` seulement si une vraie
@@ -144,7 +152,7 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
   fil « essaim-media » (MTA, appels asynchrones attendus par `join`), réveillé par
   `CurrentSessionChanged`, `MediaPropertiesChanged` et `PlaybackInfoChanged`, et au moins
-  toutes les secondes. Miniature décodée en 48 × 48 (`BitmapDecoder`) puis
+  toutes les 5 s (chaque seconde tant qu'une pochette ou une reprise de lecture est attendue). Miniature décodée en 48 × 48 (`BitmapDecoder`) puis
   `appli::teinte_dominante`. Priorité des teintes : pochette (pendant la lecture) > application
   ou site > Prisme. Sans l'API (Windows N), une ligne au journal et rien ne change. Message
   `charge` : `morceau`, `lecture`, `pistes`.
@@ -444,9 +452,12 @@ vérifie l'en-tête `MZ`, l'empreinte `digest` (SHA-256 par `BCryptHash`) et la 
 `essaim.exe.sig` : ECDSA P-256 (r puis s, 64 octets) sur « essaim.exe <version> <sha256> », par
 l'une des deux clés publiques de `CLES` (principale, secours), vérifiée par BCrypt. Sans
 signature valide, rien n'est installé : GitHub seul (compte, workflow, dépendance de
-compilation piégée) ne peut pas pousser un exécutable chez les utilisateurs. Il renomme ensuite
-l'exécutable en cours en `.ancien` et met le nouveau à sa place (Windows autorise le renommage
-d'un exécutable lancé). Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
+compilation piégée) ne peut pas pousser un exécutable chez les utilisateurs. Le nouveau fichier
+est écrit puis forcé sur le disque ; l'exécutable en cours est déplacé en `.ancien` (Windows
+autorise le renommage d'un exécutable lancé) et le nouveau mis à sa place, chaque fois par
+`MoveFileExW` (`REPLACE_EXISTING | WRITE_THROUGH`) avec cinq nouveaux essais espacés (un
+antivirus qui tient le fichier) ; à défaut, le nouveau est copié, sinon l'ancien revient : il
+reste toujours un `essaim.exe`. Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
 d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
 ne vérifie rien.
 

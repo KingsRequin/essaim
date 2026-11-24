@@ -80,6 +80,7 @@ impl Gpu {
             };
             match make() {
                 Ok((target, visual, surface)) => {
+                    crate::win::show_window(hwnd);
                     Ok(GpuLayer {
                         mon,
                         rect,
@@ -163,9 +164,8 @@ impl GpuLayer {
 
     /// Efface ce qui est affiché (pause, curseur masqué). À suivre d'un `commit`.
     pub fn clear(&mut self, gpu: &Gpu) -> windows::core::Result<()> {
-        self.frame(gpu, None, |_| {})?;
-        self.prev = None;
-        Ok(())
+        // sans zone à dessiner, `frame` efface la précédente et n'en garde aucune
+        self.frame(gpu, None, |_| {}).map(|_| ())
     }
 }
 

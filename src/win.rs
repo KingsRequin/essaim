@@ -44,6 +44,9 @@ pub struct Surface {
     bits: *mut u8,
     w: i32,
     h: i32,
+    /// Affichée au premier envoi, puis jamais cachée : vider le calque, c'est lui envoyer une zone
+    /// transparente (`Layer::clear`). Une fenêtre cachée puis remontrée sous la souris ferait
+    /// redemander leur curseur aux applications.
     shown: bool,
     /// Le dernier envoi a échoué : le suivant renvoie toute l'image (la zone perdue serait
     /// restée périmée à l'écran).
@@ -51,8 +54,9 @@ pub struct Surface {
 }
 
 /// Fenêtre superposée transparente aux clics, toujours devant, hors barre des tâches, au
-/// rectangle écran `rect`. `composition` : sans surface GDI, pour un contenu DirectComposition
-/// (elle est alors affichée tout de suite et ne bouge plus).
+/// rectangle écran `rect`, créée cachée. `composition` : sans surface GDI, pour un contenu
+/// DirectComposition (à afficher par `show_window` une fois prête ; elle ne bouge plus ensuite).
+/// En cas d'erreur, la fenêtre déjà créée est détruite.
 pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows::core::Result<HWND> {
     unsafe {
         let hinst = GetModuleHandleW(None)?;
@@ -84,20 +88,35 @@ pub fn overlay_window(rect: (i32, i32, i32, i32), composition: bool) -> windows:
             Some(hinst.into()),
             None,
         )?;
-        // Sans cette propriété, l'Explorateur prend ce calque (toujours devant, de la taille de
-        // l'écran) pour une appli plein écran : la barre des tâches masquée automatiquement perd
-        // son « toujours devant » et ressort derrière les fenêtres.
-        SetPropW(hwnd, w!("NonRudeHWND"), Some(windows::Win32::Foundation::HANDLE(std::ptr::without_provenance_mut(1))))?;
+        let preparer = || -> windows::core::Result<()> {
+            // Sans cette propriété, l'Explorateur prend ce calque (toujours devant, de la taille
+            // de l'écran) pour une appli plein écran : la barre des tâches masquée
+            // automatiquement perd son « toujours devant » et ressort derrière les fenêtres.
+            SetPropW(hwnd, w!("NonRudeHWND"), Some(windows::Win32::Foundation::HANDLE(std::ptr::without_provenance_mut(1))))?;
+            if composition {
+                // une fenêtre « layered » n'est montrée qu'avec des attributs ; l'opacité globale
+                // reste pleine, la transparence vient du contenu DirectComposition
+                SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+            }
+            Ok(())
+        };
+        // fenêtre encore cachée : la détruire ne fait rien apparaître ni disparaître à l'écran
+        if let Err(e) = preparer() {
+            let _ = DestroyWindow(hwnd);
+            return Err(e);
+        }
         if MASQUER_CAPTURES.load(Ordering::Relaxed) {
             exclure_des_captures(hwnd, true);
         }
-        if composition {
-            // une fenêtre « layered » n'est montrée qu'avec des attributs ; l'opacité globale
-            // reste pleine, la transparence vient du contenu DirectComposition
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
-            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        }
         Ok(hwnd)
+    }
+}
+
+/// Affiche un calque DirectComposition une fois son contenu prêt (`overlay_window` le crée
+/// caché : un calque dont la préparation échoue n'apparaît jamais).
+pub fn show_window(hwnd: HWND) {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
 }
 
@@ -246,15 +265,6 @@ impl Surface {
             }
         }
         Ok(())
-    }
-
-    pub fn hide(&mut self) {
-        if self.shown {
-            unsafe {
-                let _ = ShowWindow(self.hwnd, SW_HIDE);
-            }
-            self.shown = false;
-        }
     }
 }
 
@@ -536,8 +546,35 @@ pub const CMD_PRESET: usize = 100;
 const WM_TRAY: u32 = WM_APP + 1;
 pub const TRAY_CLASS: PCWSTR = w!("EssaimTray");
 
+/// Commandes reçues (menu, raccourcis, icône, fermeture) en attente de la boucle d'affichage,
+/// dans l'ordre d'arrivée. Bornée : une rafale anormale ne remplit pas la mémoire, mais
+/// « Quitter » passe toujours.
+#[derive(Default)]
+struct FileCommandes(std::collections::VecDeque<usize>);
+
+impl FileCommandes {
+    const MAX: usize = 32;
+
+    fn pousser(&mut self, cmd: usize) {
+        if cmd == 0 {
+            return;
+        }
+        if cmd == CMD_QUIT {
+            // rien après « Quitter » ne compte : il passe devant tout le reste
+            self.0.clear();
+        } else if self.0.len() >= Self::MAX {
+            return;
+        }
+        self.0.push_back(cmd);
+    }
+
+    fn prendre(&mut self) -> usize {
+        self.0.pop_front().unwrap_or(0)
+    }
+}
+
 thread_local! {
-    static COMMAND: Cell<usize> = const { Cell::new(0) };
+    static COMMANDES: RefCell<FileCommandes> = RefCell::new(FileCommandes::default());
     static PAUSED: Cell<bool> = const { Cell::new(false) };
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ICON: Cell<HICON> = const { Cell::new(HICON(std::ptr::null_mut())) };
@@ -626,9 +663,15 @@ pub fn take_power_changed() -> bool {
     POWER_CHANGED.with(|p| p.replace(false))
 }
 
-/// Commande choisie dans le menu depuis le dernier appel (0 = aucune).
+/// Plus ancienne commande en attente (menu, raccourci, icône, fermeture), retirée de la file ;
+/// 0 quand il n'y en a plus. Plusieurs peuvent arriver dans un même passage de la file de
+/// messages : la boucle les vide toutes (`while let c @ 1.. = take_command()`).
 pub fn take_command() -> usize {
-    COMMAND.with(|c| c.replace(0))
+    COMMANDES.with(|f| f.borrow_mut().prendre())
+}
+
+fn commande(cmd: usize) {
+    COMMANDES.with(|f| f.borrow_mut().pousser(cmd));
 }
 
 /// Infobulle de l'icône : « Essaim — preset « X » · en pause / en veille ».
@@ -730,19 +773,19 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         if msg == WM_TRAY {
             let ev = (lp.0 & 0xFFFF) as u32;
             if ev == windows::Win32::UI::Shell::NIN_BALLOONUSERCLICK && BULLE_MAJ.load(Ordering::Relaxed) {
-                COMMAND.with(|c| c.set(CMD_REDEMARRER));
+                commande(CMD_REDEMARRER);
                 return LRESULT(0);
             }
             // clic gauche (ou double-clic) : réglages ; clic droit : menu
             if ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK {
-                COMMAND.with(|c| c.set(CMD_CONFIG));
+                commande(CMD_CONFIG);
             } else if ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU {
                 menu(hwnd);
             }
             return LRESULT(0);
         }
         if msg == WM_COMMAND {
-            COMMAND.with(|c| c.set(wp.0 & 0xFFFF));
+            commande(wp.0 & 0xFFFF);
             return LRESULT(0);
         }
         if msg == WM_HOTKEY {
@@ -752,10 +795,12 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
                 4 => CMD_PROJECTEUR,
                 _ => CMD_PAUSE,
             };
-            COMMAND.with(|c| c.set(cmd));
+            commande(cmd);
             return LRESULT(0);
         }
-        if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED || (msg == WM_SETTINGCHANGE && wp.0 == SPI_SETWORKAREA.0 as usize) {
+        // La zone de travail (`SPI_SETWORKAREA` : barre des tâches redimensionnée ou masquée,
+        // barre d'appli, Explorateur relancé) ne compte pas : les calques couvrent tout l'écran.
+        if msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED {
             DISPLAY_CHANGED.with(|d| d.set(true));
         }
         if msg == WM_POWERBROADCAST && wp.0 == PBT_APMPOWERSTATUSCHANGE as usize {
@@ -766,12 +811,12 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             // moment après ce message, la bordure est rendue tout de suite
             if wp.0 != 0 {
                 crate::bordure::restore();
-                COMMAND.with(|c| c.set(CMD_QUIT));
+                commande(CMD_QUIT);
             }
             return LRESULT(0);
         }
         if msg == WM_CLOSE {
-            COMMAND.with(|c| c.set(CMD_QUIT));
+            commande(CMD_QUIT);
             return LRESULT(0);
         }
         if msg != 0 && msg == TASKBAR_CREATED.with(|t| t.get()) {
@@ -823,13 +868,24 @@ impl Drop for Tray {
 
 /// Icône de l'appli pour une fenêtre (barre des tâches, Alt+Tab), à la taille voulue par Windows
 /// (`petite` : celle de la barre de titre) : celle de l'exécutable (`ressources/essaim.ico`,
-/// intégrée par `build.rs`), sinon dessinée à la volée.
+/// intégrée par `build.rs`), sinon dessinée à la volée. Chargée une fois par taille et gardée
+/// jusqu'à la fin (chaque ouverture des réglages en créait une nouvelle, jamais détruite) ; à ne
+/// pas détruire.
 pub fn app_icon(petite: bool) -> Option<HICON> {
+    /// Icônes déjà chargées : (côté, poignée).
+    static ICONES: std::sync::Mutex<Vec<((i32, i32), isize)>> = std::sync::Mutex::new(Vec::new());
     unsafe {
         let (cx, cy) = if petite { (SM_CXSMICON, SM_CYSMICON) } else { (SM_CXICON, SM_CYICON) };
+        let taille = (GetSystemMetrics(cx), GetSystemMetrics(cy));
+        let mut icones = ICONES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&(_, h)) = icones.iter().find(|(t, _)| *t == taille) {
+            return Some(HICON(h as *mut c_void));
+        }
         let hinst = GetModuleHandleW(None).ok()?;
-        let h = LoadImageW(Some(hinst.into()), PCWSTR(std::ptr::without_provenance(1)), IMAGE_ICON, GetSystemMetrics(cx), GetSystemMetrics(cy), LR_DEFAULTCOLOR);
-        h.ok().map(|h| HICON(h.0)).or_else(|| make_icon(false))
+        let h = LoadImageW(Some(hinst.into()), PCWSTR(std::ptr::without_provenance(1)), IMAGE_ICON, taille.0, taille.1, LR_DEFAULTCOLOR);
+        let icone = h.ok().map(|h| HICON(h.0)).or_else(|| make_icon(false))?;
+        icones.push((taille, icone.0 as isize));
+        Some(icone)
     }
 }
 
@@ -1075,6 +1131,26 @@ mod tests {
             }
             eprintln!("attente de {ms} ms : {:.2} ms en moyenne", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
         }
+    }
+
+    #[test]
+    fn file_des_commandes() {
+        let mut f = FileCommandes::default();
+        assert_eq!(f.prendre(), 0);
+        // plusieurs commandes d'un même passage : aucune perdue, dans l'ordre
+        f.pousser(CMD_PAUSE);
+        f.pousser(0);
+        f.pousser(CMD_SUIVANT);
+        f.pousser(CMD_PAUSE);
+        assert_eq!((f.prendre(), f.prendre(), f.prendre(), f.prendre()), (CMD_PAUSE, CMD_SUIVANT, CMD_PAUSE, 0));
+        // bornée, mais « Quitter » passe toujours, et en premier
+        for _ in 0..100 {
+            f.pousser(CMD_SUIVANT);
+        }
+        assert_eq!(f.0.len(), FileCommandes::MAX);
+        f.pousser(CMD_QUIT);
+        f.pousser(CMD_CONFIG);
+        assert_eq!((f.prendre(), f.prendre(), f.prendre()), (CMD_QUIT, CMD_CONFIG, 0));
     }
 
     #[test]

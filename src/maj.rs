@@ -242,21 +242,75 @@ fn verifier(exe: &Path) -> anyhow::Result<Option<String>> {
     Ok(Some(version.to_owned()))
 }
 
-/// Met `octets` à la place de l'exécutable en cours ; l'ancien reste sous `.ancien`.
+/// Attentes entre les essais d'un déplacement de fichier : un antivirus qui examine le nouvel
+/// exécutable le garde ouvert quelques instants.
+const ATTENTES_DEPLACEMENT: [Duration; 5] =
+    [Duration::from_millis(100), Duration::from_millis(250), Duration::from_millis(500), Duration::from_secs(1), Duration::from_secs(2)];
+
+// Déclaré ici : le paquet `windows` n'a pas la partie « Storage_FileSystem » activée.
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn MoveFileExW(existant: *const u16, nouveau: *const u16, options: u32) -> i32;
+}
+const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+/// Déplace `de` vers `vers` (remplacé s'il existe), écrit sur le disque avant de rendre la main ;
+/// réessaie après chacune des `attentes`.
+fn deplacer(de: &Path, vers: &Path, attentes: &[Duration]) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    let large = |p: &Path| -> Vec<u16> { p.as_os_str().encode_wide().chain(Some(0)).collect() };
+    let (de, vers) = (large(de), large(vers));
+    let mut attentes = attentes.iter();
+    loop {
+        if unsafe { MoveFileExW(de.as_ptr(), vers.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) } != 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        match attentes.next() {
+            Some(&d) => std::thread::sleep(d),
+            None => return Err(e),
+        }
+    }
+}
+
+/// Met `octets` à la place de l'exécutable en cours ; l'ancien reste sous `.ancien`. Chaque
+/// déplacement est réessayé (antivirus) ; si la nouvelle version ne peut pas prendre la place
+/// libérée, l'ancienne y revient, par copie en dernier recours : il ne manque jamais d'exécutable.
 fn remplacer(exe: &Path, octets: &[u8]) -> anyhow::Result<()> {
+    remplacer_avec(exe, octets, &ATTENTES_DEPLACEMENT)
+}
+
+fn remplacer_avec(exe: &Path, octets: &[u8], attentes: &[Duration]) -> anyhow::Result<()> {
+    use std::io::Write;
     let (neuf, vieux) = (nouveau(exe), ancien(exe));
-    std::fs::write(&neuf, octets).with_context(|| format!("écriture de {} impossible", neuf.display()))?;
+    let ecrire = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&neuf)?;
+        f.write_all(octets)?;
+        f.sync_all()
+    };
+    if let Err(e) = ecrire() {
+        let _ = std::fs::remove_file(&neuf);
+        bail!("écriture de {} impossible : {e}", neuf.display());
+    }
     let _ = std::fs::remove_file(&vieux);
-    if let Err(e) = std::fs::rename(exe, &vieux) {
+    // Windows permet de renommer un exécutable lancé ; tant que ceci échoue, rien n'a bougé
+    if let Err(e) = deplacer(exe, &vieux, attentes) {
         let _ = std::fs::remove_file(&neuf);
         bail!("renommage de l'exécutable en cours impossible : {e}");
     }
-    if let Err(e) = std::fs::rename(&neuf, exe) {
-        let _ = std::fs::rename(&vieux, exe);
+    let Err(e) = deplacer(&neuf, exe, attentes) else { return Ok(()) };
+    // la place est libre : la nouvelle version (déjà vérifiée) par copie, sinon l'ancienne
+    if std::fs::copy(&neuf, exe).is_ok() {
         let _ = std::fs::remove_file(&neuf);
-        bail!("mise en place de la nouvelle version impossible : {e}");
+        return Ok(());
     }
-    Ok(())
+    let retour = deplacer(&vieux, exe, attentes).or_else(|_| std::fs::copy(&vieux, exe).map(|_| ()));
+    let _ = std::fs::remove_file(&neuf);
+    match retour {
+        Ok(()) => bail!("mise en place de la nouvelle version impossible : {e}"),
+        Err(r) => bail!("mise en place de la nouvelle version impossible ({e}), et l'ancienne n'a pas pu revenir ({r}) : elle reste sous {}", vieux.display()),
+    }
 }
 
 /// `a` est-elle une version plus récente que `b` ? (« 1.10.0 » > « 1.9.2 » ; un suffixe
@@ -471,6 +525,39 @@ mod tests {
         remplacer(&exe, b"MZ nouvelle").unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), b"MZ nouvelle");
         assert_eq!(std::fs::read(ancien(&exe)).unwrap(), b"MZ ancienne");
+        assert!(!nouveau(&exe).exists());
+        let _ = std::fs::remove_dir_all(&dossier);
+    }
+
+    /// Ouvre `p` sans partage (comme un antivirus qui l'examine) pendant `duree`, sur un autre fil.
+    fn verrouiller(p: &Path, duree: Duration) -> std::thread::JoinHandle<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let f = std::fs::OpenOptions::new().read(true).share_mode(0).open(p).unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(duree);
+            drop(f);
+        })
+    }
+
+    #[test]
+    fn remplacement_reessaye_quand_le_fichier_est_tenu() {
+        let dossier = std::env::temp_dir().join(format!("essaim-maj-essais-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let exe = dossier.join("essaim.exe");
+        let attentes = [Duration::from_millis(100), Duration::from_millis(200), Duration::from_millis(300)];
+        // tenu un instant : un nouvel essai réussit
+        std::fs::write(&exe, b"MZ ancienne").unwrap();
+        let fil = verrouiller(&exe, Duration::from_millis(150));
+        remplacer_avec(&exe, b"MZ nouvelle", &attentes).unwrap();
+        fil.join().unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZ nouvelle");
+        assert_eq!(std::fs::read(ancien(&exe)).unwrap(), b"MZ ancienne");
+        // tenu tout du long : refusé, l'exécutable reste intact et rien ne traîne
+        std::fs::write(&exe, b"MZ ancienne").unwrap();
+        let fil = verrouiller(&exe, Duration::from_secs(2));
+        assert!(remplacer_avec(&exe, b"MZ nouvelle", &attentes).is_err());
+        fil.join().unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZ ancienne");
         assert!(!nouveau(&exe).exists());
         let _ = std::fs::remove_dir_all(&dossier);
     }

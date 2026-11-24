@@ -93,10 +93,11 @@ impl Layer {
         sent.elapsed()
     }
 
-    pub fn hide(&mut self) {
-        self.pm.fill(tiny_skia::Color::TRANSPARENT);
-        self.prev = None;
-        self.surface.hide();
+    /// Efface ce qui est affiché (pause, curseur masqué) : la zone dessinée à l'image précédente
+    /// est vidée et envoyée transparente. La fenêtre reste affichée (une fenêtre cachée puis
+    /// remontrée sous la souris fait redemander leur curseur aux applications).
+    pub fn clear(&mut self) {
+        self.frame(None, |_| {});
     }
 }
 
@@ -126,7 +127,7 @@ mod tests {
                 total.as_secs_f64() * 1000.0 / n as f64,
                 all.as_secs_f64() * 1000.0 / n as f64
             );
-            lay.hide();
+            lay.clear();
         }
     }
 
