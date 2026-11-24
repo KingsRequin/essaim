@@ -11,9 +11,9 @@ use crate::prereglages::builtins;
 use std::path::PathBuf;
 
 /// Sections enregistrées dans un profil.
-const SECTIONS: [&str; 17] = [
+const SECTIONS: [&str; 20] = [
     "eclat", "orbite", "essaim", "couleur", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts",
-    "audio", "bordure", "souris", "modulations", "declencheurs",
+    "arcs", "quatre_temps", "anneau", "audio", "bordure", "souris", "modulations", "declencheurs",
 ];
 
 /// Le réglage `[section] key` fait-il partie des profils ?

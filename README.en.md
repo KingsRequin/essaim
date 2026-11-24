@@ -38,7 +38,7 @@ throw sparks, and on the drop, everything bursts.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
   use. It goes to sleep when a game or video goes fullscreen.
 - **Your way.** 14 path shapes, the outlines of an image, a text, an emoji or the icon of the
-  app in front; 43 bundled presets, animated live;
+  app in front; 46 bundled presets, animated live;
   triggers ("on the drop, a crack", "on the snare, sparks") and modulations ("the rotation spins
   up on the drop", "the orbit opens on low notes") to build your own swarm; "if the artist is…
   then this preset" rules; every setting applied instantly, with its cost shown.
@@ -89,6 +89,7 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | ⚡ **Triggers** | When an event happens (kick, snare, hi-hat, drop, beat, off-beat, break, track change, click, right click), an action: flash, shockwave, shards, sparks, square, crack, implosion, satellites, explosion, burst, reversed rotation, border lighting up, orbit bounce, rotation push, brake; with a minimum delay and a chance ("one kick in three") |
 | 🎗️ **Ribbons and springs** | Comets as twisting ribbons, with no white head; or the whole swarm on springs: the orbit bounces on the kick instead of reversing, heads stretch as they speed up, satellites are born at the center |
 | 🎛️ **Modulations** | A part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, off-beat, tempo, brightness, stereo) drives the path rotation, speed, acceleration, radius, size, hue, offset, glow, trail or opacity, of the comets, the satellites or both; with a threshold, smoothing, and inverted if you like |
+| ◔ **Small figures** | Thin lines that leave the screen visible, alone or with the swarm: two arcs that gauge bass and treble, four dots counting the beats under the pointer, a ring that trails the pointer and beats on the kick |
 | 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
 
 ### The mouse and the screen
@@ -122,7 +123,7 @@ away, automatic updates (downloaded, verified, applied on restart). The **Dotter
 When it opens, the logo assembles out of orbs, then the name slides into the header
 while the window draws itself (a click skips it).
 
-**Presets.** A grid of 43 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art, ribbons, springs…), each animated live with
+**Presets.** A grid of 46 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art, ribbons, springs…), each animated live with
 your music: one click applies it. Save your own, compare two side by side, filter by shape.
 Publish them to the [community library](https://github.com/KingsRequin/essaim-presets) and
 install other people's.

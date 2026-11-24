@@ -22,6 +22,7 @@ mod charge;
 mod config;
 mod contours;
 mod effets;
+mod figures;
 mod gpu;
 mod ipc;
 mod layer;

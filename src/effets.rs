@@ -11,7 +11,8 @@ use crate::audio::{AudioShared, BANDES_MAX};
 use crate::canvas::Canvas;
 use crate::config::Config;
 use crate::layer::IRect;
-use crate::render::prisme;
+use crate::figures::Figures;
+use crate::render::{prisme, Ecoute};
 use std::f32::consts::{PI, TAU};
 
 // --- Secousse de la souris ----------------------------------------------------------------------
@@ -180,11 +181,14 @@ pub struct Effets {
     visible: f32,
     /// Éclat du kick (celui de l'essaim), 1 → 0.
     env: f32,
+    /// Petites figures autour du pointeur (`figures.rs`), et leur écoute des coups du son.
+    figures: Figures,
+    ecoute: Ecoute,
 }
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0 }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default() }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -239,6 +243,10 @@ impl Effets {
             self.bandes = [0.0; BANDES_MAX];
         }
         self.visible = visibilite(self.visible, s.masquer_sans_musique && self.silence >= SPECTRE_ATTENTE, dt);
+        // petites figures : elles écoutent les coups du son elles-mêmes
+        let au = shared.view();
+        let coups = self.ecoute.lire(&au);
+        self.figures.avance(t, dt, cursor, scale, &au, &coups, cfg);
     }
 
     /// Projecteur en cours (écran assombri à redessiner en entier à chaque image).
@@ -246,7 +254,8 @@ impl Effets {
         self.voile.map(|v| v.0)
     }
 
-    /// Zone du réticule et du spectre autour du pointeur, à ajouter à celle de l'essaim.
+    /// Zone du réticule, du spectre et des petites figures autour du pointeur, à ajouter à celle
+    /// de l'essaim.
     pub fn rect_pointeur(&self, cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
         let mut e = 0.0f32;
         if cfg.reticule.actif {
@@ -258,10 +267,11 @@ impl Effets {
             let r = cfg.spectre.rayon * scale;
             e = e.max(r + (SPECTRE_BARRE_MIN + cfg.spectre.hauteur) * scale + spectre_largeur(n, r, scale));
         }
-        (e > 0.0).then(|| {
+        let zone = (e > 0.0).then(|| {
             let e = e + 2.0;
             ((cursor.0 - e).floor() as i32, (cursor.1 - e).floor() as i32, (cursor.0 + e).ceil() as i32, (cursor.1 + e).ceil() as i32)
-        })
+        });
+        crate::layer::union(zone, self.figures.rect(cursor, scale, cfg))
     }
 
     /// Voile du projecteur, sous tout le reste (fissures et essaim restent visibles par-dessus).
@@ -273,8 +283,9 @@ impl Effets {
         cv.ring(x, y, r, 2.0 * scale, prisme(cfg, t, 1.0), 0.5 * presence);
     }
 
-    /// Réticule et anneau de spectre autour de `cursor`, sous l'essaim.
+    /// Réticule, anneau de spectre et petites figures autour de `cursor`, sous l'essaim.
     pub fn dessiner(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32, cursor: (f32, f32)) {
+        self.figures.dessiner(cv, t, cfg, scale);
         let (cx, cy) = cursor;
         let s = &cfg.spectre;
         if s.actif && self.visible > 0.0 {

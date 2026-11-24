@@ -205,8 +205,8 @@ const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE]
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Icône de l'appli" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
-  "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "audio",
-  "bordure", "souris", "modulations", "declencheurs",
+  "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "arcs",
+  "quatre_temps", "anneau", "audio", "bordure", "souris", "modulations", "declencheurs",
 ];
 // Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
 // (comme profils::in_profile).
@@ -380,8 +380,12 @@ const observateur = new IntersectionObserver((entrees) => {
 function detail(p) {
   const c = p.reglages, o = c.orbite;
   const parts = [];
-  if (o.cometes) parts.push(`${NOMS_FORMES[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} comète${o.nombre * o.anneaux > 1 ? "s" : ""}`);
-  else parts.push("sans comètes");
+  // rubans, ressorts et petites figures : ce qui fait l'allure du preset passe en tête
+  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau suiveur"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
+  if (o.cometes) parts.push(`${NOMS_FORMES[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} ${c.rubans && c.rubans.actif ? "ruban" : "comète"}${o.nombre * o.anneaux > 1 ? "s" : ""}`);
+  else if (!figures.length) parts.push("sans comètes");
+  if (figures.length) parts.push(figures.join(", ").replace(/^./, (l) => l.toUpperCase()));
+  if (c.ressorts && c.ressorts.actif) parts.push("sur ressorts");
   const sats = c.essaim.fixes + c.essaim.maximum;
   if (sats) parts.push(sats + " satellites" + (c.essaim.forme && c.essaim.forme !== "cometes" ? " en " + (NOMS_FORMES[c.essaim.forme] || "").toLowerCase() : ""));
   if (o.rotation) parts.push("trajet qui tourne");
@@ -755,6 +759,10 @@ const IMPACT = {
   "rubans.actif": [2, "estime"], "rubans.largeur": [2, "estime"], "rubans.vrille": [1, "estime"],
   "ressorts.actif": [1, "estime"], "ressorts.raideur": [1, "estime"], "ressorts.amorti": [1, "estime"], "ressorts.etirement": [1, "estime"],
   "action.rebond": [1, "estime"], "action.poussee": [1, "estime"], "action.frein": [1, "estime"],
+  // petites figures : quelques traits et points, hors du banc
+  "arcs.actif": [1, "estime"], "arcs.rayon": [1, "estime"], "arcs.epaisseur": [1, "estime"],
+  "quatre_temps.actif": [1, "estime"], "quatre_temps.taille": [1, "estime"], "quatre_temps.ecart": [1, "estime"],
+  "anneau.actif": [1, "estime"], "anneau.rayon": [1, "estime"], "anneau.epaisseur": [1, "estime"],
   // actions des déclencheurs (estimé : une particule de plus ou de moins pèse peu, une gerbe d'étincelles un peu plus)
   "action.eclat": [1, "estime"], "action.satellites": [2, "estime"], "action.inversion": [1, "estime"], "action.bordure": [1, "estime"],
   "action.onde": [1, "estime"], "action.eclats": [2, "estime"], "action.fissure": [2, "estime"], "action.implosion": [1, "estime"],
@@ -1043,6 +1051,30 @@ const PANNEAUX = [
       { libelle: "Rayon", section: "spectre", cle: "rayon", min: 10, max: 150, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Hauteur des barres", section: "spectre", cle: "hauteur", min: 4, max: 100, pas: 1, aff: (v) => String(Math.round(v)) },
       { rangee: "Silence", puces: [["Masquer sans musique", "spectre", "masquer_sans_musique", "L'anneau s'efface quand plus aucun son ne joue, et revient avec la musique"]] },
+    ],
+  },
+  {
+    id: "arcs", famille: "Les effets", titre: "Arcs", actif: ["arcs", "actif"],
+    note: "Deux arcs fins autour du pointeur, comme les anneaux d'une montre : le grand s'ouvre avec la basse, le petit avec les aigus et la montée. Chaque kick fait avancer le grand d'un cran, la caisse claire fait reculer le petit, un drop les ferme en cercles. Leurs couleurs sont celles de l'essaim (tête et queue des traînées).",
+    base: [
+      { libelle: "Rayon", section: "arcs", cle: "rayon", min: 10, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Épaisseur", section: "arcs", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "quatre_temps", famille: "Les effets", titre: "Quatre temps", actif: ["quatre_temps", "actif"],
+    note: "Quatre points sous le pointeur, un par temps. Celui du temps en cours saute sur le kick et s'étire sur la caisse claire ; pendant une montée ils se rapprochent, au drop ils sautent en vague et le compte repart du premier. Ils s'effacent quand le tempo n'est pas régulier.",
+    base: [
+      { libelle: "Taille des points", section: "quatre_temps", cle: "taille", min: 1, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
+      { libelle: "Écart", section: "quatre_temps", cle: "ecart", min: 4, max: 20, pas: 0.5, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "anneau", famille: "Les effets", titre: "Anneau suiveur", actif: ["anneau", "actif"],
+    note: "Un anneau fin qui suit le pointeur avec un temps de retard et s'allonge dans le mouvement. Il bat avec le kick, devient carré un instant sur la caisse claire, se resserre pendant une montée et lâche un écho au drop. Un point y fait un tour par mesure quand le tempo est régulier.",
+    base: [
+      { libelle: "Rayon", section: "anneau", cle: "rayon", min: 6, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Épaisseur", section: "anneau", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
     ],
   },
   {

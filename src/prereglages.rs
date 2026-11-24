@@ -776,7 +776,33 @@ pub(crate) fn builtins() -> Vec<Profile> {
             ];
             c.declencheurs.liste = vec![d(E::Kick, A::Bordure, 0.8), d(E::Drop, A::Rebond, 1.2), d(E::Clic, A::Onde, 0.8), d(E::ClicDroit, A::Implosion, 0.8)];
         }),
+        // arcs : rien d'autre que deux arcs fins, la basse dans le grand, les aigus dans le petit
+        make("Arcs", |c| {
+            figure_seule(c);
+            c.arcs.actif = true;
+            teinte(c, 160.0, 0.0, 40.0);
+        }),
+        // quatre temps : quatre points sous le pointeur, le plus petit preset
+        make("Quatre temps", |c| {
+            figure_seule(c);
+            c.quatre_temps.actif = true;
+            teinte(c, 35.0, 0.0, 20.0);
+        }),
+        // anneau : un anneau fin qui suit le pointeur avec du retard et bat au kick
+        make("Anneau", |c| {
+            figure_seule(c);
+            c.anneau.actif = true;
+            teinte(c, 250.0, 0.0, 80.0);
+        }),
     ]
+}
+
+/// Une figure seule autour du pointeur (`figures.rs`) : ni comètes, ni satellites, ni éclat, donc
+/// aucune modulation ; la bordure s'illumine encore au kick et les clics gardent leur onde.
+fn figure_seule(c: &mut Config) {
+    (c.orbite.cometes, c.essaim.maximum, c.essaim.fixes, c.eclat.taille) = (false, 0, 0, 0.0);
+    c.modulations.liste.clear();
+    c.declencheurs.liste = vec![d(E::Kick, A::Bordure, 0.8), d(E::Clic, A::Onde, 0.8), d(E::ClicDroit, A::Implosion, 0.8)];
 }
 
 /// Modulation `source` → `cible` (lissage par défaut).
@@ -947,9 +973,12 @@ mod tests {
 
     /// Les presets fournis montrent tout ce que les modulations savent faire : chaque source et
     /// chaque cible servent au moins une fois, et deux presets n'ont jamais les mêmes réactions.
+    /// Ceux d'une figure seule (ni comètes ni satellites) n'ont rien à moduler : ils n'en ont pas.
     #[test]
     fn modulations_variees() {
-        let b = builtins();
+        let seules: Vec<Profile> = builtins().into_iter().filter(|p| !p.cfg.orbite.cometes && p.cfg.essaim.maximum + p.cfg.essaim.fixes as usize == 0).collect();
+        assert!(seules.iter().all(|p| p.cfg.modulations.liste.is_empty() && crate::figures::Figures::actives(&p.cfg)), "figure seule avec des modulations, ou sans figure");
+        let b: Vec<Profile> = builtins().into_iter().filter(|p| seules.iter().all(|s| s.name != p.name)).collect();
         let mods: Vec<&Modulation> = b.iter().flat_map(|p| &p.cfg.modulations.liste).collect();
         let sources = [S::Basse, S::Grave, S::Aigu, S::Kick, S::Caisse, S::Charleston, S::Montee, S::Drop, S::Stereo, S::Tempo, S::Contretemps, S::Brillance];
         let cibles = [Ci::Rotation, Ci::Vitesse, Ci::Acceleration, Ci::Rayon, Ci::Taille, Ci::Teinte, Ci::Decalage, Ci::Luminosite, Ci::Trainee, Ci::Opacite];

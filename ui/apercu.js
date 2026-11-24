@@ -40,6 +40,12 @@ const MODULATION = {
 const REBOND = 6.67, POUSSEE = [5, 4], FREIN = [0.8, 9], TREMBLE = [0.053, 46];
 const SAT_RESSORT = [10, 16, 0.3], SAT_ENTREE_SORTIE = [0.3, 0.35], SAT_FONTE = 0.6, SAT_TRAIL_RESSORTS = 0.68;
 const ETIREMENT = [0.02, 8.7], ANNEAU_RESSORTS = [5, 4.5], VRILLE = [0.58, 2.4, 1.4], RUBAN_MORCEAU = 2;
+// Petites figures (arcs, quatre temps, anneau) : comme les constantes de src/figures.rs.
+const FIG_RETOMBEE = [10, 8, 6], TEMPO_FONDU = [0.15, 0.8], SOUS_LE_POINTEUR = [7, 27];
+const ARC_CRAN = 0.6, ARC_BOND = 90, ARC_RECUL = 13, ARC_BORNES = [-4, 8], ARC_PETIT = [0.675, 0.76];
+const ARC_GRAND_OUVERTURE = [0.14, 5.5], ARC_PETIT_OUVERTURE = [0.12, 4.8];
+const SAUT_BORNES = [-12, 6], TAILLE_BORNES = [0.3, 1.8], TIRET_BORNES = [-1, 5], POINT_ACTIF = 1.45, POINT_ETEINT = 0.4, VAGUE = 0.06;
+const ANNEAU_BORNES = [0.2, 1.7], ANNEAU_ECHO = [0.42, 1.2];
 const RETOMBEE = [7, 8, 10, 0.9, 10];
 const SUIVI_MONTEE = 6;
 const LISSAGE = 0.35;
@@ -103,6 +109,24 @@ function ressort(x, v, w, z, dt) {
     x += v * h;
   }
   return Number.isFinite(x) && Number.isFinite(v) ? [x, v] : [0, 0];
+}
+
+// Ressort borné des figures (comme figures::Ressort::vers) : `r` = [position, vitesse], avancé de
+// dt vers `cible` ; en butée, l'élan est perdu.
+function vers(r, cible, [w, z], dt, [lo, hi]) {
+  const [ecart, v] = ressort(r[0] - cible, r[1], w, z, dt), x = cible + ecart;
+  r[0] = Math.min(hi, Math.max(lo, x));
+  r[1] = r[0] === x ? v : 0;
+}
+
+// État des petites figures (comme figures::Figures::new).
+function nouvellesFigures() {
+  return {
+    horloge: 0, charleston: 0, caisse: 0, montee: 0, basse: 0, compte: 0, mesure: 0, tempo: 0,
+    arcs: { tour: [0, 0], cran: 0, bond: [0, 0], recul: [0, 0], grave: 0, aigu: 0, plein: 0 },
+    temps: { pts: [0, 1, 2, 3].map(() => ({ saut: [0, 0], taille: [1, 0], tiret: [0, 0], arme: false })), actif: null, vague: -Infinity },
+    anneau: { echelle: [1, 0], carre: 0, echos: [] },
+  };
 }
 
 // Sortie avec dépassement, de 0 à 1 (comme render::depasse).
@@ -343,6 +367,9 @@ class Apercu {
     this.pousse = 0;
     this.frein = 0;
     this.vrille = [0, 0];
+    // petites figures (figures.rs), et coups du son entendus pendant l'image en cours
+    this.figures = nouvellesFigures();
+    this.coupsImage = { kicks: 0, caisses: 0, aigus: 0, drops: 0, temps: false };
     // modulations : enveloppes des coups et montée suivie (modulation::Sources), valeur lissée de
     // chaque modulation, effets sur les comètes et les satellites à cette image et à la
     // précédente, teinte de tout ce qui est dessiné
@@ -422,9 +449,146 @@ class Apercu {
   avancer(dt, son) {
     if (!this.reglages) return;
     this.sillage(dt);
+    this.coupsImage = { kicks: 0, caisses: 0, aigus: 0, drops: 0, temps: false };
     const n = Math.max(1, Math.ceil(dt / PAS_TRAINEE));
     for (let i = 0; i < n; i++) this.pas(dt / n, son);
     this.spectre(dt, son);
+    this.avancerFigures(dt, son, this.coupsImage);
+  }
+
+  // Petites figures (comme figures::Figures::avance) ; dans l'aperçu, le pointeur ne bouge pas :
+  // leur centre est celui du canevas.
+  avancerFigures(dt, son, coups) {
+    const c = this.reglages, f = this.figures, t = this.t;
+    const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
+    if (!arcs.actif && !quatre.actif && !anneau.actif) return;
+    f.horloge = reste(f.horloge + dt, TAU * 40);
+    f.charleston = coups.aigus > 0 ? 1 : f.charleston * Math.exp(-dt * FIG_RETOMBEE[0]);
+    f.caisse = coups.caisses > 0 ? 1 : f.caisse * Math.exp(-dt * FIG_RETOMBEE[1]);
+    f.montee += (Math.min(1, Math.max(0, finiOu(son.tension, 0))) - f.montee) * Math.min(1, dt * FIG_RETOMBEE[2]);
+    f.basse += (Math.min(1, Math.max(0, finiOu(son.basse, 0))) - f.basse) * (1 - Math.exp(-dt * 10));
+    const kicks = coups.kicks, caisse = coups.caisses > 0, drop = coups.drops > 0;
+    if (coups.temps) f.compte++;
+    if (drop) f.compte = 0;
+    f.tempo = son.bpm ? Math.min(1, f.tempo + dt / TEMPO_FONDU[0]) : Math.max(0, f.tempo - dt / TEMPO_FONDU[1]);
+    if (son.bpm) f.mesure = ((f.compte % 4) + Math.min(1, Math.max(0, son.phase || 0))) / 4;
+    if (arcs.actif) {
+      const a = f.arcs;
+      for (let i = 0; i < kicks; i++) { a.cran += ARC_CRAN; a.bond[1] += ARC_BOND; }
+      if (caisse) a.recul[1] -= ARC_RECUL;
+      if (drop) a.plein = 1;
+      a.plein *= Math.exp(-dt * 1.6);
+      if (a.cran > TAU) { a.cran -= TAU; a.tour[0] -= TAU; }
+      vers(a.tour, a.cran, [14, 0.4], dt, [-TAU, 2 * TAU]);
+      vers(a.bond, 0, [18, 0.3], dt, ARC_BORNES);
+      vers(a.recul, 0, [12, 0.35], dt, [-Math.PI, Math.PI]);
+      const aigu = Math.max(a.plein, Math.min(1, 0.9 * f.charleston + 0.8 * f.montee + 0.45 * f.caisse));
+      a.grave = Math.max(f.basse, a.plein);
+      a.aigu += (aigu - a.aigu) * (1 - Math.exp(-dt * (aigu > a.aigu ? 30 : 6)));
+    }
+    if (quatre.actif) {
+      const q = f.temps, actif = son.bpm ? f.compte % 4 : null;
+      if (actif !== q.actif) {
+        q.actif = actif;
+        if (actif !== null) q.pts[actif].taille[1] += 9;
+      }
+      if (q.actif !== null) {
+        const p = q.pts[q.actif];
+        p.saut[1] -= 150 * Math.min(1, kicks);
+        if (caisse) p.tiret[1] += 60;
+      }
+      if (drop) { q.vague = t; for (const p of q.pts) p.arme = true; }
+      q.pts.forEach((p, i) => {
+        if (p.arme && t >= q.vague + i * VAGUE) { p.saut[1] -= 230; p.arme = false; }
+        vers(p.saut, 0, [20, 0.3], dt, SAUT_BORNES);
+        vers(p.taille, 1, [18, 0.35], dt, TAILLE_BORNES);
+        vers(p.tiret, 0, [16, 0.4], dt, TIRET_BORNES);
+      });
+    }
+    if (anneau.actif) {
+      const a = f.anneau;
+      a.echelle[1] += 5.5 * kicks;
+      if (caisse) a.carre = 1;
+      if (drop) { a.echelle[1] += 10; a.echos.push(t); }
+      a.carre *= Math.exp(-dt * 6);
+      vers(a.echelle, 1 - 0.42 * f.montee, [18, 0.28], dt, ANNEAU_BORNES);
+      a.echos = a.echos.filter((ne) => t - ne < ANNEAU_ECHO[0]);
+    }
+  }
+
+  // Dessin des petites figures (comme figures::Figures::dessiner), autour de (cx, cy).
+  dessinerFigures(g, cx, cy, S, tete, queue) {
+    const c = this.reglages, f = this.figures, t = this.t;
+    const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
+    const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
+    const plein = (rgb, a = 1) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${Math.max(0, Math.min(1, a))})`;
+    if (arcs.actif) {
+      const a = f.arcs, rayon = borne(arcs.rayon, 10, 80, 20), epais = borne(arcs.epaisseur, 0.5, 6, 2.1);
+      const arc = (r, depart, ouverture, largeur, rgb) => {
+        g.strokeStyle = plein(rgb);
+        g.lineWidth = largeur;
+        g.beginPath();
+        g.arc(cx, cy, Math.max(2, r), depart, depart + ouverture);
+        g.stroke();
+      };
+      arc((rayon + a.bond[0]) * S, -Math.PI / 2 + a.tour[0] + f.horloge * 0.25, ARC_GRAND_OUVERTURE[0] + ARC_GRAND_OUVERTURE[1] * Math.min(1, Math.max(0, a.grave)), epais * S, tete);
+      arc((rayon * ARC_PETIT[0] + a.bond[0] * 0.5) * S, Math.PI / 2 + a.recul[0] - f.horloge * 0.4, ARC_PETIT_OUVERTURE[0] + ARC_PETIT_OUVERTURE[1] * Math.min(1, Math.max(0, a.aigu)), epais * ARC_PETIT[1] * S, queue);
+    }
+    if (quatre.actif && f.tempo > 0.01) {
+      const q = f.temps, taille = borne(quatre.taille, 1, 5, 1.6), ax = cx + SOUS_LE_POINTEUR[0] * S, ay = cy + SOUS_LE_POINTEUR[1] * S;
+      const ecart = borne(quatre.ecart, 4, 20, 7.5) * S * (1 - 0.35 * f.montee);
+      q.pts.forEach((p, i) => {
+        const actif = q.actif === i;
+        const x = ax + (i - 1.5) * ecart + Math.sin(f.horloge * 40 + i * 2) * 0.8 * f.montee * S, y = ay + p.saut[0] * S;
+        const r = taille * S * p.taille[0] * (actif ? POINT_ACTIF : 1), l = Math.max(0, p.tiret[0]) * 1.1 * S, al = f.tempo * (actif ? 1 : POINT_ETEINT);
+        if (l > 0.3) {
+          g.strokeStyle = plein(tete, al);
+          g.lineWidth = 2 * r;
+          g.beginPath();
+          g.moveTo(x - l, y);
+          g.lineTo(x + l, y);
+          g.stroke();
+        } else {
+          g.fillStyle = plein(tete, al);
+          g.beginPath();
+          g.arc(x, y, Math.max(0.1, r), 0, TAU);
+          g.fill();
+        }
+      });
+    }
+    if (anneau.actif) {
+      const a = f.anneau, r = borne(anneau.rayon, 6, 60, 13) * S * a.echelle[0], epais = borne(anneau.epaisseur, 0.5, 6, 1.4);
+      for (const ne of a.echos) {
+        const k = (t - ne) / ANNEAU_ECHO[0];
+        if (k < 0 || k >= 1) continue;
+        g.strokeStyle = plein(queue, 0.7 * (1 - k));
+        g.lineWidth = 1.2 * S;
+        g.beginPath();
+        g.arc(cx, cy, r * (1 + ANNEAU_ECHO[1] * (1 - (1 - k) ** 3)), 0, TAU);
+        g.stroke();
+      }
+      // carré un instant sur la caisse claire (superellipse : cercle à 2, presque carré à 8)
+      const puissance = 2 / (2 + 6 * Math.min(1, Math.max(0, a.carre)));
+      const point = (th) => {
+        const ct = Math.cos(th), st = Math.sin(th);
+        return [cx + r * Math.sign(ct) * Math.abs(ct) ** puissance, cy + r * Math.sign(st) * Math.abs(st) ** puissance];
+      };
+      g.beginPath();
+      for (let i = 0; i <= 48; i++) {
+        const [x, y] = point((i / 48) * TAU);
+        if (i) g.lineTo(x, y); else g.moveTo(x, y);
+      }
+      g.strokeStyle = plein(tete);
+      g.lineWidth = epais * (1 + 1.07 * f.basse + 0.86 * f.montee) * S;
+      g.stroke();
+      if (f.tempo > 0.01) {
+        const [x, y] = point(-Math.PI / 2 + f.mesure * TAU);
+        g.fillStyle = plein(queue, f.tempo);
+        g.beginPath();
+        g.arc(x, y, (1.9 + 1.9 * f.charleston) * S, 0, TAU);
+        g.fill();
+      }
+    }
   }
 
   // Bandes de l'anneau de spectre : simulées, puis lissées comme effets::lisser_bandes.
@@ -482,6 +646,10 @@ class Apercu {
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2, p = [cx, cy];
     // événements du son : chacun fait agir ses déclencheurs, dans l'ordre de render.rs
     const coups = this.ecoute.lire(son);
+    // gardés pour les petites figures, qui avancent une fois par image
+    const ci = this.coupsImage;
+    ci.kicks += coups.kicks; ci.caisses += coups.caisses; ci.aigus += coups.aigus; ci.drops += coups.drops;
+    ci.temps = ci.temps || coups.temps;
     for (let i = 0; i < coups.kicks; i++) this.declencher("kick", p, t);
     this.env *= Math.exp(-dt * 9);
     if (coups.temps) {
@@ -838,6 +1006,9 @@ class Apercu {
       g.lineTo(b[0], b[1]);
       g.stroke();
     };
+    this.dessinerFigures(g, cx, cy, S, tete, couleur(0));
+    g.lineCap = "round";
+    g.lineJoin = "round";
     const sp = c.spectre;
     if (sp && sp.actif) {
       const n = Math.min(BANDES_MAX, Math.max(8, Math.round(sp.bandes))), r = sp.rayon * S, l = spectreLargeur(n, r, S);

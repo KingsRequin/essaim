@@ -324,6 +324,15 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   phase). La phase défile à 2,4 rad/s et saute de 1,4 rad à chaque caisse claire (rejointe en
   douceur). La tête n'est pas dessinée (elle compte encore pour la constellation). La largeur suit
   la modulation de la taille et tient dans la marge de `Swarm::bounds`.
+- **Petites figures** (`figures.rs` : arcs, quatre temps, anneau suiveur) : `Effets` possède
+  `Figures`, lui passe le son (`AudioShared::view`) et les coups (sa propre `render::Ecoute`), et
+  ajoute leur zone à celle du pointeur. Leur centre est au bout d'un ressort accroché au pointeur
+  (14 rad/s, amortissement 0,55), jamais à plus de 40 px de lui : la zone (`Figures::rect`) est
+  prise autour de ce centre. Tout ce qui bouge passe par des ressorts bornés
+  (`Ressort::vers` : en butée, l'élan est perdu), si bien que la zone contient toujours le dessin
+  (essai `les_figures_tiennent_dans_leur_zone`, quatre kicks par image à 20 images/s). Les temps
+  se comptent depuis le dernier drop ; la présence du tempo monte en 0,15 s et s'efface en 0,8 s.
+  Une figure active demande l'analyse musicale (`Config::analyse_musicale`).
 - **Réglages d'avant** (`migration.rs`) : les réactions fixes d'Essaim 0.3 et 0.4 (`[musique]`,
   `[clic]`, `[scintillement]`, `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`,
   `[audio] pulsation_tempo`, `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`,

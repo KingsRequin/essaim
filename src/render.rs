@@ -79,7 +79,7 @@ const RUBAN_MORCEAU: usize = 2;
 
 /// Avance de `dt` un ressort amorti : `x` son écart à la cible, `v` sa vitesse, `w` sa pulsation
 /// (rad/s), `z` son amortissement. En petits pas (w × pas ≤ 0,25) : stable à toute cadence.
-fn ressort(x: &mut f32, v: &mut f32, w: f32, z: f32, dt: f32) {
+pub(crate) fn ressort(x: &mut f32, v: &mut f32, w: f32, z: f32, dt: f32) {
     let n = (w * dt / 0.25).ceil().clamp(1.0, 16.0);
     let h = dt / n;
     for _ in 0..n as usize {
@@ -92,7 +92,7 @@ fn ressort(x: &mut f32, v: &mut f32, w: f32, z: f32, dt: f32) {
 }
 
 /// Sortie avec dépassement, de 0 à 1 : dépasse 1 d'un dixième avant d'y revenir.
-fn depasse(k: f32) -> f32 {
+pub(crate) fn depasse(k: f32) -> f32 {
     let (c, u) = (1.70158f32, k.clamp(0.0, 1.0) - 1.0);
     1.0 + (c + 1.0) * u * u * u + c * u * u
 }
@@ -2284,12 +2284,18 @@ mod tests {
         planche.fill(tiny_skia::Color::from_rgba8(17, 17, 17, 255));
         let mut s = Swarm::new();
         s.rng = Rng::graine(7);
+        // les petites figures aussi (`figures.rs`), avec leur propre écoute des coups
+        let (mut figures, mut ecoute) = (crate::figures::Figures::new(), Ecoute::default());
         let (dt, mut t, mut k) = (1.0 / 120.0, 0.0f64, 0);
         while k < instants.len() {
-            s.avance(t, dt, C, son_essai(t), &p.cfg, scale);
+            let au = son_essai(t);
+            s.avance(t, dt, C, au, &p.cfg, scale);
+            figures.avance(t, dt, C, scale, &au, &ecoute.lire(&au), &p.cfg);
             if t >= instants[k] {
                 let origin = (C.0 - cote as f32 / 2.0 - (k as u32 * cote) as f32, C.1 - cote as f32 / 2.0);
-                s.draw(&mut crate::canvas::PixCanvas { pm: &mut planche, origin }, t, &p.cfg, scale, C);
+                let cv = &mut crate::canvas::PixCanvas { pm: &mut planche, origin };
+                figures.dessiner(cv, t, &p.cfg, scale);
+                s.draw(cv, t, &p.cfg, scale, C);
                 k += 1;
             }
             t += dt as f64;

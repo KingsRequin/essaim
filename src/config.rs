@@ -21,6 +21,9 @@ pub struct Config {
     pub spectre: Spectre,
     pub rubans: Rubans,
     pub ressorts: Ressorts,
+    pub arcs: Arcs,
+    pub quatre_temps: QuatreTemps,
+    pub anneau: Anneau,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -80,6 +83,61 @@ impl Config {
     pub fn analyse_musicale(&self) -> bool {
         self.modulations.liste.iter().any(|m| matches!(m.source, Source::Caisse | Source::Montee | Source::Drop))
             || self.declencheurs.liste.iter().any(|d| matches!(d.quand, Evenement::Caisse | Evenement::Drop))
+            || crate::figures::Figures::actives(self)
+    }
+}
+
+/// Arcs : deux arcs fins autour du pointeur, comme les anneaux d'une montre. Le grand mesure la
+/// basse, le petit les aigus (`figures.rs`).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Arcs {
+    pub actif: bool,
+    /// Rayon du grand arc (px à 100 %, 10 à 80) ; le petit est aux deux tiers.
+    pub rayon: f32,
+    /// Épaisseur du trait du grand arc (0,5 à 6).
+    pub epaisseur: f32,
+}
+
+impl Default for Arcs {
+    fn default() -> Self {
+        Self { actif: false, rayon: 20.0, epaisseur: 2.1 }
+    }
+}
+
+/// Quatre temps : quatre points sous le pointeur, un par temps ; celui du temps en cours saute
+/// sur le kick et s'étire sur la caisse claire. Effacés sans tempo régulier.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct QuatreTemps {
+    pub actif: bool,
+    /// Rayon d'un point (px à 100 %, 1 à 5).
+    pub taille: f32,
+    /// Écart entre deux points (4 à 20).
+    pub ecart: f32,
+}
+
+impl Default for QuatreTemps {
+    fn default() -> Self {
+        Self { actif: false, taille: 1.6, ecart: 7.5 }
+    }
+}
+
+/// Anneau suiveur : un anneau fin qui suit le pointeur avec un temps de retard, s'allonge dans le
+/// mouvement et bat avec le kick.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Anneau {
+    pub actif: bool,
+    /// Rayon de l'anneau (px à 100 %, 6 à 60).
+    pub rayon: f32,
+    /// Épaisseur de son trait au repos (0,5 à 6).
+    pub epaisseur: f32,
+}
+
+impl Default for Anneau {
+    fn default() -> Self {
+        Self { actif: false, rayon: 13.0, epaisseur: 1.4 }
     }
 }
 
@@ -980,6 +1038,21 @@ raideur = 19            # pulsation du ressort (6 à 30) : plus raide, il revien
 amorti = 0.26           # 0.1 = rebondit longtemps, 1 = revient sans dépasser
 etirement = 1           # étirement des têtes dans leur élan (0 = rondes, 2 = très étirées)
 
+[arcs]
+actif = false           # deux arcs fins autour du pointeur : le grand mesure la basse, le petit les aigus
+rayon = 20              # rayon du grand arc (10 à 80)
+epaisseur = 2.1         # épaisseur du trait (0.5 à 6)
+
+[quatre_temps]
+actif = false           # quatre points sous le pointeur, un par temps ; effacés sans tempo régulier
+taille = 1.6            # rayon d'un point (1 à 5)
+ecart = 7.5             # écart entre deux points (4 à 20)
+
+[anneau]
+actif = false           # un anneau fin qui suit le pointeur avec du retard et bat avec le kick
+rayon = 13              # rayon de l'anneau (6 à 60)
+epaisseur = 1.4         # épaisseur du trait au repos (0.5 à 6)
+
 [modulations]
 # Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
 # satellites ou tout (16 au plus) :
@@ -1146,6 +1219,11 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("ressorts", "raideur") => (6.0, 30.0),
         ("ressorts", "amorti") => (0.1, 1.0),
         ("ressorts", "etirement") => (0.0, 2.0),
+        ("arcs", "rayon") => (10.0, 80.0),
+        ("arcs", "epaisseur") | ("anneau", "epaisseur") => (0.5, 6.0),
+        ("quatre_temps", "taille") => (1.0, 5.0),
+        ("quatre_temps", "ecart") => (4.0, 20.0),
+        ("anneau", "rayon") => (6.0, 60.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -1761,6 +1839,32 @@ mod tests {
             assert!(crate::profils::in_profile(s, k), "[{s}] {k}");
         }
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn petites_figures_lues_bornees_et_gardees_dans_les_presets() {
+        // fichier par défaut : mêmes valeurs que les réglages par défaut, figures éteintes
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        let d = super::Config::default();
+        assert_eq!((c.arcs.actif, c.quatre_temps.actif, c.anneau.actif), (false, false, false));
+        assert_eq!((c.arcs.rayon, c.arcs.epaisseur), (d.arcs.rayon, d.arcs.epaisseur));
+        assert_eq!((c.quatre_temps.taille, c.quatre_temps.ecart), (d.quatre_temps.taille, d.quatre_temps.ecart));
+        assert_eq!((c.anneau.rayon, c.anneau.epaisseur), (d.anneau.rayon, d.anneau.epaisseur));
+        // éteintes, elles ne demandent pas l'analyse musicale ; une figure active, si
+        let mut c = super::Config::default();
+        (c.modulations.liste, c.declencheurs.liste) = (Vec::new(), Vec::new());
+        assert!(!c.analyse_musicale());
+        c.anneau.actif = true;
+        assert!(c.analyse_musicale());
+        // valeurs absurdes ramenées dans leurs bornes
+        let texte = "[arcs]\nrayon = 900\nepaisseur = 0\n[quatre_temps]\ntaille = 40\necart = 1\n[anneau]\nrayon = 1\nepaisseur = 99";
+        let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
+        assert_eq!((c.arcs.rayon, c.arcs.epaisseur), (80.0, 0.5));
+        assert_eq!((c.quatre_temps.taille, c.quatre_temps.ecart), (5.0, 4.0));
+        assert_eq!((c.anneau.rayon, c.anneau.epaisseur), (6.0, 6.0));
+        for (s, k) in [("arcs", "actif"), ("arcs", "rayon"), ("quatre_temps", "ecart"), ("anneau", "epaisseur")] {
+            assert!(crate::profils::in_profile(s, k), "[{s}] {k}");
+        }
     }
 
     #[test]

@@ -177,6 +177,22 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
   (`rayon`, `hauteur`). Avec `masquer_sans_musique` (oui par défaut, *Masquer sans musique*),
   l'anneau s'efface après 1,5 s sans aucun son et revient dès que la musique reprend.
+- **Arcs** (`[arcs]`) : deux arcs fins autour du pointeur, comme les anneaux d'une montre
+  (`rayon` du grand, 10 à 80, 20 par défaut ; `epaisseur`, 0,5 à 6). Le grand s'ouvre avec la
+  basse, le petit avec les aigus et la montée ; chaque kick fait avancer le grand d'un cran et
+  gonfler son rayon, la caisse claire fait reculer le petit, un drop les ferme en cercles.
+- **Quatre temps** (`[quatre_temps]`) : quatre points sous le pointeur, un par temps (`taille`,
+  1 à 5 ; `ecart`, 4 à 20). Celui du temps en cours saute sur le kick et s'étire en tiret sur la
+  caisse claire ; pendant une montée ils se rapprochent, au drop ils sautent en vague et le
+  compte repart du premier (Essaim connaît les temps, pas le premier de la mesure). Ils
+  s'effacent en moins d'une seconde quand le tempo n'est plus régulier.
+- **Anneau suiveur** (`[anneau]`) : un anneau fin (`rayon`, 6 à 60, 13 par défaut ;
+  `epaisseur`, 0,5 à 6) qui suit le pointeur avec un temps de retard et s'allonge dans le
+  mouvement. Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec
+  la basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
+  mesure de quatre temps quand le tempo est régulier.
+  Ces trois figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
+  pointeur dégagé et tiennent dans un cercle plus petit que l'orbite par défaut.
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs.
@@ -278,7 +294,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     montre côte à côte avec la liste de leurs réglages différents.
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
     *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
-    *Spectre*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
+    *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un
@@ -335,7 +351,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (43), chacun avec sa forme, ses couleurs, ses effets et ses propres
+  - Préréglages fournis (46), chacun avec sa forme, ses couleurs, ses effets et ses propres
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
@@ -358,7 +374,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     satellites) ; *Vortex* (implosions, tout est aspiré) ; *Artifice* (gerbes d'éclats) ;
     *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort) ;
     *Ressorts* (l'essaim par défaut, mais l'orbite bondit au kick sans changer de sens et freine
-    sur la caisse claire) ; *Rubans* (trois rubans vrillés, sans tête, dans trois teintes fixes).
+    sur la caisse claire) ; *Rubans* (trois rubans vrillés, sans tête, dans trois teintes fixes) ;
+    *Arcs*, *Quatre temps* et *Anneau* (chacun une petite figure seule, sans comètes ni
+    satellites).
     Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
     curseurs, ni à la secousse du projecteur et à sa sensibilité.
