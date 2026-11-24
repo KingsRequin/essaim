@@ -229,9 +229,11 @@ pub struct Loin {
     halo: Filet,
     frisson: f32,
     halo_affiche: Option<Halo>,
-    // liseré : sa lumière ; bande (écran) et abscisse du pointeur, `None` s'il n'y a rien à dessiner
+    // liseré : sa lumière ; bandes (une par écran où il est dessiné, aucune s'il n'y a rien à
+    // dessiner) et abscisse du pointeur, d'où partent ses éclats
     lisere: Filet,
-    bande: Option<(IRect, f32)>,
+    bandes: Vec<IRect>,
+    px: f32,
     /// Zones à redessiner à cette image.
     zones: Vec<IRect>,
 }
@@ -252,7 +254,8 @@ impl Loin {
             frisson: 0.0,
             halo_affiche: None,
             lisere: Filet::new(),
-            bande: None,
+            bandes: Vec::new(),
+            px: 0.0,
             zones: Vec::new(),
         }
     }
@@ -263,19 +266,21 @@ impl Loin {
 
     /// Quelque chose est-il affiché ? (Après l'extinction d'un effet, une dernière image l'efface.)
     pub fn affiche(&self) -> bool {
-        self.equerres.is_some() || self.halo_affiche.is_some() || self.bande.is_some()
+        self.equerres.is_some() || self.halo_affiche.is_some() || !self.bandes.is_empty()
     }
 
     /// Les calques viennent d'être effacés : plus rien n'est affiché, la prochaine image redonne
     /// toutes les zones.
     pub fn oublier(&mut self) {
-        (self.equerres, self.halo_affiche, self.bande) = (None, None, None);
+        (self.equerres, self.halo_affiche) = (None, None);
+        self.bandes.clear();
     }
 
     /// Avance d'une image. `fenetre` : cadre de la fenêtre au premier plan (gauche, haut, droite,
-    /// bas) et échelle de son écran ; `ecran` : celui du pointeur.
+    /// bas) et échelle de son écran ; `ecrans` : ceux qui portent le liseré (celui du pointeur, ou
+    /// tous : `[lisere] tous_ecrans`).
     #[allow(clippy::too_many_arguments)]
-    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config, fenetre: Option<((f32, f32, f32, f32), f32)>, ecran: Option<IRect>) {
+    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config, fenetre: Option<((f32, f32, f32, f32), f32)>, ecrans: &[IRect]) {
         self.zones.clear();
         let (kicks, caisse, drop) = (son.coups.kicks, son.coups.caisses > 0, son.coups.drops > 0);
         self.kick = if kicks > 0 { 1.0 } else { self.kick * (-dt * 7.0).exp() };
@@ -355,26 +360,24 @@ impl Loin {
             }
         }
 
-        // liseré : une bande au bord bas de l'écran du pointeur, tant qu'il y a du son
-        let avant = self.bande;
-        self.bande = None;
+        // liseré : une bande au bord bas de chaque écran qui le porte, tant qu'il y a du son ; les
+        // éclats partent de l'aplomb du pointeur et passent d'un écran à l'autre (ils courent en
+        // abscisse d'écran, commune à tous)
+        let avant = std::mem::take(&mut self.bandes);
         if cfg.lisere.actif {
             self.lisere.avance(t, dt, cursor.0, kicks > 0, drop, son_la);
-            if let (Some(e), true) = (ecran, self.lisere.presence > 0.0) {
+            if self.lisere.presence > 0.0 {
                 let haut = (cfg.lisere.epaisseur * scale).ceil() as i32 + 2;
-                self.bande = Some(((e.0, e.3 - haut, e.2, e.3), cursor.0));
+                self.bandes.extend(ecrans.iter().map(|e| (e.0, e.3 - haut, e.2, e.3)));
+                self.px = cursor.0;
             }
         } else {
             self.lisere = Filet::new();
         }
-        // la bande change à chaque image tant qu'elle est là ; quand elle disparaît ou change
-        // d'écran, l'ancienne est effacée
-        self.zones.extend(self.bande.map(|b| b.0));
-        if let Some((zone, _)) = avant {
-            if self.bande.map(|b| b.0) != Some(zone) {
-                self.zones.push(zone);
-            }
-        }
+        // les bandes changent à chaque image tant qu'elles sont là ; celles qui disparaissent
+        // (plus de son, autre écran) sont effacées une dernière fois
+        self.zones.extend(self.bandes.iter().copied());
+        self.zones.extend(avant.into_iter().filter(|z| !self.bandes.contains(z)));
     }
 
     /// Zones à redessiner à cette image : vides tant que le dessin ne change pas.
@@ -388,7 +391,7 @@ impl Loin {
         if let Some(e) = &self.equerres {
             e.dessiner(cv);
         }
-        if self.halo_affiche.is_none() && self.bande.is_none() {
+        if self.halo_affiche.is_none() && self.bandes.is_empty() {
             return;
         }
         // filets : la teinte va de celle des têtes à celle des queues le long du filet, et glisse
@@ -424,8 +427,8 @@ impl Loin {
                 });
             }
         }
-        if let Some(((x0, _, x1, bas), px)) = self.bande {
-            let ep = cfg.lisere.epaisseur * scale;
+        for &(x0, _, x1, bas) in &self.bandes {
+            let (ep, px) = (cfg.lisere.epaisseur * scale, self.px);
             let (gauche, largeur, y) = (x0 as f32, (x1 - x0) as f32, bas as f32 - ep / 2.0);
             let lueur = LISERE_LUEUR.0 * scale + LISERE_LUEUR.1 * largeur * self.basse;
             let niveau = |s: f32| {
@@ -476,7 +479,7 @@ mod tests {
 
     fn avancer(l: &mut Loin, t: f64, bass: f32, coups: Coups, cfg: &Config, fenetre: Option<(f32, f32, f32, f32)>) {
         let au = AudioView { bass, ..Default::default() };
-        l.avance(t, 1.0 / 120.0, (600.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, cfg, fenetre.map(|f| (f, 1.0)), Some(ECRAN));
+        l.avance(t, 1.0 / 120.0, (600.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, cfg, fenetre.map(|f| (f, 1.0)), &[ECRAN]);
     }
 
     fn image(l: &Loin, t: f64, cfg: &Config) -> Pixmap {
@@ -685,6 +688,38 @@ mod tests {
         }
         assert!(l.zones().is_empty() && !l.affiche());
         assert!(image(&l, 6.0, &cfg).data().iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn lisere_sur_deux_ecrans_l_eclat_passe_de_l_un_a_l_autre() {
+        let mut cfg = Config::default();
+        (cfg.lisere.actif, cfg.lisere.tous_ecrans) = (true, true);
+        let ecrans = [(0, 0, 1200, 800), (1200, 0, 2400, 800)];
+        let mut l = Loin::new();
+        let dt = 1.0f32 / 120.0;
+        // pointeur sur le premier écran, près de son bord droit ; un kick, puis l'éclat court
+        let pas = |l: &mut Loin, t: f64, kick: bool| {
+            let au = AudioView { bass: 0.3, ..Default::default() };
+            let coups = Coups { kicks: kick as u32, ..Default::default() };
+            l.avance(t, dt, (1100.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, &cfg, None, &ecrans);
+        };
+        for i in 0..30 {
+            pas(&mut l, i as f64 * dt as f64, i == 0);
+        }
+        assert_eq!(l.zones(), [(0, 795, 1200, 800), (1200, 795, 2400, 800)]);
+        let mut pm = Pixmap::new(2400, 800).unwrap();
+        l.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 29.0 * dt as f64, &cfg, 1.0);
+        // 0,24 s après le kick, l'éclat est à ~135 px de part et d'autre du pointeur : sur le second écran
+        let fort = |x: u32| pm.pixel(x, 798).unwrap().alpha();
+        assert!(fort(1235) > fort(1500) + 40, "éclat absent du second écran : {} / {}", fort(1235), fort(1500));
+        // un seul écran : la bande du pointeur seulement
+        cfg.lisere.tous_ecrans = false;
+        let mut l = Loin::new();
+        for i in 0..30 {
+            let au = AudioView { bass: 0.3, ..Default::default() };
+            l.avance(i as f64 * dt as f64, dt, (1100.0, 400.0), 1.0, &Son { au: &au, coups: &Coups::default(), bandes: &[] }, &cfg, None, &ecrans[..1]);
+        }
+        assert_eq!(l.zones(), [(0, 795, 1200, 800)]);
     }
 
     #[test]

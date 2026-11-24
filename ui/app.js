@@ -1291,6 +1291,7 @@ const PANNEAUX = [
     note: "Un filet de lumière au bord bas de l'écran du pointeur, à son aplomb, aux couleurs de l'essaim. Il s'élargit avec la basse, chaque kick y court vers les deux côtés, un drop allume tout le bord ; il s'efface quand plus rien ne joue. Il ne fait pas partie des presets et reste quand tu en changes. Dans l'aperçu, l'écran est le cadre de l'aperçu.",
     base: [
       { libelle: "Épaisseur", section: "lisere", cle: "epaisseur", min: 1, max: 8, pas: 0.5, aff: (v) => virgule(+v, 1) },
+      { rangee: "Écrans", puces: [["Sur tous les écrans", "lisere", "tous_ecrans", "Au bord bas de chaque écran, pas seulement de celui du pointeur ; les éclats du kick passent de l'un à l'autre"]] },
     ],
   },
   {

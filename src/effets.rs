@@ -193,6 +193,15 @@ pub struct Effets {
     pub echelle_fenetre: f32,
 }
 
+/// Écrans qui portent le liseré : celui du pointeur, ou tous (`[lisere] tous_ecrans`).
+fn ecrans_du_lisere(monitors: &[(isize, IRect)], cursor: (f32, f32), cfg: &Config) -> Vec<IRect> {
+    if cfg.lisere.tous_ecrans {
+        monitors.iter().map(|m| m.1).collect()
+    } else {
+        ecran_du_pointeur(monitors, cursor).into_iter().collect()
+    }
+}
+
 impl Effets {
     pub fn new() -> Self {
         Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None, echelle_fenetre: 1.0 }
@@ -260,7 +269,7 @@ impl Effets {
         let son = Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] };
         self.figures.avance(t, dt, cursor, scale, &son, cfg);
         // équerres et liseré : aux coins de la fenêtre au premier plan, au bord de l'écran du pointeur
-        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), ecran_du_pointeur(monitors, cursor));
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), &ecrans_du_lisere(monitors, cursor, cfg));
     }
 
     /// Effets des modulations sur chaque figure, pris par les figures à l'image suivante.
@@ -276,7 +285,7 @@ impl Effets {
         let au = shared.view();
         let coups = self.ecoute.lire(&au);
         let son = Son { au: &au, coups: &coups, bandes: &[] };
-        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), ecran_du_pointeur(monitors, cursor));
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), &ecrans_du_lisere(monitors, cursor, cfg));
     }
 
     /// Y a-t-il un habillage à dessiner, ou encore affiché à effacer ?

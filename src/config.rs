@@ -434,13 +434,15 @@ impl Default for Halo {
 #[serde(default)]
 pub struct Lisere {
     pub actif: bool,
+    /// Au bord bas de tous les écrans, pas seulement de celui du pointeur.
+    pub tous_ecrans: bool,
     /// Épaisseur du filet (px à 100 %, 1 à 8).
     pub epaisseur: f32,
 }
 
 impl Default for Lisere {
     fn default() -> Self {
-        Self { actif: false, epaisseur: 3.0 }
+        Self { actif: false, tous_ecrans: false, epaisseur: 3.0 }
     }
 }
 
@@ -1445,6 +1447,7 @@ epaisseur = 2           # épaisseur du trait le long du cadre (1 à 4)
 [lisere]
 actif = false           # un filet de lumière au bord bas de l'écran, sous le pointeur ; effacé sans son
 epaisseur = 3           # épaisseur du filet (1 à 8)
+tous_ecrans = false     # au bord bas de tous les écrans (les éclats passent de l'un à l'autre)
 
 # Information, hors des presets elle aussi.
 [etiquette]

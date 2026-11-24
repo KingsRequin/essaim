@@ -265,7 +265,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
 - **Liseré** (`[lisere]`) : un filet de lumière au bord bas de l'écran du pointeur (`epaisseur`,
   1 à 8, 3 par défaut), à son aplomb. Il s'élargit avec la basse, chaque kick y court vers la
   gauche et la droite, une montée charge tout le bord, un drop l'allume en entier. Il s'efface
-  après 1,5 s sans son.
+  après 1,5 s sans son. `tous_ecrans = true` le met au bord bas de chaque écran : les éclats
+  partent toujours de l'aplomb du pointeur et passent d'un écran à l'autre.
   Ces trois figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
   du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le halo et le liseré
   tant que la musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.
