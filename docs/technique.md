@@ -333,6 +333,16 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   (essai `les_figures_tiennent_dans_leur_zone`, quatre kicks par image à 20 images/s). Les temps
   se comptent depuis le dernier drop ; la présence du tempo monte en 0,15 s et s'efface en 0,8 s.
   Une figure active demande l'analyse musicale (`Config::analyse_musicale`).
+  `figures/plus.rs` en ajoute cinq. L'orbe reçoit les bandes lissées du spectre (`Effets` les
+  demande à 16 bandes quand le spectre est coupé) ; son contour est recalculé à chaque image, et
+  chaque écho en garde une copie. La trame parcourt les cases de la grille que couvre la loupe
+  (alignée sur l'écran : les points ne bougent pas avec le pointeur) ; la somme des vagues est
+  bornée, donc aussi la taille et le déplacement d'un point. Le trait garde le trajet du pointeur
+  (instant, x, y) : sa zone est le cadre de ce trajet, et un point à plus de 1200 px du pointeur
+  est oublié (saut d'écran). Le pendule est une masse sous gravité au bout d'un fil qui ne
+  s'étire pas : après chaque pas, le poids est ramené à la longueur du fil et sa vitesse
+  recalculée d'après son vrai déplacement (le fil tendu l'entraîne), stable de 20 à 144 images/s
+  (essai `le_pendule_reste_au_bout_de_son_fil`).
 - **Réglages d'avant** (`migration.rs`) : les réactions fixes d'Essaim 0.3 et 0.4 (`[musique]`,
   `[clic]`, `[scintillement]`, `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`,
   `[audio] pulsation_tempo`, `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`,

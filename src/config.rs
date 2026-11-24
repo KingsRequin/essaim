@@ -24,6 +24,11 @@ pub struct Config {
     pub arcs: Arcs,
     pub quatre_temps: QuatreTemps,
     pub anneau: Anneau,
+    pub orbe: Orbe,
+    pub voix: Voix,
+    pub trame: Trame,
+    pub pinceau: Pinceau,
+    pub pendule: Pendule,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -138,6 +143,102 @@ pub struct Anneau {
 impl Default for Anneau {
     fn default() -> Self {
         Self { actif: false, rayon: 13.0, epaisseur: 1.4 }
+    }
+}
+
+/// Orbe : le spectre en une seule ligne fermée autour du pointeur, que les bandes de fréquences
+/// déforment (graves en haut, aigus en bas) ; chaque kick en détache un écho.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Orbe {
+    pub actif: bool,
+    /// Rayon de la ligne au repos (px à 100 %, 10 à 60).
+    pub rayon: f32,
+    /// Relief : ce qu'une bande à fond ajoute au rayon (2 à 30).
+    pub relief: f32,
+    /// Épaisseur du trait (0,5 à 5).
+    pub epaisseur: f32,
+}
+
+impl Default for Orbe {
+    fn default() -> Self {
+        Self { actif: false, rayon: 21.0, relief: 9.0, epaisseur: 1.6 }
+    }
+}
+
+/// Ligne de voix : une petite onde sous le pointeur, comme celle d'un message vocal ; elle
+/// s'efface sans son.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Voix {
+    pub actif: bool,
+    /// Largeur de la ligne (px à 100 %, 20 à 120).
+    pub largeur: f32,
+    /// Hauteur des grandes ondulations (2 à 20).
+    pub hauteur: f32,
+    /// Épaisseur du trait (0,5 à 5).
+    pub epaisseur: f32,
+}
+
+impl Default for Voix {
+    fn default() -> Self {
+        Self { actif: false, largeur: 46.0, hauteur: 6.5, epaisseur: 1.7 }
+    }
+}
+
+/// Trame : une grille de points fixe à l'écran, visible seulement autour du pointeur, que les
+/// coups traversent en vagues.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Trame {
+    pub actif: bool,
+    /// Rayon de la loupe (px à 100 %, 20 à 120).
+    pub rayon: f32,
+    /// Pas de la grille (6 à 24).
+    pub pas: f32,
+    /// Taille des points (0,3 à 3).
+    pub taille: f32,
+}
+
+impl Default for Trame {
+    fn default() -> Self {
+        Self { actif: false, rayon: 46.0, pas: 10.0, taille: 1.0 }
+    }
+}
+
+/// Trait de pinceau : rien au repos ; quand la souris file, elle laisse un trait, plus épais
+/// quand elle va vite, où chaque kick fait glisser une perle.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Pinceau {
+    pub actif: bool,
+    /// Largeur du trait à pleine vitesse (px à 100 %, 2 à 12).
+    pub largeur: f32,
+    /// Durée du trait (0,2 à 1 s).
+    pub duree: f32,
+}
+
+impl Default for Pinceau {
+    fn default() -> Self {
+        Self { actif: false, largeur: 5.5, duree: 0.42 }
+    }
+}
+
+/// Pendule : un petit poids pendu au pointeur par un fil, qui se balance quand la souris bouge
+/// et saute sur le kick.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Pendule {
+    pub actif: bool,
+    /// Longueur du fil (px à 100 %, 8 à 60).
+    pub longueur: f32,
+    /// Rayon du poids (1 à 6).
+    pub taille: f32,
+}
+
+impl Default for Pendule {
+    fn default() -> Self {
+        Self { actif: false, longueur: 22.0, taille: 2.6 }
     }
 }
 
@@ -1053,6 +1154,34 @@ actif = false           # un anneau fin qui suit le pointeur avec du retard et b
 rayon = 13              # rayon de l'anneau (6 à 60)
 epaisseur = 1.4         # épaisseur du trait au repos (0.5 à 6)
 
+[orbe]
+actif = false           # le spectre en une seule ligne fermée autour du pointeur (graves en haut)
+rayon = 21              # rayon de la ligne au repos (10 à 60)
+relief = 9              # ce qu'une bande de fréquences à fond ajoute au rayon (2 à 30)
+epaisseur = 1.6         # épaisseur du trait (0.5 à 5)
+
+[voix]
+actif = false           # une petite onde sous le pointeur, comme un message vocal ; effacée sans son
+largeur = 46            # largeur de la ligne (20 à 120)
+hauteur = 6.5           # hauteur des grandes ondulations (2 à 20)
+epaisseur = 1.7         # épaisseur du trait (0.5 à 5)
+
+[trame]
+actif = false           # une grille de points visible autour du pointeur, traversée par des vagues
+rayon = 46              # rayon de la loupe (20 à 120)
+pas = 10                # pas de la grille (6 à 24)
+taille = 1              # taille des points (0.3 à 3)
+
+[pinceau]
+actif = false           # quand la souris file, elle laisse un trait de pinceau ; rien au repos
+largeur = 5.5           # largeur du trait à pleine vitesse (2 à 12)
+duree = 0.42            # durée du trait (0.2 à 1 s)
+
+[pendule]
+actif = false           # un petit poids pendu au pointeur par un fil, qui saute sur le kick
+longueur = 22           # longueur du fil (8 à 60)
+taille = 2.6            # rayon du poids (1 à 6)
+
 [modulations]
 # Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
 # satellites ou tout (16 au plus) :
@@ -1224,6 +1353,18 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("quatre_temps", "taille") => (1.0, 5.0),
         ("quatre_temps", "ecart") => (4.0, 20.0),
         ("anneau", "rayon") => (6.0, 60.0),
+        ("orbe", "rayon") => (10.0, 60.0),
+        ("orbe", "relief") => (2.0, 30.0),
+        ("orbe", "epaisseur") | ("voix", "epaisseur") => (0.5, 5.0),
+        ("voix", "largeur") => (20.0, 120.0),
+        ("voix", "hauteur") => (2.0, 20.0),
+        ("trame", "rayon") => (20.0, 120.0),
+        ("trame", "pas") => (6.0, 24.0),
+        ("trame", "taille") => (0.3, 3.0),
+        ("pinceau", "largeur") => (2.0, 12.0),
+        ("pinceau", "duree") => (0.2, 1.0),
+        ("pendule", "longueur") => (8.0, 60.0),
+        ("pendule", "taille") => (1.0, 6.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -1864,6 +2005,21 @@ mod tests {
         assert_eq!((c.anneau.rayon, c.anneau.epaisseur), (6.0, 6.0));
         for (s, k) in [("arcs", "actif"), ("arcs", "rayon"), ("quatre_temps", "ecart"), ("anneau", "epaisseur")] {
             assert!(crate::profils::in_profile(s, k), "[{s}] {k}");
+        }
+        // orbe, ligne de voix, trame, trait de pinceau, pendule : mêmes règles
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        assert_eq!((c.orbe.actif, c.voix.actif, c.trame.actif, c.pinceau.actif, c.pendule.actif), (false, false, false, false, false));
+        assert_eq!((c.orbe.rayon, c.orbe.relief, c.orbe.epaisseur), (d.orbe.rayon, d.orbe.relief, d.orbe.epaisseur));
+        assert_eq!((c.voix.largeur, c.voix.hauteur, c.voix.epaisseur), (d.voix.largeur, d.voix.hauteur, d.voix.epaisseur));
+        assert_eq!((c.trame.rayon, c.trame.pas, c.trame.taille), (d.trame.rayon, d.trame.pas, d.trame.taille));
+        assert_eq!((c.pinceau.largeur, c.pinceau.duree, c.pendule.longueur, c.pendule.taille), (d.pinceau.largeur, d.pinceau.duree, d.pendule.longueur, d.pendule.taille));
+        let texte = "[orbe]\nrayon = 1\nrelief = 99\n[voix]\nlargeur = 5\nhauteur = 80\n[trame]\nrayon = 500\npas = 1\ntaille = 9\n[pinceau]\nlargeur = 40\nduree = 9\n[pendule]\nlongueur = 1\ntaille = 20";
+        let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
+        assert_eq!((c.orbe.rayon, c.orbe.relief, c.voix.largeur, c.voix.hauteur), (10.0, 30.0, 20.0, 20.0));
+        assert_eq!((c.trame.rayon, c.trame.pas, c.trame.taille), (120.0, 6.0, 3.0));
+        assert_eq!((c.pinceau.largeur, c.pinceau.duree, c.pendule.longueur, c.pendule.taille), (12.0, 1.0, 8.0, 6.0));
+        for s in ["orbe", "voix", "trame", "pinceau", "pendule"] {
+            assert!(crate::profils::in_profile(s, "actif"), "[{s}] actif");
         }
     }
 

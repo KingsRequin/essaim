@@ -46,6 +46,11 @@ const ARC_CRAN = 0.6, ARC_BOND = 90, ARC_RECUL = 13, ARC_BORNES = [-4, 8], ARC_P
 const ARC_GRAND_OUVERTURE = [0.14, 5.5], ARC_PETIT_OUVERTURE = [0.12, 4.8];
 const SAUT_BORNES = [-12, 6], TAILLE_BORNES = [0.3, 1.8], TIRET_BORNES = [-1, 5], POINT_ACTIF = 1.45, POINT_ETEINT = 0.4, VAGUE = 0.06;
 const ANNEAU_BORNES = [0.2, 1.7], ANNEAU_ECHO = [0.42, 1.2];
+// Orbe, ligne de voix, trame, trait de pinceau et pendule : comme les constantes de src/figures/plus.rs.
+const ORBE_POINTS = 96, ORBE_SOUFFLE = [-6, 12], ORBE_ECHO = [0.45, 0.32], ORBE_ELAN = 110;
+const VOIX_POINTS = 40, VOIX_MORCEAUX = 8, VOIX_ATTENTE = 1.5, VOIX_FONDU = [0.15, 0.8], VOIX_LARGE = [0.5, 1.6], VOIX_ONDES = [0.62, 0.4];
+const TRAME_VIDE = [7, 16], TRAME_VAGUE = [220, 10], TRAME_ONDE_MAX = 2.5, TRAME_DEPLACE = 3, TRAME_LOUPE_MAX = 1.5, TRAME_VAGUES_MAX = 12;
+const PINCEAU_VITESSE = [120, 700], PINCEAU_PERLE = [1.4, 0.4, 2.4], PENDULE_GRAVITE = 900, PENDULE_FREIN = 1.8, PENDULE_SAUT = [250, 200];
 const RETOMBEE = [7, 8, 10, 0.9, 10];
 const SUIVI_MONTEE = 6;
 const LISSAGE = 0.35;
@@ -126,6 +131,13 @@ function nouvellesFigures() {
     arcs: { tour: [0, 0], cran: 0, bond: [0, 0], recul: [0, 0], grave: 0, aigu: 0, plein: 0 },
     temps: { pts: [0, 1, 2, 3].map(() => ({ saut: [0, 0], taille: [1, 0], tiret: [0, 0], arme: false })), actif: null, vague: -Infinity },
     anneau: { echelle: [1, 0], carre: 0, echos: [] },
+    // figures/plus.rs
+    kick: 0,
+    orbe: { souffle: [0, 0], contour: [], echos: [] },
+    voix: { niveaux: [0, 0, 0], large: [1, 0], silence: 0, visible: 0 },
+    trame: { loupe: [0, 0], vagues: [], eclairs: [] },
+    pinceau: { trajet: [], perles: [], vie: [0, 0] },
+    pendule: { poids: null, vitesse: [0, 0], fil: [0, 0], mou: 0, cote: 1 },
   };
 }
 
@@ -461,7 +473,8 @@ class Apercu {
   avancerFigures(dt, son, coups) {
     const c = this.reglages, f = this.figures, t = this.t;
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
-    if (!arcs.actif && !quatre.actif && !anneau.actif) return;
+    const plus = ['orbe', 'voix', 'trame', 'pinceau', 'pendule'].some((s) => c[s] && c[s].actif);
+    if (!arcs.actif && !quatre.actif && !anneau.actif && !plus) { this.figures = nouvellesFigures(); return; }
     f.horloge = reste(f.horloge + dt, TAU * 40);
     f.charleston = coups.aigus > 0 ? 1 : f.charleston * Math.exp(-dt * FIG_RETOMBEE[0]);
     f.caisse = coups.caisses > 0 ? 1 : f.caisse * Math.exp(-dt * FIG_RETOMBEE[1]);
@@ -472,6 +485,7 @@ class Apercu {
     if (drop) f.compte = 0;
     f.tempo = son.bpm ? Math.min(1, f.tempo + dt / TEMPO_FONDU[0]) : Math.max(0, f.tempo - dt / TEMPO_FONDU[1]);
     if (son.bpm) f.mesure = ((f.compte % 4) + Math.min(1, Math.max(0, son.phase || 0))) / 4;
+    if (plus) this.avancerPlus(dt, son, coups, true);
     if (arcs.actif) {
       const a = f.arcs;
       for (let i = 0; i < kicks; i++) { a.cran += ARC_CRAN; a.bond[1] += ARC_BOND; }
@@ -516,12 +530,232 @@ class Apercu {
     }
   }
 
+  // Orbe, ligne de voix, trame, trait de pinceau et pendule (comme figures::plus::Plus::avance) ;
+  // dans l'aperçu, leur centre est celui du canevas et le trait suit la souris sur le canevas.
+  avancerPlus(dt, son, coups, actives) {
+    const c = this.reglages, f = this.figures, t = this.t, S = this.echelle || 1;
+    const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+    const orbe = c.orbe || {}, voix = c.voix || {}, trame = c.trame || {}, pinceau = c.pinceau || {}, pendule = c.pendule || {};
+    const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
+    const kicks = coups.kicks, caisse = coups.caisses > 0, drop = coups.drops > 0;
+    f.kick = kicks > 0 ? 1 : f.kick * Math.exp(-dt * 7);
+    if (orbe.actif) {
+      const o = f.orbe, rayons = () => this.rayonsOrbe(orbe);
+      if (kicks > 0) { o.souffle[1] += ORBE_ELAN; o.echos.push([t + 0.03, 1, rayons()]); }
+      if (drop) { o.souffle[1] += 2 * ORBE_ELAN; for (const retard of [0.12, 0.24]) o.echos.push([t + retard, 1.5, rayons()]); }
+      vers(o.souffle, 0, [17, 0.3], dt, ORBE_SOUFFLE);
+      o.echos = o.echos.filter((e) => t - e[0] < ORBE_ECHO[0]);
+      o.contour = rayons();
+    } else {
+      f.orbe.contour = [];
+      f.orbe.echos = [];
+    }
+    if (voix.actif) {
+      const v = f.voix;
+      const cibles = [0.3 * f.basse + 0.85 * f.kick, (f.basse > 0.02 ? 0.15 : 0) + 0.9 * f.caisse, 0.9 * f.charleston + 0.6 * f.montee];
+      v.niveaux = v.niveaux.map((n, i) => { const cible = Math.min(1, cibles[i]); return n + (cible - n) * (1 - Math.exp(-dt * (cible > n ? 30 : 9))); });
+      if (drop) v.large[1] += 5;
+      vers(v.large, 1, [12, 0.35], dt, VOIX_LARGE);
+      v.silence = v.niveaux[0] + v.niveaux[1] + v.niveaux[2] < 0.03 ? v.silence + dt : 0;
+      v.visible = v.silence >= VOIX_ATTENTE ? Math.max(0, v.visible - dt / VOIX_FONDU[1]) : Math.min(1, v.visible + dt / VOIX_FONDU[0]);
+    }
+    if (trame.actif) {
+      const tr = f.trame, rayon = borne(trame.rayon, 20, 120, 46), pas = borne(trame.pas, 6, 24, 10) * S;
+      if (coups.aigus > 0) {
+        for (let i = 0; i < 4; i++) {
+          const a = entre(0, TAU), d = (14 + 28 * Math.random()) * S;
+          tr.eclairs.push([Math.round((cx + Math.cos(a) * d) / pas), Math.round((cy + Math.sin(a) * d) / pas), t]);
+        }
+      }
+      if (kicks > 0) { tr.vagues.push({ x: cx, y: cy, ne: t, force: 1, vie: 0.4, losange: false }); tr.loupe[1] += 1.96 * rayon; }
+      if (caisse) tr.vagues.push({ x: cx, y: cy, ne: t, force: 0.6, vie: 0.34, losange: true });
+      if (drop) tr.vagues.push({ x: cx, y: cy, ne: t + 0.05, force: 1.8, vie: 0.6, losange: false });
+      tr.vagues = tr.vagues.filter((v) => t - v.ne < v.vie).slice(-TRAME_VAGUES_MAX);
+      tr.eclairs = tr.eclairs.filter((e) => t - e[2] < 0.4);
+      vers(tr.loupe, rayon * (1 + 0.3 * f.basse), [15, 0.4], dt, [0, rayon * TRAME_LOUPE_MAX]);
+    } else {
+      f.trame.vagues = [];
+      f.trame.loupe = [0, 0];
+    }
+    if (pinceau.actif) {
+      const pi = f.pinceau, duree = borne(pinceau.duree, 0.2, 1, 0.42);
+      if (kicks > 0 && pi.perles.length < 6) pi.perles.push(t);
+      if (pi.vie[0] <= 0) pi.vie = [duree, 0];
+      if (drop) pi.vie[1] += 5.2 * duree;
+      vers(pi.vie, duree, [9, 0.45], dt, [duree * 0.5, duree * 2.2]);
+      pi.perles = pi.perles.filter((ne) => t - ne < 0.5);
+      // le pointeur de l'aperçu : la souris sur le canevas, sinon son centre (rien à tracer)
+      const [x, y] = this.pointeur || [cx, cy];
+      pi.trajet.push([t, x, y]);
+      pi.trajet = pi.trajet.filter((q) => t - q[0] <= pi.vie[0]);
+    } else {
+      f.pinceau.trajet = [];
+    }
+    if (pendule.actif && dt > 1e-5) {
+      const pe = f.pendule, longueur = borne(pendule.longueur, 8, 60, 22);
+      if (pe.fil[0] <= 0) pe.fil = [longueur, 0];
+      if (drop) pe.fil[1] += 7.3 * longueur;
+      vers(pe.fil, longueur * (1 + 0.32 * f.basse - 0.6 * f.montee), [12, 0.4], dt, [4, longueur * 2]);
+      const l = pe.fil[0] * S;
+      let [qx, qy] = pe.poids || [cx, cy + l];
+      if (kicks > 0) { pe.vitesse[1] -= PENDULE_SAUT[0] * S; pe.vitesse[0] += entre(-70, 70) * S; }
+      if (caisse) { pe.cote = -pe.cote; pe.vitesse[0] += PENDULE_SAUT[1] * pe.cote * S; }
+      if (drop) pe.vitesse[1] -= 1.5 * PENDULE_SAUT[0] * S;
+      // gravité et frottement, puis le fil : il ne s'étire pas, mais peut se détendre
+      const avant = [qx, qy], frein = Math.exp(-dt * PENDULE_FREIN);
+      pe.vitesse = [pe.vitesse[0] * frein, (pe.vitesse[1] + PENDULE_GRAVITE * S * dt) * frein];
+      qx += pe.vitesse[0] * dt;
+      qy += pe.vitesse[1] * dt;
+      const dx = qx - cx, dy = qy - cy, d = Math.hypot(dx, dy);
+      if (d > l) { qx = cx + (dx / d) * l; qy = cy + (dy / d) * l; }
+      pe.vitesse = [(qx - avant[0]) / dt, (qy - avant[1]) / dt];
+      if (![qx, qy, pe.vitesse[0], pe.vitesse[1]].every(Number.isFinite)) { qx = cx; qy = cy + l; pe.vitesse = [0, 0]; }
+      pe.poids = [qx, qy];
+      pe.mou = Math.max(0, l - Math.min(d, l));
+    } else if (!pendule.actif) {
+      f.pendule.poids = null;
+    }
+    return actives;
+  }
+
+  // Rayons de l'orbe (comme figures::plus::Plus::rayons), en px à 100 %.
+  rayonsOrbe(orbe) {
+    const f = this.figures, n = this.nBandes || 0, bandes = this.bandes;
+    const fond = Math.min(60, Math.max(10, finiOu(+orbe.rayon, 21))) * (1 - 0.35 * f.montee) + f.orbe.souffle[0];
+    const relief = Math.min(30, Math.max(2, finiOu(+orbe.relief, 9)));
+    return Array.from({ length: ORBE_POINTS }, (_, i) => {
+      const th = (i / ORBE_POINTS) * TAU;
+      let bande = 0;
+      if (n >= 2) {
+        const x = (1 - Math.abs(th / Math.PI - 1)) * (n - 1), j = Math.min(n - 2, Math.floor(x)), k = (1 - Math.cos((x - j) * Math.PI)) / 2;
+        bande = Math.min(1, Math.max(0, bandes[j] + (bandes[j + 1] - bandes[j]) * k));
+      }
+      const lente = (0.4 + 0.7 * f.basse) * (1.3 * Math.sin(3 * th + f.horloge * 0.9) + 0.9 * Math.sin(5 * th - f.horloge * 1.3));
+      return Math.max(2, fond + relief * bande + lente + 1.4 * f.montee * Math.sin(14 * th + f.horloge * 22));
+    });
+  }
+
+  // Dessin de l'orbe, de la ligne de voix, de la trame, du trait et du pendule (comme
+  // figures::plus::Plus::dessiner), autour de (cx, cy).
+  dessinerPlus(g, cx, cy, S, tete, queue) {
+    const c = this.reglages, f = this.figures, t = this.t;
+    const orbe = c.orbe || {}, voix = c.voix || {}, trame = c.trame || {}, pinceau = c.pinceau || {}, pendule = c.pendule || {};
+    const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
+    const plein = (rgb, a = 1) => `rgba(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])},${Math.max(0, Math.min(1, a))})`;
+    const melange = (a, b, k) => a.map((x, i) => x + (b[i] - x) * Math.min(1, Math.max(0, k)));
+    const lisse = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+    const gauss = (x) => Math.exp(-x * x);
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    if (trame.actif) {
+      const tr = f.trame, pas = borne(trame.pas, 6, 24, 10) * S, taille = borne(trame.taille, 0.3, 3, 1), l = Math.max(4, tr.loupe[0]) * S, marge = l * 1.25 + 1;
+      for (let j = Math.floor((cy - marge) / pas); j <= Math.ceil((cy + marge) / pas); j++) {
+        for (let i = Math.floor((cx - marge) / pas); i <= Math.ceil((cx + marge) / pas); i++) {
+          let x = i * pas, y = j * pas;
+          const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy);
+          // le vide sous le pointeur, puis la loupe qui s'estompe vers son bord
+          const vide = lisse(TRAME_VIDE[0] * S, TRAME_VIDE[1] * S, d), dedans = (1 - lisse(l * 0.35, l, d)) * vide, large = (1 - lisse(l * 0.3, l * 1.25, d)) * vide;
+          if (large <= 0.01) continue;
+          let onde = 0, px = 0, py = 0;
+          for (const v of tr.vagues) {
+            const age = t - v.ne;
+            if (age < 0) continue;
+            const vx = x - v.x, vy = y - v.y, droit = Math.hypot(vx, vy), dist = v.losange ? (Math.abs(vx) + Math.abs(vy)) / 1.25 : droit;
+            const force = gauss((dist - TRAME_VAGUE[0] * S * age) / (TRAME_VAGUE[1] * S)) * v.force * Math.max(0, 1 - age / v.vie);
+            onde += force;
+            if (droit > 1e-3) { px += (vx / droit) * force; py += (vy / droit) * force; }
+          }
+          onde = Math.min(TRAME_ONDE_MAX, onde);
+          const pousse = Math.hypot(px, py);
+          if (pousse > TRAME_ONDE_MAX) { px = (px / pousse) * TRAME_ONDE_MAX; py = (py / pousse) * TRAME_ONDE_MAX; }
+          const eclair = tr.eclairs.reduce((m, e) => (e[0] === i && e[1] === j ? Math.max(m, Math.exp(-(t - e[2]) * 12)) : m), 0);
+          x += px * TRAME_DEPLACE * S - dx * 0.3 * f.montee * dedans;
+          y += py * TRAME_DEPLACE * S - dy * 0.3 * f.montee * dedans;
+          const r = (dedans * (1 + 0.9 * f.basse) + 2 * onde * large + 1.5 * eclair * large) * taille * S;
+          if (r < 0.25) continue;
+          g.fillStyle = plein(tete, Math.min(1, 0.3 + (0.35 * r) / S));
+          g.beginPath();
+          g.arc(x, y, r, 0, TAU);
+          g.fill();
+        }
+      }
+    }
+    if (orbe.actif && f.orbe.contour.length === ORBE_POINTS) {
+      const tracer = (rayons, echelle, largeur, rgb, al) => {
+        g.beginPath();
+        for (let i = 0; i <= ORBE_POINTS; i++) {
+          const a = -Math.PI / 2 + (i / ORBE_POINTS) * TAU, r = rayons[i % ORBE_POINTS] * echelle * S;
+          if (i) g.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); else g.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+        }
+        g.strokeStyle = plein(rgb, al);
+        g.lineWidth = largeur;
+        g.stroke();
+      };
+      for (const [ne, force, rayons] of f.orbe.echos) {
+        const k = (t - ne) / ORBE_ECHO[0];
+        if (k < 0 || k >= 1) continue;
+        tracer(rayons, 1 + ORBE_ECHO[1] * force * (1 - (1 - k) ** 3), (1.3 * (1 - k) + 0.4) * S, melange(tete, queue, k), 0.55 * (1 - k));
+      }
+      tracer(f.orbe.contour, 1, borne(orbe.epaisseur, 0.5, 5, 1.6) * S, tete, 1);
+    }
+    if (voix.actif && f.voix.visible > 0.01) {
+      const v = f.voix, hauteur = borne(voix.hauteur, 2, 20, 6.5), w = borne(voix.largeur, 20, 120, 46) * S * v.large[0], h = hauteur * S;
+      const ax = cx + SOUS_LE_POINTEUR[0] * S, ay = cy + (SOUS_LE_POINTEUR[1] + 1.4 * hauteur) * S, [grave, medium, aigu] = v.niveaux;
+      const point = (i) => {
+        const u = i / VOIX_POINTS, fenetre = Math.sin(Math.PI * u) ** 2;
+        const onde = grave * Math.sin(TAU * 1.5 * u + f.horloge * 5) + VOIX_ONDES[0] * medium * Math.sin(TAU * 3 * u - f.horloge * 8) + VOIX_ONDES[1] * aigu * Math.sin(TAU * 6.5 * u + f.horloge * 13);
+        return [ax + (u - 0.5) * w, ay + fenetre * h * onde];
+      };
+      const al = v.visible * (0.5 + 0.5 * Math.min(1, grave + medium + aigu)), par = VOIX_POINTS / VOIX_MORCEAUX;
+      g.lineWidth = borne(voix.epaisseur, 0.5, 5, 1.7) * S;
+      for (let m = 0; m < VOIX_MORCEAUX; m++) {
+        g.strokeStyle = plein(melange(tete, queue, (m + 0.5) / VOIX_MORCEAUX), al);
+        g.beginPath();
+        for (let i = m * par; i <= (m + 1) * par; i++) { const [x, y] = point(i); if (i > m * par) g.lineTo(x, y); else g.moveTo(x, y); }
+        g.stroke();
+      }
+    }
+    if (pinceau.actif && f.pinceau.trajet.length >= 2) {
+      const pi = f.pinceau, vie = Math.max(0.05, pi.vie[0]), largeur = borne(pinceau.largeur, 2, 12, 5.5);
+      for (let i = 1; i < pi.trajet.length; i++) {
+        const a = pi.trajet[i - 1], b = pi.trajet[i], duree = Math.max(1e-3, b[0] - a[0]);
+        const v = Math.hypot(b[1] - a[1], b[2] - a[2]) / duree / S, vif = Math.min(1, Math.max(0, (v - PINCEAU_VITESSE[0]) / PINCEAU_VITESSE[1])) ** 0.8;
+        if (vif < 0.02) continue;
+        const k = Math.min(1, Math.max(0, 1 - (t - b[0]) / vie)), profil = Math.max(0, Math.sin(Math.PI * k ** 0.6)) ** 0.7;
+        const perle = pi.perles.reduce((s, ne) => s + PINCEAU_PERLE[0] * gauss((k - (1 - (t - ne) / PINCEAU_PERLE[1])) / 0.1), 0);
+        const trait = (0.6 + largeur * vif * (0.6 + 0.6 * f.basse)) * profil * Math.min(PINCEAU_PERLE[2], 1 + perle) * S;
+        if (trait < 0.4) continue;
+        g.strokeStyle = plein(prisme(c.couleur, t, k, this.teinteImposee, this.teinte));
+        g.lineWidth = trait;
+        g.beginPath();
+        g.moveTo(a[1], a[2]);
+        g.lineTo(b[1], b[2]);
+        g.stroke();
+      }
+    }
+    if (pendule.actif && f.pendule.poids) {
+      const pe = f.pendule, [qx, qy] = pe.poids;
+      // le fil : droit quand il est tendu, il pend quand le poids est remonté
+      g.strokeStyle = plein(queue, 0.75);
+      g.lineWidth = S;
+      g.beginPath();
+      g.moveTo(cx, cy);
+      g.quadraticCurveTo((cx + qx) / 2, (cy + qy) / 2 + pe.mou * 0.6, qx, qy);
+      g.stroke();
+      g.fillStyle = plein(tete);
+      g.beginPath();
+      g.arc(qx, qy, (borne(pendule.taille, 1, 6, 2.6) + 1.8 * f.kick) * S, 0, TAU);
+      g.fill();
+    }
+  }
+
   // Dessin des petites figures (comme figures::Figures::dessiner), autour de (cx, cy).
   dessinerFigures(g, cx, cy, S, tete, queue) {
     const c = this.reglages, f = this.figures, t = this.t;
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
     const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
     const plein = (rgb, a = 1) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${Math.max(0, Math.min(1, a))})`;
+    this.dessinerPlus(g, cx, cy, S, tete, queue);
     if (arcs.actif) {
       const a = f.arcs, rayon = borne(arcs.rayon, 10, 80, 20), epais = borne(arcs.epaisseur, 0.5, 6, 2.1);
       const arc = (r, depart, ouverture, largeur, rgb) => {
@@ -593,12 +827,13 @@ class Apercu {
 
   // Bandes de l'anneau de spectre : simulées, puis lissées comme effets::lisser_bandes.
   spectre(dt, son) {
-    const s = this.reglages.spectre;
-    if (!s || !s.actif) return;
+    const s = this.reglages.spectre || {}, orbe = this.reglages.orbe || {};
+    if (!s.actif && !orbe.actif) { this.nBandes = 0; return; }
     if (this.aigusSpectre !== null && (son.aigus || 0) !== this.aigusSpectre) this.eclatAigus = 1;
     this.aigusSpectre = son.aigus || 0;
     this.eclatAigus *= Math.exp(-dt * 12);
-    const n = Math.min(BANDES_MAX, Math.max(8, Math.round(s.bandes)));
+    const n = s.actif ? Math.min(BANDES_MAX, Math.max(8, Math.round(s.bandes))) : 16;
+    this.nBandes = n;
     const lues = bandesSimulees(n, this.t, son, this.env, this.eclatAigus);
     const km = Math.min(1, dt * SPECTRE_MONTEE), kd = Math.min(1, dt * SPECTRE_DESCENTE);
     for (let i = 0; i < n; i++) this.bandes[i] += (lues[i] - this.bandes[i]) * (lues[i] > this.bandes[i] ? km : kd);

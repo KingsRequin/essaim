@@ -191,8 +191,30 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   mouvement. Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec
   la basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
   mesure de quatre temps quand le tempo est régulier.
-  Ces trois figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
-  pointeur dégagé et tiennent dans un cercle plus petit que l'orbite par défaut.
+- **Orbe** (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
+  pointeur (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à 5). Les bandes de fréquences la
+  déforment (`relief`, 2 à 30 : graves en haut, aigus en bas, les deux moitiés en miroir) ; chaque
+  kick en détache un écho qui garde la forme du son, un drop trois ; pendant une montée elle se
+  resserre et frise. Elle demande l'analyse en bandes, comme le spectre (16 bandes s'il est coupé).
+- **Ligne de voix** (`[voix]`) : une petite onde sous le pointeur, comme celle d'un message vocal
+  (`largeur`, 20 à 120 ; `hauteur`, 2 à 20 ; `epaisseur`). Les grandes ondulations suivent la
+  basse et le kick, les moyennes la caisse claire, les fines le charleston et la montée ; un drop
+  l'élargit un instant. Elle ne passe jamais sur le pointeur et s'efface après 1,5 s sans son.
+- **Trame** (`[trame]`) : une grille de points fixe à l'écran (`pas`, 6 à 24), visible seulement
+  autour du pointeur, comme sous une loupe (`rayon`, 20 à 120, 46 par défaut ; `taille` des
+  points, 0,3 à 3) ; un vide de 7 px est gardé sous le pointeur. La basse agrandit la loupe ; les
+  coups la traversent en vagues, ronde pour le kick, en losange pour la caisse claire, plus grande
+  au drop ; le charleston fait scintiller quelques points ; une montée les aspire vers le centre.
+- **Trait** (`[pinceau]`) : rien au repos. Quand la souris file (plus de 120 px par seconde à
+  100 %), elle laisse un trait de pinceau, plus épais quand elle va vite (`largeur` à pleine
+  vitesse, 2 à 12), qui s'efface en `duree` (0,2 à 1 s, 0,42 par défaut). La basse l'élargit,
+  chaque kick y fait glisser une perle de la tête à la queue, un drop le fait durer plus longtemps.
+- **Pendule** (`[pendule]`) : un petit poids (`taille`, 1 à 6) pendu au pointeur par un fil
+  (`longueur`, 8 à 60, 22 par défaut). Il se balance quand la souris bouge ; chaque kick le fait
+  sauter (le fil se détend puis se retend), la caisse claire lui donne une pichenette, à gauche
+  puis à droite ; le fil s'allonge avec la basse et se raccourcit pendant une montée.
+  Ces huit figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
+  pointeur dégagé, et s'utilisent seules ou avec l'essaim.
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs.
@@ -294,7 +316,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     montre côte à côte avec la liste de leurs réglages différents.
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
     *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*, *Bordure*,
-    *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
+    *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*,
+    *Pendule*, *Réticule et projecteur*), *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un
@@ -351,7 +374,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (46), chacun avec sa forme, ses couleurs, ses effets et ses propres
+  - Préréglages fournis (51), chacun avec sa forme, ses couleurs, ses effets et ses propres
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
@@ -375,8 +398,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort) ;
     *Ressorts* (l'essaim par défaut, mais l'orbite bondit au kick sans changer de sens et freine
     sur la caisse claire) ; *Rubans* (trois rubans vrillés, sans tête, dans trois teintes fixes) ;
-    *Arcs*, *Quatre temps* et *Anneau* (chacun une petite figure seule, sans comètes ni
-    satellites).
+    *Arcs*, *Quatre temps*, *Anneau*, *Orbe*, *Ligne de voix*, *Trame*, *Trait* et *Pendule*
+    (chacun une petite figure seule, sans comètes ni satellites).
     Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
     curseurs, ni à la secousse du projecteur et à sa sensibilité.

@@ -2271,7 +2271,8 @@ mod tests {
 
     /// Planche d'un preset fourni sur le son d'essai, pour juger son allure à l'œil : six images
     /// (après un kick, en plein groove, pendant la montée, au drop, après le drop, au break) à
-    /// 200 %, sur fond sombre.
+    /// 200 %, sur fond sombre. Le pointeur décrit un petit cercle (les figures qui suivent son
+    /// mouvement se voient) ; les bandes de fréquences sont simulées.
     /// `ESSAIM_PLANCHE=dossier ESSAIM_PRESET=Rubans cargo test --release exporter_planche -- --ignored`
     #[test]
     #[ignore]
@@ -2289,13 +2290,23 @@ mod tests {
         let (dt, mut t, mut k) = (1.0 / 120.0, 0.0f64, 0);
         while k < instants.len() {
             let au = son_essai(t);
-            s.avance(t, dt, C, au, &p.cfg, scale);
-            figures.avance(t, dt, C, scale, &au, &ecoute.lire(&au), &p.cfg);
+            let c = (C.0 + 40.0 * (t as f32 * 9.0).cos(), C.1 + 40.0 * (t as f32 * 9.0).sin());
+            let cloche = |x: f32, milieu: f32, large: f32| (-((x - milieu) / large).powi(2)).exp();
+            let bandes: Vec<f32> = (0..16)
+                .map(|i| {
+                    let x = i as f32 / 15.0;
+                    (au.bass * cloche(x, 0.1, 0.2) + 0.4 * (0.6 + 0.4 * (t as f32 * 2.3 + i as f32 * 1.7).sin()) * cloche(x, 0.5, 0.22) + au.brillance * cloche(x, 0.88, 0.14)).clamp(0.0, 1.0)
+                })
+                .collect();
+            s.avance(t, dt, c, au, &p.cfg, scale);
+            figures.avance(t, dt, c, scale, &crate::figures::Son { au: &au, coups: &ecoute.lire(&au), bandes: &bandes }, &p.cfg);
             if t >= instants[k] {
                 let origin = (C.0 - cote as f32 / 2.0 - (k as u32 * cote) as f32, C.1 - cote as f32 / 2.0);
                 let cv = &mut crate::canvas::PixCanvas { pm: &mut planche, origin };
                 figures.dessiner(cv, t, &p.cfg, scale);
-                s.draw(cv, t, &p.cfg, scale, C);
+                s.draw(cv, t, &p.cfg, scale, c);
+                // le pointeur : un point blanc
+                cv.circle(c.0, c.1, 2.0 * scale, (255, 255, 255), 0.9);
                 k += 1;
             }
             t += dt as f64;

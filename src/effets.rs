@@ -11,7 +11,7 @@ use crate::audio::{AudioShared, BANDES_MAX};
 use crate::canvas::Canvas;
 use crate::config::Config;
 use crate::layer::IRect;
-use crate::figures::Figures;
+use crate::figures::{Figures, Son};
 use crate::render::{prisme, Ecoute};
 use std::f32::consts::{PI, TAU};
 
@@ -233,11 +233,17 @@ impl Effets {
         }
         // bandes du spectre : demandées à l'analyse du son seulement si l'effet est voulu
         let s = &cfg.spectre;
-        let voulues = if s.actif && cfg.audio.actif { s.bandes.clamp(8, BANDES_MAX as u32) } else { 0 };
+        // (le nombre de bandes est celui du spectre ; une figure qui en veut sans lui en a 16)
+        let voulues = match (cfg.audio.actif, s.actif, Figures::veut_les_bandes(cfg)) {
+            (true, true, _) => s.bandes.clamp(8, BANDES_MAX as u32),
+            (true, false, true) => 16,
+            _ => 0,
+        };
         shared.set_bandes(voulues);
+        let mut lues = 0;
         if voulues > 0 {
-            let n = shared.bandes(&mut self.lues);
-            lisser_bandes(&mut self.bandes[..n], &self.lues[..n], dt);
+            lues = shared.bandes(&mut self.lues);
+            lisser_bandes(&mut self.bandes[..lues], &self.lues[..lues], dt);
             self.silence = if shared.bandes_crete() > SPECTRE_AUDIBLE { 0.0 } else { self.silence + dt };
         } else {
             self.bandes = [0.0; BANDES_MAX];
@@ -246,7 +252,7 @@ impl Effets {
         // petites figures : elles écoutent les coups du son elles-mêmes
         let au = shared.view();
         let coups = self.ecoute.lire(&au);
-        self.figures.avance(t, dt, cursor, scale, &au, &coups, cfg);
+        self.figures.avance(t, dt, cursor, scale, &Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] }, cfg);
     }
 
     /// Projecteur en cours (écran assombri à redessiner en entier à chaque image).

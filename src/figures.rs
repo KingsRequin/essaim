@@ -1,5 +1,6 @@
 //! Petites figures autour du pointeur, faites de lignes fines et de points qui laissent voir
-//! l'écran : arcs (`[arcs]`), quatre temps (`[quatre_temps]`) et anneau suiveur (`[anneau]`).
+//! l'écran : arcs (`[arcs]`), quatre temps (`[quatre_temps]`) et anneau suiveur (`[anneau]`) ici ;
+//! orbe, ligne de voix, trame, trait de pinceau et pendule dans `figures/plus.rs`.
 //! `Effets` les possède, leur passe le son et ajoute leur zone à celle du pointeur.
 //!
 //! Tout ce qui bouge passe par des ressorts bornés (`Ressort::vers`) : la zone de `rect` contient
@@ -12,6 +13,28 @@ use crate::config::Config;
 use crate::layer::IRect;
 use crate::render::{prisme, ressort, Coups};
 use std::f32::consts::{PI, TAU};
+
+mod plus;
+
+/// Ce que les figures écoutent pendant une image : le son, ses coups depuis l'image précédente
+/// et les bandes de fréquences lissées (vide si personne ne les demande).
+pub struct Son<'a> {
+    pub au: &'a AudioView,
+    pub coups: &'a Coups,
+    pub bandes: &'a [f32],
+}
+
+/// Ce que les figures partagent pendant une image : leur centre, l'horloge des rotations lentes,
+/// le niveau de la basse, la montée, les enveloppes du charleston et de la caisse claire.
+#[derive(Clone, Copy)]
+struct Partage {
+    centre: (f32, f32),
+    horloge: f32,
+    basse: f32,
+    montee: f32,
+    charleston: f32,
+    caisse: f32,
+}
 
 /// Centre des figures : au bout d'un ressort accroché au pointeur (pulsation en rad/s,
 /// amortissement), jamais à plus de `RETARD_MAX` px (à 100 %) de lui.
@@ -130,6 +153,8 @@ pub struct Figures {
     arcs: Arcs,
     temps: QuatreTemps,
     anneau: Anneau,
+    /// Orbe, ligne de voix, trame, trait de pinceau et pendule.
+    plus: plus::Plus,
     /// Points d'une ligne à tracer, gardés d'une image à l'autre (le dessin ne prend que `&self`).
     tampon: std::cell::RefCell<Vec<(f32, f32)>>,
 }
@@ -151,20 +176,27 @@ impl Figures {
             arcs: Arcs::default(),
             temps: QuatreTemps { pts: [point; 4], actif: None, vague: f64::NEG_INFINITY },
             anneau: Anneau { echelle: Ressort::en(1.0), carre: 0.0, echos: Vec::new() },
+            plus: plus::Plus::new(),
             tampon: Default::default(),
         }
     }
 
     /// Une figure est-elle active ?
     pub fn actives(cfg: &Config) -> bool {
-        cfg.arcs.actif || cfg.quatre_temps.actif || cfg.anneau.actif
+        cfg.arcs.actif || cfg.quatre_temps.actif || cfg.anneau.actif || plus::Plus::actives(cfg)
+    }
+
+    /// Une figure active a-t-elle besoin des bandes de fréquences ?
+    pub fn veut_les_bandes(cfg: &Config) -> bool {
+        cfg.orbe.actif
     }
 
     /// Avance d'une image : le centre suit le pointeur, les coups du son poussent les ressorts.
-    #[allow(clippy::too_many_arguments)]
-    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, au: &AudioView, coups: &Coups, cfg: &Config) {
+    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config) {
+        let (au, coups) = (son.au, son.coups);
         if !Self::actives(cfg) {
             self.centre = None;
+            self.plus.oublier();
             return;
         }
         // centre : au bout d'un ressort accroché au pointeur, retard borné
@@ -199,6 +231,8 @@ impl Figures {
         if au.bpm.is_some() {
             self.mesure = ((self.compte % 4) as f32 + au.phase.clamp(0.0, 1.0)) / 4.0;
         }
+        let partage = self.partage(cursor);
+        self.plus.avance(&partage, t, dt, cursor, scale, son, cfg);
 
         if cfg.arcs.actif {
             let a = &mut self.arcs;
@@ -272,6 +306,11 @@ impl Figures {
         }
     }
 
+    /// Ce que les figures partagent à cette image (leur centre : `cursor` avant la première).
+    fn partage(&self, cursor: (f32, f32)) -> Partage {
+        Partage { centre: self.centre.unwrap_or(cursor), horloge: self.horloge, basse: self.basse, montee: self.montee, charleston: self.charleston, caisse: self.caisse }
+    }
+
     /// Zone écran qui contient les figures (autour de leur centre, ou de `cursor` avant la
     /// première image) ; `None` si aucune n'est active.
     pub fn rect(&self, cursor: (f32, f32), scale: f32, cfg: &Config) -> Option<IRect> {
@@ -290,11 +329,8 @@ impl Figures {
             let a = &cfg.anneau;
             e = e.max(a.rayon * ANNEAU_BORNES.1 * (1.0 + ANNEAU_ECHO.1) + 4.0 * a.epaisseur + 4.0);
         }
-        (e > 0.0).then(|| {
-            let (cx, cy) = self.centre.unwrap_or(cursor);
-            let e = e * scale + 2.0;
-            ((cx - e).floor() as i32, (cy - e).floor() as i32, (cx + e).ceil() as i32, (cy + e).ceil() as i32)
-        })
+        let zone = (e > 0.0).then(|| autour(self.centre.unwrap_or(cursor), e * scale));
+        crate::layer::union(zone, self.plus.rect(self.centre.unwrap_or(cursor), cursor, scale, cfg))
     }
 
     /// Dessine les figures actives autour de leur centre.
@@ -303,6 +339,7 @@ impl Figures {
         // deux couleurs : celle des têtes de l'essaim et celle des queues de traînée
         let (tete, queue) = (prisme(cfg, t, 1.0), prisme(cfg, t, 0.0));
         let mut pts = self.tampon.borrow_mut();
+        self.plus.dessiner(&self.partage((cx, cy)), cv, &mut pts, t, cfg, scale, (tete, queue));
 
         if cfg.arcs.actif {
             let (a, c) = (&self.arcs, &cfg.arcs);
@@ -374,10 +411,22 @@ impl Figures {
     }
 }
 
+/// Carré écran de demi-côté `e` px (plus 2 px de marge) autour de `centre`.
+fn autour((cx, cy): (f32, f32), e: f32) -> IRect {
+    let e = e + 2.0;
+    ((cx - e).floor() as i32, (cy - e).floor() as i32, (cx + e).ceil() as i32, (cy + e).ceil() as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tiny_skia::Pixmap;
+
+    /// Avance d'une image, sans bandes de fréquences.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn avancer(f: &mut Figures, t: f64, dt: f32, cursor: (f32, f32), scale: f32, au: &AudioView, coups: &Coups, cfg: &Config) {
+        f.avance(t, dt, cursor, scale, &Son { au, coups, bandes: &[] }, cfg);
+    }
 
     /// Son d'essai : 120 BPM, kick sur chaque temps, caisse claire un temps sur deux, charleston
     /// aux contretemps, basse forte ; drop à 2 s.
@@ -393,6 +442,7 @@ mod tests {
     fn toutes() -> Config {
         let mut cfg = Config::default();
         (cfg.arcs.actif, cfg.quatre_temps.actif, cfg.anneau.actif) = (true, true, true);
+        (cfg.orbe.actif, cfg.voix.actif, cfg.trame.actif, cfg.pinceau.actif, cfg.pendule.actif) = (true, true, true, true, true);
         cfg
     }
 
@@ -401,7 +451,7 @@ mod tests {
         let cfg = Config::default();
         let mut f = Figures::new();
         let (au, coups) = son(0.0);
-        f.avance(0.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &au, &coups, &cfg);
+        avancer(&mut f, 0.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &au, &coups, &cfg);
         assert_eq!(f.rect((300.0, 300.0), 1.0, &cfg), None);
         let mut pm = Pixmap::new(600, 600).unwrap();
         f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 0.0, &cfg, 1.0);
@@ -416,6 +466,11 @@ mod tests {
         (cfg.arcs.rayon, cfg.arcs.epaisseur) = (80.0, 6.0);
         (cfg.quatre_temps.taille, cfg.quatre_temps.ecart) = (5.0, 20.0);
         (cfg.anneau.rayon, cfg.anneau.epaisseur) = (60.0, 6.0);
+        (cfg.orbe.rayon, cfg.orbe.relief, cfg.orbe.epaisseur) = (60.0, 30.0, 5.0);
+        (cfg.voix.largeur, cfg.voix.hauteur, cfg.voix.epaisseur) = (120.0, 20.0, 5.0);
+        (cfg.trame.rayon, cfg.trame.pas, cfg.trame.taille) = (120.0, 6.0, 3.0);
+        (cfg.pinceau.largeur, cfg.pinceau.duree) = (12.0, 1.0);
+        (cfg.pendule.longueur, cfg.pendule.taille) = (60.0, 6.0);
         for (scale, dt) in [(1.0f32, 1.0 / 120.0), (1.5, 1.0 / 20.0)] {
             let mut f = Figures::new();
             let (mut t, mut peints) = (0.0f64, 0usize);
@@ -423,15 +478,15 @@ mod tests {
                 let cursor = (700.0 + 300.0 * (t as f32 * 5.0).sin(), 700.0 + 120.0 * (t as f32 * 3.0).cos());
                 let (au, mut coups) = son(t);
                 coups.kicks *= 4; // quatre kicks dans la même image : les ressorts restent bornés
-                f.avance(t, dt, cursor, scale, &au, &coups, &cfg);
+                f.avance(t, dt, cursor, scale, &Son { au: &au, coups: &coups, bandes: &[1.0; 16] }, &cfg);
                 if i % 7 == 0 {
                     let (x0, y0, x1, y1) = f.rect(cursor, scale, &cfg).unwrap();
-                    let mut pm = Pixmap::new(1400, 1400).unwrap();
+                    let mut pm = Pixmap::new(1600, 1600).unwrap();
                     f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, t, &cfg, scale);
                     for (j, p) in pm.data().chunks_exact(4).enumerate() {
                         if p[3] > 0 {
                             peints += 1;
-                            let (x, y) = ((j % 1400) as i32, (j / 1400) as i32);
+                            let (x, y) = ((j % 1600) as i32, (j / 1600) as i32);
                             assert!(x >= x0 && x < x1 && y >= y0 && y < y1, "t = {t:.2} : pixel ({x}, {y}) hors de {x0},{y0} → {x1},{y1}");
                         }
                     }
@@ -447,13 +502,13 @@ mod tests {
         let cfg = toutes();
         let mut f = Figures::new();
         let (au, coups) = (AudioView::default(), Coups::default());
-        f.avance(0.0, 1.0 / 60.0, (100.0, 100.0), 1.0, &au, &coups, &cfg);
+        avancer(&mut f, 0.0, 1.0 / 60.0, (100.0, 100.0), 1.0, &au, &coups, &cfg);
         // saut du pointeur sur un autre écran : le centre reste à portée, puis le rejoint
-        f.avance(1.0 / 60.0, 1.0 / 60.0, (3000.0, 900.0), 1.0, &au, &coups, &cfg);
+        avancer(&mut f, 1.0 / 60.0, 1.0 / 60.0, (3000.0, 900.0), 1.0, &au, &coups, &cfg);
         let c = f.centre.unwrap();
         assert!(((c.0 - 3000.0).powi(2) + (c.1 - 900.0).powi(2)).sqrt() <= RETARD_MAX + 0.01, "{c:?}");
         for i in 2..120 {
-            f.avance(i as f64 / 60.0, 1.0 / 60.0, (3000.0, 900.0), 1.0, &au, &coups, &cfg);
+            avancer(&mut f, i as f64 / 60.0, 1.0 / 60.0, (3000.0, 900.0), 1.0, &au, &coups, &cfg);
         }
         let c = f.centre.unwrap();
         assert!((c.0 - 3000.0).abs() < 0.5 && (c.1 - 900.0).abs() < 0.5, "{c:?}");
@@ -466,7 +521,7 @@ mod tests {
         let mut f = Figures::new();
         let dt = 1.0 / 120.0;
         let image = |f: &mut Figures, i: usize, bass: f32, kicks: u32| {
-            f.avance(i as f64 * dt as f64, dt, (300.0, 300.0), 1.0, &AudioView { bass, ..Default::default() }, &Coups { kicks, ..Default::default() }, &cfg)
+            avancer(f, i as f64 * dt as f64, dt, (300.0, 300.0), 1.0, &AudioView { bass, ..Default::default() }, &Coups { kicks, ..Default::default() }, &cfg)
         };
         for i in 0..120 {
             image(&mut f, i, 0.0, 0);
@@ -491,7 +546,7 @@ mod tests {
         let mut actifs = Vec::new();
         while t < 4.0 {
             let (au, coups) = son(t);
-            f.avance(t, dt, (300.0, 300.0), 1.0, &au, &coups, &cfg);
+            avancer(&mut f, t, dt, (300.0, 300.0), 1.0, &au, &coups, &cfg);
             if actifs.last() != Some(&f.temps.actif) {
                 actifs.push(f.temps.actif);
             }
@@ -503,7 +558,7 @@ mod tests {
         assert!(suite.len() >= 7 && f.tempo == 1.0, "{suite:?}");
         // plus de tempo : les points s'effacent, plus rien n'est dessiné
         for i in 0..150 {
-            f.avance(t + i as f64 * dt as f64, dt, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
+            avancer(&mut f, t + i as f64 * dt as f64, dt, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
         }
         assert_eq!((f.tempo, f.temps.actif), (0.0, None));
         let mut pm = Pixmap::new(600, 600).unwrap();
@@ -520,7 +575,7 @@ mod tests {
         let mut t = 0.0f64;
         while t < 3.0 {
             let (au, coups) = son(t);
-            f.avance(t, dt, (300.0, 300.0), 1.0, &au, &coups, &cfg);
+            avancer(&mut f, t, dt, (300.0, 300.0), 1.0, &au, &coups, &cfg);
             t += dt as f64;
         }
         let mut pm = Pixmap::new(600, 600).unwrap();

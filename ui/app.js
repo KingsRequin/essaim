@@ -121,8 +121,11 @@ function sonPourApercus(maintenant) {
     etat.demo.kicks++;
     etat.demo.prochain = maintenant + 500;
   }
-  // démo : un charleston entre deux kicks, une caisse claire un kick sur deux
-  return { kicks: etat.demo.kicks, basse: 0.35, hauteur: 50, aigus: Math.floor((maintenant + 250) / 500), brillance: 0.3, caisses: Math.floor(etat.demo.kicks / 2) };
+  // démo : un charleston entre deux kicks, une caisse claire un kick sur deux ; son tempo est
+  // connu (120 BPM, la phase repart de 0 à chaque kick), comme l'analyse le donnerait sur ce son :
+  // ce qui suit les temps (déclencheurs « temps », quatre temps, point de l'anneau) vit aussi
+  const phase = Math.min(1, Math.max(0, 1 - (etat.demo.prochain - maintenant) / 500));
+  return { kicks: etat.demo.kicks, basse: 0.35, hauteur: 50, aigus: Math.floor((maintenant + 250) / 500), brillance: 0.3, caisses: Math.floor(etat.demo.kicks / 2), bpm: 120, phase };
 }
 
 // Simulation dans le grand aperçu (boutons sous l'aperçu) : une montée de 3 s (roulement de
@@ -206,7 +209,7 @@ const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Ic�
 // Sections enregistrées dans un preset (comme profils::SECTIONS).
 const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "arcs",
-  "quatre_temps", "anneau", "audio", "bordure", "souris", "modulations", "declencheurs",
+  "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "audio", "bordure", "souris", "modulations", "declencheurs",
 ];
 // Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
 // (comme profils::in_profile).
@@ -381,7 +384,7 @@ function detail(p) {
   const c = p.reglages, o = c.orbite;
   const parts = [];
   // rubans, ressorts et petites figures : ce qui fait l'allure du preset passe en tête
-  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau suiveur"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
+  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau suiveur"], ["orbe", "orbe"], ["voix", "ligne de voix"], ["trame", "trame"], ["pinceau", "trait"], ["pendule", "pendule"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
   if (o.cometes) parts.push(`${NOMS_FORMES[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} ${c.rubans && c.rubans.actif ? "ruban" : "comète"}${o.nombre * o.anneaux > 1 ? "s" : ""}`);
   else if (!figures.length) parts.push("sans comètes");
   if (figures.length) parts.push(figures.join(", ").replace(/^./, (l) => l.toUpperCase()));
@@ -763,6 +766,11 @@ const IMPACT = {
   "arcs.actif": [1, "estime"], "arcs.rayon": [1, "estime"], "arcs.epaisseur": [1, "estime"],
   "quatre_temps.actif": [1, "estime"], "quatre_temps.taille": [1, "estime"], "quatre_temps.ecart": [1, "estime"],
   "anneau.actif": [1, "estime"], "anneau.rayon": [1, "estime"], "anneau.epaisseur": [1, "estime"],
+  "orbe.actif": [2, "estime"], "orbe.rayon": [1, "estime"], "orbe.relief": [1, "estime"], "orbe.epaisseur": [1, "estime"],
+  "voix.actif": [1, "estime"], "voix.largeur": [1, "estime"], "voix.hauteur": [1, "estime"], "voix.epaisseur": [1, "estime"],
+  "trame.actif": [2, "estime"], "trame.rayon": [3, "estime"], "trame.pas": [2, "estime"], "trame.taille": [1, "estime"],
+  "pinceau.actif": [1, "estime"], "pinceau.largeur": [1, "estime"], "pinceau.duree": [1, "estime"],
+  "pendule.actif": [1, "estime"], "pendule.longueur": [1, "estime"], "pendule.taille": [1, "estime"],
   // actions des déclencheurs (estimé : une particule de plus ou de moins pèse peu, une gerbe d'étincelles un peu plus)
   "action.eclat": [1, "estime"], "action.satellites": [2, "estime"], "action.inversion": [1, "estime"], "action.bordure": [1, "estime"],
   "action.onde": [1, "estime"], "action.eclats": [2, "estime"], "action.fissure": [2, "estime"], "action.implosion": [1, "estime"],
@@ -775,6 +783,9 @@ const PRECISIONS = {
   "projecteur.actif": "Rien hors de l'effet ; pendant l'effet, tout l'écran est redessiné : +0,13 ms par image avec la carte graphique, +9 ms avec le processeur.",
   "spectre.actif": "Analyse du son en bandes : 0,9 % d'un cœur à 32 bandes, rien quand l'anneau est coupé ; le dessin ne coûte presque rien.",
   "spectre.bandes": "L'analyse du son coûte en proportion : 0,2 % d'un cœur à 8 bandes, 0,9 % à 32.",
+  "orbe.actif": "Demande l'analyse du son en bandes, comme le spectre (16 bandes s'il est coupé).",
+  "trame.rayon": "Une loupe plus grande, ce sont plus de points à dessiner et une zone plus large redessinée à chaque image.",
+  "trame.pas": "Un pas plus serré multiplie les points : quatre fois plus à moitié pas.",
   "action.fissure": "Une fissure redessine sa zone de l'écran pendant qu'elle s'efface.",
   "essaim.constellation": "Une ligne par paire de têtes proches, 160 au plus.",
 };
@@ -1075,6 +1086,49 @@ const PANNEAUX = [
     base: [
       { libelle: "Rayon", section: "anneau", cle: "rayon", min: 6, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Épaisseur", section: "anneau", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "orbe", famille: "Les effets", titre: "Orbe", actif: ["orbe", "actif"], si: SI.son,
+    note: "Le spectre sans les barres : une seule ligne fermée autour du pointeur, que les bandes de fréquences déforment (graves en haut, aigus en bas, les deux moitiés en miroir). Chaque kick en détache un écho qui garde la forme du son ; pendant une montée, la ligne se resserre et frise.",
+    base: [
+      { libelle: "Rayon", section: "orbe", cle: "rayon", min: 10, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Relief", section: "orbe", cle: "relief", min: 2, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Épaisseur", section: "orbe", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "voix", famille: "Les effets", titre: "Ligne de voix", actif: ["voix", "actif"], si: SI.son,
+    note: "Une petite onde sous le pointeur, comme celle d'un message vocal : les grandes ondulations suivent la basse et le kick, les moyennes la caisse claire, les fines le charleston. Elle ne passe jamais sur le pointeur et s'efface quand plus rien ne joue.",
+    base: [
+      { libelle: "Largeur", section: "voix", cle: "largeur", min: 20, max: 120, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Hauteur des ondulations", section: "voix", cle: "hauteur", min: 2, max: 20, pas: 0.5, aff: (v) => virgule(+v, 1) },
+      { libelle: "Épaisseur", section: "voix", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "trame", famille: "Les effets", titre: "Trame", actif: ["trame", "actif"],
+    note: "Une grille de points fixe à l'écran, visible seulement autour du pointeur, comme sous une loupe ; un vide est gardé sous le pointeur. Les coups la traversent en vagues : ronde pour le kick, en losange pour la caisse claire, plus grande au drop ; le charleston fait scintiller quelques points.",
+    base: [
+      { libelle: "Rayon de la loupe", section: "trame", cle: "rayon", min: 20, max: 120, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Pas de la grille", section: "trame", cle: "pas", min: 6, max: 24, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Taille des points", section: "trame", cle: "taille", min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "pinceau", famille: "Les effets", titre: "Trait", actif: ["pinceau", "actif"],
+    note: "Rien au repos. Quand la souris file, elle laisse un trait de pinceau, plus épais quand elle va vite, qui s'efface en moins d'une seconde ; chaque kick y fait glisser une perle. Dans l'aperçu, passe vite la souris dessus pour le voir.",
+    base: [
+      { libelle: "Largeur à pleine vitesse", section: "pinceau", cle: "largeur", min: 2, max: 12, pas: 0.5, aff: (v) => virgule(+v, 1) },
+      { libelle: "Durée", section: "pinceau", cle: "duree", min: 0.2, max: 1, pas: 0.02, aff: (v) => virgule(+v, 2) + " s" },
+    ],
+  },
+  {
+    id: "pendule", famille: "Les effets", titre: "Pendule", actif: ["pendule", "actif"],
+    note: "Un petit poids pendu au pointeur par un fil. Il se balance quand la souris bouge ; chaque kick le fait sauter (le fil se détend puis se retend), la caisse claire lui donne une pichenette, le fil s'allonge avec la basse et se raccourcit pendant une montée.",
+    base: [
+      { libelle: "Longueur du fil", section: "pendule", cle: "longueur", min: 8, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Taille du poids", section: "pendule", cle: "taille", min: 1, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
     ],
   },
   {

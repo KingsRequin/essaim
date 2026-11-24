@@ -794,6 +794,36 @@ pub(crate) fn builtins() -> Vec<Profile> {
             c.anneau.actif = true;
             teinte(c, 250.0, 0.0, 80.0);
         }),
+        // orbe : le spectre en une seule ligne fermée, qui lâche un écho à chaque kick
+        make("Orbe", |c| {
+            figure_seule(c);
+            c.orbe.actif = true;
+            teinte(c, 140.0, 0.0, 60.0);
+        }),
+        // ligne de voix : une petite onde sous le pointeur, effacée sans son
+        make("Ligne de voix", |c| {
+            figure_seule(c);
+            c.voix.actif = true;
+            teinte(c, 200.0, 0.0, 50.0);
+        }),
+        // trame : une grille de points autour du pointeur, traversée par les vagues des coups
+        make("Trame", |c| {
+            figure_seule(c);
+            c.trame.actif = true;
+            teinte(c, 5.0, 0.0, 0.0);
+        }),
+        // trait : rien au repos, un trait de pinceau quand la souris file
+        make("Trait", |c| {
+            figure_seule(c);
+            c.pinceau.actif = true;
+            teinte(c, 20.0, 0.0, 240.0);
+        }),
+        // pendule : un petit poids pendu au pointeur, qui saute sur le kick
+        make("Pendule", |c| {
+            figure_seule(c);
+            c.pendule.actif = true;
+            teinte(c, 195.0, 0.0, 0.0);
+        }),
     ]
 }
 
