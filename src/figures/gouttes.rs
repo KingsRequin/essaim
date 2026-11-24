@@ -76,6 +76,13 @@ impl Gouttes {
         self.bulles.clear();
     }
 
+    /// Gouttes rallumées : noyau et perles reprennent leur place de départ, sans élan.
+    pub(super) fn reinitialiser(&mut self) {
+        let neuves = Self::new();
+        (self.noyau, self.perles) = (neuves.noyau, neuves.perles);
+        self.oublier();
+    }
+
     /// Tirage entre `a` et `b` (xorshift).
     fn hasard(&mut self, (a, b): (f32, f32)) -> f32 {
         self.graine ^= self.graine << 13;
@@ -101,8 +108,10 @@ impl Gouttes {
             for q in &mut self.perles {
                 q.ecart.v += PERLE_ELAN.1 * el.drop;
             }
+            // vitesse bornée à celle d'une réaction de 1 : une bulle plus rapide sortirait de la
+            // grille (son contour y serait coupé)
             for i in 0..BULLES {
-                let (a, v) = (i as f32 * TAU / BULLES as f32 + self.hasard((-0.3, 0.3)), self.hasard(BULLE_VITESSE) * el.drop);
+                let (a, v) = (i as f32 * TAU / BULLES as f32 + self.hasard((-0.3, 0.3)), self.hasard(BULLE_VITESSE) * el.drop.min(1.0));
                 let (r, vie) = (self.hasard(BULLE_RAYON), self.hasard(BULLE_VIE));
                 self.bulles.push(Bulle { x: 0.0, y: 0.0, vx: a.cos() * v, vy: a.sin() * v, r, ne: t, vie });
             }

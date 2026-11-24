@@ -281,7 +281,8 @@ fn prisme_palette(cfg: &Config, t: f64, k: f32, j: usize, decale: f32) -> (u8, u
 /// Couleur de l'essaim (comme `prisme`), décalée de `decale` degrés.
 pub(crate) fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u8, u8) {
     let synced = f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed));
-    let base = if synced.is_finite() { synced } else { (cfg.couleur.teinte + t as f32 * cfg.couleur.vitesse_teinte).rem_euclid(360.0) };
+    // teinte qui tourne : calculée et repliée en f64 (en f32, après des jours, elle irait par crans)
+    let base = if synced.is_finite() { synced } else { (cfg.couleur.teinte as f64 + t * cfg.couleur.vitesse_teinte as f64).rem_euclid(360.0) as f32 };
     let base = base + decalage();
     let base = base + if decale.is_finite() { decale } else { 0.0 };
     let tail = base + cfg.couleur.ecart_teinte;
@@ -318,9 +319,15 @@ type Trail = VecDeque<(f64, f32, f32)>;
 /// fixe n'est ajouté que tous les `TRAIL_STEP` ou tous les `gap` pixels, mesurés depuis
 /// l'avant-dernier (le dernier, lui, est sans cesse rafraîchi) : peu de points au ralenti, assez
 /// pour une courbe lisse à grande vitesse.
+///
+/// Au-delà de `VIE_FINE` (traînée allongée par une modulation), les points sont espacés d'autant
+/// (en temps et en distance) : une traînée de 12 s ne compte pas plus de points qu'une de 3 s.
+/// `TRAIL_POINTS_MAX` borne le reste (pointeur qui file très vite).
 fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
     let n = tr.len();
-    let proche = |p: &(f64, f32, f32)| t - p.0 < TRAIL_STEP && (p.1 - x).powi(2) + (p.2 - y).powi(2) < gap * gap;
+    let k = (life / VIE_FINE).max(1.0);
+    let (pas, gap) = (TRAIL_STEP * k, gap * k as f32);
+    let proche = |p: &(f64, f32, f32)| t - p.0 < pas && (p.1 - x).powi(2) + (p.2 - y).powi(2) < gap * gap;
     if n >= 2 && proche(&tr[n - 2]) {
         tr[n - 1] = (t, x, y);
     } else {
@@ -329,7 +336,16 @@ fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
     while tr.front().is_some_and(|p| t - p.0 > life) {
         tr.pop_front();
     }
+    if tr.len() > TRAIL_POINTS_MAX {
+        let trop = tr.len() - TRAIL_POINTS_MAX;
+        tr.drain(..trop);
+    }
 }
+
+/// Vie de traînée jusqu'à laquelle les points gardent leur finesse (la plus longue du réglage
+/// `[orbite] trainee`), et points d'une traînée au plus.
+const VIE_FINE: f64 = 3.0;
+const TRAIL_POINTS_MAX: usize = 4000;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Genre {
@@ -586,8 +602,12 @@ pub struct Swarm {
     /// Effets des modulations sur chaque figure (`figures.rs` s'en sert).
     mods_figures: [Effet; modulation::NB_FIGURES],
     teinte: f32,
-    /// Dernier déclenchement de chaque déclencheur (délai minimal).
+    /// Dernier déclenchement de chaque déclencheur (délai minimal), et la liste des déclencheurs
+    /// (événement, action) à qui ils appartiennent : une liste changée les remet à zéro.
     derniers: Vec<f64>,
+    cles_declencheurs: Vec<(Evenement, Action)>,
+    /// Part fractionnaire des grains du sillage, reportée à l'image suivante.
+    reste_sillage: f32,
     /// Fissures demandées par les déclencheurs (x, y, force), que la boucle principale ouvre.
     pub fissures: Vec<(f32, f32, f32)>,
     /// Traînées des comètes, anneau par anneau.
@@ -687,6 +707,8 @@ impl Swarm {
             mods_figures: [Effet::default(); modulation::NB_FIGURES],
             teinte: 0.0,
             derniers: Vec::new(),
+            cles_declencheurs: Vec::new(),
+            reste_sillage: 0.0,
             fissures: Vec::new(),
             trails: Vec::new(),
             sats: Vec::new(),
@@ -711,6 +733,14 @@ impl Swarm {
             tetes: Vec::new(),
             tampons: Default::default(),
         }
+    }
+
+    /// Rien n'est simulé à cette image (frappe, pause, plein écran) : les coups joués entre-temps
+    /// sont lus et jetés, sinon ils partiraient tous à la reprise (jusqu'à 4 kicks et un drop
+    /// d'un coup) ; le pointeur sera repris où il sera, sans glisser depuis l'ancienne position.
+    pub fn oublier_coups(&mut self, au: &AudioView) {
+        self.ecoute.lire(au);
+        self.dernier_curseur = None;
     }
 
     /// Effets des modulations sur chaque figure, dans l'ordre de `config::FIGURES`.
@@ -822,11 +852,18 @@ impl Swarm {
             self.declencher(Evenement::Charleston, cursor, t, cfg, scale);
         }
         // sillage : poussière le long du trajet de la souris quand elle file vite
+        // (le nombre de grains de l'image garde sa part fractionnaire pour l'image suivante : à
+        // haute cadence, chaque image n'en voit qu'une fraction, qui doit s'accumuler)
+        let mut vite = false;
         if let (true, Some(avant)) = (cfg.sillage.actif, self.dernier_curseur) {
             let (dx, dy) = (cursor.0 - avant.0, cursor.1 - avant.1);
             let dist = (dx * dx + dy * dy).sqrt();
             if dist / dt.max(1e-3) > 700.0 * scale && dist < 600.0 * scale {
-                let n = ((cfg.sillage.densite.clamp(1.0, 10.0) * dist / (60.0 * scale)).round() as usize).min(14);
+                vite = true;
+                self.reste_sillage += cfg.sillage.densite.clamp(1.0, 10.0) * dist / (60.0 * scale);
+                let n = (self.reste_sillage.floor().max(0.0) as usize).min(14);
+                // au plus 14 grains par image : au-delà, le surplus est perdu (comme avant)
+                self.reste_sillage = (self.reste_sillage - n as f32).min(1.0);
                 for i in 0..n {
                     let f = (i as f32 + self.rng.f()) / n.max(1) as f32;
                     let (a, v) = (self.rng.range(0.0, TAU), self.rng.range(5.0, 30.0) * scale);
@@ -836,6 +873,9 @@ impl Swarm {
                     self.particules.push(Particule { x, y, vx: a.cos() * v - dx / dt * 0.05, vy: a.sin() * v - dy / dt * 0.05, ne: t, vie, taille, genre: Genre::Poussiere });
                 }
             }
+        }
+        if !vite || !self.reste_sillage.is_finite() {
+            self.reste_sillage = 0.0;
         }
         self.dernier_curseur = Some(cursor);
         // particules : avancent en ralentissant (en rebondissant sur les bords de la fenêtre au
@@ -928,7 +968,12 @@ impl Swarm {
         let anneaux = if contours_cometes > 1 { contours_cometes } else { o.anneaux.max(1) as usize };
         let nombre = o.nombre.max(1) as usize;
         self.angles.resize(anneaux, 0.0);
-        self.trails.resize_with(anneaux * nombre, Trail::new);
+        // anneaux ou comètes par anneau changés : chaque traînée appartiendrait à une autre
+        // comète (et sauterait d'une place à l'autre) ; elles repartent de zéro
+        if self.trails.len() != anneaux * nombre {
+            self.trails.clear();
+            self.trails.resize_with(anneaux * nombre, Trail::new);
+        }
         let life = o.trainee.max(0.01) as f64 * self.mods[0].trainee as f64;
         // une pose par groupe : rotation du trajet (`rotation_sur` : comètes, satellites ou tout,
         // plus les modulations), rayon et décalage au début et à la fin de l'image ; les points
@@ -1025,7 +1070,12 @@ impl Swarm {
     /// son délai minimal, avec sa chance.
     fn declencher(&mut self, ev: Evenement, p: (f32, f32), t: f64, cfg: &Config, scale: f32) {
         let liste = &cfg.declencheurs.liste;
-        if self.derniers.len() != liste.len() {
+        // délais rattachés à chaque déclencheur, pas à sa place : une liste changée (ajout,
+        // retrait, réordonnée, autre preset) les remet tous à zéro
+        if !self.cles_declencheurs.iter().copied().eq(liste.iter().map(|d| (d.quand, d.faire))) {
+            self.cles_declencheurs.clear();
+            self.cles_declencheurs.extend(liste.iter().map(|d| (d.quand, d.faire)));
+            self.derniers.clear();
             self.derniers.resize(liste.len(), f64::NEG_INFINITY);
         }
         for (i, d) in liste.iter().enumerate() {
@@ -1420,9 +1470,22 @@ pub struct Crack {
     /// Branches de la fissure (suites de segments bout à bout), en coordonnées écran : l'éclat,
     /// de largeur constante, est tracé branche par branche plutôt que segment par segment.
     branches: Vec<Vec<(f32, f32)>>,
+    /// Échelle de l'écran : largeurs de l'éclat et du reflet, décalage du reflet (1 par défaut,
+    /// `a_l_echelle`).
+    echelle: f32,
 }
 
 impl Crack {
+    /// La même fissure, ses traits fixes (éclat, reflet) à l'échelle `scale` de l'écran ; sa zone
+    /// (`rect`) suit.
+    pub fn a_l_echelle(mut self, scale: f32) -> Self {
+        let scale = if scale.is_finite() { scale.max(0.1) } else { 1.0 };
+        self.ext += MARGE_FISSURE * ((scale - self.echelle).max(0.0));
+        self.echelle = scale;
+        *self.fixe.borrow_mut() = None;
+        self
+    }
+
     pub fn new(x: f32, y: f32, t: f64, size: f32, rng: &mut Rng) -> Self {
         let mut segs = Vec::new();
         let rays = 3 + (rng.f() * 4.0) as usize;
@@ -1448,7 +1511,7 @@ impl Crack {
                 }
             }
         }
-        let ext = segs.iter().fold(8.0f32, |m, s| m.max(s[0].abs()).max(s[1].abs()).max(s[2].abs()).max(s[3].abs())) + 6.0;
+        let ext = segs.iter().fold(8.0f32, |m, s| m.max(s[0].abs()).max(s[1].abs()).max(s[2].abs()).max(s[3].abs())) + MARGE_FISSURE;
         let mut branches: Vec<Vec<(f32, f32)>> = Vec::new();
         for s in &segs {
             let (a, b) = ((x + s[0], y + s[1]), (x + s[2], y + s[3]));
@@ -1457,7 +1520,7 @@ impl Crack {
                 _ => branches.push(vec![a, b]),
             }
         }
-        Self { x, y, segs, ext, born: t, fixe: Default::default(), branches }
+        Self { x, y, segs, ext, born: t, fixe: Default::default(), branches, echelle: 1.0 }
     }
 
     /// Rectangle écran (gauche, haut, droite, bas) qui contient la fissure.
@@ -1490,27 +1553,32 @@ impl Crack {
             self.passes_fixes(cv, opacity);
         }
         if glow > 0.02 {
+            let e = self.echelle;
             for br in &self.branches {
-                cv.polyline(br, 3.5, rgb, glow * 0.3 * opacity, true);
+                cv.polyline(br, 3.5 * e, rgb, glow * 0.3 * opacity, true);
             }
             for br in &self.branches {
-                cv.polyline(br, 1.2, rgb, glow * opacity, true);
+                cv.polyline(br, 1.2 * e, rgb, glow * opacity, true);
             }
         }
     }
 
     /// Trait sombre puis reflet décalé.
     fn passes_fixes(&self, cv: &mut dyn Canvas, opacity: f32) {
-        let (x, y) = (self.x, self.y);
+        let (x, y, e) = (self.x, self.y, self.echelle);
         for s in &self.segs {
             cv.line((x + s[0], y + s[1]), (x + s[2], y + s[3]), s[4], (2, 3, 8), 0.92 * opacity, true);
         }
+        let d = 0.8 * e;
         for s in &self.segs {
-            let w = (s[4] * 0.35).max(0.5);
-            cv.line((x + s[0] + 0.8, y + s[1] + 0.8), (x + s[2] + 0.8, y + s[3] + 0.8), w, (170, 185, 250), 0.25 * opacity, true);
+            let w = (s[4] * 0.35).max(0.5 * e);
+            cv.line((x + s[0] + d, y + s[1] + d), (x + s[2] + d, y + s[3] + d), w, (170, 185, 250), 0.25 * opacity, true);
         }
     }
 }
+
+/// Marge autour de la fissure, à 100 % (moitié de l'éclat, reflet décalé, lissage).
+const MARGE_FISSURE: f32 = 6.0;
 
 /// Taille de l'onde d'un changement de piste (pixels à 100 %), et sa durée (s).
 const ONDE_PISTE: (f32, f32) = (90.0, 0.8);
@@ -2677,5 +2745,128 @@ mod tests {
                 assert!(x > x0 && x < x1 && y > y0 && y < y1, "point ({x}, {y}) hors de la zone");
             }
         }
+    }
+
+    #[test]
+    fn coups_oublies_pendant_la_pause_aucune_rafale_a_la_reprise() {
+        let cfg = Config::default();
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, C, AudioView::default(), &cfg, 1.0);
+        let dir = s.dir;
+        // pause (frappe, plein écran) : 6 kicks et un drop joués, lus et jetés ; le pointeur a bougé
+        let pendant = AudioView { kicks: 6, drops: 1, ..Default::default() };
+        s.oublier_coups(&pendant);
+        assert_eq!(s.dernier_curseur, None);
+        // reprise : rien ne part, et l'essaim ne glisse pas depuis l'ancienne place (pas de sillage)
+        s.avance(5.0, 0.016, (C.0 + 800.0, C.1), pendant, &cfg, 1.0);
+        assert_eq!((s.dir, s.sats.len(), s.env), (dir, 0, 0.0));
+        assert!(s.particules.is_empty(), "{} particules", s.particules.len());
+    }
+
+    #[test]
+    fn le_sillage_ne_depend_pas_de_la_cadence() {
+        // la souris file à 1500 px/s pendant 0,3 s : à 240 images/s, chaque image ne voit qu'une
+        // fraction de grain (avant : arrondie à 0, aucun sillage) ; autant de grains qu'à 60
+        let mut cfg = Config::default();
+        (cfg.sillage.actif, cfg.sillage.densite) = (true, 3.0);
+        let grains = |ips: u32| {
+            let mut s = Swarm::avec_graine(3);
+            let dt = 1.0 / ips as f32;
+            for i in 0..=(ips * 3 / 10) {
+                let t = i as f64 * dt as f64;
+                s.update(t, dt, (100.0 + 1500.0 * t as f32, 300.0), AudioView::default(), &cfg, 1.0);
+            }
+            s.particules.iter().filter(|p| p.genre == Genre::Poussiere).count() as f32
+        };
+        let (lent, vif) = (grains(60), grains(240));
+        // 3 grains par 60 px sur 450 px : 22,5
+        assert!(vif > 15.0 && (vif - lent).abs() <= 0.2 * lent, "60 i/s : {lent} grains, 240 i/s : {vif}");
+        // à l'arrêt, le reste est oublié
+        let mut s = Swarm::new();
+        s.update(0.0, 0.004, C, AudioView::default(), &cfg, 1.0);
+        s.update(0.004, 0.004, (C.0 + 6.0, C.1), AudioView::default(), &cfg, 1.0);
+        assert!(s.reste_sillage > 0.0);
+        s.update(0.008, 0.004, (C.0 + 6.0, C.1), AudioView::default(), &cfg, 1.0);
+        assert_eq!(s.reste_sillage, 0.0);
+    }
+
+    #[test]
+    fn nombre_de_cometes_change_les_trainees_repartent_de_zero() {
+        let mut cfg = Config::default();
+        cfg.orbite.nombre = 3;
+        let mut s = Swarm::new();
+        let dt = 1.0 / 60.0;
+        for i in 0..30 {
+            s.update(i as f64 * dt as f64, dt, C, AudioView::default(), &cfg, 1.0);
+        }
+        assert!(s.trails.iter().all(|tr| tr.len() > 3));
+        // deux comètes au lieu de trois : aucune ne garde la traînée d'une autre
+        cfg.orbite.nombre = 2;
+        let t = 30.0 * dt as f64;
+        s.update(t, dt, C, AudioView::default(), &cfg, 1.0);
+        assert_eq!(s.trails.len(), 2);
+        for tr in &s.trails {
+            assert!(tr.iter().all(|p| p.0 >= t - dt as f64 - 1e-9), "point d'avant le changement gardé");
+        }
+    }
+
+    #[test]
+    fn delais_des_declencheurs_remis_a_zero_quand_la_liste_change() {
+        let mut cfg = Config::default();
+        cfg.declencheurs.liste = vec![Declencheur { delai: 5.0, ..Declencheur::new(Evenement::Clic, Action::Onde) }];
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, C, AudioView::default(), &cfg, 1.0);
+        s.evenement(Evenement::Clic, C.0, C.1, 0.1, &cfg, 1.0);
+        assert_eq!(s.particules.len(), 1);
+        // même liste : le délai tient
+        s.evenement(Evenement::Clic, C.0, C.1, 0.2, &cfg, 1.0);
+        assert_eq!(s.particules.len(), 1);
+        // autre déclencheur à la même place : il n'hérite pas du délai de l'ancien
+        cfg.declencheurs.liste = vec![Declencheur { delai: 5.0, ..Declencheur::new(Evenement::Clic, Action::Eclats) }];
+        s.evenement(Evenement::Clic, C.0, C.1, 0.3, &cfg, 1.0);
+        assert_eq!(s.particules.iter().filter(|p| p.genre == Genre::Etincelle).count(), 16);
+        // une force changée n'est pas une autre liste : le délai tient
+        cfg.declencheurs.liste[0].force = 2.0;
+        s.evenement(Evenement::Clic, C.0, C.1, 0.4, &cfg, 1.0);
+        assert_eq!(s.particules.iter().filter(|p| p.genre == Genre::Etincelle).count(), 16);
+    }
+
+    #[test]
+    fn longue_trainee_points_espaces() {
+        // 12 s de traînée (modulation de la traînée) : points espacés d'autant
+        let points = |vie: f64, px_par_s: f64, images: usize| {
+            let mut tr = Trail::new();
+            for i in 0..images {
+                let t = i as f64 / 144.0;
+                push_trail(&mut tr, t, (t * px_par_s) as f32, 0.0, vie, FINESSE_COMETES.1);
+            }
+            tr.len()
+        };
+        // lente (144 px/s) : un point tous les `TRAIL_STEP` jusqu'à 3 s, quatre fois moins à 12 s
+        let (courte, longue) = (points(3.0, 144.0, 14 * 144), points(12.0, 144.0, 14 * 144));
+        assert!(longue as f32 <= 1.2 * courte as f32, "3 s : {courte} points, 12 s : {longue}");
+        // jusqu'à 3 s, rien ne change : au moins 90 points par seconde
+        assert!(courte >= 3 * 90, "{courte} points pour 3 s");
+        // très rapide et très longue : jamais plus de `TRAIL_POINTS_MAX`
+        assert_eq!(points(100.0, 20000.0, 6000), TRAIL_POINTS_MAX);
+    }
+
+    #[test]
+    fn fissure_a_l_echelle_dans_sa_zone() {
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let c = Crack::new(300.0, 300.0, 0.0, 1.5 * 2.0, &mut rng).a_l_echelle(2.0);
+        let (l, t, r, b) = c.rect();
+        let mut pm = Pixmap::new(600, 600).unwrap();
+        c.draw(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 1.0, (120, 160, 255), 1.0);
+        let mut peints = 0;
+        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+            if p[3] > 0 {
+                peints += 1;
+                let (x, y) = ((j % 600) as i32, (j / 600) as i32);
+                assert!(x >= l && x < r && y >= t && y < b, "pixel ({x}, {y}) hors de {l},{t} → {r},{b}");
+            }
+        }
+        assert!(peints > 200);
+        assert_eq!(c.echelle, 2.0);
     }
 }

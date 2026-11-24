@@ -11,6 +11,7 @@ use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
 use crate::layer::IRect;
 use crate::render::prisme_decale;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 
@@ -59,12 +60,25 @@ fn lisse(a: f32, b: f32, x: f32) -> f32 {
     k * k * (3.0 - 2.0 * k)
 }
 
+/// Rayons de la ligne de l'orbe (px à 100 %), un par point.
+type Rayons = [f32; ORBE_POINTS];
+/// Échos de l'orbe gardés au plus (les plus vieux s'en vont), scintillements de la trame au plus.
+const ORBE_ECHOS_MAX: usize = 8;
+const TRAME_ECLAIRS_MAX: usize = 48;
+
 struct Orbe {
     souffle: Ressort,
-    /// Rayons de la ligne (px à 100 %), recalculés à chaque image.
-    contour: Vec<f32>,
-    /// Échos : naissance, force, rayons de la ligne à ce moment-là.
-    echos: Vec<(f64, f32, Vec<f32>)>,
+    /// Rayons de la ligne, recalculés à chaque image (`None` : orbe éteinte).
+    contour: Option<Rayons>,
+    /// Échos : naissance, force, rayons de la ligne à ce moment-là (sans allocation : le
+    /// tableau garde sa capacité d'une image à l'autre).
+    echos: Vec<(f64, f32, Rayons)>,
+}
+
+impl Orbe {
+    fn new() -> Self {
+        Self { souffle: Ressort::default(), contour: None, echos: Vec::new() }
+    }
 }
 
 struct Voix {
@@ -73,6 +87,13 @@ struct Voix {
     large: Ressort,
     silence: f32,
     visible: f32,
+}
+
+impl Voix {
+    /// Silencieuse au départ : la ligne n'apparaît qu'avec le son.
+    fn new() -> Self {
+        Self { niveaux: [0.0; 3], large: Ressort::en(1.0), silence: VOIX_ATTENTE, visible: 0.0 }
+    }
 }
 
 struct Vague {
@@ -90,15 +111,36 @@ struct Trame {
     vagues: Vec<Vague>,
     /// Points qui scintillent : case de la grille (colonne, ligne) et instant.
     eclairs: Vec<(i32, i32, f64)>,
+    /// Scintillement de chaque case dessinée, rempli avant de la parcourir (gardé d'une image à
+    /// l'autre : le dessin ne prend que `&self`).
+    table: RefCell<Vec<f32>>,
+}
+
+impl Trame {
+    fn new() -> Self {
+        Self { loupe: Ressort::default(), vagues: Vec::new(), eclairs: Vec::new(), table: RefCell::default() }
+    }
 }
 
 struct Pinceau {
-    /// Trajet récent du pointeur : (instant, x, y) en coordonnées écran.
+    /// Trajet récent du pointeur : (instant, x, y) en coordonnées écran. Un point n'est ajouté
+    /// que si le pointeur a bougé (`PINCEAU_PAS`) : la souris est lue moins souvent que l'écran
+    /// ne se rafraîchit, et deux points au même endroit feraient un segment immobile (sauté, le
+    /// trait se trouait et sa largeur clignotait).
     trajet: VecDeque<(f64, f32, f32)>,
     /// Instants des kicks dont la perle glisse encore.
     perles: Vec<f64>,
     vie: Ressort,
 }
+
+impl Pinceau {
+    fn new() -> Self {
+        Self { trajet: VecDeque::new(), perles: Vec::new(), vie: Ressort::default() }
+    }
+}
+
+/// Déplacement du pointeur (px écran) qui ajoute un point au trajet du pinceau.
+const PINCEAU_PAS: f32 = 0.5;
 
 struct Pendule {
     /// Poids (écran) et sa vitesse (px/s) ; `None` avant la première image.
@@ -109,6 +151,12 @@ struct Pendule {
     ancre: (f32, f32),
     mou: f32,
     cote: f32,
+}
+
+impl Pendule {
+    fn new() -> Self {
+        Self { poids: None, vitesse: (0.0, 0.0), fil: Ressort::default(), ancre: (0.0, 0.0), mou: 0.0, cote: 1.0 }
+    }
 }
 
 pub(super) struct Plus {
@@ -127,12 +175,11 @@ impl Plus {
         Self {
             kick: 0.0,
             graine: 0x9e37_79b9,
-            orbe: Orbe { souffle: Ressort::default(), contour: Vec::new(), echos: Vec::new() },
-            // silencieuse au départ : la ligne n'apparaît qu'avec le son
-            voix: Voix { niveaux: [0.0; 3], large: Ressort::en(1.0), silence: VOIX_ATTENTE, visible: 0.0 },
-            trame: Trame { loupe: Ressort::default(), vagues: Vec::new(), eclairs: Vec::new() },
-            pinceau: Pinceau { trajet: VecDeque::new(), perles: Vec::new(), vie: Ressort::default() },
-            pendule: Pendule { poids: None, vitesse: (0.0, 0.0), fil: Ressort::default(), ancre: (0.0, 0.0), mou: 0.0, cote: 1.0 },
+            orbe: Orbe::new(),
+            voix: Voix::new(),
+            trame: Trame::new(),
+            pinceau: Pinceau::new(),
+            pendule: Pendule::new(),
         }
     }
 
@@ -146,8 +193,30 @@ impl Plus {
         self.pendule.poids = None;
         self.trame.vagues.clear();
         self.trame.loupe = Ressort::default();
-        self.orbe.contour.clear();
+        self.orbe.contour = None;
         self.orbe.echos.clear();
+    }
+
+    /// La figure `i` vient d'être allumée : elle repart de son état de départ (rien de ce qu'elle
+    /// faisait avant d'être éteinte ne revient).
+    pub(super) fn reinitialiser(&mut self, i: usize) {
+        match i {
+            ORBE => {
+                // l'état repart de zéro, les tampons gardent leur capacité
+                self.orbe.souffle = Ressort::default();
+                self.orbe.contour = None;
+                self.orbe.echos.clear();
+            }
+            VOIX => self.voix = Voix::new(),
+            TRAME => {
+                self.trame.loupe = Ressort::default();
+                self.trame.vagues.clear();
+                self.trame.eclairs.clear();
+            }
+            TRAIT => self.pinceau = Pinceau::new(),
+            PENDULE => self.pendule = Pendule::new(),
+            _ => {}
+        }
     }
 
     /// Tirage entre 0 et 1 (xorshift), pour les scintillements et les sauts.
@@ -161,24 +230,22 @@ impl Plus {
     /// Rayons de l'orbe (px à 100 %) : le rayon au repos, plus le relief des bandes de fréquences
     /// (graves en haut, aigus en bas, les deux moitiés en miroir), une ondulation lente qui suit
     /// la basse et un frisson pendant une montée.
-    fn rayons(&self, p: &Partage, bandes: &[f32], cfg: &Config) -> Vec<f32> {
+    fn rayons(&self, p: &Partage, bandes: &[f32], cfg: &Config) -> Rayons {
         let (c, n) = (&cfg.orbe, bandes.len());
         let fond = c.rayon * (1.0 - 0.35 * p.montee) + self.orbe.souffle.x;
-        (0..ORBE_POINTS)
-            .map(|i| {
-                let th = i as f32 / ORBE_POINTS as f32 * TAU;
-                let bande = if n >= 2 {
-                    let x = (1.0 - (th / PI - 1.0).abs()) * (n - 1) as f32;
-                    let j = (x.floor() as usize).min(n - 2);
-                    let f = (1.0 - ((x - j as f32) * PI).cos()) / 2.0;
-                    (bandes[j] + (bandes[j + 1] - bandes[j]) * f).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let lente = (0.4 + 0.7 * p.basse) * (1.3 * (3.0 * th + p.horloge * 0.9).sin() + 0.9 * (5.0 * th - p.horloge * 1.3).sin());
-                (fond + c.relief * bande + lente + 1.4 * p.montee * (14.0 * th + p.horloge * 22.0).sin()).max(2.0)
-            })
-            .collect()
+        std::array::from_fn(|i| {
+            let th = i as f32 / ORBE_POINTS as f32 * TAU;
+            let bande = if n >= 2 {
+                let x = (1.0 - (th / PI - 1.0).abs()) * (n - 1) as f32;
+                let j = (x.floor() as usize).min(n - 2);
+                let f = (1.0 - ((x - j as f32) * PI).cos()) / 2.0;
+                (bandes[j] + (bandes[j + 1] - bandes[j]) * f).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let lente = (0.4 + 0.7 * p.basse) * (1.3 * (3.0 * th + p.horloge * 0.9).sin() + 0.9 * (5.0 * th - p.horloge * 1.3).sin());
+            (fond + c.relief * bande + lente + 1.4 * p.montee * (14.0 * th + p.horloge * 22.0).sin()).max(2.0)
+        })
     }
 
     /// Avance d'une image ; `ecoutes` : ce que chaque figure entend (à la force de ses réactions).
@@ -207,9 +274,13 @@ impl Plus {
             }
             self.orbe.souffle.vers(0.0, (17.0, 0.3), dt, ORBE_SOUFFLE);
             self.orbe.echos.retain(|e| t - e.0 < ORBE_ECHO.0);
-            self.orbe.contour = self.rayons(p, son.bandes, cfg);
+            if self.orbe.echos.len() > ORBE_ECHOS_MAX {
+                let trop = self.orbe.echos.len() - ORBE_ECHOS_MAX;
+                self.orbe.echos.drain(..trop);
+            }
+            self.orbe.contour = Some(self.rayons(p, son.bandes, cfg));
         } else {
-            self.orbe.contour.clear();
+            self.orbe.contour = None;
             self.orbe.echos.clear();
         }
 
@@ -256,6 +327,10 @@ impl Plus {
                 tr.vagues.drain(..trop);
             }
             tr.eclairs.retain(|e| t - e.2 < 0.4);
+            if tr.eclairs.len() > TRAME_ECLAIRS_MAX {
+                let trop = tr.eclairs.len() - TRAME_ECLAIRS_MAX;
+                tr.eclairs.drain(..trop);
+            }
             tr.loupe.vers(c.rayon * (1.0 + 0.3 * p.basse), (15.0, 0.4), dt, (0.0, c.rayon * TRAME_LOUPE_MAX));
         } else {
             self.trame.vagues.clear();
@@ -273,7 +348,10 @@ impl Plus {
             pi.vie.v += 5.2 * c.duree * el.drop;
             pi.vie.vers(c.duree, (9.0, 0.45), dt, (c.duree * 0.5, c.duree * 2.2));
             pi.perles.retain(|&ne| t - ne < 0.5);
-            pi.trajet.push_back((t, cursor.0, cursor.1));
+            let immobile = pi.trajet.back().is_some_and(|q| (q.1 - cursor.0).hypot(q.2 - cursor.1) < PINCEAU_PAS);
+            if !immobile {
+                pi.trajet.push_back((t, cursor.0, cursor.1));
+            }
             let (vie, loin) = (pi.vie.x as f64, PINCEAU_LOIN * scale);
             pi.trajet.retain(|q| t - q.0 <= vie && (q.1 - cursor.0).abs() <= loin && (q.2 - cursor.1).abs() <= loin);
         } else {
@@ -373,6 +451,18 @@ impl Plus {
         let marge = l * 1.25 + 1.0;
         let cases = |m: f32| (((m - marge) / pas).floor() as i32, ((m + marge) / pas).ceil() as i32);
         let ((i0, i1), (j0, j1)) = (cases(cx), cases(cy));
+        // scintillement de chaque case, posé une fois dans une table (au lieu de chercher dans
+        // tous les scintillements à chaque case)
+        let largeur = (i1 - i0 + 1).max(0) as usize;
+        let mut table = tr.table.borrow_mut();
+        table.clear();
+        table.resize(largeur * (j1 - j0 + 1).max(0) as usize, 0.0);
+        for e in &tr.eclairs {
+            if (i0..=i1).contains(&e.0) && (j0..=j1).contains(&e.1) {
+                let case = &mut table[(e.1 - j0) as usize * largeur + (e.0 - i0) as usize];
+                *case = case.max((-(t - e.2) as f32 * 12.0).exp());
+            }
+        }
         for j in j0..=j1 {
             for i in i0..=i1 {
                 let (mut x, mut y) = (i as f32 * pas, j as f32 * pas);
@@ -406,7 +496,7 @@ impl Plus {
                 if pousse > TRAME_ONDE_MAX {
                     (px, py) = (px / pousse * TRAME_ONDE_MAX, py / pousse * TRAME_ONDE_MAX);
                 }
-                let eclair = tr.eclairs.iter().filter(|e| e.0 == i && e.1 == j).map(|e| (-(t - e.2) as f32 * 12.0).exp()).fold(0.0f32, f32::max);
+                let eclair = table[(j - j0) as usize * largeur + (i - i0) as usize];
                 x += px * TRAME_DEPLACE * scale - dx * 0.3 * p.montee * dedans;
                 y += py * TRAME_DEPLACE * scale - dy * 0.3 * p.montee * dedans;
                 let r = (dedans * (1.0 + 0.9 * p.basse) + 2.0 * onde * large + 1.5 * eclair * large) * c.taille * scale;
@@ -421,9 +511,7 @@ impl Plus {
     /// Orbe, étirée comme l'anneau (`etire` : étirement, cosinus et sinus de sa direction).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dessiner_orbe(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb), (e, ec, es): (f32, f32, f32)) {
-        if self.orbe.contour.len() != ORBE_POINTS {
-            return;
-        }
+        let Some(contour) = &self.orbe.contour else { return };
         let ((cx, cy), c) = (p.centre, &cfg.orbe);
         let mut tracer = |rayons: &[f32], echelle: f32, largeur: f32, rgb: Rgb, al: f32| {
             pts.clear();
@@ -442,11 +530,11 @@ impl Plus {
         };
         for (ne, force, rayons) in &self.orbe.echos {
             let k = ((t - ne) / ORBE_ECHO.0) as f32;
-            if (0.0..1.0).contains(&k) && rayons.len() == ORBE_POINTS {
+            if (0.0..1.0).contains(&k) {
                 tracer(rayons, 1.0 + ORBE_ECHO.1 * force * (1.0 - (1.0 - k).powi(3)), (1.3 * (1.0 - k) + 0.4) * scale, melange(tete, queue, k), 0.55 * (1.0 - k));
             }
         }
-        tracer(&self.orbe.contour, 1.0, c.epaisseur * scale, tete, 1.0);
+        tracer(contour, 1.0, c.epaisseur * scale, tete, 1.0);
     }
 
     pub(super) fn dessiner_voix(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
@@ -543,11 +631,12 @@ mod tests {
         for i in 0..120 {
             f.avance(i as f64 / 120.0, 1.0 / 120.0, C, 1.0, &Son { au: &au, coups: &coups, bandes: &bandes }, &cfg);
         }
-        let plat = f.plus.orbe.contour.clone();
+        let plat = f.plus.orbe.contour.unwrap();
         assert!(plat.iter().all(|r| (r - cfg.orbe.rayon).abs() < 2.0), "{plat:?}");
         bandes[0] = 1.0;
         f.avance(1.0, 1.0 / 120.0, C, 1.0, &Son { au: &au, coups: &coups, bandes: &bandes }, &cfg);
-        let (haut, bas) = (f.plus.orbe.contour[0], f.plus.orbe.contour[ORBE_POINTS / 2]);
+        let contour = f.plus.orbe.contour.unwrap();
+        let (haut, bas) = (contour[0], contour[ORBE_POINTS / 2]);
         assert!(haut > cfg.orbe.rayon + cfg.orbe.relief - 2.0 && bas < cfg.orbe.rayon + 2.0, "haut {haut}, bas {bas}");
         let (pm, n) = peints(&f, 1.0, &cfg);
         assert!(n > 100 && pm.pixel(300, 300).unwrap().alpha() == 0, "{n} pixels");
@@ -642,6 +731,31 @@ mod tests {
             avancer(&mut f, t + (i + 1) as f64 * dt as f64, dt, (510.0, 300.0), 1.0, &au, &coups, &cfg);
         }
         assert_eq!(peints(&f, t + 1.0, &cfg).1, 0);
+    }
+
+    #[test]
+    fn le_trait_reste_plein_quand_la_souris_est_lue_moins_souvent_que_l_ecran() {
+        // souris lue à 125 Hz, écran à 240 Hz : le pointeur ne bouge pas à certaines images ;
+        // aucun segment immobile dans le trajet, et le trait garde sa largeur d'une image à l'autre
+        let mut cfg = Config::default();
+        cfg.pinceau.actif = true;
+        let mut f = Figures::new();
+        let dt = 1.0 / 240.0;
+        let (au, coups) = (AudioView::default(), Coups::default());
+        let mut largeurs = Vec::new();
+        for i in 0..96 {
+            let t = i as f64 * dt as f64;
+            // position lue au dernier rapport de la souris (toutes les 8 ms), à 1200 px/s
+            let lu = (t * 125.0).floor() / 125.0;
+            avancer(&mut f, t, dt, (100.0 + 1200.0 * lu as f32, 300.0), 1.0, &au, &coups, &cfg);
+            if i >= 48 {
+                largeurs.push(peints(&f, t, &cfg).1 as f32);
+            }
+        }
+        let tr = &f.plus.pinceau.trajet;
+        assert!(tr.iter().zip(tr.iter().skip(1)).all(|(a, b)| (b.1 - a.1).hypot(b.2 - a.2) >= PINCEAU_PAS), "segment immobile dans le trajet");
+        // le trait s'allonge : d'une image à l'autre, il ne perd jamais de pixels peints
+        assert!(largeurs[0] > 300.0 && largeurs.windows(2).all(|w| w[1] >= 0.95 * w[0]), "pixels peints : {largeurs:?}");
     }
 
     #[test]

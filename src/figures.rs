@@ -304,10 +304,23 @@ struct QuatreTemps {
     force: f32,
 }
 
+impl QuatreTemps {
+    fn new() -> Self {
+        let point = Point { saut: Ressort::default(), taille: Ressort::en(1.0), tiret: Ressort::default(), arme: false };
+        Self { pts: [point; 4], actif: None, vague: f64::NEG_INFINITY, force: 1.0 }
+    }
+}
+
 struct Anneau {
     echelle: Ressort,
     carre: f32,
     echos: Vec<f64>,
+}
+
+impl Anneau {
+    fn new() -> Self {
+        Self { echelle: Ressort::en(1.0), carre: 0.0, echos: Vec::new() }
+    }
 }
 
 pub struct Figures {
@@ -342,6 +355,8 @@ pub struct Figures {
     angles: [f32; NB_FIGURES],
     poses: [Pose; NB_FIGURES],
     teintes: [f32; NB_FIGURES],
+    /// Figures allumées à l'image précédente : une figure qui s'allume repart de son état de départ.
+    allumees: [bool; NB_FIGURES],
     /// Points d'une ligne à tracer, gardés d'une image à l'autre (le dessin ne prend que `&self`),
     /// et ceux de cette ligne une fois posée.
     tampon: RefCell<Vec<(f32, f32)>>,
@@ -350,7 +365,6 @@ pub struct Figures {
 
 impl Figures {
     pub fn new() -> Self {
-        let point = Point { saut: Ressort::default(), taille: Ressort::en(1.0), tiret: Ressort::default(), arme: false };
         Self {
             centre: None,
             vitesse: (0.0, 0.0),
@@ -365,14 +379,15 @@ impl Figures {
             mesure: 0.0,
             tempo: 0.0,
             arcs: Arcs::default(),
-            temps: QuatreTemps { pts: [point; 4], actif: None, vague: f64::NEG_INFINITY, force: 1.0 },
-            anneau: Anneau { echelle: Ressort::en(1.0), carre: 0.0, echos: Vec::new() },
+            temps: QuatreTemps::new(),
+            anneau: Anneau::new(),
             plus: plus::Plus::new(),
             gouttes: gouttes::Gouttes::new(),
             mods: [Effet::default(); NB_FIGURES],
             angles: [0.0; NB_FIGURES],
             poses: [Pose::default(); NB_FIGURES],
             teintes: [0.0; NB_FIGURES],
+            allumees: [false; NB_FIGURES],
             tampon: Default::default(),
             tampon_pose: Default::default(),
         }
@@ -397,10 +412,21 @@ impl Figures {
     pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config) {
         let (au, coups) = (son.au, son.coups);
         if !Self::actives(cfg) {
-            self.centre = None;
+            // toutes éteintes : au rallumage, le centre repart du pointeur, sans élan ni retard
+            (self.centre, self.vitesse, self.retard) = (None, (0.0, 0.0), (0.0, 0.0));
+            self.allumees = [false; NB_FIGURES];
             self.plus.oublier();
             self.gouttes.oublier();
             return;
+        }
+        // une figure qui s'allume repart de son état de départ (rien de ce qu'elle faisait
+        // avant d'être éteinte ne revient)
+        for i in 0..NB_FIGURES {
+            let allumee = cfg.figure(i).0;
+            if allumee && !self.allumees[i] {
+                self.reinitialiser(i);
+            }
+            self.allumees[i] = allumee;
         }
         // centre : au bout d'un ressort accroché au pointeur, retard borné
         let (cx, cy) = self.centre.unwrap_or(cursor);
@@ -511,6 +537,18 @@ impl Figures {
             a.carre *= (-dt * 6.0).exp();
             a.echelle.vers(1.0 - 0.42 * p.montee, (18.0, 0.28), dt, ANNEAU_BORNES);
             a.echos.retain(|&ne| t - ne < ANNEAU_ECHO.0);
+        }
+    }
+
+    /// État propre de la figure `i` remis à celui de départ (elle vient de s'allumer).
+    fn reinitialiser(&mut self, i: usize) {
+        self.angles[i] = 0.0;
+        match i {
+            ARCS => self.arcs = Arcs::default(),
+            QUATRE_TEMPS => self.temps = QuatreTemps::new(),
+            ANNEAU => self.anneau = Anneau::new(),
+            GOUTTES => self.gouttes.reinitialiser(),
+            _ => self.plus.reinitialiser(i),
         }
     }
 
@@ -662,6 +700,10 @@ impl Figures {
                     return;
                 }
                 let (q, c) = (&self.temps, &cfg.quatre_temps);
+                // la pose met le rayon d'un point à l'échelle `geo` et la largeur d'un trait à
+                // l'échelle `traits` : le tiret, un point allongé, garde l'échelle du point
+                let pose = &self.poses[QUATRE_TEMPS];
+                let tiret = if pose.traits > 1e-3 { pose.geo / pose.traits } else { 0.0 };
                 let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + SOUS_LE_POINTEUR.1 * scale);
                 let ecart = c.ecart * scale * (1.0 - 0.35 * p.montee);
                 for (i, pt) in q.pts.iter().enumerate() {
@@ -671,8 +713,8 @@ impl Figures {
                     let r = c.taille * scale * pt.taille.x * if actif { POINT_ACTIF } else { 1.0 };
                     let l = pt.tiret.x.max(0.0) * 1.1 * scale;
                     let al = self.tempo * if actif { 1.0 } else { POINT_ETEINT };
-                    if l > 0.3 {
-                        cv.line((x - l, y), (x + l, y), 2.0 * r, tete, al, true);
+                    if l > 0.3 && tiret > 0.0 {
+                        cv.line((x - l, y), (x + l, y), 2.0 * r * tiret, tete, al, true);
                     } else {
                         cv.circle(x, y, r, tete, al);
                     }
@@ -954,6 +996,76 @@ mod tests {
         let mut pm = Pixmap::new(600, 600).unwrap();
         f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, t, &cfg, 1.0);
         assert!(pm.data().iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn figures_remises_a_zero_au_rallumage() {
+        let mut cfg = Config::default();
+        (cfg.arcs.actif, cfg.anneau.actif) = (true, true);
+        let mut f = Figures::new();
+        let (au, kick) = (AudioView::default(), Coups { kicks: 1, ..Default::default() });
+        // les arcs ont avancé d'un cran, le pointeur file : le centre a de l'élan et du retard
+        for i in 0..10 {
+            avancer(&mut f, i as f64 / 60.0, 1.0 / 60.0, (100.0 + 30.0 * i as f32, 300.0), 1.0, &au, &kick, &cfg);
+        }
+        assert!(f.arcs.cran > 0.0 && f.retard.0.abs() > 1.0);
+        // arcs seuls éteints puis rallumés : ils repartent de zéro (l'anneau, resté allumé, non)
+        cfg.arcs.actif = false;
+        avancer(&mut f, 10.0 / 60.0, 1.0 / 60.0, (400.0, 300.0), 1.0, &au, &Coups::default(), &cfg);
+        cfg.arcs.actif = true;
+        avancer(&mut f, 11.0 / 60.0, 1.0 / 60.0, (400.0, 300.0), 1.0, &au, &Coups::default(), &cfg);
+        assert_eq!((f.arcs.cran, f.arcs.bond.v), (0.0, 0.0));
+        assert!(f.centre.is_some() && f.retard.0.abs() > 0.0, "le centre, partagé, n'est pas remis à zéro");
+        // toutes éteintes : plus ni élan ni retard ; au rallumage, le centre part du pointeur
+        let eteint = Config::default();
+        avancer(&mut f, 12.0 / 60.0, 1.0 / 60.0, (400.0, 300.0), 1.0, &au, &Coups::default(), &eteint);
+        assert_eq!((f.centre, f.vitesse, f.retard), (None, (0.0, 0.0), (0.0, 0.0)));
+        avancer(&mut f, 13.0 / 60.0, 1.0 / 60.0, (800.0, 300.0), 1.0, &au, &Coups::default(), &cfg);
+        assert_eq!(f.centre, Some((800.0, 300.0)));
+        assert_eq!(f.etirement(1.0).0, 0.0, "l'anneau rallumé ne doit pas être étiré");
+    }
+
+    #[test]
+    fn le_tiret_garde_la_taille_du_point() {
+        // pose agrandie (rayon ×2) et traits affinés (×0,5) : le tiret d'un point doit garder la
+        // largeur du diamètre des autres points, pas celle d'un trait
+        #[derive(Default)]
+        struct Releve {
+            lignes: Vec<f32>,
+            cercles: Vec<f32>,
+        }
+        impl Canvas for Releve {
+            fn line(&mut self, _: (f32, f32), _: (f32, f32), w: f32, _: Rgb, _: f32, _: bool) {
+                self.lignes.push(w);
+            }
+            fn polyline(&mut self, _: &[(f32, f32)], _: f32, _: Rgb, _: f32, _: bool) {}
+            fn circle(&mut self, _: f32, _: f32, r: f32, _: Rgb, _: f32) {
+                self.cercles.push(r);
+            }
+            fn ring(&mut self, _: f32, _: f32, _: f32, _: f32, _: Rgb, _: f32) {}
+            fn voile(&mut self, _: (f32, f32, f32, f32), _: f32, _: f32, _: f32, _: f32, _: Rgb, _: f32) {}
+            fn vignette(&mut self, _: &Pixmap, _: u64, _: f32, _: f32, _: f32) {}
+        }
+        let mut cfg = Config::default();
+        cfg.quatre_temps.actif = true;
+        let mut f = Figures::new();
+        f.moduler(&[Effet { rayon: 2.0, taille: 0.5, ..Effet::default() }; NB_FIGURES]);
+        let au = AudioView { bpm: Some(120.0), ..Default::default() };
+        for i in 0..60 {
+            avancer(&mut f, i as f64 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &au, &Coups::default(), &cfg);
+        }
+        let pose = f.poses[QUATRE_TEMPS];
+        assert!((pose.geo - 2.0).abs() < 1e-6 && (pose.traits - 0.5).abs() < 1e-6, "{pose:?}");
+        // tous les points au repos et pareils ; le premier en tiret
+        f.temps.actif = None;
+        for p in &mut f.temps.pts {
+            (p.taille, p.tiret, p.saut) = (Ressort::en(1.0), Ressort::default(), Ressort::default());
+        }
+        f.temps.pts[0].tiret = Ressort::en(3.0);
+        let mut r = Releve::default();
+        f.dessiner(&mut r, 1.0, &cfg, 1.0);
+        assert_eq!((r.lignes.len(), r.cercles.len()), (1, 3));
+        assert!((r.lignes[0] - 2.0 * r.cercles[0]).abs() < 1e-4, "tiret de {} px, points de {} px de rayon", r.lignes[0], r.cercles[0]);
     }
 
     #[test]

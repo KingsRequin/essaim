@@ -288,6 +288,12 @@ impl Effets {
         self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), &ecrans_du_lisere(monitors, cursor, cfg));
     }
 
+    /// Rien n'est simulé à cette image (frappe, pause, plein écran) : les coups joués entre-temps
+    /// sont lus et jetés, sinon les figures les recevraient tous à la reprise.
+    pub fn oublier_coups(&mut self, shared: &AudioShared) {
+        self.ecoute.lire(&shared.view());
+    }
+
     /// Y a-t-il un habillage à dessiner, ou encore affiché à effacer ?
     pub fn habillage(&self, cfg: &Config) -> bool {
         Loin::actives(cfg) || self.loin.affiche()

@@ -396,7 +396,9 @@ impl Loin {
         }
         // filets : la teinte va de celle des têtes à celle des queues le long du filet, et glisse
         let (tete, queue) = (prisme(cfg, t, 1.0), prisme(cfg, t, 0.0));
-        let teinte = |part: f32| 0.5 + 0.5 * (part * TAU + (t as f32 * 0.5).rem_euclid(TAU)).sin();
+        // phase repliée en f64 avant la conversion : en f32, après des jours, elle avancerait par crans
+        let phase = (t * 0.5).rem_euclid(std::f64::consts::TAU) as f32;
+        let teinte = |part: f32| 0.5 + 0.5 * (part * TAU + phase).sin();
         let (son, pas) = ((self.basse, self.montee), FILET_PAS * scale);
         if let Some(Halo { cadre, u, echelle: scale, .. }) = self.halo_affiche {
             let c = &cfg.halo;
