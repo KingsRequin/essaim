@@ -193,13 +193,15 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   caisse claire ; pendant une montée ils se rapprochent, au drop ils sautent en vague et le
   compte repart du premier (Essaim connaît les temps, pas le premier de la mesure). Ils
   s'effacent en moins d'une seconde quand le tempo n'est plus régulier.
-- **Anneau suiveur** (`[anneau]`) : un anneau fin (`rayon`, 6 à 60, 13 par défaut ;
-  `epaisseur`, 0,5 à 6) qui suit le pointeur avec un temps de retard et s'allonge dans le
-  mouvement. Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec
+- **Anneau** : un anneau qui suit le pointeur avec un temps de retard et s'étire quand il file,
+  d'autant plus qu'il est loin derrière. Deux formes, seules ou ensemble (deux anneaux ; panneau
+  *Anneau*, cases *Lisse* et *Spectre*) :
+- *Lisse* (`[anneau]`) : un trait net (`rayon`, 6 à 60, 13 par défaut ; `epaisseur`, 0,5 à 6).
+  Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec
   la basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
   mesure de quatre temps quand le tempo est régulier.
-- **Orbe** (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
-  pointeur (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à 5). Les bandes de fréquences la
+- *Spectre* (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
+  pointeur, étirée comme la forme lisse (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à 5). Les bandes de fréquences la
   déforment (`relief`, 2 à 30 : graves en haut, aigus en bas, les deux moitiés en miroir) ; chaque
   kick en détache un écho qui garde la forme du son, un drop trois ; pendant une montée elle se
   resserre et frise. Elle demande l'analyse en bandes, comme le spectre (16 bandes s'il est coupé).
@@ -389,7 +391,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     ouvert est dépliée d'office ; l'en-tête compte les effets actifs) : *L'essaim* (*Orbite*,
     *Comètes*, *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*,
     *Particules*, *Fissures*, *Réticule et projecteur*), *Figures* (*Spectre*, *Arcs*,
-    *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*, *Pendule*,
+    *Quatre temps*, *Anneau* (formes lisse et spectre), *Ligne de voix*, *Trame*, *Trait*, *Pendule*,
     *Gouttes* ; sous *+ Avancé*, leur teinte, rotation, place et réactions, et un bouton qui
     leur ajoute une modulation), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* (*Écoute*, *Étiquette du morceau*) et

@@ -5,7 +5,7 @@
 //!
 //! `ui/apercu.js` les reproduit (mêmes formules) : les modifier ici oblige à les reporter là.
 
-use super::{autour, gauss, melange, Elan, Partage, Ressort, Son, ORBE, PENDULE, SOUS_LE_POINTEUR, TRAIT, TRAME, VOIX};
+use super::{autour, gauss, melange, Elan, Partage, Ressort, Son, ANNEAU_ETIRE, ORBE, PENDULE, SOUS_LE_POINTEUR, TRAIT, TRAME, VOIX};
 use crate::modulation::NB_FIGURES;
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
@@ -328,7 +328,8 @@ impl Plus {
         match i {
             ORBE => {
                 let c = &cfg.orbe;
-                (c.rayon + c.relief + ORBE_SOUFFLE.1 + 4.0) * (1.0 + ORBE_ECHO.1 * 1.5) + c.epaisseur + 1.0
+                // étirée comme l'anneau, de `ANNEAU_ETIRE.0` au plus
+                (c.rayon + c.relief + ORBE_SOUFFLE.1 + 4.0) * (1.0 + ORBE_ECHO.1 * 1.5) * (1.0 + ANNEAU_ETIRE.0) + c.epaisseur + 1.0
             }
             VOIX => {
                 let c = &cfg.voix;
@@ -417,7 +418,9 @@ impl Plus {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn dessiner_orbe(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb)) {
+    /// Orbe, étirée comme l'anneau (`etire` : étirement, cosinus et sinus de sa direction).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn dessiner_orbe(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb), (e, ec, es): (f32, f32, f32)) {
         if self.orbe.contour.len() != ORBE_POINTS {
             return;
         }
@@ -427,7 +430,13 @@ impl Plus {
             pts.extend((0..=ORBE_POINTS).map(|i| {
                 let (sin, cos) = (-PI / 2.0 + i as f32 / ORBE_POINTS as f32 * TAU).sin_cos();
                 let r = rayons[i % ORBE_POINTS] * echelle * scale;
-                (cx + cos * r, cy + sin * r)
+                let (x, y) = (cos * r, sin * r);
+                if e == 0.0 {
+                    return (cx + x, cy + y);
+                }
+                // étirée le long de (ec, es), resserrée en travers
+                let (a, b) = ((x * ec + y * es) * (1.0 + e), (-x * es + y * ec) * (1.0 - e));
+                (cx + a * ec - b * es, cy + a * es + b * ec)
             }));
             cv.polyline(pts, largeur, rgb, al, true);
         };

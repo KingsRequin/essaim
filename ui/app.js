@@ -385,7 +385,7 @@ function detail(p) {
   const c = p.reglages, o = c.orbite;
   const parts = [];
   // rubans, ressorts et petites figures : ce qui fait l'allure du preset passe en tête
-  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau suiveur"], ["orbe", "orbe"], ["voix", "ligne de voix"], ["trame", "trame"], ["pinceau", "trait"], ["pendule", "pendule"], ["gouttes", "gouttes en contour"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
+  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau lisse"], ["orbe", "anneau spectre"], ["voix", "ligne de voix"], ["trame", "trame"], ["pinceau", "trait"], ["pendule", "pendule"], ["gouttes", "gouttes en contour"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
   if (o.cometes) parts.push(`${NOMS_FORMES[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} ${c.rubans && c.rubans.actif ? "ruban" : "comète"}${o.nombre * o.anneaux > 1 ? "s" : ""}`);
   else if (!figures.length) parts.push("sans comètes");
   if (figures.length) parts.push(figures.join(", ").replace(/^./, (l) => l.toUpperCase()));
@@ -863,7 +863,7 @@ const CIBLES_MOD = [
 ];
 // Figures autour du pointeur (comme config::FIGURES ; nom distinct de celui de apercu.js, chargé dans la même page) : section et nom affiché.
 const FIGURES_REGLAGES = [
-  ["arcs", "Arcs"], ["quatre_temps", "Quatre temps"], ["anneau", "Anneau suiveur"], ["orbe", "Orbe"], ["voix", "Ligne de voix"],
+  ["arcs", "Arcs"], ["quatre_temps", "Quatre temps"], ["anneau", "Anneau lisse"], ["orbe", "Anneau spectre"], ["voix", "Ligne de voix"],
   ["trame", "Trame"], ["pinceau", "Trait"], ["pendule", "Pendule"], ["gouttes", "Gouttes"],
 ];
 const NOMS_FIGURES = Object.fromEntries(FIGURES_REGLAGES);
@@ -961,28 +961,31 @@ function reactionsAvant(p) {
 // courants, le reste sous « + Avancé ». Le trait et le pendule (`geo` faux) ne tournent, ne
 // grandissent ni ne se déplacent.
 const enPourcent = (v) => Math.round(v * 100) + " %";
-function allureBase(s, geo = true) {
+// `nom` : titre des groupes quand un panneau montre deux figures ; `cache(r)` : réglages cachés
+// quand la figure est éteinte (panneau « Anneau », deux formes).
+function allureBase(s, geo = true, cache) {
   return [
     ...(geo ? [{ libelle: "Échelle", section: s, cle: "echelle", min: 0.5, max: 2, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) }] : []),
     { libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent },
-  ];
+  ].map((d) => ({ ...d, cache }));
 }
-function allureAvance(s, geo = true) {
+function allureAvance(s, geo = true, nom, cache) {
   const reaction = (libelle, cle) => ({ libelle, section: s, cle: "reaction_" + cle, min: 0, max: 2, pas: 0.05, aff: enPourcent });
+  const titre = (t) => (nom ? nom + " · " + t.charAt(0).toLowerCase() + t.slice(1) : t);
   return [
-    { groupe: geo ? "Couleur et place" : "Couleur" },
+    { groupe: titre(geo ? "Couleur et place" : "Couleur") },
     { libelle: "Teinte", section: s, cle: "teinte", min: -180, max: 180, pas: 5, aff: (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v)) + "°" },
     ...(geo ? [
       { libelle: "Rotation", section: s, cle: "rotation", min: -30, max: 30, pas: 0.5, aff: (v) => virgule(+v, 1) + " tr/min" },
       { libelle: "Décalage horizontal", section: s, cle: "decalage_x", min: -80, max: 80, pas: 1, aff: (v) => Math.round(v) + " px" },
       { libelle: "Décalage vertical", section: s, cle: "decalage_y", min: -80, max: 80, pas: 1, aff: (v) => Math.round(v) + " px" },
     ] : []),
-    { groupe: "Réactions à la musique (0 % : aucune, 200 % : double)" },
+    { groupe: titre("Réactions à la musique (0 % : aucune, 200 % : double)") },
     reaction("Kick", "kick"), reaction("Caisse claire", "caisse"), reaction("Charleston", "charleston"),
     reaction("Basse", "basse"), reaction("Montée", "montee"), reaction("Drop", "drop"),
     { copierAllure: s },
     { moduler: s },
-  ];
+  ].map((d) => ({ ...d, cache }));
 }
 
 // Allure d'une figure copiée sur les huit autres : teinte, opacité et réactions (l'échelle, la
@@ -1187,26 +1190,27 @@ const PANNEAUX = [
     ],
     avance: allureAvance("quatre_temps"),
   },
+  // Anneau : deux formes, à cocher seules ou ensemble (deux anneaux) ; chacune garde sa section
+  // dans les réglages (`anneau` : lisse, `orbe` : spectre)
   {
-    id: "anneau", famille: "Figures", titre: "Anneau suiveur", actif: ["anneau", "actif"],
-    note: "Un anneau fin qui suit le pointeur avec un temps de retard et s'allonge dans le mouvement. Il bat avec le kick, devient carré un instant sur la caisse claire, se resserre pendant une montée et lâche un écho au drop. Un point y fait un tour par mesure quand le tempo est régulier.",
+    id: "anneau", famille: "Figures", titre: "Anneau", voyant: (r) => !!(r.anneau.actif || r.orbe.actif),
+    note: "Un anneau autour du pointeur, qui le suit avec un temps de retard et s'étire quand il file (d'autant plus qu'il est loin derrière). Deux formes, seules ou ensemble : lisse, un trait net qui bat avec le kick, devient carré un instant sur la caisse claire et lâche un écho au drop, un point y faisant un tour par mesure ; spectre, une ligne que les bandes de fréquences déforment (graves en haut, aigus en bas), dont chaque kick détache un écho.",
     base: [
-      { libelle: "Rayon", section: "anneau", cle: "rayon", min: 6, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
-      { libelle: "Épaisseur", section: "anneau", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
-      ...allureBase("anneau"),
+      { rangee: "Forme", puces: [
+        ["Lisse", "anneau", "actif", "Un trait net, qui bat avec le kick et devient carré sur la caisse claire"],
+        ["Spectre", "orbe", "actif", "Une ligne déformée par les bandes de fréquences"],
+      ] },
+      { titre: "Lisse", cache: (r) => !r.anneau.actif },
+      { libelle: "Rayon", section: "anneau", cle: "rayon", min: 6, max: 60, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.anneau.actif },
+      { libelle: "Épaisseur", section: "anneau", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1), cache: (r) => !r.anneau.actif },
+      ...allureBase("anneau", true, (r) => !r.anneau.actif),
+      { titre: "Spectre", cache: (r) => !r.orbe.actif },
+      { libelle: "Rayon", section: "orbe", cle: "rayon", min: 10, max: 60, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.orbe.actif },
+      { libelle: "Relief", section: "orbe", cle: "relief", min: 2, max: 30, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.orbe.actif },
+      { libelle: "Épaisseur", section: "orbe", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1), cache: (r) => !r.orbe.actif },
+      ...allureBase("orbe", true, (r) => !r.orbe.actif),
     ],
-    avance: allureAvance("anneau"),
-  },
-  {
-    id: "orbe", famille: "Figures", titre: "Orbe", actif: ["orbe", "actif"], si: SI.son,
-    note: "Le spectre sans les barres : une seule ligne fermée autour du pointeur, que les bandes de fréquences déforment (graves en haut, aigus en bas, les deux moitiés en miroir). Chaque kick en détache un écho qui garde la forme du son ; pendant une montée, la ligne se resserre et frise.",
-    base: [
-      { libelle: "Rayon", section: "orbe", cle: "rayon", min: 10, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
-      { libelle: "Relief", section: "orbe", cle: "relief", min: 2, max: 30, pas: 1, aff: (v) => String(Math.round(v)) },
-      { libelle: "Épaisseur", section: "orbe", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
-      ...allureBase("orbe"),
-    ],
-    avance: allureAvance("orbe"),
+    avance: [...allureAvance("anneau", true, "Lisse", (r) => !r.anneau.actif), ...allureAvance("orbe", true, "Spectre", (r) => !r.orbe.actif)],
   },
   {
     id: "voix", famille: "Figures", titre: "Ligne de voix", actif: ["voix", "actif"], si: SI.son,
@@ -1568,7 +1572,9 @@ function construireBase(def, grille, corps) {
   };
   let els = null;
   if (def.titre) {
-    grille.append(el("div", "titre-groupe", def.titre));
+    const t = el("div", "titre-groupe", def.titre);
+    grille.append(t);
+    els = [t];
   } else if (def.trajet) {
     els = ligneLarge(def.trajet, def.section + "." + def.cle, choixForme(def.section, def.cle, def.liste));
   } else if (def.rangee) {
@@ -1617,6 +1623,7 @@ function construireAvance(def, zone) {
     decrire(b, note.id);
     l.append(b, note);
     zone.append(l);
+    els = [l];
   } else if (def.moduler) {
     // une modulation de plus, sur cette figure, puis le panneau des modulations
     const l = el("div", "ligne-avance");
@@ -1628,8 +1635,11 @@ function construireAvance(def, zone) {
     });
     l.append(b, el("p", "note", "Une source du son fait varier la figure : son rayon, l'épaisseur de ses traits, sa rotation, sa teinte, sa place, son opacité… Voir « Modulations »."));
     zone.append(l);
+    els = [l];
   } else if (def.groupe) {
-    zone.append(el("div", "t-label groupe-avance", def.groupe));
+    const g = el("div", "t-label groupe-avance", def.groupe);
+    zone.append(g);
+    els = [g];
   } else if (def.choix || def.rangee) {
     const l = el("div", "ligne-avance");
     const groupe = el("div", "groupe-puces");
@@ -3422,7 +3432,9 @@ function apercuChange() { grandAFiger = true; }
 // Repère de place de la figure dont le panneau est affiché (croix au pointeur, cadre de sa zone) :
 // dessiné sur le grand aperçu après la prise d'une image du GIF, qui ne l'a donc pas.
 function repereFigure() {
-  if (etat.panneau in NOMS_FIGURES) grand.dessinerRepere(etat.panneau, couleurJeton("--scene-repere"));
+  // le panneau « Anneau » montre deux figures : ses deux formes (anneau lisse, orbe)
+  const sections = etat.panneau === "anneau" ? ["anneau", "orbe"] : etat.panneau in NOMS_FIGURES ? [etat.panneau] : [];
+  for (const s of sections) grand.dessinerRepere(s, couleurJeton("--scene-repere"));
 }
 function figer(ap, son) {
   ap.dimensionner();

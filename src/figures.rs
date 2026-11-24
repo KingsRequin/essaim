@@ -233,7 +233,8 @@ const POINT_ETEINT: f32 = 0.4;
 const VAGUE: f64 = 0.06;
 
 /// Anneau : bornes de son échelle, durée d'un écho (s) et ce dont il s'élargit, étirement au plus
-/// et vitesse qui le donne (px/s à 100 %).
+/// et vitesse qui le donne (px/s à 100 %). Il s'étire aussi avec son retard sur le pointeur
+/// (`Figures::etirement`) : au retard le plus grand, l'étirement le plus grand.
 const ANNEAU_BORNES: (f32, f32) = (0.2, 1.7);
 const ANNEAU_ECHO: (f64, f32) = (0.42, 1.2);
 const ANNEAU_ETIRE: (f32, f32) = (0.45, 900.0);
@@ -313,6 +314,9 @@ pub struct Figures {
     /// Centre des figures et sa vitesse (px, px/s) ; `None` tant qu'aucune figure n'est active.
     centre: Option<(f32, f32)>,
     vitesse: (f32, f32),
+    /// Écart du centre au pointeur (px), et retard au plus (px) à cette image.
+    retard: (f32, f32),
+    retard_max: f32,
     /// Horloge des rotations lentes (s, repliée).
     horloge: f32,
     /// Enveloppes du charleston et de la caisse claire (1 au coup, puis retombée), montée suivie.
@@ -350,6 +354,8 @@ impl Figures {
         Self {
             centre: None,
             vitesse: (0.0, 0.0),
+            retard: (0.0, 0.0),
+            retard_max: RETARD_MAX,
             horloge: 0.0,
             charleston: 0.0,
             caisse: 0.0,
@@ -407,6 +413,7 @@ impl Figures {
             self.vitesse = (0.0, 0.0);
         }
         self.centre = Some((cursor.0 + ex, cursor.1 + ey));
+        (self.retard, self.retard_max) = ((ex, ey), lim);
         self.horloge = (self.horloge + dt).rem_euclid(TAU * 40.0);
         // ce que les figures écoutent
         let retombe = |v: f32, coup: bool, taux: f32| if coup { 1.0 } else { v * (-dt * taux).exp() };
@@ -543,6 +550,25 @@ impl Figures {
         }
     }
 
+    /// Étirement de l'anneau et de l'orbe à cette image (0 à `ANNEAU_ETIRE.0`) et sa direction
+    /// (cosinus, sinus) : le plus grand de celui de leur vitesse et de celui de leur retard sur
+    /// le pointeur. Le retard compte aussi : arrivé au retard le plus grand, le centre ne bouge
+    /// plus que de la vitesse du pointeur, qui l'entraîne au bout de son ressort, et l'anneau
+    /// resterait rond.
+    fn etirement(&self, scale: f32) -> (f32, f32, f32) {
+        let v = self.vitesse.0.hypot(self.vitesse.1);
+        let d = self.retard.0.hypot(self.retard.1);
+        let par_vitesse = (v / (ANNEAU_ETIRE.1 * scale)).min(ANNEAU_ETIRE.0);
+        let par_retard = (d / self.retard_max.max(1.0)).min(1.0) * ANNEAU_ETIRE.0;
+        if par_retard > par_vitesse && d > 0.5 {
+            (par_retard, -self.retard.0 / d, -self.retard.1 / d)
+        } else if v > 1.0 {
+            (par_vitesse, self.vitesse.0 / v, self.vitesse.1 / v)
+        } else {
+            (0.0, 1.0, 0.0)
+        }
+    }
+
     /// Demi-côté (px à 100 %) du carré autour du centre qui contient la figure `i` (sauf le trait
     /// et le pendule, qui ont leur propre zone).
     fn etendue(&self, i: usize, cfg: &Config) -> f32 {
@@ -610,7 +636,7 @@ impl Figures {
         match i {
             GOUTTES => self.gouttes.dessiner(p, cv, cfg, scale, (tete, queue)),
             TRAME => self.plus.dessiner_trame(p, cv, t, cfg, scale, tete),
-            ORBE => self.plus.dessiner_orbe(p, cv, pts, t, cfg, scale, (tete, queue)),
+            ORBE => self.plus.dessiner_orbe(p, cv, pts, t, cfg, scale, (tete, queue), self.etirement(scale)),
             VOIX => self.plus.dessiner_voix(p, cv, pts, cfg, scale, (tete, queue)),
             TRAIT => self.plus.dessiner_trait(p, cv, t, cfg, scale, teinte),
             PENDULE => self.plus.dessiner_pendule(cv, pts, cfg, scale, (tete, queue)),
@@ -661,11 +687,9 @@ impl Figures {
                         cv.ring(cx, cy, r * (1.0 + ANNEAU_ECHO.1 * (1.0 - (1.0 - k).powi(3))), 1.2 * scale, queue, 0.7 * (1.0 - k));
                     }
                 }
-                // étiré dans le sens de sa vitesse ; carré un instant sur la caisse claire
+                // étiré dans le sens où il file ; carré un instant sur la caisse claire
                 // (superellipse : un cercle à l'exposant 2, presque un carré à 8)
-                let v = (self.vitesse.0.powi(2) + self.vitesse.1.powi(2)).sqrt();
-                let e = (v / (ANNEAU_ETIRE.1 * scale)).min(ANNEAU_ETIRE.0);
-                let (sin, cos) = if v > 1.0 { (self.vitesse.1 / v, self.vitesse.0 / v) } else { (0.0, 1.0) };
+                let (e, cos, sin) = self.etirement(scale);
                 let (ra, rb, puissance) = (r * (1.0 + e), r * (1.0 - e), 2.0 / (2.0 + 6.0 * a.carre.clamp(0.0, 1.0)));
                 let point = |angle: f32| {
                     let (st, ct) = angle.sin_cos();
@@ -841,6 +865,26 @@ mod tests {
         h.moduler(&[Effet { teinte: 180.0, ..Effet::default() }; NB_FIGURES]);
         avancer(&mut h, 2.0 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
         assert!(h.poses[ARCS].neutre() && h.teintes[ARCS] == 180.0);
+    }
+
+    #[test]
+    fn l_anneau_reste_etire_quand_le_pointeur_file_loin() {
+        let mut cfg = Config::default();
+        cfg.anneau.actif = true;
+        let mut f = Figures::new();
+        let (au, coups) = (AudioView::default(), Coups::default());
+        // le pointeur file vers la droite, vite : le centre est au bout de son retard, sa vitesse
+        // remise à zéro à chaque image ; l'anneau doit rester étiré vers le pointeur
+        for i in 0..120 {
+            avancer(&mut f, i as f64 / 120.0, 1.0 / 120.0, (100.0 + 40.0 * i as f32, 300.0), 1.0, &au, &coups, &cfg);
+        }
+        let (e, cos, sin) = f.etirement(1.0);
+        assert!(e > 0.8 * ANNEAU_ETIRE.0 && cos > 0.99 && sin.abs() < 0.05, "étirement {e}, direction ({cos}, {sin})");
+        // le pointeur s'arrête : l'anneau revient rond
+        for i in 120..360 {
+            avancer(&mut f, i as f64 / 120.0, 1.0 / 120.0, (100.0 + 40.0 * 119.0, 300.0), 1.0, &au, &coups, &cfg);
+        }
+        assert!(f.etirement(1.0).0 < 0.02, "{}", f.etirement(1.0).0);
     }
 
     #[test]
