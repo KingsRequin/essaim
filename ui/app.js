@@ -1838,6 +1838,8 @@ function montrerPanneau(id, focus) {
   memoire.ecrire("panneau", id);
   apercuChange(); // aperçu à l'arrêt : le repère de place suit le panneau
   majFamilles();
+  // panneau Écoute : la liste des applis qui ont du son (et de celles qui jouent) est relue
+  if (id === "son") envoyer({ cmd: "applis_sonores" });
   for (const p of panneaux) {
     const oui = p.def.id === id;
     p.section.hidden = !oui;
@@ -2166,7 +2168,7 @@ function rangeeApplisSon() {
   const actualiser = el("button", "puce", "Actualiser");
   actualiser.type = "button";
   actualiser.addEventListener("click", () => envoyer({ cmd: "applis_sonores" }));
-  const note = el("p", "note", "Coche une ou plusieurs applications pour n'écouter que leur son (ta musique, sans les notifications ni les vidéos d'à côté). Aucune cochée : tout le son de la sortie. Propre à cet ordinateur (hors presets) ; il faut Windows 10 2004 ou plus récent, sinon tout le son est écouté.");
+  const note = el("p", "note", "Coche une ou plusieurs applications pour n'écouter que leur son (ta musique, sans les notifications ni les vidéos d'à côté) ; celles qui jouent en ce moment sont en tête, marquées « en lecture ». Aucune cochée : tout le son de la sortie. Propre à cet ordinateur (hors presets) ; il faut Windows 10 2004 ou plus récent, sinon tout le son est écouté.");
   note.id = "note-applis-son";
   decrire(groupe, note.id);
   l.append(nom, groupe, actualiser, note);
@@ -2179,16 +2181,18 @@ function majApplisSon() {
   const groupe = $("applis-son");
   if (!groupe || !etat.reglages) return;
   const choisies = val("audio", "applis") || [];
-  const liste = (etat.applisSon || []).map((a) => [a.exe, a.nom]);
-  for (const c of choisies) if (!liste.some(([exe]) => nomExe(exe) === nomExe(c))) liste.push([c, c.replace(/\.exe$/i, "")]);
+  // celles qui jouent en ce moment d'abord, marquées
+  const liste = (etat.applisSon || []).map((a) => [a.exe, a.nom, !!a.joue]).sort((a, b) => b[2] - a[2]);
+  for (const c of choisies) if (!liste.some(([exe]) => nomExe(exe) === nomExe(c))) liste.push([c, c.replace(/\.exe$/i, ""), false]);
   const cle = JSON.stringify([liste, choisies]);
   if (groupe.dataset.cle === cle) return;
   groupe.dataset.cle = cle;
   if (!liste.length) { groupe.replaceChildren(el("span", "note", "Aucune application n'a de son ouvert en ce moment.")); return; }
-  groupe.replaceChildren(...liste.map(([exe, nom]) => {
+  groupe.replaceChildren(...liste.map(([exe, nom, joue]) => {
     const b = el("button", "puce", nom);
+    if (joue) b.append(el("span", "joue", " ▶ en lecture"));
     b.type = "button";
-    b.title = exe;
+    b.title = exe + (joue ? " : joue en ce moment" : "");
     const coche = choisies.some((c) => nomExe(c) === nomExe(exe));
     b.setAttribute("aria-pressed", coche);
     b.addEventListener("click", () => {

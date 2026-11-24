@@ -289,7 +289,8 @@ presets ; si elle est débranchée, Essaim écoute la sortie par défaut en atte
 Spotify, navigateur, jeux… sans rien configurer. Pour n'écouter qu'une ou quelques applications
 (ta musique, sans les notifications ni la vidéo d'à côté), coche-les dans *Écoute › Avancé ›
 Applications écoutées* (`[audio] applis = ["spotify.exe"]`, propre à l'ordinateur et hors
-presets ; aucune cochée : tout le son). La liste montre les applications qui ont du son ouvert
+presets ; aucune cochée : tout le son). La liste montre les applications qui ont du son ouvert,
+celles qui jouent en ce moment en tête, marquées « en lecture »
 (*Actualiser* la relit) ; une appli lancée plus tard est écoutée dès qu'elle démarre, un
 navigateur avec tous ses onglets. Il faut Windows 10 2004 ou plus récent ; sinon, tout le son
 est écouté.

@@ -493,7 +493,7 @@ impl Fenetre {
                 self.envoyer(&json!({ "type": "sorties", "liste": liste, "actuelle": actuelle }));
             }
             Demande::ApplisSonores => {
-                let liste: Vec<Value> = audio_commun::capture::applis_sonores().into_iter().map(|(exe, nom)| json!({ "exe": exe, "nom": nom })).collect();
+                let liste: Vec<Value> = audio_commun::capture::applis_sonores_detail().into_iter().map(|a| json!({ "exe": a.exe, "nom": a.nom, "joue": a.joue })).collect();
                 self.envoyer(&json!({ "type": "applis_sonores", "liste": liste }));
             }
             Demande::OuvrirDepot => {

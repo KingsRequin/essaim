@@ -499,6 +499,7 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .sous-onglets .famille:first-child { padding-top: var(--esp-2); }
 .sous-onglets .famille:hover { color: var(--encre); }
 .sous-onglets .famille .signe { width: 1ch; font-weight: 900; color: var(--signal-texte); }
+.puce .joue { color: var(--signal-texte); font-weight: 800; }
 .sous-onglets .famille .compte-famille { margin-left: auto; font-weight: 900; color: var(--signal-texte); font-variant-numeric: tabular-nums; }
 .sous-onglet[aria-selected="true"] { color: var(--encre); box-shadow: inset var(--trait-souligne) 0 0 0 var(--signal); }
 .sous-onglet .voyant { width: 8px; height: 8px; flex-shrink: 0; border: 1.5px solid currentColor; }
