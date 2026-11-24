@@ -236,7 +236,11 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   force de chacune de ses réactions à la musique, de 0 (aucune) à 2 (double) :
   `reaction_kick`, `reaction_caisse`, `reaction_charleston`, `reaction_basse`,
   `reaction_montee`, `reaction_drop`. Le trait et le pendule n'ont ni échelle, ni rotation, ni
-  décalage. Les modulations peuvent viser chaque figure (`sur`, ci-dessus).
+  décalage. Les modulations peuvent viser chaque figure (`sur`, ci-dessus). Dans la fenêtre des
+  réglages, *Copier sur toutes les figures* (sous *+ Avancé* d'une figure) donne sa teinte, son
+  opacité et ses réactions aux huit autres (Ctrl+Z pour revenir) ; tant que le panneau d'une
+  figure active est affiché, le grand aperçu montre une croix au pointeur et, en pointillés, le
+  cadre de sa zone une fois posée (échelle, décalage), absents de l'export GIF.
 - **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres, le halo et le
   liseré ne sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
   pas partie des presets : une fois allumés, ils restent quand on change de preset (la bordure,
@@ -247,8 +251,10 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   pointeur, rien sur le contenu. Elles s'écartent sur le kick puis reviennent, leurs bras
   s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre, une montée les
   serre contre la fenêtre, un drop les écarte en grand. Le cadre est relu à chaque image : les
-  équerres et le halo suivent une fenêtre qu'on déplace ou redimensionne ; pas d'équerres sur le bureau, la barre des tâches, une fenêtre en plein écran ou une
-  fenêtre d'Essaim.
+  équerres et le halo suivent une fenêtre qu'on déplace ou redimensionne. Ils habillent les mêmes
+  fenêtres que la bordure : des fenêtres à cadre ou à barre de titre, la fenêtre des réglages
+  d'Essaim comprise ; jamais le bureau, la barre des tâches, une fenêtre en plein écran, ni une
+  barre ou un menu sans cadre (la barre d'Horizon et son menu du clic droit, par exemple).
 - **Halo de fenêtre** (`[halo]`) : la lumière court le long du cadre de la fenêtre au premier
   plan (`epaisseur` du trait, 1 à 4). Elle entre par le bord le plus proche du pointeur,
   s'élargit avec la basse ; chaque kick en fait partir deux éclats le long du cadre, la caisse
@@ -273,7 +279,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   son morceau à Windows (comme pour l'infobulle).
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
-  défaut), même pendant la frappe ; pas en mode sans flashs.
+  défaut), même pendant la frappe ; pas en mode sans flashs. La fenêtre des réglages d'Essaim
+  se colore comme les autres.
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
 choisie dans *Écoute › Avancé › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
@@ -433,7 +440,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     dont les réglages en cours s'écartent de peu est marqué *modifié* (cadre pointillé).
     Installer ou importer un preset ne remplace jamais un preset différent du même nom (à la
     casse près), et les noms réservés de Windows (CON, NUL, COM1…) sont refusés.
-  - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir).
+  - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir) ; une fois sur trois
+    environ, une ou deux figures (jamais plus) d'allure tirée dans des bornes sages (échelle 0,8
+    à 1,3, réactions 50 à 150 %), parfois avec une modulation sur l'une d'elles.
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application*.
   - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 5 ou flèches
     (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme

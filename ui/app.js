@@ -980,8 +980,41 @@ function allureAvance(s, geo = true) {
     { groupe: "Réactions à la musique (0 % : aucune, 200 % : double)" },
     reaction("Kick", "kick"), reaction("Caisse claire", "caisse"), reaction("Charleston", "charleston"),
     reaction("Basse", "basse"), reaction("Montée", "montee"), reaction("Drop", "drop"),
+    { copierAllure: s },
     { moduler: s },
   ];
+}
+
+// Allure d'une figure copiée sur les huit autres : teinte, opacité et réactions (l'échelle, la
+// rotation et le décalage dépendent de la forme, ils restent). Les valeurs remplacées sont gardées :
+// « Annuler » (Ctrl+Z) les remet tant qu'aucun preset n'a été appliqué depuis.
+const ALLURE_COPIEE = ["teinte", "opacite", "reaction_kick", "reaction_caisse", "reaction_charleston", "reaction_basse", "reaction_montee", "reaction_drop"];
+let annulationLocale = null; // dernière action de la page que « Annuler » défait avant le dernier preset
+function copierAllure(source) {
+  const r = etat.reglages;
+  if (!r || !r[source]) return;
+  const avant = [];
+  for (const [s] of FIGURES_REGLAGES) {
+    if (s === source || !r[s]) continue;
+    for (const cle of ALLURE_COPIEE) {
+      const v = r[source][cle], ancien = r[s][cle];
+      if (v === undefined || ancien === undefined || memeValeur(ancien, v)) continue;
+      avant.push([s, cle, ancien]);
+      regler(s, cle, v);
+    }
+  }
+  majReglages();
+  const nom = NOMS_FIGURES[source];
+  if (!avant.length) { bandeau(`Les autres figures ont déjà l'allure de « ${nom} ».`); return; }
+  const defaire = () => {
+    if (annulationLocale !== defaire) return;
+    annulationLocale = null;
+    for (const [s, cle, v] of avant) regler(s, cle, v);
+    majReglages();
+    bandeau("Allure des figures d'avant remise.");
+  };
+  annulationLocale = defaire;
+  bandeau(`Teinte, opacité et réactions de « ${nom} » copiées sur les autres figures.`, { libelle: "Annuler (Ctrl+Z)", faire: defaire });
 }
 
 // Panneaux de l'onglet Réglages, un par effet, rangés par familles (`famille`). `actif` :
@@ -1573,7 +1606,17 @@ function construireBase(def, grille, corps) {
 // glissière ; bascules et choix sur toute la largeur, avec leur note.
 function construireAvance(def, zone) {
   let els = null;
-  if (def.moduler) {
+  if (def.copierAllure) {
+    const l = el("div", "ligne-avance");
+    const b = el("button", "puce debut", "Copier sur toutes les figures");
+    b.type = "button";
+    b.addEventListener("click", () => copierAllure(def.copierAllure));
+    const note = el("p", "note", "Donne la teinte, l'opacité et les réactions de cette figure aux huit autres ; l'échelle, la rotation et le décalage restent propres à chacune.");
+    note.id = "note-copier-" + def.copierAllure;
+    decrire(b, note.id);
+    l.append(b, note);
+    zone.append(l);
+  } else if (def.moduler) {
     // une modulation de plus, sur cette figure, puis le panneau des modulations
     const l = el("div", "ligne-avance");
     const b = el("button", "puce debut", "+ Moduler cette figure");
@@ -1792,6 +1835,7 @@ function montrerPanneau(id, focus) {
   if (!panneaux.some((p) => p.def.id === id)) id = panneaux[0].def.id;
   etat.panneau = id;
   memoire.ecrire("panneau", id);
+  apercuChange(); // aperçu à l'arrêt : le repère de place suit le panneau
   majFamilles();
   for (const p of panneaux) {
     const oui = p.def.id === id;
@@ -2262,6 +2306,32 @@ function surprise() {
   const avant = reactionsAvant({ orbite: { vitesse_basse: +r(4, 20).toFixed(1), eloignement_grave: +r(0.4, 2).toFixed(1) }, musique: { contretemps: Math.random() < 0.25 } });
   const idee = (l) => (Math.random() < 0.35 ? [{ seuil: 0, lissage: LISSAGE_MOD, inverser: false, force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1, ...parmi(l)[1] }] : []);
   c.modulations = { liste: avant.basse.concat(avant.mods, idee(SUGGESTIONS_MOD.slice(3))).map(({ force, nombre, nombre_max, delai, probabilite, ...m }) => m) };
+  // une fois sur trois, une ou deux figures (jamais plus : l'essaim reste discret), d'allure tirée
+  // dans des bornes sages, et parfois une modulation sur l'une d'elles ; les autres sont coupées
+  const figures = FIGURES_REGLAGES.map(([s]) => s).filter((s) => c[s]);
+  for (const s of figures) c[s].actif = false;
+  if (figures.length && Math.random() < 0.35) {
+    const tirees = [];
+    const n = Math.min(figures.length, Math.random() < 0.6 ? 1 : 2);
+    while (tirees.length < n) { const s = parmi(figures); if (!tirees.includes(s)) tirees.push(s); }
+    const reaction = () => +r(0.5, 1.5).toFixed(2);
+    for (const s of tirees) {
+      Object.assign(c[s], {
+        actif: true, opacite: +r(0.7, 1).toFixed(2), teinte: 5 * ri(-36, 36),
+        reaction_kick: reaction(), reaction_caisse: reaction(), reaction_charleston: reaction(),
+        reaction_basse: reaction(), reaction_montee: reaction(), reaction_drop: reaction(),
+      });
+      // le trait et le pendule ne grandissent, ne tournent ni ne se déplacent
+      if (s !== "pinceau" && s !== "pendule") {
+        Object.assign(c[s], { echelle: +r(0.8, 1.3).toFixed(2), rotation: Math.random() < 0.3 ? +(r(3, 10) * parmi([-1, 1])).toFixed(1) : 0, decalage_x: 0, decalage_y: 0 });
+      }
+    }
+    if (Math.random() < 0.4 && c.modulations.liste.length < MODULATIONS_MAX) {
+      const sur = parmi(tirees), geo = sur !== "pinceau" && sur !== "pendule";
+      const [cible, q] = parmi([["taille", [0.2, 0.5]], ["teinte", [0.2, 0.5]], ...(geo ? [["rayon", [0.05, 0.12]], ["rotation", [0.05, 0.12]]] : [])]);
+      c.modulations.liste.push({ source: parmi(["basse", "kick", "caisse", "charleston", "montee"]), cible, sur, quantite: +r(q[0], q[1]).toFixed(2), seuil: 0, lissage: LISSAGE_MOD, inverser: false });
+    }
+  }
   c.declencheurs = { liste: avant.decl.concat(idee(IDEES_DECLENCHEURS).map(({ seuil, lissage, inverser, ...d }) => d)) };
   envoyer({ cmd: "appliquer_reglages", nom: "Surprise", reglages: c });
 }
@@ -3201,7 +3271,9 @@ function fermerPanneau() {
   fermerBoite("voile");
 }
 
-const annuler = () => envoyer({ cmd: "annuler" });
+// Annuler : la dernière action de la page qui le permet (copie d'allure), sinon le dernier preset
+// appliqué (l'appli garde les réglages d'avant).
+const annuler = () => (annulationLocale ? annulationLocale() : envoyer({ cmd: "annuler" }));
 
 // ---------------------------------------------------------------------------------------------
 // Messages de l'appli
@@ -3286,6 +3358,7 @@ window.essaim = {
         recevoirApercuJeu(m);
         break;
       case "applique":
+        annulationLocale = null; // Ctrl+Z défait maintenant ce preset
         bandeau(`« ${m.nom} » appliqué.`, { libelle: "Annuler (Ctrl+Z)", faire: annuler });
         break;
       case "enregistre":
@@ -3341,6 +3414,11 @@ function protege(nom, f) {
 const mouvementReduit = matchMedia("(prefers-reduced-motion: reduce)");
 let lecture = !mouvementReduit.matches, grandAFiger = true;
 function apercuChange() { grandAFiger = true; }
+// Repère de place de la figure dont le panneau est affiché (croix au pointeur, cadre de sa zone) :
+// dessiné sur le grand aperçu après la prise d'une image du GIF, qui ne l'a donc pas.
+function repereFigure() {
+  if (etat.panneau in NOMS_FIGURES) grand.dessinerRepere(etat.panneau, couleurJeton("--scene-repere"));
+}
 function figer(ap, son) {
   ap.dimensionner();
   for (let i = 0; i < 40; i++) ap.avancer(1 / 30, son);
@@ -3386,9 +3464,11 @@ function boucle(maintenant) {
         grand.avancer(dt, sonGrand);
         grand.dessiner();
         imageGif(maintenant);
+        repereFigure();
         majJaugesModulations();
       } else if (grandAFiger || largeur !== grand.canvas.width) {
         figer(grand, sonGrand);
+        repereFigure();
       }
       grandAFiger = false;
     });

@@ -28,6 +28,8 @@
   /* dessins sur la scène (toujours sombre) : guide et point du trajet dessiné */
   --scene-guide: rgba(255, 255, 255, 0.18);
   --scene-point: #ffffff;
+  /* repère de place d'une figure dans le grand aperçu (croix au pointeur, cadre pointillé) */
+  --scene-repere: rgba(255, 255, 255, 0.4);
   /* fond de l'image analysée (boîte « Trajet d'une image ») : clair dans les deux thèmes, pour
      qu'un logo sombre se voie */
   --papier-image: #f4f3ee;

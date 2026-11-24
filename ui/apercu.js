@@ -90,6 +90,30 @@ function elanDe(coups, a) {
   const si = (n, k) => (n > 0 ? k : 0);
   return { kicks: coups.kicks, fk: a.reaction_kick, kick: si(coups.kicks, a.reaction_kick), caisse: si(coups.caisses, a.reaction_caisse), aigus: si(coups.aigus, a.reaction_charleston), drop: si(coups.drops, a.reaction_drop) };
 }
+// Zone d'une figure au repos autour du pointeur, avant sa pose : [x0, y0, x1, y1], en unités de
+// l'aperçu (× S), d'après ses réglages et les bornes de son dessin plus bas, sans les élans du son.
+// null pour le trait, qui suit la souris. Sert seulement au repère de place (dessinerRepere).
+function zoneFigure(i, s) {
+  const carre = (r) => [-r, -r, r, r];
+  if (i === F_ARCS) return carre(regle(s.rayon, 10, 80, 20));
+  if (i === F_ANNEAU) return carre(regle(s.rayon, 6, 60, 13));
+  if (i === F_ORBE) return carre(regle(s.rayon, 10, 60, 21) + regle(s.relief, 2, 30, 9));
+  if (i === F_TRAME) return carre(regle(s.rayon, 20, 120, 46));
+  if (i === F_GOUTTES) return carre(Math.max(...GOUTTE_PERLES.map(([orbite, , r]) => orbite + r)) * regle(s.taille, 0.6, 1.6, 1));
+  if (i === F_QUATRE) {
+    const t = regle(s.taille, 1, 5, 1.6) * POINT_ACTIF, demi = 1.5 * regle(s.ecart, 4, 20, 7.5) + t;
+    return [SOUS_LE_POINTEUR[0] - demi, SOUS_LE_POINTEUR[1] - t, SOUS_LE_POINTEUR[0] + demi, SOUS_LE_POINTEUR[1] + t];
+  }
+  if (i === F_VOIX) {
+    const h = regle(s.hauteur, 2, 20, 6.5), demi = regle(s.largeur, 20, 120, 46) / 2, y = SOUS_LE_POINTEUR[1] + 1.4 * h;
+    return [SOUS_LE_POINTEUR[0] - demi, y - h, SOUS_LE_POINTEUR[0] + demi, y + h];
+  }
+  if (i === F_PENDULE) {
+    const l = regle(s.longueur, 8, 60, 22), t = regle(s.taille, 1, 6, 2.6);
+    return [-l - t, -t, l + t, l + t];
+  }
+  return null;
+}
 // La pose ne change rien : la figure est dessinée directement (comme figures::Pose::neutre).
 const poseNeutre = (p) => !p || (p.angle === 0 && p.geo === 1 && p.traits === 1 && p.decalage[0] === 0 && p.decalage[1] === 0 && p.alpha === 1);
 // Couleur CSS d'opacité multipliée par `alpha`, plafonnée à 1 (comme figures::Posee::alpha).
@@ -1278,6 +1302,46 @@ class Apercu {
       this.dessinerFigure(i, contextePose(g, pose), cx, cy, S, couleur(1), couleur(0), p, teinte);
       g.restore();
     }
+  }
+
+  // Repère de place (grand aperçu, panneau d'une figure active) : une croix au pointeur et, en
+  // pointillés fins, le cadre de la zone de la figure une fois posée (échelle, décalage ; si elle
+  // tourne, le carré que balaie sa zone). Dessiné par-dessus l'image déjà faite, sans rien changer
+  // au calcul : ni les vignettes ni l'export GIF (pris avant) ne l'ont. `couleur` : couleur CSS.
+  dessinerRepere(section, couleur) {
+    const c = this.reglages, i = FIGURES.indexOf(section);
+    if (!c || i < 0 || !(c[section] && c[section].actif)) return;
+    const g = this.ctx, S = this.echelle || 1, d = window.devicePixelRatio || 1;
+    // croix ouverte au centre : ses bras partent du bord du point qui figure le pointeur
+    // traits fins posés au milieu des pixels : nets, sans être fondus sur deux
+    const net = (v) => Math.round(v - d / 2) + d / 2;
+    const cx = net(this.canvas.width / 2), cy = net(this.canvas.height / 2), vide = 3.5 * S, bras = vide + 6 * d;
+    g.save();
+    g.strokeStyle = couleur;
+    g.lineWidth = d;
+    g.lineCap = "butt";
+    g.setLineDash([]);
+    g.beginPath();
+    for (const [ux, uy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      g.moveTo(cx + ux * vide, cy + uy * vide);
+      g.lineTo(cx + ux * bras, cy + uy * bras);
+    }
+    g.stroke();
+    let z = zoneFigure(i, c[section]);
+    if (z) {
+      if (geometrique(i)) {
+        const a = allureDe(c[section]);
+        if (a.rotation !== 0) {
+          const r = Math.max(...[z[0], z[2]].flatMap((x) => [z[1], z[3]].map((y) => Math.hypot(x, y))));
+          z = [-r, -r, r, r];
+        }
+        z = [z[0] * a.echelle + a.decalage_x, z[1] * a.echelle + a.decalage_y, z[2] * a.echelle + a.decalage_x, z[3] * a.echelle + a.decalage_y];
+      }
+      g.setLineDash([3 * d, 3 * d]);
+      const x0 = net(cx + z[0] * S), y0 = net(cy + z[1] * S);
+      g.strokeRect(x0, y0, net(cx + z[2] * S) - x0, net(cy + z[3] * S) - y0);
+    }
+    g.restore();
   }
 
   // Bandes de l'anneau de spectre : simulées, puis lissées comme effets::lisser_bandes.

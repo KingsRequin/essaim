@@ -37,8 +37,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
   notée dans `bordure.hwnd` pour le cas où Essaim est tué ; ce témoin n'est réécrit que pour une
   nouvelle fenêtre colorée, et le hook de plantage ne rend la bordure que si c'est le fil
-  principal qui plante). Ignorées : fenêtres sans cadre, outils
-  (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, fenêtres d'Essaim, plein écran. Couleur
+  principal qui plante). Ignorées (`bordure::eligible`, aussi utilisé par
+  `win::cadre_premier_plan` pour le halo, les équerres et les rebonds) : fenêtres sans cadre ni
+  barre de titre (barres et menus superposés, comme ceux d'Horizon), outils
+  (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, calques et fenêtre de stream d'Essaim, plein
+  écran ; la fenêtre des réglages d'Essaim se colore comme les autres. Couleur
   quantifiée, envoyée seulement si elle change (60 fois par seconde au plus) ; une fenêtre qui
   refuse (appli administrateur) est notée une fois au journal. Essai réel :
   `cargo test --release bordure_reelle -- --ignored --nocapture` avec un Bloc-notes ouvert.
