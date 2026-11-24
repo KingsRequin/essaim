@@ -213,7 +213,14 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   (`longueur`, 8 à 60, 22 par défaut). Il se balance quand la souris bouge ; chaque kick le fait
   sauter (le fil se détend puis se retend), la caisse claire lui donne une pichenette, à gauche
   puis à droite ; le fil s'allonge avec la basse et se raccourcit pendant une montée.
-  Ces huit figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
+- **Gouttes** (`[gouttes]`) : une ligne liquide autour du pointeur. Un noyau et quatre perles en
+  orbite, dont on ne voit que le contour commun (`epaisseur`, 1 à 4) : la ligne se soude quand
+  deux gouttes se touchent et se sépare quand elles s'éloignent ; l'intérieur reste vide, on voit
+  l'écran à travers. Le noyau s'élargit avec la basse, chaque kick projette les perles qui
+  reviennent se souder, une montée fond tout en un seul anneau, un drop lâche cinq petites bulles.
+  `taille` (0,6 à 1,6) agrandit ou réduit l'ensemble (à 1, les perles tournent jusqu'à 35 px du
+  pointeur).
+  Ces neuf figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
   pointeur dégagé, et s'utilisent seules ou avec l'essaim.
 - **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres et le liseré ne
   sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
@@ -336,7 +343,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *02 Réglages* : des sous-onglets rangés par familles : *L'essaim* (*Orbite*, *Comètes*,
     *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*,
     *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*,
-    *Pendule*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Liseré*),
+    *Pendule*, *Gouttes*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
@@ -394,7 +401,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     une boîte.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
-  - Préréglages fournis (51), chacun avec sa forme, ses couleurs, ses effets et ses propres
+  - Préréglages fournis (52), chacun avec sa forme, ses couleurs, ses effets et ses propres
     modulations et déclencheurs (toutes les sources et toutes les cibles de modulation y servent,
     essai `modulations_variees`) : *Défaut* ; *Discret* (petit, lent, sans fissure) ; *Intense*
     (deux anneaux, beaucoup de satellites, ondes, éclats, fissures) ; *Zen* (trois anneaux qui
@@ -418,8 +425,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Hypnose* (astroïdes lents, traînées arc-en-ciel) ; *Élastique* (pend au bout d'un ressort) ;
     *Ressorts* (l'essaim par défaut, mais l'orbite bondit au kick sans changer de sens et freine
     sur la caisse claire) ; *Rubans* (trois rubans vrillés, sans tête, dans trois teintes fixes) ;
-    *Arcs*, *Quatre temps*, *Anneau*, *Orbe*, *Ligne de voix*, *Trame*, *Trait* et *Pendule*
-    (chacun une petite figure seule, sans comètes ni satellites).
+    *Arcs*, *Quatre temps*, *Anneau*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*, *Pendule* et
+    *Gouttes* (chacun une petite figure seule, sans comètes ni satellites).
     Chacun est refaisable à la main dans les réglages. Les
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
     curseurs, ni à la secousse du projecteur et à sa sensibilité.

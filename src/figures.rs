@@ -1,6 +1,7 @@
 //! Petites figures autour du pointeur, faites de lignes fines et de points qui laissent voir
 //! l'écran : arcs (`[arcs]`), quatre temps (`[quatre_temps]`) et anneau suiveur (`[anneau]`) ici ;
-//! orbe, ligne de voix, trame, trait de pinceau et pendule dans `figures/plus.rs`.
+//! orbe, ligne de voix, trame, trait de pinceau et pendule dans `figures/plus.rs`, gouttes en
+//! contour dans `figures/gouttes.rs`.
 //! `Effets` les possède, leur passe le son et ajoute leur zone à celle du pointeur.
 //!
 //! Tout ce qui bouge passe par des ressorts bornés (`Ressort::vers`) : la zone de `rect` contient
@@ -8,12 +9,13 @@
 //! ici oblige à les reporter là.
 
 use crate::audio::AudioView;
-use crate::canvas::Canvas;
+use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
 use crate::layer::IRect;
 use crate::render::{prisme, ressort, Coups};
 use std::f32::consts::{PI, TAU};
 
+mod gouttes;
 mod plus;
 
 /// Ce que les figures écoutent pendant une image : le son, ses coups depuis l'image précédente
@@ -75,20 +77,31 @@ const ANNEAU_BORNES: (f32, f32) = (0.2, 1.7);
 const ANNEAU_ECHO: (f64, f32) = (0.42, 1.2);
 const ANNEAU_ETIRE: (f32, f32) = (0.45, 900.0);
 
+/// Cloche de Gauss, 1 en 0.
+pub(crate) fn gauss(x: f32) -> f32 {
+    (-x * x).exp()
+}
+
+/// Couleur entre `a` (k = 0) et `b` (k = 1).
+pub(crate) fn melange(a: Rgb, b: Rgb, k: f32) -> Rgb {
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k.clamp(0.0, 1.0)).round() as u8;
+    (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
+}
+
 /// Ressort amorti dont la position reste dans des bornes (la zone dessinée en dépend).
 #[derive(Clone, Copy, Default)]
-struct Ressort {
-    x: f32,
-    v: f32,
+pub(crate) struct Ressort {
+    pub(crate) x: f32,
+    pub(crate) v: f32,
 }
 
 impl Ressort {
-    fn en(x: f32) -> Self {
+    pub(crate) fn en(x: f32) -> Self {
         Self { x, v: 0.0 }
     }
 
     /// Avance de `dt` vers `cible` (pulsation `w`, amortissement `z`) ; en butée, l'élan est perdu.
-    fn vers(&mut self, cible: f32, (w, z): (f32, f32), dt: f32, (lo, hi): (f32, f32)) {
+    pub(crate) fn vers(&mut self, cible: f32, (w, z): (f32, f32), dt: f32, (lo, hi): (f32, f32)) {
         let mut ecart = self.x - cible;
         ressort(&mut ecart, &mut self.v, w, z, dt);
         let x = cible + ecart;
@@ -155,6 +168,7 @@ pub struct Figures {
     anneau: Anneau,
     /// Orbe, ligne de voix, trame, trait de pinceau et pendule.
     plus: plus::Plus,
+    gouttes: gouttes::Gouttes,
     /// Points d'une ligne à tracer, gardés d'une image à l'autre (le dessin ne prend que `&self`).
     tampon: std::cell::RefCell<Vec<(f32, f32)>>,
 }
@@ -177,13 +191,14 @@ impl Figures {
             temps: QuatreTemps { pts: [point; 4], actif: None, vague: f64::NEG_INFINITY },
             anneau: Anneau { echelle: Ressort::en(1.0), carre: 0.0, echos: Vec::new() },
             plus: plus::Plus::new(),
+            gouttes: gouttes::Gouttes::new(),
             tampon: Default::default(),
         }
     }
 
     /// Une figure est-elle active ?
     pub fn actives(cfg: &Config) -> bool {
-        cfg.arcs.actif || cfg.quatre_temps.actif || cfg.anneau.actif || plus::Plus::actives(cfg)
+        cfg.arcs.actif || cfg.quatre_temps.actif || cfg.anneau.actif || cfg.gouttes.actif || plus::Plus::actives(cfg)
     }
 
     /// Une figure active a-t-elle besoin des bandes de fréquences ?
@@ -197,6 +212,7 @@ impl Figures {
         if !Self::actives(cfg) {
             self.centre = None;
             self.plus.oublier();
+            self.gouttes.oublier();
             return;
         }
         // centre : au bout d'un ressort accroché au pointeur, retard borné
@@ -233,6 +249,7 @@ impl Figures {
         }
         let partage = self.partage(cursor);
         self.plus.avance(&partage, t, dt, cursor, scale, son, cfg);
+        self.gouttes.avance(&partage, t, dt, son, cfg);
 
         if cfg.arcs.actif {
             let a = &mut self.arcs;
@@ -330,7 +347,9 @@ impl Figures {
             e = e.max(a.rayon * ANNEAU_BORNES.1 * (1.0 + ANNEAU_ECHO.1) + 4.0 * a.epaisseur + 4.0);
         }
         let zone = (e > 0.0).then(|| autour(self.centre.unwrap_or(cursor), e * scale));
-        crate::layer::union(zone, self.plus.rect(self.centre.unwrap_or(cursor), cursor, scale, cfg))
+        let centre = self.centre.unwrap_or(cursor);
+        let zone = crate::layer::union(zone, self.gouttes.rect(centre, scale, cfg));
+        crate::layer::union(zone, self.plus.rect(centre, cursor, scale, cfg))
     }
 
     /// Dessine les figures actives autour de leur centre.
@@ -339,6 +358,7 @@ impl Figures {
         // deux couleurs : celle des têtes de l'essaim et celle des queues de traînée
         let (tete, queue) = (prisme(cfg, t, 1.0), prisme(cfg, t, 0.0));
         let mut pts = self.tampon.borrow_mut();
+        self.gouttes.dessiner(&self.partage((cx, cy)), cv, cfg, scale, (tete, queue));
         self.plus.dessiner(&self.partage((cx, cy)), cv, &mut pts, t, cfg, scale, (tete, queue));
 
         if cfg.arcs.actif {
@@ -443,6 +463,7 @@ mod tests {
         let mut cfg = Config::default();
         (cfg.arcs.actif, cfg.quatre_temps.actif, cfg.anneau.actif) = (true, true, true);
         (cfg.orbe.actif, cfg.voix.actif, cfg.trame.actif, cfg.pinceau.actif, cfg.pendule.actif) = (true, true, true, true, true);
+        cfg.gouttes.actif = true;
         cfg
     }
 

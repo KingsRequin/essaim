@@ -210,7 +210,7 @@ const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Ic�
 // de l'écran (equerres, lisere) n'en fait pas partie : il reste d'un preset à l'autre.
 const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "arcs",
-  "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "audio", "bordure", "souris", "modulations", "declencheurs",
+  "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "gouttes", "audio", "bordure", "souris", "modulations", "declencheurs",
 ];
 // Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
 // (comme profils::in_profile).
@@ -385,7 +385,7 @@ function detail(p) {
   const c = p.reglages, o = c.orbite;
   const parts = [];
   // rubans, ressorts et petites figures : ce qui fait l'allure du preset passe en tête
-  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau suiveur"], ["orbe", "orbe"], ["voix", "ligne de voix"], ["trame", "trame"], ["pinceau", "trait"], ["pendule", "pendule"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
+  const figures = [["arcs", "arcs"], ["quatre_temps", "quatre temps"], ["anneau", "anneau suiveur"], ["orbe", "orbe"], ["voix", "ligne de voix"], ["trame", "trame"], ["pinceau", "trait"], ["pendule", "pendule"], ["gouttes", "gouttes en contour"]].filter(([s]) => c[s] && c[s].actif).map(([, nom]) => nom);
   if (o.cometes) parts.push(`${NOMS_FORMES[o.forme] || "Cercle"} · ${o.nombre * o.anneaux} ${c.rubans && c.rubans.actif ? "ruban" : "comète"}${o.nombre * o.anneaux > 1 ? "s" : ""}`);
   else if (!figures.length) parts.push("sans comètes");
   if (figures.length) parts.push(figures.join(", ").replace(/^./, (l) => l.toUpperCase()));
@@ -772,6 +772,7 @@ const IMPACT = {
   "trame.actif": [2, "estime"], "trame.rayon": [3, "estime"], "trame.pas": [2, "estime"], "trame.taille": [1, "estime"],
   "pinceau.actif": [1, "estime"], "pinceau.largeur": [1, "estime"], "pinceau.duree": [1, "estime"],
   "pendule.actif": [1, "estime"], "pendule.longueur": [1, "estime"], "pendule.taille": [1, "estime"],
+  "gouttes.actif": [2, "estime"], "gouttes.taille": [1, "estime"], "gouttes.epaisseur": [1, "estime"],
   // loin du pointeur : leur zone agrandit celle que le moteur redessine
   "equerres.actif": [2, "estime"], "equerres.bras": [1, "estime"], "equerres.epaisseur": [1, "estime"],
   "lisere.actif": [3, "estime"], "lisere.epaisseur": [1, "estime"],
@@ -1127,6 +1128,14 @@ const PANNEAUX = [
     base: [
       { libelle: "Longueur du fil", section: "pendule", cle: "longueur", min: 8, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Taille du poids", section: "pendule", cle: "taille", min: 1, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+    ],
+  },
+  {
+    id: "gouttes", famille: "Les effets", titre: "Gouttes", actif: ["gouttes", "actif"],
+    note: "Une ligne liquide autour du pointeur : un noyau et quatre perles en orbite, dont on ne voit que le contour, qui se soude quand elles se touchent et se sépare quand elles s'éloignent. L'intérieur reste vide. Le kick projette les perles, une montée fond tout en un seul anneau, un drop lâche des bulles.",
+    base: [
+      { libelle: "Taille", section: "gouttes", cle: "taille", min: 0.6, max: 1.6, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) },
+      { libelle: "Épaisseur", section: "gouttes", cle: "epaisseur", min: 1, max: 4, pas: 0.1, aff: (v) => virgule(+v, 1) },
     ],
   },
   {

@@ -824,6 +824,12 @@ pub(crate) fn builtins() -> Vec<Profile> {
             c.pendule.actif = true;
             teinte(c, 195.0, 0.0, 0.0);
         }),
+        // gouttes : une ligne liquide, du rouge au centre à l'ambre au large
+        make("Gouttes", |c| {
+            figure_seule(c);
+            c.gouttes.actif = true;
+            teinte(c, 6.0, 0.0, 30.0);
+        }),
     ]
 }
 

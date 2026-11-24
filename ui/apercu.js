@@ -51,6 +51,62 @@ const ORBE_POINTS = 96, ORBE_SOUFFLE = [-6, 12], ORBE_ECHO = [0.45, 0.32], ORBE_
 const VOIX_POINTS = 40, VOIX_MORCEAUX = 8, VOIX_ATTENTE = 1.5, VOIX_FONDU = [0.15, 0.8], VOIX_LARGE = [0.5, 1.6], VOIX_ONDES = [0.62, 0.4];
 const TRAME_VIDE = [7, 16], TRAME_VAGUE = [220, 10], TRAME_ONDE_MAX = 2.5, TRAME_DEPLACE = 3, TRAME_LOUPE_MAX = 1.5, TRAME_VAGUES_MAX = 12;
 const PINCEAU_VITESSE = [120, 700], PINCEAU_PERLE = [1.4, 0.4, 2.4], PENDULE_GRAVITE = 900, PENDULE_FREIN = 1.8, PENDULE_SAUT = [250, 200];
+// Gouttes en contour : comme les constantes de src/figures/gouttes.rs.
+const GOUTTE_DEMI = 72, GOUTTE_NOEUDS = 73, GOUTTE_NOYAU = [8, 2.5, 4], GOUTTE_NOYAU_ELAN = [40, 70], GOUTTE_NOYAU_BORNES = [2, 18];
+const GOUTTE_PERLES = [[17, 2.1, 4.8], [23, -1.6, 4.2], [29, 1.2, 5.2], [34, -0.9, 4.2]];
+const GOUTTE_PERLE_ELAN = [[80, 140], 200], GOUTTE_PERLE_ECART_MAX = 24, GOUTTE_PERLE_MONTEE = 0.9;
+const GOUTTE_BULLES = 5, GOUTTE_BULLE_VITESSE = [90, 160], GOUTTE_BULLE_RAYON = [2.2, 3.2], GOUTTE_BULLE_VIE = [0.6, 0.9], GOUTTE_BULLE_FREIN = 3.5;
+const GOUTTE_DEGRADE = 45;
+const champGouttes = new Float32Array(GOUTTE_NOEUDS * GOUTTE_NOEUDS);
+
+// Contour au niveau 1 du champ des gouttes ([x, y, rayon], px autour du centre), en segments
+// (comme figures::gouttes::contour) : marching squares sur la partie utile de la grille.
+function contourGouttes(gouttes) {
+  const N = GOUTTE_NOEUDS, D = GOUTTE_DEMI, pas = (2 * D) / (N - 1), champ = champGouttes, segments = [];
+  const noeud = (v) => Math.min(N - 1, Math.max(0, (v + D) / pas));
+  let i0 = N, j0 = N, i1 = 0, j1 = 0;
+  for (const [x, y, r] of gouttes) {
+    const m = r * 3.2 + 3;
+    i0 = Math.min(i0, Math.floor(noeud(x - m))); i1 = Math.max(i1, Math.ceil(noeud(x + m)));
+    j0 = Math.min(j0, Math.floor(noeud(y - m))); j1 = Math.max(j1, Math.ceil(noeud(y + m)));
+  }
+  if (i0 >= i1 || j0 >= j1) return segments;
+  for (let j = j0; j <= j1; j++) {
+    const y = -D + j * pas;
+    for (let i = i0; i <= i1; i++) {
+      const x = -D + i * pas;
+      let f = 0;
+      // le bord de la grille est toujours dehors : un contour qui l'atteint s'y referme
+      if (i > 0 && j > 0 && i < N - 1 && j < N - 1) for (const [gx, gy, r] of gouttes) f += (r * r) / ((x - gx) ** 2 + (y - gy) ** 2 + 1);
+      champ[j * N + i] = f;
+    }
+  }
+  const croise = ([xa, ya, va], [xb, yb, vb]) => {
+    const k = Math.abs(vb - va) > 1e-6 ? Math.min(1, Math.max(0, (1 - va) / (vb - va))) : 0.5;
+    return [xa + (xb - xa) * k, ya + (yb - ya) * k];
+  };
+  for (let j = j0; j < j1; j++) {
+    for (let i = i0; i < i1; i++) {
+      const coin = (di, dj) => [-D + (i + di) * pas, -D + (j + dj) * pas, champ[(j + dj) * N + i + di]];
+      // coins dans le sens des aiguilles d'une montre : haut gauche, haut droit, bas droit, bas gauche
+      const c = [coin(0, 0), coin(1, 0), coin(1, 1), coin(0, 1)], dedans = c.map((q) => q[2] > 1);
+      const nombre = dedans.filter(Boolean).length;
+      if (nombre === 0 || nombre === 4) continue;
+      const passages = [0, 1, 2, 3].map((a) => (dedans[a] !== dedans[(a + 1) % 4] ? croise(c[a], c[(a + 1) % 4]) : null));
+      if (passages.every(Boolean)) {
+        // col : le milieu de la case dit quels coins sont reliés
+        const milieu = (c[0][2] + c[1][2] + c[2][2] + c[3][2]) / 4 > 1;
+        if (milieu === dedans[0]) segments.push([passages[0], passages[1]], [passages[2], passages[3]]);
+        else segments.push([passages[3], passages[0]], [passages[1], passages[2]]);
+      } else {
+        const bouts = passages.filter(Boolean);
+        if (bouts.length >= 2) segments.push([bouts[0], bouts[1]]);
+      }
+    }
+  }
+  return segments;
+}
+
 // Équerres et liseré : comme les constantes de src/loin.rs.
 const EQUERRE_ECART = 4, EQUERRE_ELAN = [110, 260], EQUERRE_BASSE = 1.3, EQUERRE_ELAN_BRAS = 38, EQUERRE_BORNES = [[0, 26], [0.4, 3.2]];
 const LISERE_PAS = 6, LISERE_LUEUR = [36, 0.26], LISERE_KICK = [1, 0.6, 560], LISERE_DROP = [2, 1.1, 760], LISERE_ECLAT = 40, LISERE_ATTENTE = 1.5, LISERE_FONDU = [0.15, 0.8];
@@ -141,6 +197,8 @@ function nouvellesFigures() {
     trame: { loupe: [0, 0], vagues: [], eclairs: [] },
     pinceau: { trajet: [], perles: [], vie: [0, 0] },
     pendule: { poids: null, vitesse: [0, 0], fil: [0, 0], mou: 0, cote: 1 },
+    // figures/gouttes.rs
+    gouttes: { noyau: [GOUTTE_NOYAU[0], 0], perles: [0, 1, 2, 3].map((i) => ({ angle: i * 2.4, ecart: [0, 0] })), bulles: [], segments: [] },
     // loin.rs
     loin: { kick: 0, ecart: [EQUERRE_ECART, 0], bras: [1, 0], diagonales: [0, 0], tour: 0, eclats: [], embrase: 0, silence: LISERE_ATTENTE, presence: 0 },
   };
@@ -480,7 +538,8 @@ class Apercu {
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
     const plus = ['orbe', 'voix', 'trame', 'pinceau', 'pendule'].some((s) => c[s] && c[s].actif);
     const loin = ['equerres', 'lisere'].some((s) => c[s] && c[s].actif);
-    if (!arcs.actif && !quatre.actif && !anneau.actif && !plus && !loin) { this.figures = nouvellesFigures(); return; }
+    const gouttes = !!(c.gouttes && c.gouttes.actif);
+    if (!arcs.actif && !quatre.actif && !anneau.actif && !plus && !loin && !gouttes) { this.figures = nouvellesFigures(); return; }
     f.horloge = reste(f.horloge + dt, TAU * 40);
     f.charleston = coups.aigus > 0 ? 1 : f.charleston * Math.exp(-dt * FIG_RETOMBEE[0]);
     f.caisse = coups.caisses > 0 ? 1 : f.caisse * Math.exp(-dt * FIG_RETOMBEE[1]);
@@ -493,6 +552,8 @@ class Apercu {
     if (son.bpm) f.mesure = ((f.compte % 4) + Math.min(1, Math.max(0, son.phase || 0))) / 4;
     if (plus) this.avancerPlus(dt, son, coups, true);
     if (loin) this.avancerLoin(dt, coups);
+    if (gouttes) this.avancerGouttes(dt, coups);
+    else { f.gouttes.segments = []; f.gouttes.bulles = []; }
     if (arcs.actif) {
       const a = f.arcs;
       for (let i = 0; i < kicks; i++) { a.cran += ARC_CRAN; a.bond[1] += ARC_BOND; }
@@ -838,6 +899,61 @@ class Apercu {
     }
   }
 
+  // Gouttes en contour (comme figures::gouttes::Gouttes::avance).
+  avancerGouttes(dt, coups) {
+    const f = this.figures, go = f.gouttes, t = this.t;
+    const tire = ([a, b]) => a + (b - a) * Math.random();
+    for (let i = 0; i < Math.min(4, coups.kicks); i++) {
+      go.noyau[1] += GOUTTE_NOYAU_ELAN[0];
+      for (const q of go.perles) q.ecart[1] += tire(GOUTTE_PERLE_ELAN[0]);
+    }
+    if (coups.drops > 0) {
+      go.noyau[1] += GOUTTE_NOYAU_ELAN[1];
+      for (const q of go.perles) q.ecart[1] += GOUTTE_PERLE_ELAN[1];
+      for (let i = 0; i < GOUTTE_BULLES; i++) {
+        const a = (i * TAU) / GOUTTE_BULLES + tire([-0.3, 0.3]), v = tire(GOUTTE_BULLE_VITESSE);
+        go.bulles.push({ x: 0, y: 0, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: tire(GOUTTE_BULLE_RAYON), ne: t, vie: tire(GOUTTE_BULLE_VIE) });
+      }
+      go.bulles = go.bulles.slice(-2 * GOUTTE_BULLES);
+    }
+    vers(go.noyau, GOUTTE_NOYAU[0] + GOUTTE_NOYAU[1] * f.basse + GOUTTE_NOYAU[2] * f.montee, [16, 0.35], dt, GOUTTE_NOYAU_BORNES);
+    go.perles.forEach((q, i) => {
+      const [orbite, vitesse] = GOUTTE_PERLES[i];
+      q.angle = reste(q.angle + vitesse * (1 + 1.5 * f.basse) * dt, TAU);
+      vers(q.ecart, 0, [9, 0.32], dt, [-orbite, GOUTTE_PERLE_ECART_MAX]);
+    });
+    const frein = Math.exp(-dt * GOUTTE_BULLE_FREIN);
+    for (const b of go.bulles) { b.x += b.vx * dt; b.y += b.vy * dt; b.vx *= frein; b.vy *= frein; }
+    go.bulles = go.bulles.filter((b) => t - b.ne < b.vie);
+    // les gouttes de l'image : [x, y, rayon] autour du centre, puis leur contour commun
+    const gouttes = [[0, 0, Math.max(GOUTTE_NOYAU_BORNES[0], go.noyau[0])]];
+    go.perles.forEach((q, i) => {
+      const [orbite, , r] = GOUTTE_PERLES[i], d = Math.max(0, orbite * (1 - GOUTTE_PERLE_MONTEE * f.montee) + q.ecart[0]);
+      gouttes.push([Math.cos(q.angle) * d, Math.sin(q.angle) * d, r]);
+    });
+    for (const b of go.bulles) gouttes.push([b.x, b.y, b.r * (1 - Math.min(1, Math.max(0, (t - b.ne) / b.vie))) ** 0.7]);
+    go.segments = contourGouttes(gouttes);
+  }
+
+  // Dessin des gouttes (comme figures::gouttes::Gouttes::dessiner) : couleur des têtes au centre,
+  // des queues au large.
+  dessinerGouttes(g, cx, cy, S, tete, queue) {
+    const c = this.reglages.gouttes || {};
+    if (!c.actif) return;
+    const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
+    const k = borne(c.taille, 0.6, 1.6, 1) * S;
+    g.lineWidth = borne(c.epaisseur, 1, 4, 1.4) * S;
+    g.lineCap = "round";
+    for (const [a, b] of this.figures.gouttes.segments) {
+      const loin = Math.min(1, Math.hypot(a[0] + b[0], a[1] + b[1]) / 2 / GOUTTE_DEGRADE);
+      g.strokeStyle = `rgb(${tete.map((v, i) => Math.round(v + (queue[i] - v) * loin)).join(",")})`;
+      g.beginPath();
+      g.moveTo(cx + a[0] * k, cy + a[1] * k);
+      g.lineTo(cx + b[0] * k, cy + b[1] * k);
+      g.stroke();
+    }
+  }
+
   // Dessin des petites figures (comme figures::Figures::dessiner), autour de (cx, cy).
   dessinerFigures(g, cx, cy, S, tete, queue) {
     const c = this.reglages, f = this.figures, t = this.t;
@@ -845,6 +961,7 @@ class Apercu {
     const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
     const plein = (rgb, a = 1) => `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${Math.max(0, Math.min(1, a))})`;
     this.dessinerLoin(g, S, tete, queue);
+    this.dessinerGouttes(g, cx, cy, S, tete, queue);
     this.dessinerPlus(g, cx, cy, S, tete, queue);
     if (arcs.actif) {
       const a = f.arcs, rayon = borne(arcs.rayon, 10, 80, 20), epais = borne(arcs.epaisseur, 0.5, 6, 2.1);

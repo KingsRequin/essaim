@@ -5,7 +5,7 @@
 //!
 //! `ui/apercu.js` les reproduit (mêmes formules) : les modifier ici oblige à les reporter là.
 
-use super::{autour, Partage, Ressort, Son, SOUS_LE_POINTEUR};
+use super::{autour, gauss, melange, Partage, Ressort, Son, SOUS_LE_POINTEUR};
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
 use crate::layer::IRect;
@@ -56,15 +56,6 @@ const PENDULE_SAUT: (f32, f32) = (250.0, 200.0);
 fn lisse(a: f32, b: f32, x: f32) -> f32 {
     let k = ((x - a) / (b - a)).clamp(0.0, 1.0);
     k * k * (3.0 - 2.0 * k)
-}
-
-fn gauss(x: f32) -> f32 {
-    (-x * x).exp()
-}
-
-fn melange(a: Rgb, b: Rgb, k: f32) -> Rgb {
-    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k.clamp(0.0, 1.0)).round() as u8;
-    (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
 struct Orbe {

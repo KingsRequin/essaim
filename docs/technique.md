@@ -343,6 +343,13 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   s'étire pas : après chaque pas, le poids est ramené à la longueur du fil et sa vitesse
   recalculée d'après son vrai déplacement (le fil tendu l'entraîne), stable de 20 à 144 images/s
   (essai `le_pendule_reste_au_bout_de_son_fil`).
+  Les gouttes en contour (`figures/gouttes.rs`) sont un champ : chaque goutte (noyau, perles,
+  bulles) y ajoute r² / (d² + 1), calculé sur une grille de 73 × 73 nœuds (pas de 2 px à 100 %),
+  réduite à la partie que les gouttes peuvent atteindre. La ligne où ce champ vaut 1 est tirée
+  case par case (marching squares, coupure placée par interpolation entre deux nœuds), en petits
+  segments dessinés comme des traits : ni image ni flou, les deux moteurs dessinent comme
+  d'habitude. Les ressorts des perles sont bornés et le bord de la grille est toujours hors du
+  contour : la ligne reste dans la zone redessinée.
 - **Équerres et liseré** (`loin.rs`) : habillage de la fenêtre et de l'écran, hors des presets
   (`profils::SECTIONS` ne contient ni `equerres` ni `lisere` : appliquer un preset n'y touche
   pas, et aucun preset fourni ne les allume). Comme la bordure, il reste quand l'essaim n'est

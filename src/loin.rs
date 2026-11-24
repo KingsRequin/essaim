@@ -15,9 +15,9 @@
 
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
-use crate::figures::Son;
+use crate::figures::{gauss, melange, Ressort, Son};
 use crate::layer::IRect;
-use crate::render::{prisme, ressort};
+use crate::render::prisme;
 
 /// Équerres : écart au cadre au repos (px à 100 %), élan que lui donnent le kick et le drop
 /// (px/s), ce que la basse ajoute aux bras (en longueurs), élan des bras au drop (px/s), bornes
@@ -47,37 +47,9 @@ const LISERE_ECLAT: f32 = 40.0;
 const LISERE_ATTENTE: f32 = 1.5;
 const LISERE_FONDU: (f32, f32) = (0.15, 0.8);
 
-fn gauss(x: f32) -> f32 {
-    (-x * x).exp()
-}
-
 /// Deux couleurs que l'œil ne distingue pas sur un trait fin.
 fn proches(a: Rgb, b: Rgb) -> bool {
     [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|&(x, y)| x.abs_diff(y) < EQUERRE_NUANCE)
-}
-
-fn melange(a: Rgb, b: Rgb, k: f32) -> Rgb {
-    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k.clamp(0.0, 1.0)).round() as u8;
-    (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
-}
-
-/// Ressort borné : position, vitesse.
-#[derive(Clone, Copy, Default)]
-struct Ressort {
-    x: f32,
-    v: f32,
-}
-
-impl Ressort {
-    fn vers(&mut self, cible: f32, (w, z): (f32, f32), dt: f32, (lo, hi): (f32, f32)) {
-        let mut ecart = self.x - cible;
-        ressort(&mut ecart, &mut self.v, w, z, dt);
-        let x = cible + ecart;
-        self.x = x.clamp(lo, hi);
-        if self.x != x {
-            self.v = 0.0;
-        }
-    }
 }
 
 /// Ce qui est dessiné des équerres : cadre de la fenêtre, écart et bras (px écran), opacité des
@@ -152,8 +124,8 @@ impl Loin {
             kick: 0.0,
             basse: 0.0,
             montee: 0.0,
-            ecart: Ressort { x: EQUERRE_ECART, v: 0.0 },
-            bras: Ressort { x: 1.0, v: 0.0 },
+            ecart: Ressort::en(EQUERRE_ECART),
+            bras: Ressort::en(1.0),
             diagonales: [0.0; 2],
             tour: 0,
             equerres: None,

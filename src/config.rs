@@ -29,6 +29,7 @@ pub struct Config {
     pub trame: Trame,
     pub pinceau: Pinceau,
     pub pendule: Pendule,
+    pub gouttes: Gouttes,
     pub equerres: Equerres,
     pub lisere: Lisere,
     pub audio: Audio,
@@ -242,6 +243,24 @@ pub struct Pendule {
 impl Default for Pendule {
     fn default() -> Self {
         Self { actif: false, longueur: 22.0, taille: 2.6 }
+    }
+}
+
+/// Gouttes en contour : un noyau et quatre perles en orbite, dont seule la ligne de contour est
+/// dessinée ; elle se soude et se sépare (`figures/gouttes.rs`).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Gouttes {
+    pub actif: bool,
+    /// Taille de l'ensemble (0,6 à 1,6 ; 1 : perles jusqu'à 35 px du pointeur).
+    pub taille: f32,
+    /// Épaisseur de la ligne (1 à 4).
+    pub epaisseur: f32,
+}
+
+impl Default for Gouttes {
+    fn default() -> Self {
+        Self { actif: false, taille: 1.0, epaisseur: 1.4 }
     }
 }
 
@@ -1220,6 +1239,11 @@ actif = false           # un petit poids pendu au pointeur par un fil, qui saute
 longueur = 22           # longueur du fil (8 à 60)
 taille = 2.6            # rayon du poids (1 à 6)
 
+[gouttes]
+actif = false           # gouttes en contour : une ligne liquide qui se soude et se sépare autour du pointeur
+taille = 1              # taille de l'ensemble (0.6 à 1.6)
+epaisseur = 1.4         # épaisseur de la ligne (1 à 4)
+
 # Habillage de la fenêtre et de l'écran : hors des presets, il reste quand on en change et prend
 # les couleurs de l'essaim.
 [equerres]
@@ -1414,6 +1438,8 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("pinceau", "duree") => (0.2, 1.0),
         ("pendule", "longueur") => (8.0, 60.0),
         ("pendule", "taille") => (1.0, 6.0),
+        ("gouttes", "taille") => (0.6, 1.6),
+        ("gouttes", "epaisseur") => (1.0, 4.0),
         ("equerres", "bras") => (4.0, 30.0),
         ("equerres", "epaisseur") => (1.0, 5.0),
         ("lisere", "epaisseur") => (1.0, 8.0),
@@ -2070,9 +2096,14 @@ mod tests {
         assert_eq!((c.orbe.rayon, c.orbe.relief, c.voix.largeur, c.voix.hauteur), (10.0, 30.0, 20.0, 20.0));
         assert_eq!((c.trame.rayon, c.trame.pas, c.trame.taille), (120.0, 6.0, 3.0));
         assert_eq!((c.pinceau.largeur, c.pinceau.duree, c.pendule.longueur, c.pendule.taille), (12.0, 1.0, 8.0, 6.0));
-        for s in ["orbe", "voix", "trame", "pinceau", "pendule"] {
+        for s in ["orbe", "voix", "trame", "pinceau", "pendule", "gouttes"] {
             assert!(crate::profils::in_profile(s, "actif"), "[{s}] actif");
         }
+        // gouttes : éteintes par défaut, bornées
+        let c: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        assert_eq!((c.gouttes.actif, c.gouttes.taille, c.gouttes.epaisseur), (false, d.gouttes.taille, d.gouttes.epaisseur));
+        let c = toml::from_str::<super::Config>("[gouttes]\ntaille = 9\nepaisseur = 0").unwrap().clamped();
+        assert_eq!((c.gouttes.taille, c.gouttes.epaisseur), (1.6, 1.0));
     }
 
     /// Équerres et liseré : éteints par défaut, bornés, et hors des presets. Appliquer un preset
