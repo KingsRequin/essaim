@@ -265,20 +265,22 @@ fn reglages_ouverts() -> bool {
 #[derive(Default)]
 struct Son {
     capture: Option<audio::AudioThread>,
-    /// Sortie écoutée par la capture en cours (`[audio] sortie`, vide = par défaut).
+    /// Sortie écoutée par la capture en cours (`[audio] sortie`, vide = par défaut) et
+    /// applications écoutées (`[audio] applis`, vide = tout le son).
     sortie: String,
+    applis: Vec<String>,
     /// Le dernier lancement a échoué ; nouvel essai à cette date.
     reessai: Option<Instant>,
     publie: Option<&'static str>,
 }
 
 impl Son {
-    fn regler(&mut self, voulu: bool, sortie: &str, shared: &Arc<audio::AudioShared>, now: Instant) {
-        // autre sortie choisie : la capture est relancée dessus tout de suite
-        if self.capture.is_some() && self.sortie != sortie {
+    fn regler(&mut self, voulu: bool, sortie: &str, applis: &[String], shared: &Arc<audio::AudioShared>, now: Instant) {
+        // autre sortie ou autres applications choisies : la capture est relancée tout de suite
+        if self.capture.is_some() && (self.sortie != sortie || self.applis != applis) {
             self.capture = None;
             self.reessai = None;
-            log::info!("son : sortie écoutée changée, capture relancée");
+            log::info!("son : sortie ou applications écoutées changées, capture relancée");
         }
         if !voulu {
             self.reessai = None;
@@ -288,10 +290,11 @@ impl Son {
                 log::info!("son : capture arrêtée");
             }
         } else if self.capture.is_none() && self.reessai.is_none_or(|r| now >= r) {
-            match audio::start(shared.clone(), sortie) {
+            match audio::start(shared.clone(), sortie, applis) {
                 Ok(c) => {
                     self.capture = Some(c);
                     sortie.clone_into(&mut self.sortie);
+                    applis.clone_into(&mut self.applis);
                     self.reessai = None;
                     log::info!("son : capture lancée");
                 }
@@ -518,7 +521,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // son : coupé en pause et en plein écran (sauf fenêtre des réglages ou du stream ouverte,
         // qui le montrent)
         let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts() || stream::ouverte());
-        son.regler(son_voulu, &conf.cfg.audio.sortie, &shared, now);
+        son.regler(son_voulu, &conf.cfg.audio.sortie, &conf.cfg.audio.applis, &shared, now);
         automatique.tick(&conf.cfg, now, shared.view().bpm);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);

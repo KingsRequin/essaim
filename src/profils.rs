@@ -4,7 +4,7 @@
 //! profils de l'utilisateur, un fichier `%APPDATA%\Essaim\profils\<nom>.toml` chacun.
 //! Appliquer un profil réécrit ses réglages dans `config.toml` (commentaires gardés). Les choix
 //! propres à la machine ou à la main de l'utilisateur n'en font pas partie : `[rendu]`,
-//! `[souris] avec_preset`, `[audio] sortie` et `[projecteur] secousse`, `sensibilite`.
+//! `[souris] avec_preset`, `[audio] sortie` et `applis`, `[projecteur] secousse`, `sensibilite`.
 //! L'habillage de la fenêtre et de l'écran (`[equerres]`, `[lisere]`) non plus : un preset est
 //! une allure de l'essaim autour du pointeur ; l'habillage, une fois choisi, reste d'un preset à
 //! l'autre et en prend les couleurs.
@@ -22,7 +22,7 @@ const SECTIONS: [&str; 26] = [
 /// Le réglage `[section] key` fait-il partie des profils ?
 pub fn in_profile(section: &str, key: &str) -> bool {
     SECTIONS.contains(&section)
-        && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie") | ("projecteur", "secousse") | ("projecteur", "sensibilite"))
+        && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie") | ("audio", "applis") | ("projecteur", "secousse") | ("projecteur", "sensibilite"))
 }
 
 pub struct Profile {

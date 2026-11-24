@@ -91,6 +91,7 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | 🎛️ **Modulations** | A part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, off-beat, tempo, brightness, stereo) drives the path rotation, speed, acceleration, radius, size, hue, offset, glow, trail or opacity, of the comets, the satellites or both; with a threshold, smoothing, and inverted if you like |
 | ◔ **Small figures** | Thin lines that leave the screen visible, alone or with the swarm: two arcs that gauge bass and treble, four dots counting the beats under the pointer, a ring that trails the pointer and beats on the kick, an orb (the spectrum as one closed line), a voice line, a dot grid swept by waves, a brush stroke when the mouse moves fast, a pendulum that jumps on the kick, outlined droplets that merge and split. Alternatives to the swarm: each has its own size, opacity, hue, rotation, position, strength of every reaction to the music, and its own modulations |
 | 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings; optionally, the title is written next to the pointer for a few seconds when the track changes |
+| 🎚️ **Listened apps** | Optionally, it listens to your music only (one or more apps), without notifications or the video next to it |
 
 ### The mouse and the screen
 
@@ -214,7 +215,7 @@ for the preset library and updates.
 <summary><b>The swarm doesn't react to sound.</b></summary>
 
 Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
-in *Réglages › Écoute › Avancé › Sortie son écoutée*. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
+in *Réglages › Écoute › Avancé › Sortie son écoutée*. To make it listen to your music only (not notifications or the video next to it), tick its app in *Applications écoutées*, just below. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
 </details>
 
 <details>

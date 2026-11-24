@@ -144,6 +144,9 @@ enum Demande {
     EnregistrerGif { nom: String, donnees: String },
     /// Sorties son de Windows, pour le choix de la sortie écoutée (`[audio] sortie`).
     Sorties,
+    /// Applications qui ont du son ouvert, pour le choix des applications écoutées
+    /// (`[audio] applis`).
+    ApplisSonores,
     /// Ouvre la fenêtre pour le stream (`stream.rs`).
     Stream,
     /// Contours d'une image (pixels RVBA en base64, `largeur` × `hauteur`), pour le trajet
@@ -488,6 +491,10 @@ impl Fenetre {
                 let liste: Vec<Value> = audio_commun::capture::sorties().into_iter().map(|(id, nom)| json!({ "id": id, "nom": nom })).collect();
                 let actuelle = Config::read(&config::path()).unwrap_or_default().audio.sortie;
                 self.envoyer(&json!({ "type": "sorties", "liste": liste, "actuelle": actuelle }));
+            }
+            Demande::ApplisSonores => {
+                let liste: Vec<Value> = audio_commun::capture::applis_sonores().into_iter().map(|(exe, nom)| json!({ "exe": exe, "nom": nom })).collect();
+                self.envoyer(&json!({ "type": "applis_sonores", "liste": liste }));
             }
             Demande::OuvrirDepot => {
                 let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;

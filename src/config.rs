@@ -1254,6 +1254,9 @@ pub struct Audio {
     /// Sortie son écoutée (identifiant Windows) ; vide = sortie par défaut. Propre à la
     /// machine : hors presets.
     pub sortie: String,
+    /// Applications écoutées (noms d'exécutables, `spotify.exe`) : seul leur son est capté ;
+    /// vide = tout le son de la sortie. Propre à la machine : hors presets.
+    pub applis: Vec<String>,
 }
 
 impl Default for Eclat {
@@ -1306,7 +1309,7 @@ impl Default for Fissures {
 }
 impl Default for Audio {
     fn default() -> Self {
-        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1, sortie: String::new() }
+        Self { actif: true, sensibilite_kick: 5.0, delai_kick: 0.1, sortie: String::new(), applis: Vec::new() }
     }
 }
 
@@ -1527,6 +1530,7 @@ actif = true
 sensibilite_kick = 5    # 1 = peu sensible, 10 = très sensible
 delai_kick = 0.1        # délai minimal entre deux kicks (s) ; plus long si un kick long compte double
 sortie = ""             # sortie son écoutée (identifiant Windows) ; "" = sortie par défaut ; hors presets
+applis = []             # n'écouter que ces applications (["spotify.exe"]) ; [] = tout le son ; hors presets
 
 [rendu]
 cadence = 0             # images par seconde de l'essaim ; 0 = celle de l'écran (144…), 72 = deux fois moins de calcul
@@ -2065,7 +2069,8 @@ mod tests {
         assert_eq!((c.pause.batterie, d.pause.batterie), (super::ModeBatterie::Reduire, super::ModeBatterie::Reduire));
         assert!(c.pause.applis.is_empty() && d.pause.applis.is_empty());
         // hors presets
-        for (s, k) in [("rendu", "masquer_captures"), ("rendu", "adaptatif"), ("pause", "ne_pas_deranger"), ("pause", "batterie"), ("pause", "applis")] {
+        assert!(c.audio.applis.is_empty() && d.audio.applis.is_empty());
+        for (s, k) in [("rendu", "masquer_captures"), ("rendu", "adaptatif"), ("pause", "ne_pas_deranger"), ("pause", "batterie"), ("pause", "applis"), ("audio", "applis")] {
             assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
         }
         // écriture : valeur connue, inconnue refusée, liste d'applications
@@ -2075,11 +2080,13 @@ mod tests {
         super::set_value_in(&p, "pause", "batterie", &serde_json::json!("pause")).unwrap();
         assert!(super::set_value_in(&p, "pause", "batterie", &serde_json::json!("parfois")).is_err());
         super::set_value_in(&p, "pause", "applis", &serde_json::json!(["obs64.exe", "zoom.exe"])).unwrap();
+        super::set_value_in(&p, "audio", "applis", &serde_json::json!(["spotify.exe"])).unwrap();
         assert!(super::set_value_in(&p, "pause", "applis", &serde_json::json!([3])).is_err());
         super::set_value_in(&p, "rendu", "masquer_captures", &serde_json::json!(true)).unwrap();
         let c = super::Config::read(&p).unwrap();
         assert_eq!(c.pause.batterie, super::ModeBatterie::Pause);
         assert_eq!(c.pause.applis, ["obs64.exe", "zoom.exe"]);
+        assert_eq!(c.audio.applis, ["spotify.exe"]);
         assert!(c.rendu.masquer_captures);
         let _ = std::fs::remove_dir_all(&d);
     }

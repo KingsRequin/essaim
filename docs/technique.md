@@ -184,7 +184,13 @@ est dans la préparation des tracés), horloge du compositeur `DCompositionWaitF
 ## Analyse du son (audio-commun, `src/kick.rs`)
 
 La capture et l'analyse sont dans la bibliothèque partagée `audio-commun` (aussi utilisée par
-Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'affichage.
+Prisme et Horizon) ; `src/audio.rs` ne fait que publier les résultats pour l'affichage. La
+capture suit `[audio] sortie` et `[audio] applis` (`capture::Ecoute::depuis_reglages`) : avec des
+applications choisies, `audio-commun` ouvre une capture « process loopback » par application
+(racine de son arbre de processus, enfants compris), les mélange et revérifie les processus
+toutes les 2 s (README d'`audio-commun`, « Son de certaines applications »). `main::Son` relance
+la capture quand la sortie ou les applications changent ; la fenêtre des réglages demande la
+liste (`Demande::ApplisSonores` → `capture::applis_sonores`).
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 

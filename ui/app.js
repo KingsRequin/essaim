@@ -214,7 +214,7 @@ const SECTIONS_PRESET = [
 ];
 // Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
 // (comme profils::in_profile).
-const HORS_PRESET = new Set(["souris.avec_preset", "audio.sortie", "projecteur.secousse", "projecteur.sensibilite"]);
+const HORS_PRESET = new Set(["souris.avec_preset", "audio.sortie", "audio.applis", "projecteur.secousse", "projecteur.sensibilite"]);
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
@@ -1279,6 +1279,7 @@ const PANNEAUX = [
     avance: [
       { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
       { sorties: true },
+      { applisSon: true },
     ],
   },
   {
@@ -1604,6 +1605,8 @@ function construireAvance(def, zone) {
     els = [l];
   } else if (def.sorties) {
     zone.append(rangeeSorties());
+  } else if (def.applisSon) {
+    zone.append(rangeeApplisSon());
   } else if (def.bascule || def.demarrage || def.accueil || def.stream) {
     const l = el("div", "ligne-avance");
     if (def.bascule) {
@@ -2102,6 +2105,55 @@ function rangeeSorties() {
   envoyer({ cmd: "sorties" });
   majSorties(choix);
   return l;
+}
+
+// Applications écoutées (`[audio] applis`, propre à cet ordinateur) : une puce par appli qui a du
+// son ouvert, plus celles déjà choisies ; aucune cochée = tout le son. Liste redemandée à
+// l'ouverture du panneau et par le bouton « Actualiser ».
+function rangeeApplisSon() {
+  const l = el("div", "ligne-avance");
+  const groupe = el("div", "groupe-puces");
+  groupe.id = "applis-son";
+  groupe.setAttribute("role", "group");
+  const nom = el("span", "t-label", "Applications écoutées");
+  nom.id = "nom-applis-son";
+  groupe.setAttribute("aria-labelledby", nom.id);
+  const actualiser = el("button", "puce", "Actualiser");
+  actualiser.type = "button";
+  actualiser.addEventListener("click", () => envoyer({ cmd: "applis_sonores" }));
+  const note = el("p", "note", "Coche une ou plusieurs applications pour n'écouter que leur son (ta musique, sans les notifications ni les vidéos d'à côté). Aucune cochée : tout le son de la sortie. Propre à cet ordinateur (hors presets) ; il faut Windows 10 2004 ou plus récent, sinon tout le son est écouté.");
+  note.id = "note-applis-son";
+  decrire(groupe, note.id);
+  l.append(nom, groupe, actualiser, note);
+  envoyer({ cmd: "applis_sonores" });
+  majApplisSon();
+  return l;
+}
+
+function majApplisSon() {
+  const groupe = $("applis-son");
+  if (!groupe || !etat.reglages) return;
+  const choisies = val("audio", "applis") || [];
+  const liste = (etat.applisSon || []).map((a) => [a.exe, a.nom]);
+  for (const c of choisies) if (!liste.some(([exe]) => nomExe(exe) === nomExe(c))) liste.push([c, c.replace(/\.exe$/i, "")]);
+  const cle = JSON.stringify([liste, choisies]);
+  if (groupe.dataset.cle === cle) return;
+  groupe.dataset.cle = cle;
+  if (!liste.length) { groupe.replaceChildren(el("span", "note", "Aucune application n'a de son ouvert en ce moment.")); return; }
+  groupe.replaceChildren(...liste.map(([exe, nom]) => {
+    const b = el("button", "puce", nom);
+    b.type = "button";
+    b.title = exe;
+    const coche = choisies.some((c) => nomExe(c) === nomExe(exe));
+    b.setAttribute("aria-pressed", coche);
+    b.addEventListener("click", () => {
+      const actuelles = val("audio", "applis") || [];
+      const deja = actuelles.some((c) => nomExe(c) === nomExe(exe));
+      regler("audio", "applis", deja ? actuelles.filter((c) => nomExe(c) !== nomExe(exe)) : actuelles.concat([exe]));
+      majApplisSon();
+    });
+    return b;
+  }));
 }
 
 function majSorties(choix = $("sortie-son")) {
@@ -3212,6 +3264,10 @@ window.essaim = {
       case "sorties":
         etat.sorties = Array.isArray(m.liste) ? m.liste.filter((s) => s && typeof s.id === "string" && typeof s.nom === "string") : [];
         majSorties();
+        break;
+      case "applis_sonores":
+        etat.applisSon = Array.isArray(m.liste) ? m.liste.filter((a) => a && typeof a.exe === "string" && typeof a.nom === "string") : [];
+        majApplisSon();
         break;
       case "maj":
         recevoirMaj(m);

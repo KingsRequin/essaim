@@ -278,7 +278,13 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
 choisie dans *Écoute › Avancé › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
 presets ; si elle est débranchée, Essaim écoute la sortie par défaut en attendant son retour) :
-Spotify, navigateur, jeux… sans rien configurer.
+Spotify, navigateur, jeux… sans rien configurer. Pour n'écouter qu'une ou quelques applications
+(ta musique, sans les notifications ni la vidéo d'à côté), coche-les dans *Écoute › Avancé ›
+Applications écoutées* (`[audio] applis = ["spotify.exe"]`, propre à l'ordinateur et hors
+presets ; aucune cochée : tout le son). La liste montre les applications qui ont du son ouvert
+(*Actualiser* la relit) ; une appli lancée plus tard est écoutée dès qu'elle démarre, un
+navigateur avec tous ses onglets. Il faut Windows 10 2004 ou plus récent ; sinon, tout le son
+est écouté.
 
 ## Curseurs
 

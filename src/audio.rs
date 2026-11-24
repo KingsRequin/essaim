@@ -9,7 +9,7 @@
 //! l'analyse du kick d'`audio-commun`, sur les mêmes attaques), montée et drops (`Montee`). Les niveaux des deux canaux donnent l'équilibre
 //! gauche-droite (`balance`).
 
-use audio_commun::capture::{self, Capture, Sink, Sortie};
+use audio_commun::capture::{self, Capture, Ecoute, Sink};
 use audio_commun::kick::Analyzer;
 use audio_commun::pulsation::Pulsation;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -156,9 +156,10 @@ fn fini(v: f32) -> f32 {
 /// Capture en cours ; l'arrêter = la `drop`.
 pub type AudioThread = Capture;
 
-/// Lance la capture de la sortie `sortie` (identifiant Windows ; vide = sortie par défaut).
-pub fn start(shared: Arc<AudioShared>, sortie: &str) -> std::io::Result<AudioThread> {
-    capture::start_sur("essaim-audio", Sortie::depuis_id(sortie), Kick::new(shared))
+/// Lance la capture : de la sortie `sortie` (identifiant Windows ; vide = sortie par défaut), ou
+/// des seules applications `applis` (noms d'exécutables) si la liste n'est pas vide.
+pub fn start(shared: Arc<AudioShared>, sortie: &str, applis: &[String]) -> std::io::Result<AudioThread> {
+    capture::start_ecoute("essaim-audio", Ecoute::depuis_reglages(sortie, applis), Kick::new(shared))
 }
 
 /// Sous ce niveau crête (−50 dBFS), un paquet compte comme silencieux pour le tempo.
@@ -1026,7 +1027,7 @@ mod tests {
     fn musique_reelle() {
         let shared = Arc::new(AudioShared::default());
         shared.set_musique(true);
-        let _capture = super::start(shared.clone(), "").expect("capture");
+        let _capture = super::start(shared.clone(), "", &[]).expect("capture");
         let mut tension_max = 0f32;
         for s in 0..240 {
             std::thread::sleep(std::time::Duration::from_millis(100));
