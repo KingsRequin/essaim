@@ -33,6 +33,7 @@ pub struct Config {
     pub equerres: Equerres,
     pub halo: Halo,
     pub lisere: Lisere,
+    pub etiquette: Etiquette,
     pub audio: Audio,
     pub rendu: Rendu,
     pub bordure: Bordure,
@@ -281,6 +282,24 @@ pub struct Equerres {
 impl Default for Equerres {
     fn default() -> Self {
         Self { actif: false, bras: 10.0, epaisseur: 2.0 }
+    }
+}
+
+/// Étiquette du morceau : à chaque changement de piste, le titre et l'artiste s'écrivent à côté
+/// du pointeur, puis s'effacent (`etiquette.rs`). Une information, hors des presets.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
+pub struct Etiquette {
+    pub actif: bool,
+    /// Taille du titre (px à 100 %, 9 à 20).
+    pub taille: f32,
+    /// Temps d'affichage (s, 1,5 à 8), avant l'effacement.
+    pub duree: f32,
+}
+
+impl Default for Etiquette {
+    fn default() -> Self {
+        Self { actif: false, taille: 12.0, duree: 3.0 }
     }
 }
 
@@ -1280,6 +1299,12 @@ epaisseur = 2           # épaisseur du trait le long du cadre (1 à 4)
 actif = false           # un filet de lumière au bord bas de l'écran, sous le pointeur ; effacé sans son
 epaisseur = 3           # épaisseur du filet (1 à 8)
 
+# Information, hors des presets elle aussi.
+[etiquette]
+actif = false           # à chaque changement de morceau, son titre s'écrit à côté du pointeur, puis s'efface
+taille = 12             # taille du titre (9 à 20)
+duree = 3               # temps d'affichage en secondes (1.5 à 8)
+
 [modulations]
 # Chaque modulation fait agir une source du son sur un paramètre, pour les comètes, les
 # satellites ou tout (16 au plus) :
@@ -1470,6 +1495,8 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("lisere", "epaisseur") => (1.0, 8.0),
         ("halo", "profondeur") => (6.0, 30.0),
         ("halo", "epaisseur") => (1.0, 4.0),
+        ("etiquette", "taille") => (9.0, 20.0),
+        ("etiquette", "duree") => (1.5, 8.0),
         ("essaim", "maximum") => (0.0, 64.0),
         ("essaim", "duree") => (0.1, 30.0),
         ("essaim", _) => (0.0, 10.0),
@@ -2145,6 +2172,14 @@ mod tests {
         assert_eq!((c.equerres.bras, c.equerres.epaisseur, c.lisere.epaisseur), (30.0, 1.0, 8.0));
         assert_eq!((c.halo.profondeur, c.halo.epaisseur), (6.0, 4.0));
         let hors = [("equerres", "actif"), ("equerres", "bras"), ("equerres", "epaisseur"), ("lisere", "actif"), ("lisere", "epaisseur"), ("halo", "actif"), ("halo", "profondeur"), ("halo", "epaisseur")];
+        // l'étiquette du morceau non plus : éteinte par défaut, bornée, hors des presets
+        let e: super::Config = toml::from_str(super::DEFAULT_FILE).unwrap();
+        assert_eq!((e.etiquette.actif, e.etiquette.taille, e.etiquette.duree), (false, d.etiquette.taille, d.etiquette.duree));
+        let e = toml::from_str::<super::Config>("[etiquette]\ntaille = 90\nduree = 0").unwrap().clamped();
+        assert_eq!((e.etiquette.taille, e.etiquette.duree), (20.0, 1.5));
+        for k in ["actif", "taille", "duree"] {
+            assert!(!crate::profils::in_profile("etiquette", k), "[etiquette] {k}");
+        }
         for (s, k) in hors {
             assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
         }

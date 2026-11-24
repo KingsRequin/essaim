@@ -10,7 +10,7 @@
 use crate::audio::{AudioShared, BANDES_MAX};
 use crate::canvas::Canvas;
 use crate::config::Config;
-use crate::layer::IRect;
+use crate::layer::{ecran_du_pointeur, IRect};
 use crate::loin::Loin;
 use crate::figures::{Figures, Son};
 use crate::render::{prisme, Ecoute};
@@ -189,12 +189,6 @@ pub struct Effets {
     /// principale donne avant chaque image.
     loin: Loin,
     pub fenetre: Option<(f32, f32, f32, f32)>,
-}
-
-/// Écran où se trouve le pointeur (le premier, s'il est hors de tous).
-fn ecran_du_pointeur(monitors: &[(isize, IRect)], cursor: (f32, f32)) -> Option<IRect> {
-    let (cx, cy) = (cursor.0 as i32, cursor.1 as i32);
-    monitors.iter().map(|m| m.1).find(|r| cx >= r.0 && cx < r.2 && cy >= r.1 && cy < r.3).or(monitors.first().map(|m| m.1))
 }
 
 impl Effets {

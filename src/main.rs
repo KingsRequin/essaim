@@ -22,6 +22,7 @@ mod charge;
 mod config;
 mod contours;
 mod effets;
+mod etiquette;
 mod figures;
 mod gpu;
 mod ipc;
@@ -353,6 +354,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut cracks: Vec<Crack> = Vec::new();
     let mut swarm = Swarm::new();
     let mut effets = effets::Effets::new();
+    let mut etiquette = etiquette::Etiquette::new();
     let mut rng = Rng::seeded();
     let mut border = bordure::Border::default();
     let mut ecoute_bordure = render::Ecoute::default();
@@ -681,6 +683,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         (swarm.murs, swarm.doux) = (murs, doux);
         swarm.avance(t, dt, cursor, au, cfg, scale);
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
+        etiquette.avance(t, dt, cursor, scale, &au, cfg, layer::ecran_du_pointeur(&monitors, cursor));
         // fissures demandées par les déclencheurs (clic, drop…) ; teinte de tout ce qu'Essaim
         // dessine (modulations « sur tout »)
         for (x, y, force) in swarm.fissures.drain(..) {
@@ -730,6 +733,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // réticule et spectre autour du pointeur : dans la zone de l'essaim ; projecteur : tout
         // l'écran du pointeur, le temps de l'effet seulement
         let swarm_rect = layer::union(Some(swarm_rect), effets.rect_pointeur(cursor, scale, cfg)).unwrap_or(swarm_rect);
+        // étiquette du morceau, à côté du pointeur le temps qu'elle se montre
+        let swarm_rect = layer::union(Some(swarm_rect), etiquette.rect()).unwrap_or(swarm_rect);
         let mut crack_rects: Vec<layer::IRect> = cracks.iter().map(Crack::rect).collect();
         crack_rects.extend(effets.rect_ecran());
         // équerres et liseré : seulement quand leur dessin change
@@ -748,6 +753,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             if here {
                 effets.dessiner(cv, t, cfg, scale, cursor);
                 swarm.draw(cv, t, cfg, scale, cursor);
+                etiquette.dessiner(cv, t, cfg, scale);
             }
         };
         let draw = |cv: &mut dyn canvas::Canvas, here: bool| {

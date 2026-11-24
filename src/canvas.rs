@@ -36,6 +36,10 @@ pub trait Canvas {
     /// Recopie `img` (RGBA prémultiplié), coin haut-gauche en (x, y) écran, à l'opacité `alpha`.
     /// Seulement si `images()`.
     fn image(&mut self, _img: &Pixmap, _x: i32, _y: i32, _alpha: f32) {}
+    /// Recopie une petite image toute prête (RGBA prémultiplié), par-dessus le reste : du texte
+    /// (étiquette du morceau). Tous les moteurs le font, une vignette à la fois ; `id` change
+    /// quand l'image change (la carte graphique garde alors l'image déjà téléversée).
+    fn vignette(&mut self, img: &Pixmap, id: u64, x: f32, y: f32, alpha: f32);
 }
 
 // --- tiny-skia (processeur) -------------------------------------------------------------------
@@ -219,6 +223,10 @@ impl Canvas for PixCanvas<'_> {
         let (x, y) = (x - self.origin.0.round() as i32, y - self.origin.1.round() as i32);
         self.pm.draw_pixmap(x, y, img.as_ref(), &p, Transform::identity(), None);
     }
+
+    fn vignette(&mut self, img: &Pixmap, _id: u64, x: f32, y: f32, alpha: f32) {
+        self.image(img, x.round() as i32, y.round() as i32, alpha);
+    }
 }
 
 /// Dessin atténué (fondu d'entrée et de sortie de veille) : toutes les opacités multipliées par `k`.
@@ -258,5 +266,9 @@ impl Canvas for Fondu<'_> {
 
     fn image(&mut self, img: &Pixmap, x: i32, y: i32, alpha: f32) {
         self.cv.image(img, x, y, alpha * self.k);
+    }
+
+    fn vignette(&mut self, img: &Pixmap, id: u64, x: f32, y: f32, alpha: f32) {
+        self.cv.vignette(img, id, x, y, alpha * self.k);
     }
 }

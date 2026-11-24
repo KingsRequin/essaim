@@ -182,6 +182,8 @@ pub struct Pinceau {
     sprites: SpriteCanvas,
     /// Lot de sprites, créé une fois (ressource du périphérique Direct2D) puis vidé à chaque image.
     batch: Option<ID2D1SpriteBatch>,
+    /// Vignette téléversée (son numéro, son image Direct2D), gardée tant que le numéro ne change pas.
+    vignette: Option<(u64, ID2D1Bitmap1)>,
 }
 
 impl Pinceau {
@@ -193,42 +195,66 @@ impl Pinceau {
         sprites.rects.clear();
         sprites.colors.clear();
         sprites.voiles.clear();
+        sprites.vignette.place = None;
         draw(sprites);
         unsafe {
             // voiles (projecteur) d'abord : tout le reste est dessiné par-dessus
             for v in &sprites.voiles {
                 voile(dc, v)?;
             }
-            if sprites.rects.is_empty() {
-                return Ok(());
+            if !sprites.rects.is_empty() {
+                let dc3: ID2D1DeviceContext3 = dc.cast()?;
+                let batch = match &self.batch {
+                    Some(b) => {
+                        b.Clear();
+                        b.clone()
+                    }
+                    None => {
+                        let b = dc3.CreateSpriteBatch()?;
+                        self.batch = Some(b.clone());
+                        b
+                    }
+                };
+                batch.AddSprites(
+                    sprites.rects.len() as u32,
+                    sprites.rects.as_ptr(),
+                    None,
+                    Some(sprites.colors.as_ptr()),
+                    None,
+                    std::mem::size_of::<D2D_RECT_F>() as u32,
+                    0,
+                    std::mem::size_of::<D2D1_COLOR_F>() as u32,
+                    0,
+                )?;
+                dc3.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED); // exigé par DrawSpriteBatch
+                dc3.DrawSpriteBatch(&batch, 0, sprites.rects.len() as u32, disc, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_SPRITE_OPTIONS_NONE);
             }
-            let dc3: ID2D1DeviceContext3 = dc.cast()?;
-            let batch = match &self.batch {
-                Some(b) => {
-                    b.Clear();
-                    b.clone()
+            // vignette (texte) par-dessus : téléversée quand elle change, puis recopiée telle quelle
+            let v = &sprites.vignette;
+            if let Some((x, y, alpha)) = v.place {
+                if self.vignette.as_ref().map(|g| g.0) != Some(v.id) {
+                    let image = dc.CreateBitmap(D2D_SIZE_U { width: v.l, height: v.h }, Some(v.pixels.as_ptr() as *const _), v.l * 4, &proprietes_image())?;
+                    self.vignette = Some((v.id, image));
                 }
-                None => {
-                    let b = dc3.CreateSpriteBatch()?;
-                    self.batch = Some(b.clone());
-                    b
+                if let Some((_, image)) = &self.vignette {
+                    let zone = D2D_RECT_F { left: x, top: y, right: x + v.l as f32, bottom: y + v.h as f32 };
+                    let cible: &ID2D1RenderTarget = dc;
+                    cible.DrawBitmap(image, Some(&zone), alpha, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, None);
                 }
-            };
-            batch.AddSprites(
-                sprites.rects.len() as u32,
-                sprites.rects.as_ptr(),
-                None,
-                Some(sprites.colors.as_ptr()),
-                None,
-                std::mem::size_of::<D2D_RECT_F>() as u32,
-                0,
-                std::mem::size_of::<D2D1_COLOR_F>() as u32,
-                0,
-            )?;
-            dc3.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED); // exigé par DrawSpriteBatch
-            dc3.DrawSpriteBatch(&batch, 0, sprites.rects.len() as u32, disc, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_SPRITE_OPTIONS_NONE);
+            }
         }
         Ok(())
+    }
+}
+
+/// Image Direct2D en BGRA prémultiplié, à l'échelle de l'écran.
+fn proprietes_image() -> D2D1_BITMAP_PROPERTIES1 {
+    D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+        ..Default::default()
     }
 }
 
@@ -239,14 +265,7 @@ pub unsafe fn make_disc(dc: &ID2D1DeviceContext) -> windows::core::Result<ID2D1B
     crate::canvas::circle(&mut pm, c, c, DISC_R, &crate::canvas::paint((255, 255, 255), 1.0));
     // RGBA → BGRA (le blanc prémultiplié a les trois mêmes composantes)
     let data: Vec<u8> = pm.data().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
-    let props = D2D1_BITMAP_PROPERTIES1 {
-        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-        dpiX: 96.0,
-        dpiY: 96.0,
-        bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
-        ..Default::default()
-    };
-    unsafe { dc.CreateBitmap(D2D_SIZE_U { width: DISC, height: DISC }, Some(data.as_ptr() as *const _), DISC * 4, &props) }
+    unsafe { dc.CreateBitmap(D2D_SIZE_U { width: DISC, height: DISC }, Some(data.as_ptr() as *const _), DISC * 4, &proprietes_image()) }
 }
 
 /// Voile percé d'un disque clair (voir `Canvas::voile`), dessiné en dégradé radial Direct2D.
@@ -288,12 +307,24 @@ unsafe fn voile(dc: &ID2D1DeviceContext, v: &Voile) -> windows::core::Result<()>
     Ok(())
 }
 
+/// Vignette à recopier (voir `Canvas::vignette`) : ses pixels en BGRA prémultiplié, gardés tant
+/// que son numéro ne change pas, et où la poser à cette image (x, y, opacité).
+#[derive(Default)]
+struct Vignette {
+    id: u64,
+    pixels: Vec<u8>,
+    l: u32,
+    h: u32,
+    place: Option<(f32, f32, f32)>,
+}
+
 /// Accumule des pastilles (rectangle écran + teinte) ; dessinées en un seul lot à la fin.
 #[derive(Default)]
 struct SpriteCanvas {
     rects: Vec<D2D_RECT_F>,
     colors: Vec<D2D1_COLOR_F>,
     voiles: Vec<Voile>,
+    vignette: Vignette,
 }
 
 impl SpriteCanvas {
@@ -357,5 +388,15 @@ impl Canvas for SpriteCanvas {
             let zone = D2D_RECT_F { left: zone.0, top: zone.1, right: zone.2, bottom: zone.3 };
             self.voiles.push(Voile { zone, x, y, r, flou, rgb, alpha: alpha.min(1.0) });
         }
+    }
+
+    fn vignette(&mut self, img: &tiny_skia::Pixmap, id: u64, x: f32, y: f32, alpha: f32) {
+        let v = &mut self.vignette;
+        if v.id != id || v.pixels.is_empty() {
+            v.pixels.clear();
+            v.pixels.extend(img.data().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]));
+            (v.id, v.l, v.h) = (id, img.width(), img.height());
+        }
+        v.place = Some((x.round(), y.round(), alpha.clamp(0.0, 1.0)));
     }
 }

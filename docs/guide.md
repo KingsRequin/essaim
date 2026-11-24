@@ -248,6 +248,14 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   Ces trois figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
   du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le halo et le liseré
   tant que la musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.
+- **Étiquette du morceau** (`[etiquette]`) : quand le morceau change, son titre et, dessous, son
+  artiste s'écrivent à côté du pointeur (à droite et sous la flèche ; à gauche ou au-dessus près
+  d'un bord de l'écran), en blanc cerné de sombre pour rester lisibles sur tout fond, soulignés
+  d'un filet à la couleur de l'essaim qui bat avec le kick. Ils restent `duree` secondes (1,5 à
+  8, 3 par défaut) puis s'effacent ; le reste du temps, rien. `taille` règle le texte (9 à 20).
+  Un titre de plus de 48 lettres est coupé. C'est une information, pas une allure de l'essaim :
+  comme l'habillage, l'étiquette ne fait pas partie des presets. Il faut que le lecteur annonce
+  son morceau à Windows (comme pour l'infobulle).
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs.
@@ -351,7 +359,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*, *Particules*, *Fissures*,
     *Spectre*, *Arcs*, *Quatre temps*, *Anneau suiveur*, *Orbe*, *Ligne de voix*, *Trame*, *Trait*,
     *Pendule*, *Gouttes*, *Réticule et projecteur*), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
-    *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* et
+    *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* (*Écoute*, *Étiquette du morceau*) et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC, hors presets) ; chacun avec ses réglages courants et *+ Avancé*
     pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un

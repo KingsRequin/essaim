@@ -141,6 +141,10 @@ function bande(g, a, b, largeur, couleur) {
   g.lineCap = "round";
 }
 
+// Étiquette du morceau : comme les constantes de src/etiquette.rs.
+const ETIQUETTE_DECALAGE = [16, 24], ETIQUETTE_ENTREE = 0.3, ETIQUETTE_SORTIE = 0.4, ETIQUETTE_GLISSE = 6, ETIQUETTE_CERNE = 2, ETIQUETTE_CERNE_OPACITE = 0.6;
+const ETIQUETTE_ARTISTE = [0.85, 0.9], ETIQUETTE_FILET = [1.4, 1.6], ETIQUETTE_FILET_ECART = 2;
+
 // Filet de lumière du liseré et du halo (comme loin::Filet) : état, avance, force en un point.
 const nouveauFilet = () => ({ eclats: [], embrase: 0, silence: FILET_ATTENTE, presence: 0 });
 function avancerFilet(fl, t, dt, u, kick, drop, son) {
@@ -493,6 +497,8 @@ class Apercu {
     this.vrille = [0, 0];
     // petites figures (figures.rs), et coups du son entendus pendant l'image en cours
     this.figures = nouvellesFigures();
+    // étiquette du morceau : début de l'affichage, enveloppe du kick, déjà allumée
+    this.etiquette = { debut: -Infinity, kick: 0, allumee: false };
     this.coupsImage = { kicks: 0, caisses: 0, aigus: 0, drops: 0, temps: false };
     // modulations : enveloppes des coups et montée suivie (modulation::Sources), valeur lissée de
     // chaque modulation, effets sur les comètes et les satellites à cette image et à la
@@ -584,6 +590,7 @@ class Apercu {
   // leur centre est celui du canevas.
   avancerFigures(dt, son, coups) {
     const c = this.reglages, f = this.figures, t = this.t;
+    this.etiquette.kick = coups.kicks > 0 ? 1 : this.etiquette.kick * Math.exp(-dt * 7);
     const arcs = c.arcs || {}, quatre = c.quatre_temps || {}, anneau = c.anneau || {};
     const plus = ['orbe', 'voix', 'trame', 'pinceau', 'pendule'].some((s) => c[s] && c[s].actif);
     const loin = ['equerres', 'halo', 'lisere'].some((s) => c[s] && c[s].actif);
@@ -1018,6 +1025,49 @@ class Apercu {
     }
   }
 
+  // Étiquette du morceau (comme etiquette::Etiquette::dessiner) : dans l'aperçu, un titre d'exemple,
+  // montré par « Piste » et quand l'étiquette vient d'être allumée.
+  dessinerEtiquette(g, cx, cy, S, tete) {
+    const c = this.reglages.etiquette || {};
+    if (!c.actif) { this.etiquette.allumee = false; return; }
+    if (!this.etiquette.allumee) { this.etiquette.allumee = true; this.etiquette.debut = this.t; }
+    const borne = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
+    const lisse = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+    const duree = borne(c.duree, 1.5, 8, 3), age = this.t - this.etiquette.debut;
+    const entree = lisse(0, ETIQUETTE_ENTREE, age), a = entree * (1 - lisse(duree, duree + ETIQUETTE_SORTIE, age));
+    if (!(a > 0)) return;
+    const T = borne(c.taille, 9, 20, 12) * S, titre = `700 ${T}px "Segoe UI", sans-serif`;
+    // à droite du pointeur ; à gauche si le titre sortirait du cadre (comme Etiquette::placer)
+    g.font = titre;
+    const large = g.measureText("Titre du morceau").width, droite = cx + ETIQUETTE_DECALAGE[0] * S;
+    const x = (droite + large > this.canvas.width ? Math.max(0, cx - ETIQUETTE_DECALAGE[0] * S - large) : droite) - ETIQUETTE_GLISSE * (1 - entree) * S;
+    const y = cy + ETIQUETTE_DECALAGE[1] * S;
+    // blanc cerné de sombre : lisible sur un fond clair comme sur un fond sombre
+    const ecrire = (texte, fonte, yy, alpha) => {
+      g.font = fonte;
+      g.lineWidth = 2 * ETIQUETTE_CERNE * S;
+      g.strokeStyle = `rgba(0,0,0,${ETIQUETTE_CERNE_OPACITE * alpha})`;
+      g.strokeText(texte, x, yy);
+      g.fillStyle = `rgba(255,255,255,${alpha})`;
+      g.fillText(texte, x, yy);
+      return g.measureText(texte).width;
+    };
+    g.textAlign = "left";
+    g.textBaseline = "top";
+    g.lineJoin = "round";
+    const largeur = ecrire("Titre du morceau", titre, y, a);
+    ecrire("Artiste", `600 ${T * ETIQUETTE_ARTISTE[0]}px "Segoe UI", sans-serif`, y + T * 1.33, ETIQUETTE_ARTISTE[1] * a);
+    // filet sous le texte : il se déploie à l'entrée et bat avec le kick
+    const epais = (ETIQUETTE_FILET[0] + ETIQUETTE_FILET[1] * this.etiquette.kick) * S, yf = y + T * (1.33 + 1.33 * ETIQUETTE_ARTISTE[0]) + ETIQUETTE_FILET_ECART * S + epais / 2;
+    g.lineCap = "round";
+    g.lineWidth = epais;
+    g.strokeStyle = `rgba(${tete.map(Math.round).join(",")},${a})`;
+    g.beginPath();
+    g.moveTo(x, yf);
+    g.lineTo(x + largeur * entree, yf);
+    g.stroke();
+  }
+
   // Dessin des petites figures (comme figures::Figures::dessiner), autour de (cx, cy).
   dessinerFigures(g, cx, cy, S, tete, queue) {
     const c = this.reglages, f = this.figures, t = this.t;
@@ -1337,6 +1387,7 @@ class Apercu {
   // déclencheurs agissent tout de suite (comme Swarm::evenement).
   evenement(nom) {
     if (!this.reglages) return;
+    if (nom === "piste") this.etiquette.debut = this.t;
     this.declencher(nom, [this.canvas.width / 2, this.canvas.height / 2], this.t);
   }
 
@@ -1513,6 +1564,7 @@ class Apercu {
       g.stroke();
     };
     this.dessinerFigures(g, cx, cy, S, tete, couleur(0));
+    this.dessinerEtiquette(g, cx, cy, S, tete);
     g.lineCap = "round";
     g.lineJoin = "round";
     const sp = c.spectre;

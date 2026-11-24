@@ -90,7 +90,7 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | 🎗️ **Rubans et ressorts** | Les comètes en rubans vrillés, sans tête blanche ; ou tout l'essaim sur ressorts : l'orbite rebondit au kick au lieu de changer de sens, les têtes s'étirent dans leur élan, les satellites naissent du centre |
 | 🎛️ **Modulations** | Un élément du son (basse, note grave ou aiguë, kick, caisse claire, charleston, montée, drop, contretemps, tempo, brillance, stéréo) fait varier la rotation du trajet, la vitesse, l'accélération, le rayon, la taille, la teinte, le décalage, la lueur, la traînée ou l'opacité, des comètes, des satellites ou des deux ; avec un seuil, un lissage, et à l'envers si on veut |
 | ◔ **Petites figures** | Des lignes fines qui laissent voir l'écran, seules ou avec l'essaim : deux arcs qui mesurent la basse et les aigus, quatre points qui comptent les temps sous le pointeur, un anneau qui suit le pointeur avec du retard et bat au kick, un orbe (le spectre en une ligne fermée), une ligne de voix, une trame de points traversée par des vagues, un trait de pinceau quand la souris file, un pendule qui saute au kick, des gouttes en contour qui se soudent et se séparent |
-| 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages |
+| 🎵 **Morceau en cours** | Couleur de la pochette, rafale au changement de piste, titre dans l'infobulle et les réglages ; en option, le titre s'écrit quelques secondes à côté du pointeur quand le morceau change |
 
 ### La souris et l'écran
 

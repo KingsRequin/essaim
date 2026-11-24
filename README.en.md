@@ -90,7 +90,7 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | 🎗️ **Ribbons and springs** | Comets as twisting ribbons, with no white head; or the whole swarm on springs: the orbit bounces on the kick instead of reversing, heads stretch as they speed up, satellites are born at the center |
 | 🎛️ **Modulations** | A part of the sound (bass, low or high note, kick, snare, hi-hat, build-up, drop, off-beat, tempo, brightness, stereo) drives the path rotation, speed, acceleration, radius, size, hue, offset, glow, trail or opacity, of the comets, the satellites or both; with a threshold, smoothing, and inverted if you like |
 | ◔ **Small figures** | Thin lines that leave the screen visible, alone or with the swarm: two arcs that gauge bass and treble, four dots counting the beats under the pointer, a ring that trails the pointer and beats on the kick, an orb (the spectrum as one closed line), a voice line, a dot grid swept by waves, a brush stroke when the mouse moves fast, a pendulum that jumps on the kick, outlined droplets that merge and split |
-| 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings |
+| 🎵 **Now playing** | Album-art colour, a burst on track change, title in the tray tooltip and settings; optionally, the title is written next to the pointer for a few seconds when the track changes |
 
 ### The mouse and the screen
 

@@ -130,6 +130,14 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   minimale double tous les 5 crans en moins (104 px à 1, 30 px à 10), les deux durées
   s'allongent comme l'inverse de sa racine (0,49 s et 0,85 s à 10). `secousse` et `sensibilite`
   sont hors presets (`profils::in_profile`, `HORS_PRESET` dans `ui/app.js`).
+- **Étiquette du morceau** (`etiquette.rs`, tenue par la boucle principale) : un changement de
+  piste (`media::pistes`) lance l'affichage. Le texte est écrit une fois par morceau dans une
+  image (GDI : `CreateFontW` Segoe UI, `TextOutW` en blanc sur une section DIB, la plus forte
+  composante de chaque pixel donne sa couverture), puis cerné de sombre (plus forte couverture
+  dans un disque de 2 px). Les moteurs recopient cette image par `Canvas::vignette` : tiny-skia
+  la pose, Direct2D la téléverse une fois (`CreateBitmap`, gardée tant que son numéro ne change
+  pas) et la dessine après le lot de pastilles (`DrawBitmap`). Sa zone s'ajoute à celle de
+  l'essaim. Hors des presets, comme l'habillage.
 - **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
   fil « essaim-media » (MTA, appels asynchrones attendus par `join`), réveillé par
   `CurrentSessionChanged`, `MediaPropertiesChanged` et `PlaybackInfoChanged`, et au moins

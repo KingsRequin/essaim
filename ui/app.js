@@ -777,6 +777,8 @@ const IMPACT = {
   "equerres.actif": [2, "estime"], "equerres.bras": [1, "estime"], "equerres.epaisseur": [1, "estime"],
   "lisere.actif": [3, "estime"], "lisere.epaisseur": [1, "estime"],
   "halo.actif": [3, "estime"], "halo.profondeur": [2, "estime"], "halo.epaisseur": [1, "estime"],
+  // une image recopiée, quelques secondes par morceau
+  "etiquette.actif": [1, "estime"], "etiquette.taille": [1, "estime"], "etiquette.duree": [1, "estime"],
   // actions des déclencheurs (estimé : une particule de plus ou de moins pèse peu, une gerbe d'étincelles un peu plus)
   "action.eclat": [1, "estime"], "action.satellites": [2, "estime"], "action.inversion": [1, "estime"], "action.bordure": [1, "estime"],
   "action.onde": [1, "estime"], "action.eclats": [2, "estime"], "action.fissure": [2, "estime"], "action.implosion": [1, "estime"],
@@ -1219,6 +1221,14 @@ const PANNEAUX = [
     avance: [
       { libelle: "Écart minimal entre deux kicks", section: "audio", cle: "delai_kick", min: 0.05, max: 0.5, pas: 0.01, aff: (v) => virgule(+v, 2) + " s" },
       { sorties: true },
+    ],
+  },
+  {
+    id: "etiquette", famille: "Écoute", titre: "Étiquette du morceau", actif: ["etiquette", "actif"],
+    note: "Quand le morceau change, son titre et son artiste s'écrivent à côté du pointeur, soulignés d'un filet qui bat avec le kick, puis s'effacent. Le reste du temps, rien. Ce n'est pas une allure de l'essaim : l'étiquette ne fait pas partie des presets et reste quand tu en changes. Dans l'aperçu, « Piste » la montre avec un titre d'exemple.",
+    base: [
+      { libelle: "Taille du texte", section: "etiquette", cle: "taille", min: 9, max: 20, pas: 1, aff: (v) => String(Math.round(v)) },
+      { libelle: "Temps d'affichage", section: "etiquette", cle: "duree", min: 1.5, max: 8, pas: 0.5, aff: (v) => virgule(+v, 1) + " s" },
     ],
   },
   {

@@ -2259,6 +2259,9 @@ mod tests {
             fn voile(&mut self, z: (f32, f32, f32, f32), x: f32, y: f32, r: f32, f: f32, c: (u8, u8, u8), al: f32) {
                 self.0.voile(z, x, y, r, f, c, al);
             }
+            fn vignette(&mut self, img: &Pixmap, id: u64, x: f32, y: f32, al: f32) {
+                self.0.vignette(img, id, x, y, al);
+            }
         }
         let mut rng = Rng(0x2545_f491_4f6c_dd1d);
         let c = Crack::new(300.0, 200.0, 0.0, 1.5, &mut rng);

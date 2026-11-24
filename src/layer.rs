@@ -25,6 +25,12 @@ pub fn union(a: Option<IRect>, b: Option<IRect>) -> Option<IRect> {
 /// Zone vide : ne touche aucun écran (image sans essaim : l'habillage seul).
 pub const AUCUNE: IRect = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
 
+/// Écran où se trouve le pointeur (le premier, s'il est hors de tous).
+pub fn ecran_du_pointeur(monitors: &[(isize, IRect)], cursor: (f32, f32)) -> Option<IRect> {
+    let (cx, cy) = (cursor.0 as i32, cursor.1 as i32);
+    monitors.iter().map(|m| m.1).find(|r| cx >= r.0 && cx < r.2 && cy >= r.1 && cy < r.3).or(monitors.first().map(|m| m.1))
+}
+
 pub fn intersects(a: IRect, b: IRect) -> bool {
     a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
