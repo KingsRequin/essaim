@@ -365,23 +365,23 @@ pub fn fullscreen_under(x: i32, y: i32) -> bool {
 }
 
 /// Cadre affiché (gauche, haut, droite, bas, en pixels de l'écran) de la fenêtre au premier
-/// plan, si c'est une fenêtre d'application visible : ni réduite, ni en plein écran, ni le
-/// bureau, la barre des tâches ou une fenêtre d'Essaim. Les particules rebondissent dessus.
+/// plan, si c'est une fenêtre d'application qui pourrait aussi prendre la couleur de la bordure
+/// (`bordure::eligible` : une vraie fenêtre, à cadre ou à barre de titre ; ni une barre ou un
+/// menu sans cadre, comme celle d'Horizon et son menu du clic droit, ni le bureau, la barre des
+/// tâches ou un calque d'Essaim), ni réduite, ni en plein écran. La fenêtre des réglages
+/// d'Essaim en est une. Les particules rebondissent dessus, le halo et les équerres l'habillent.
 pub fn cadre_premier_plan() -> Option<(f32, f32, f32, f32)> {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_invalid() || IsIconic(fg).as_bool() {
             return None;
         }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, Some(&mut pid));
-        if pid == windows::Win32::System::Threading::GetCurrentProcessId() {
-            return None;
-        }
         let mut class = [0u16; 64];
         let n = GetClassNameW(fg, &mut class) as usize;
         let class = String::from_utf16_lossy(&class[..n]);
-        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") || covers_monitor(fg) {
+        let style = GetWindowLongPtrW(fg, GWL_STYLE) as u32;
+        let ex = GetWindowLongPtrW(fg, GWL_EXSTYLE) as u32;
+        if !crate::bordure::eligible(&class, style, ex) || covers_monitor(fg) {
             return None;
         }
         let mut r = RECT::default();

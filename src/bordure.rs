@@ -17,9 +17,8 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
-use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, GWL_EXSTYLE, GWL_STYLE,
+    GetClassNameW, GetForegroundWindow, GetWindowLongPtrW, GWL_EXSTYLE, GWL_STYLE,
     WS_CAPTION, WS_CHILD, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
@@ -65,7 +64,9 @@ pub fn colorref(rgb: (u8, u8, u8), level: f32) -> u32 {
 /// La fenêtre (classe, styles) a une bordure à colorer : fenêtre principale à cadre, ni outil,
 /// ni morceau du shell, ni fenêtre d'Essaim.
 pub fn eligible(class: &str, style: u32, ex_style: u32) -> bool {
-    if matches!(class, "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Progman" | "WorkerW" | "EssaimOverlay" | "EssaimTray") {
+    // bureau, barre des tâches, calques et fenêtres techniques d'Essaim (la fenêtre des réglages,
+    // elle, est une fenêtre comme les autres : elle se colore)
+    if matches!(class, "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Progman" | "WorkerW" | "EssaimOverlay" | "EssaimTray" | "EssaimStream") {
         return false;
     }
     if style & WS_CHILD.0 != 0 || ex_style & WS_EX_TOOLWINDOW.0 != 0 {
@@ -100,11 +101,6 @@ pub fn restore() {
 /// Fenêtre au premier plan si sa bordure peut être colorée.
 fn target(fg: HWND) -> bool {
     unsafe {
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, Some(&mut pid));
-        if pid == GetCurrentProcessId() {
-            return false;
-        }
         let mut buf = [0u16; 64];
         let n = GetClassNameW(fg, &mut buf) as usize;
         let class = String::from_utf16_lossy(&buf[..n]);
@@ -395,12 +391,21 @@ mod tests {
 
     #[test]
     fn seules_les_fenetres_a_cadre_se_colorent() {
+        use windows::Win32::UI::WindowsAndMessaging::{WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP};
         let fen = WS_CAPTION.0 | WS_THICKFRAME.0;
         assert!(eligible("Notepad", fen, 0));
         assert!(eligible("Chrome_WidgetWin_1", WS_THICKFRAME.0, 0));
         assert!(eligible("#32770", WS_CAPTION.0, 0)); // boîte de dialogue
         assert!(!eligible("Notepad", fen, WS_EX_TOOLWINDOW.0));
         assert!(!eligible("Popup", 0, 0)); // sans cadre
+        // barre et menu d'Horizon : popups superposés sans cadre, outils ou non
+        assert!(!eligible("HorizonBar", WS_POPUP.0, WS_EX_LAYERED.0 | WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0));
+        assert!(!eligible("HorizonMenu", WS_POPUP.0, WS_EX_LAYERED.0 | WS_EX_TOPMOST.0));
+        // la fenêtre des réglages d'Essaim se colore ; ses calques et sa fenêtre de stream, non
+        assert!(eligible("EssaimReglages", fen, 0));
+        for essaim in ["EssaimOverlay", "EssaimTray", "EssaimStream"] {
+            assert!(!eligible(essaim, fen, 0), "{essaim}");
+        }
         assert!(!eligible("Enfant", fen | WS_CHILD.0, 0));
         for shell in ["Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW", "EssaimOverlay", "EssaimTray"] {
             assert!(!eligible(shell, fen, 0), "{shell}");
