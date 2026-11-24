@@ -368,7 +368,9 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   calques sont refaits), qui redonne alors toutes ses zones ; en filet, les équerres au repos
   les redonnent toutes les 3 s (un calque sans zone depuis 10 s est retiré). `Effets` possède
   `Loin`, lui passe le son, le cadre de la fenêtre au premier plan (`win::cadre_premier_plan`,
-  relu toutes les 250 ms par la boucle principale, aussi pour les rebonds) et l'écran du pointeur. Leurs zones s'ajoutent à celles
+  relu à chaque image dessinée par `main::lire_fenetre`, aussi pour les rebonds, avec l'échelle
+  de l'écran de la fenêtre : halo et équerres y sont à sa taille, même si le pointeur est sur un
+  autre écran) et l'écran du pointeur. Leurs zones s'ajoutent à celles
   des fissures (`Effets::zones_loin`), et ils sont dessinés sur tous les écrans
   (`Effets::dessiner_loin`). `Backend::frame` redessine, par écran, un seul rectangle qui englobe
   toutes les zones : une zone loin du pointeur l'agrandit d'autant. Les équerres ne donnent donc

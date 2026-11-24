@@ -231,8 +231,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   à l'extérieur de son cadre (`bras`, 4 à 30, 10 par défaut ; `epaisseur`, 1 à 5) : rien autour du
   pointeur, rien sur le contenu. Elles s'écartent sur le kick puis reviennent, leurs bras
   s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre, une montée les
-  serre contre la fenêtre, un drop les écarte en grand. Le cadre est relu quatre fois par
-  seconde ; pas d'équerres sur le bureau, la barre des tâches, une fenêtre en plein écran ou une
+  serre contre la fenêtre, un drop les écarte en grand. Le cadre est relu à chaque image : les
+  équerres et le halo suivent une fenêtre qu'on déplace ou redimensionne ; pas d'équerres sur le bureau, la barre des tâches, une fenêtre en plein écran ou une
   fenêtre d'Essaim.
 - **Halo de fenêtre** (`[halo]`) : la lumière court le long du cadre de la fenêtre au premier
   plan (`epaisseur` du trait, 1 à 4). Elle entre par le bord le plus proche du pointeur,

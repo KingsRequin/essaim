@@ -202,11 +202,13 @@ impl Cadre {
     }
 }
 
-/// Halo affiché : cadre de la fenêtre, abscisse du pointeur sur ce cadre, zones redessinées.
+/// Halo affiché : cadre de la fenêtre, abscisse du pointeur sur ce cadre, échelle de l'écran de
+/// la fenêtre, zones redessinées.
 #[derive(Clone, Copy)]
 struct Halo {
     cadre: Cadre,
     u: f32,
+    echelle: f32,
     zones: [IRect; 4],
 }
 
@@ -271,9 +273,9 @@ impl Loin {
     }
 
     /// Avance d'une image. `fenetre` : cadre de la fenêtre au premier plan (gauche, haut, droite,
-    /// bas) ; `ecran` : celui du pointeur.
+    /// bas) et échelle de son écran ; `ecran` : celui du pointeur.
     #[allow(clippy::too_many_arguments)]
-    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config, fenetre: Option<(f32, f32, f32, f32)>, ecran: Option<IRect>) {
+    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config, fenetre: Option<((f32, f32, f32, f32), f32)>, ecran: Option<IRect>) {
         self.zones.clear();
         let (kicks, caisse, drop) = (son.coups.kicks, son.coups.caisses > 0, son.coups.drops > 0);
         self.kick = if kicks > 0 { 1.0 } else { self.kick * (-dt * 7.0).exp() };
@@ -300,7 +302,7 @@ impl Loin {
             let tremble = (t * 44.0).sin() as f32 * 0.9 * self.montee;
             self.ecart.vers(EQUERRE_ECART * (1.0 - 0.75 * self.montee) + tremble, (17.0, 0.3), dt, EQUERRE_BORNES.0);
             self.bras.vers(1.0 + EQUERRE_BASSE * self.basse, (14.0, 0.4), dt, EQUERRE_BORNES.1);
-            if let Some((l, h, r, b)) = fenetre {
+            if let Some(((l, h, r, b), scale)) = fenetre {
                 // quantifiés : un dessin qui ne change pas à l'œil ne redemande pas ses zones
                 let q = |v: f32, pas: f32| (v / pas).round() * pas;
                 let opacite = |d: f32| q((0.5 + 0.5 * d.max(self.kick)).clamp(0.0, 1.0), 1.0 / 32.0);
@@ -334,13 +336,14 @@ impl Loin {
         // quatre bandes sont redonnées à chaque image, et les anciennes quand la fenêtre change
         let avant = self.halo_affiche.take();
         if cfg.halo.actif {
-            let cadre = fenetre.map(|(l, h, r, b)| Cadre(l.round(), h.round(), r.round(), b.round()));
+            let cadre = fenetre.map(|((l, h, r, b), _)| Cadre(l.round(), h.round(), r.round(), b.round()));
+            let sf = fenetre.map_or(scale, |f| f.1);
             let u = cadre.map_or(0.0, |c| c.proche(cursor));
             self.frisson = if caisse { 1.0 } else { self.frisson * (-dt * 12.0).exp() };
             self.halo.avance(t, dt, u, kicks > 0, drop, son_la || self.frisson > 0.02);
             if let (Some(cadre), true) = (cadre, self.halo.presence > 0.0) {
                 let c = &cfg.halo;
-                self.halo_affiche = Some(Halo { cadre, u, zones: cadre.bandes((c.profondeur * (1.0 + 1.0 / HALO_NAPPES as f32) + 2.0 * c.epaisseur) * scale) });
+                self.halo_affiche = Some(Halo { cadre, u, echelle: sf, zones: cadre.bandes((c.profondeur * (1.0 + 1.0 / HALO_NAPPES as f32) + 2.0 * c.epaisseur) * sf) });
             }
         } else {
             (self.halo, self.frisson) = (Filet::new(), 0.0);
@@ -392,9 +395,9 @@ impl Loin {
         let (tete, queue) = (prisme(cfg, t, 1.0), prisme(cfg, t, 0.0));
         let teinte = |part: f32| 0.5 + 0.5 * (part * TAU + (t as f32 * 0.5).rem_euclid(TAU)).sin();
         let (son, pas) = ((self.basse, self.montee), FILET_PAS * scale);
-        if let Some(Halo { cadre, u, .. }) = self.halo_affiche {
+        if let Some(Halo { cadre, u, echelle: scale, .. }) = self.halo_affiche {
             let c = &cfg.halo;
-            let (ep, tour) = (c.epaisseur * scale, cadre.tour());
+            let (ep, tour, pas) = (c.epaisseur * scale, cadre.tour(), FILET_PAS * scale);
             for (depart, dir, long, dedans, u0) in cadre.cotes() {
                 // point du côté à `s` px de son départ, rentré de `r` px dans la fenêtre
                 let point = |s: f32, r: f32| (depart.0 + dir.0 * s + dedans.0 * r, depart.1 + dir.1 * s + dedans.1 * r);
@@ -473,7 +476,7 @@ mod tests {
 
     fn avancer(l: &mut Loin, t: f64, bass: f32, coups: Coups, cfg: &Config, fenetre: Option<(f32, f32, f32, f32)>) {
         let au = AudioView { bass, ..Default::default() };
-        l.avance(t, 1.0 / 120.0, (600.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, cfg, fenetre, Some(ECRAN));
+        l.avance(t, 1.0 / 120.0, (600.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, cfg, fenetre.map(|f| (f, 1.0)), Some(ECRAN));
     }
 
     fn image(l: &Loin, t: f64, cfg: &Config) -> Pixmap {

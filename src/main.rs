@@ -231,6 +231,18 @@ fn habillage_seul(
     backend.frame(monitors, layer::AUCUNE, &zones, &|cv, _| effets.dessiner_loin(cv, cfg, t, scale));
 }
 
+/// Relit le cadre de la fenêtre au premier plan (s'il sert : rebonds, équerres, halo) et
+/// l'échelle de son écran ; renvoie les murs des rebonds. Quelques appels à Windows, de l'ordre
+/// de la dizaine de microsecondes : fait à chaque image dessinée.
+fn lire_fenetre(effets: &mut effets::Effets, cfg: &config::Config) -> Option<(f32, f32, f32, f32)> {
+    let voulu = cfg.particules.rebonds || cfg.equerres.actif || cfg.halo.actif;
+    effets.fenetre = if voulu { win::cadre_premier_plan() } else { None };
+    if let Some((l, t, r, b)) = effets.fenetre {
+        effets.echelle_fenetre = win::scale_at(((l + r) / 2.0) as i32, ((t + b) / 2.0) as i32);
+    }
+    effets.fenetre.filter(|_| cfg.particules.rebonds)
+}
+
 /// Bouton principal (`secondaire` = faux) ou secondaire de la souris enfoncé. Boutons inversés
 /// dans Windows (gauchers) : `GetAsyncKeyState` lit le bouton physique, le principal est alors
 /// le droit.
@@ -372,10 +384,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut droit_avant = false;
-    // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) et cadre de la fenêtre
-    // au premier plan (rebonds des particules, relu toutes les 250 ms)
+    // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) ; le cadre de la
+    // fenêtre au premier plan est relu à chaque image (`lire_fenetre`)
     let mut doux = win::sans_flashs(conf.cfg.rendu.sans_flashs);
-    let mut murs: Option<(f32, f32, f32, f32)> = None;
     let mut last_state = "";
     let mut cleared = false;
     let mut backend_gen = 0u32;
@@ -468,10 +479,6 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         if now >= next_fs {
             next_fs = now + Duration::from_millis(250);
             let fs = cur.as_ref().is_some_and(|c| win::fullscreen_under(c.pos.0, c.pos.1));
-            // cadre de la fenêtre au premier plan : murs des rebonds, coins des équerres, halo
-            let voulu = conf.cfg.particules.rebonds || conf.cfg.equerres.actif || conf.cfg.halo.actif;
-            effets.fenetre = if voulu { win::cadre_premier_plan() } else { None };
-            murs = effets.fenetre.filter(|_| conf.cfg.particules.rebonds);
             if fs != fs_paused {
                 fs_paused = fs;
                 log::info!("{}", if fs { "plein écran : en veille" } else { "fin du plein écran" });
@@ -584,6 +591,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                     cracks.clear();
                     let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
                     last = now;
+                    lire_fenetre(&mut effets, cfg);
                     habillage_seul(&mut effets, &mut backend, &monitors, &shared, cfg, t, dt, pos);
                     cleared = false;
                 }
@@ -644,6 +652,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             if habille {
                 let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
                 last = now;
+                lire_fenetre(&mut effets, cfg);
                 habillage_seul(&mut effets, &mut backend, &monitors, &shared, cfg, t, dt, cur.pos);
             }
             win::attendre(VEILLE_LECTURE);
@@ -675,6 +684,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // écart réel depuis l'image précédente : la simulation le découpe en pas courts
         let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
         last = now;
+        // cadre de la fenêtre au premier plan, relu à chaque image : le halo et les équerres
+        // suivent une fenêtre qu'on déplace ou redimensionne
+        let murs = lire_fenetre(&mut effets, cfg);
         // fondu de veille : extinction lente, réveil rapide (écart borné : pas de saut au réveil)
         let df = dt.min(render::PAS_MAX);
         eveil = if endormi { (eveil - df / FONDU_EXTINCTION).max(0.0) } else { (eveil + df / FONDU_REVEIL).min(1.0) };

@@ -189,11 +189,13 @@ pub struct Effets {
     /// principale donne avant chaque image.
     loin: Loin,
     pub fenetre: Option<(f32, f32, f32, f32)>,
+    /// Échelle de l'écran de cette fenêtre (le halo et les équerres y sont à sa taille).
+    pub echelle_fenetre: f32,
 }
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None, echelle_fenetre: 1.0 }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -258,7 +260,7 @@ impl Effets {
         let son = Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] };
         self.figures.avance(t, dt, cursor, scale, &son, cfg);
         // équerres et liseré : aux coins de la fenêtre au premier plan, au bord de l'écran du pointeur
-        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre, ecran_du_pointeur(monitors, cursor));
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), ecran_du_pointeur(monitors, cursor));
     }
 
     /// Avance l'habillage seul (équerres, liseré), quand l'essaim n'est pas dessiné : pointeur
@@ -269,7 +271,7 @@ impl Effets {
         let au = shared.view();
         let coups = self.ecoute.lire(&au);
         let son = Son { au: &au, coups: &coups, bandes: &[] };
-        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre, ecran_du_pointeur(monitors, cursor));
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), ecran_du_pointeur(monitors, cursor));
     }
 
     /// Y a-t-il un habillage à dessiner, ou encore affiché à effacer ?
