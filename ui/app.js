@@ -45,6 +45,9 @@ const memoire = {
 const virgule = (x, d) => x.toFixed(d).replace(".", ",");
 const deux = (n) => String(n).padStart(2, "0");
 const borne = (x, a, b) => Math.max(a, Math.min(b, x));
+// Deux noms de presets sont le même nom comme pour profils::meme_nom : espaces autour et casse
+// ignorés.
+const memeNom = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const estObjet = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 // Égalité de deux valeurs de réglage à la tolérance de profils::same (nombres : 1e-3 relatif,
 // au moins 1e-3), en descendant dans les listes et les objets : les f32 de l'appli, élargis en
@@ -64,7 +67,6 @@ const etat = {
   presets: [],
   actif: null,
   proche: null,
-  depot: "",
   curseurs: "",
   curseursNom: null, // nom lisible du jeu en place (`curseurs_nom`), s'il est donné
   raccourcisRefuses: [], // raccourcis globaux pris par une autre application
@@ -319,18 +321,7 @@ function valeurDistante(section, cle, v, defaut) {
 // mal formé, ignoré).
 function fusion(base, partiel) {
   if (!estObjet(partiel)) return null;
-  // preset d'avant les déclencheurs : ses réactions d'alors en deviennent (comme migration::migrer)
-  if (partiel.declencheurs === undefined) {
-    const a = reactionsAvant(partiel);
-    const deja = estObjet(partiel.modulations) && Array.isArray(partiel.modulations.liste) ? partiel.modulations.liste : null;
-    const mods = deja || a.basse;
-    // une liste vidée exprès ne reçoit que les réactions écrites dans le preset ; une modulation
-    // de même source, même cible et même groupe déjà là est gardée
-    const ecrites = [["musique", "montee"], ["musique", "contretemps"], ["couleur", "musique"], ["musique", "stereo"]].some(([s, k]) => estObjet(partiel[s]) && partiel[s][k] !== undefined);
-    const meme = (x, y) => y.source === x.source && y.cible === x.cible && (y.sur || "tout") === (x.sur || "tout");
-    const plus = deja && !deja.length && !ecrites ? [] : a.mods.filter((x) => !mods.some((y) => meme(x, y)));
-    partiel = { ...partiel, modulations: { liste: mods.concat(plus) }, declencheurs: { liste: a.decl }, particules: { ...a.particules, ...(estObjet(partiel.particules) ? partiel.particules : {}) } };
-  }
+  partiel = migrer(partiel);
   const r = {};
   for (const [s, sec] of Object.entries(base)) {
     const distant = partiel[s];
@@ -344,6 +335,57 @@ function fusion(base, partiel) {
     }
   }
   return r;
+}
+
+// Clés retirées des réglages d'avant les modulations et les déclencheurs (comme
+// migration::ANCIENNES_CLES).
+const ANCIENNES_CLES = [
+  ["orbite", "vitesse_basse"], ["orbite", "eloignement_grave"], ["orbite", "inverse_au_kick"], ["essaim", "par_kick_min"], ["essaim", "par_kick_max"],
+  ["scintillement", "actif"], ["scintillement", "quantite"], ["scintillement", "rebonds"], ["clic", "onde"], ["clic", "eclats"], ["clic", "taille"],
+  ["clic", "droit"], ["fissures", "actives"], ["bordure", "intensite"], ["couleur", "musique"], ["musique", "rafale_piste"], ["musique", "montee"],
+  ["musique", "caisse_claire"], ["musique", "contretemps"], ["musique", "stereo"], ["audio", "pulsation_tempo"],
+];
+
+// Preset d'avant les modulations ou les déclencheurs (comme migration::migrer) : ses réactions
+// d'alors en deviennent. Sans `[declencheurs]`, elles deviennent les déclencheurs et s'ajoutent
+// aux modulations ; sans `[modulations]`, ou avec les anciennes clés de la basse, les réactions
+// à la basse passent en tête. Une liste de modulations vidée exprès ne reçoit que les réactions
+// écrites dans le preset (une réaction non écrite y compte comme coupée, même la montée, active
+// par défaut). Une modulation de même source, même cible et même groupe déjà là est gardée.
+function migrer(p) {
+  const ecrite = (s, k) => estObjet(p[s]) && p[s][k] !== undefined;
+  const avaitDecl = p.declencheurs !== undefined;
+  if (avaitDecl && !ANCIENNES_CLES.some(([s, k]) => ecrite(s, k))) return p;
+  const avaitMod = p.modulations !== undefined;
+  const basseExplicite = ecrite("orbite", "vitesse_basse") || ecrite("orbite", "eloignement_grave");
+  const liste = estObjet(p.modulations) && Array.isArray(p.modulations.liste) ? p.modulations.liste : null;
+  const a = reactionsAvant(p);
+  // liste vidée : les réactions non écrites sont coupées
+  let e = a;
+  if (liste && !liste.length) {
+    const seule = (s, k, coupe) => (ecrite(s, k) ? p[s][k] : coupe);
+    const section = (s) => (estObjet(p[s]) ? p[s] : {});
+    e = reactionsAvant({
+      ...p,
+      orbite: { ...section("orbite"), vitesse_basse: seule("orbite", "vitesse_basse", 0), eloignement_grave: seule("orbite", "eloignement_grave", 0) },
+      musique: { ...section("musique"), montee: seule("musique", "montee", false), contretemps: seule("musique", "contretemps", false), stereo: seule("musique", "stereo", 0) },
+      couleur: { ...section("couleur"), musique: seule("couleur", "musique", false) },
+    });
+  }
+  const meme = (x, y) => y.source === x.source && y.cible === x.cible && (y.sur || "tout") === (x.sur || "tout");
+  const tete = !avaitMod || basseExplicite ? e.basse : [];
+  const mods = tete.filter((x) => !(liste || []).some((y) => meme(x, y))).concat(liste || []);
+  for (const x of avaitDecl ? [] : e.mods) if (!mods.some((y) => meme(x, y))) mods.push(x);
+  // déplacées dans [particules] (si elles n'y sont pas déjà)
+  const particules = {};
+  if (ecrite("scintillement", "rebonds")) particules.rebonds = p.scintillement.rebonds;
+  if (ecrite("clic", "taille")) particules.taille = p.clic.taille;
+  return {
+    ...p,
+    modulations: { ...(estObjet(p.modulations) ? p.modulations : {}), liste: mods },
+    ...(avaitDecl ? {} : { declencheurs: { liste: a.decl } }),
+    particules: { ...particules, ...(estObjet(p.particules) ? p.particules : {}) },
+  };
 }
 
 function reglagesDeBase() {
@@ -369,7 +411,7 @@ function suivreRenommages() {
   etat.renommages = etat.renommages.filter(({ ancien, nouveau, quand }) => {
     // pas encore fait : attendu quelques secondes (un renommage refusé est oublié)
     if (noms.has(ancien)) return performance.now() - quand < 5000;
-    const fait = [...noms].find((n) => n.toLowerCase() === nouveau.toLowerCase());
+    const fait = [...noms].find((n) => memeNom(n, nouveau));
     if (fait && etat.favoris.delete("p:" + ancien)) { etat.favoris.add("p:" + fait); change = true; }
     if (fait && etat.comparer === "p:" + ancien) etat.comparer = "p:" + fait;
     return false;
@@ -377,8 +419,13 @@ function suivreRenommages() {
   if (change) memoire.ecrire("favoris", [...etat.favoris]);
 }
 
+// Dépôt GitHub de la bibliothèque (« propriétaire/nom ») : celui des réglages en place.
+const depotBibliotheque = () => (etat.reglages && etat.reglages.bibliotheque && typeof etat.reglages.bibliotheque.depot === "string" ? etat.reglages.bibliotheque.depot : "");
+
+// Nom de la copie locale d'un preset de la bibliothèque, ou null.
 function installe(nom) {
-  return etat.presets.some((p) => !p.fourni && p.nom === nom);
+  const p = presetAMoi(nom);
+  return p ? p.nom : null;
 }
 
 function filtrer(liste) {
@@ -397,12 +444,12 @@ function filtrer(liste) {
 
 // Image d'aperçu d'un preset de la bibliothèque (champ `apercu` de l'index, facultatif) : chemin
 // relatif d'un PNG ou d'un GIF du dépôt, sans « .. » ; adresse sur raw.githubusercontent.com.
-function imageCommu(chemin) {
+function imageCommu(chemin, depot) {
   if (typeof chemin !== "string" || chemin.length > 200) return "";
   const c = chemin.trim().replace(/^\.\//, "");
   const parts = c.split("/");
   if (!/^[\w\-. /]+\.(png|gif)$/i.test(c) || parts.some((x) => !x || x === "." || x === "..")) return "";
-  return `https://raw.githubusercontent.com/${etat.depot}/main/${parts.map(encodeURIComponent).join("/")}`;
+  return `https://raw.githubusercontent.com/${depot}/main/${parts.map(encodeURIComponent).join("/")}`;
 }
 
 const INDEX_MAX = 1 << 20;
@@ -431,13 +478,14 @@ async function lireBorne(r, max, arret) {
 }
 
 async function chargerCommu(forcer) {
-  if (!etat.depot || (!forcer && etat.commu.etat !== "rien")) return;
+  const depot = depotBibliotheque();
+  if (!depot || (!forcer && etat.commu.etat !== "rien")) return;
   etat.commu = { etat: "charge", liste: [], message: "" };
   dessinerPresets();
   const arret = new AbortController();
   const delai = setTimeout(() => arret.abort(), 8000);
   try {
-    const r = await fetch(`https://raw.githubusercontent.com/${etat.depot}/main/index.json`, { signal: arret.signal, cache: "no-store" });
+    const r = await fetch(`https://raw.githubusercontent.com/${depot}/main/index.json`, { signal: arret.signal, cache: "no-store" });
     if (r.status === 404) throw new Error("absent");
     if (!r.ok) throw new Error("http " + r.status);
     // index d'un dépôt tiers : taille et nombre de presets bornés
@@ -453,7 +501,7 @@ async function chargerCommu(forcer) {
         auteur: typeof p.auteur === "string" ? "@" + p.auteur.replace(/^@/, "").slice(0, 39) : "",
         etiquettes: Array.isArray(p.etiquettes) ? p.etiquettes.filter((e) => typeof e === "string").slice(0, 8) : [],
         reglages: fusion(base, p.reglages),
-        image: imageCommu(p.apercu),
+        image: imageCommu(p.apercu, depot),
       }))
       .filter((p) => p.reglages);
     etat.commu = { etat: "ok", liste, message: "" };
@@ -461,13 +509,13 @@ async function chargerCommu(forcer) {
     etat.commu = {
       etat: "erreur", liste: [],
       message: e.message === "absent"
-        ? `La bibliothèque n'est pas encore en ligne : le dépôt ${etat.depot} n'a pas d'index.json.`
+        ? `La bibliothèque n'est pas encore en ligne : le dépôt ${depot} n'a pas d'index.json.`
         : e.message === "trop grand"
-          ? `L'index du dépôt ${etat.depot} est trop grand (1 Mo au plus) : il n'est pas chargé.`
+          ? `L'index du dépôt ${depot} est trop grand (1 Mo au plus) : il n'est pas chargé.`
           : e.message === "illisible"
-            ? `L'index du dépôt ${etat.depot} est mal formé (JSON illisible) : il n'est pas chargé.`
+            ? `L'index du dépôt ${depot} est mal formé (JSON illisible) : il n'est pas chargé.`
             : /^http /.test(e.message)
-              ? `Le dépôt ${etat.depot} répond par une erreur (${e.message.slice(5)}). Réessaie plus tard.`
+              ? `Le dépôt ${depot} répond par une erreur (${e.message.slice(5)}). Réessaie plus tard.`
               : "Bibliothèque injoignable. Vérifie ta connexion, puis réessaie.",
     };
   } finally {
@@ -546,7 +594,8 @@ function creerTuile(p) {
 
 function choisir(p) {
   if (p.origine === "commu") {
-    if (installe(p.nom)) envoyer({ cmd: "appliquer", nom: p.nom });
+    const local = installe(p.nom);
+    if (local !== null) envoyer({ cmd: "appliquer", nom: local });
     else envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: true });
   } else {
     envoyer({ cmd: "appliquer", nom: p.nom });
@@ -623,7 +672,8 @@ function majTuile(t, p, rang, habillage) {
   const proche = etat.proche && p.origine !== "commu" && etat.proche.nom === p.nom;
   t.origine.textContent = proche ? "modifié" : p.origine === "commu" ? p.auteur || "communauté" : p.origine === "fourni" ? "fourni" : "à toi";
   t.ligne.textContent = detail(p);
-  const actif = p.origine === "commu" ? installe(p.nom) && etat.actif === p.nom : etat.actif === p.nom;
+  const nomLocal = p.origine === "commu" ? installe(p.nom) : p.nom;
+  const actif = nomLocal !== null && etat.actif === nomLocal;
   t.racine.classList.toggle("active", actif);
   t.racine.classList.toggle("proche", !!proche);
   t.racine.classList.toggle("menu-ouvert", etat.menu === p.id);
@@ -695,7 +745,7 @@ function actionsTuile(t) {
     "aria-pressed": etat.comparer === p.id, title: "Compare deux presets côte à côte, avec leurs réglages différents",
   });
   if (p.origine === "commu") {
-    const fait = installe(p.nom);
+    const fait = installe(p.nom) !== null;
     const b = bouton("installer", fait ? "Installé" : "+ Installer", { "aria-pressed": fait ? "true" : null });
     b.disabled = fait;
     return [fav, comp, b];
@@ -785,11 +835,12 @@ function dessinerPresets() {
   // note de la bibliothèque : refaite seulement si le dépôt change (son bouton garde le focus)
   const note = $("note-commu");
   note.hidden = etat.source !== "commu";
-  if (!note.hidden && note.dataset.depot !== etat.depot) {
-    note.dataset.depot = etat.depot;
+  const depot = depotBibliotheque();
+  if (!note.hidden && note.dataset.depot !== depot) {
+    note.dataset.depot = depot;
     note.replaceChildren(
       el("strong", "", "Hébergé sur GitHub"),
-      document.createTextNode(` — dépôt ${etat.depot}. Installer copie le preset dans Mes presets ; publier le tien passe par une relecture avant d'apparaître ici. `),
+      document.createTextNode(` — dépôt ${depot}. Installer copie le preset dans Mes presets ; publier le tien passe par une relecture avant d'apparaître ici. `),
       videUI.lienDepot,
     );
   }
@@ -1109,27 +1160,46 @@ const UNITES_MOD = { rotation: [90, " tr/min"], vitesse: [(40 * 60) / (2 * Math.
 const BORNES_MOD = { acceleration: [2, 0, 5], rayon: [4, 0.1, 5], taille: [1.5, 0, 4], luminosite: [2, 0, 4], trainee: [3, 0.1, 5], opacite: [1, 0, 1] };
 const MODULATIONS_MAX = 16;
 const LISSAGE_MOD = 0.35;
+// Bornes du facteur d'une cible qui se multiplie, sur le groupe `sur` : celles du moteur, et
+// pour le rayon d'une figure, son échelle qui ne descend pas sous GEO_MIN (comme
+// figures::poser : échelle × facteur, au moins 0,5). Sur « Figures », l'échelle de chacune
+// diffère : celle par défaut (1) est prise.
+function bornesFacteur(cible, sur) {
+  const b = BORNES_MOD[cible];
+  if (!b) return null;
+  if (cible !== "rayon" || !(sur === "figures" || sur in NOMS_FIGURES)) return b;
+  const f = etat.reglages && etat.reglages[sur];
+  const echelle = f && f.echelle > 0 ? f.echelle : 1;
+  return [b[0], Math.max(b[1], GEO_MIN / echelle), b[2]];
+}
 // Effet d'une modulation seule, source à fond : pour une cible qui se multiplie, 1 + q·E ramené
 // dans les bornes du moteur (le rayon ne descend pas sous 10 %, l'opacité ne monte pas au-delà
-// de 100 %).
+// de 100 %). La glissière va toujours de −100 à 100 % : la quantité appliquée est q × source,
+// une source à mi-course distingue encore deux quantités que la source à fond confond.
 const affQuantite = (cible, q, sur) => {
   const figure = sur === "figures" || sur in NOMS_FIGURES;
   const [fond, unite] = (figure && UNITES_MOD_FIGURE[cible]) || UNITES_MOD[cible] || [100, " %"];
-  const b = BORNES_MOD[cible];
+  const b = bornesFacteur(cible, sur);
   if (cible === "opacite" && q > 0) return "sans effet seule";
   const v = b ? Math.round((Math.min(b[2], Math.max(b[1], Math.max(0, 1 + q * b[0]))) - 1) * 100) : Math.round(q * fond);
   return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v) + unite;
 };
-// Infobulle de la valeur affichée : ce que la quantité ne peut pas dire seule.
-const noteQuantite = (cible, q) =>
-  cible === "opacite" && q > 0 ? "Sans effet seule (l'opacité est déjà au plus) : compense une autre modulation de l'opacité qui la baisse"
-  : BORNES_MOD[cible] ? "Effet de cette modulation seule, source à fond, dans les bornes du moteur" : "";
-// Bornes de la glissière de quantité (en centièmes) : pour une cible qui se multiplie, rien ne
-// change plus une fois son facteur à 0 (q = −1/E) ; la stéréo agit dans les deux sens.
-function bornesQuantite(cible, source) {
-  const b = BORNES_MOD[cible];
-  const lim = b ? Math.min(100, Math.ceil(100 / b[0])) : 100;
-  return [-lim, source === "stereo" ? lim : 100];
+// Infobulle de la valeur affichée : ce que la quantité ne peut pas dire seule, et la quantité
+// au-delà de laquelle la source à fond touche une borne du moteur.
+function noteQuantite(cible, q, sur) {
+  if (cible === "opacite" && q > 0) return "Sans effet seule (l'opacité est déjà au plus) : compense une autre modulation de l'opacité qui la baisse";
+  const b = bornesFacteur(cible, sur);
+  if (!b) return "";
+  const pc = (x) => {
+    const v = Math.round(Math.abs(x) * 1000) / 10;
+    return (x > 0 ? "+" : "−") + virgule(v, Number.isInteger(v) ? 0 : 1) + " %";
+  };
+  const limites = [];
+  const bas = (Math.max(0, b[1]) - 1) / b[0], haut = (b[2] - 1) / b[0];
+  if (bas > -1) limites.push(`en deçà de ${pc(bas)}`);
+  if (haut < 1) limites.push(`au-delà de ${pc(haut)}`);
+  const note = "Effet de cette modulation seule, source à fond, dans les bornes du moteur";
+  return limites.length ? `${note} ; ${limites.join(" et ")}, la source à fond ne change plus rien (une source plus faible, si)` : note;
 }
 
 // Déclencheurs : événements et actions (comme config::Evenement, Action) ; réglages de chaque
@@ -2294,16 +2364,15 @@ function ligneModulation(m, i) {
   const cible = choixMod(ciblesPour(m.sur || "tout"), m.cible, `Modulation ${n} : paramètre`, changer("cible"), CIBLES_MOD);
   const sur = choixMod(GROUPES, m.sur || "tout", `Modulation ${n} : sur`, changer("sur"));
   const plage = el("input");
-  const [qmin, qmax] = bornesQuantite(m.cible, m.source);
-  Object.assign(plage, { type: "range", min: qmin, max: qmax, step: 1, value: Math.round((m.quantite || 0) * 100) });
+  Object.assign(plage, { type: "range", min: -100, max: 100, step: 1, value: Math.round((m.quantite || 0) * 100) });
   plage.setAttribute("aria-label", `Modulation ${n} : quantité`);
   plage.title = "Double-clic : remise à zéro. À gauche de zéro : dans l'autre sens";
   const valeur = el("span", "valeur-mod", affQuantite(m.cible, m.quantite || 0, m.sur));
-  valeur.title = noteQuantite(m.cible, m.quantite || 0);
+  valeur.title = noteQuantite(m.cible, m.quantite || 0, m.sur);
   const quantite = (q) => {
     const x = listeMods()[i] || m;
     valeur.textContent = affQuantite(x.cible, q, x.sur);
-    valeur.title = noteQuantite(x.cible, q);
+    valeur.title = noteQuantite(x.cible, q, x.sur);
     regle("quantite")(q);
   };
   plage.addEventListener("input", () => quantite(+plage.value / 100));
@@ -2430,7 +2499,7 @@ function majModulations() {
     if (d && document.activeElement !== d.plage) {
       d.plage.value = Math.round((m.quantite || 0) * 100);
       d.valeur.textContent = affQuantite(m.cible, m.quantite || 0, m.sur);
-      d.valeur.title = noteQuantite(m.cible, m.quantite || 0);
+      d.valeur.title = noteQuantite(m.cible, m.quantite || 0, m.sur);
     }
   });
   const ld = listeDecl();
@@ -2671,11 +2740,13 @@ function majReglages() {
 }
 
 // « Surprends-moi » : des réglages tirés au hasard, dans des bornes qui donnent un essaim lisible.
+// Ils partent des réglages par défaut (pas de ceux en place : un réglage avancé changé à la main
+// ne survit pas à la surprise) ; l'appli n'en garde que ce qu'un preset contient.
 function surprise() {
   const r = (a, b) => a + Math.random() * (b - a);
   const ri = (a, b) => Math.floor(r(a, b + 1));
   const parmi = (l) => l[Math.floor(Math.random() * l.length)];
-  const c = JSON.parse(JSON.stringify(etat.reglages));
+  const c = JSON.parse(JSON.stringify(etat.defauts || etat.reglages));
   Object.assign(c.orbite, {
     forme: parmi(FORMES)[0], cometes: Math.random() > 0.15, nombre: ri(1, 6), anneaux: Math.random() < 0.7 ? 1 : ri(2, 3),
     rayon: ri(14, 38), vitesse_base: +r(1.2, 6).toFixed(1), rotation: Math.random() < 0.6 ? 0 : ri(-25, 25), trainee: +r(0.15, 0.7).toFixed(2),
@@ -3269,6 +3340,7 @@ const image = {
   taille: [0, 0],
   apercu: null,
   attente: 0, // minuterie de la prochaine analyse
+  demandee: false, // contours demandés à l'appli, réponse pas encore reçue
 };
 const COTE_ANALYSE = 512;
 
@@ -3363,11 +3435,13 @@ function analyser() {
     const px = r.g.getImageData(0, 0, r.c.width, r.c.height).data;
     image.taille = [r.c.width, r.c.height];
     image.rendu = r.c;
+    image.demandee = true;
     envoyer({ cmd: "contours", largeur: r.c.width, hauteur: r.c.height, pixels: base64(px), seuil: image.seuil, inverser: image.inverser, tous: image.tous });
   }, 80);
 }
 
 function recevoirContours(m) {
+  image.demandee = false;
   majAnalyse(false);
   image.contours = Array.isArray(m.liste) ? m.liste : [];
   if (image.seuil === null) $("seuil-image").value = m.seuil;
@@ -3782,12 +3856,12 @@ function bandeau(texte, action, erreur = false) {
 // alors remplacé à l'envoi (`remplacer: true`). Si l'appli trouve quand même un preset de ce nom
 // (réponse « existe »), le panneau demande la confirmation de la même façon.
 const panneauUI = { confirme: null, envoi: 0 };
-const presetAMoi = (nom) => etat.presets.find((p) => !p.fourni && p.nom.toLowerCase() === nom.trim().toLowerCase());
+const presetAMoi = (nom) => etat.presets.find((p) => !p.fourni && memeNom(p.nom, nom));
 
 function majTitrePanneau() {
   const nom = $("nom-preset").value.trim();
   const existant = presetAMoi(nom);
-  const confirme = panneauUI.confirme !== null && panneauUI.confirme.toLowerCase() === nom.toLowerCase();
+  const confirme = panneauUI.confirme !== null && memeNom(panneauUI.confirme, nom);
   const remplacer = !!existant || confirme;
   const titre = $("titre-panneau");
   // titre plus long (le nom du preset) : en plus petit
@@ -3863,9 +3937,12 @@ window.essaim = {
         etat.defauts = m.defauts;
         etat.presets = m.presets;
         suivreRenommages();
+        // un autre preset en place (appliqué depuis l'icône, Horizon, une règle) : Ctrl+Z défait
+        // maintenant ce preset, plus la dernière action de la page (sinon elle remettrait des
+        // valeurs sur un preset qui n'est plus celui d'où elles venaient)
+        if (m.actif && m.actif !== etat.actif) annulationLocale = null;
         etat.actif = m.actif;
         etat.proche = m.proche;
-        etat.depot = m.depot;
         etat.curseurs = m.curseurs;
         // nom lisible du jeu en place, raccourcis pris par une autre application (champs absents
         // d'une appli plus ancienne)
@@ -3943,20 +4020,21 @@ window.essaim = {
         annulationLocale = null; // Ctrl+Z défait maintenant ce preset
         bandeau(`« ${m.nom} » appliqué.`, { libelle: "Annuler (Ctrl+Z)", faire: annuler });
         break;
+      // réponses à « enregistrer » : elles libèrent le bouton du panneau si un envoi l'attend
       case "enregistre":
-        finEnvoiPanneau();
+        if (panneauUI.envoi) finEnvoiPanneau();
         fermerPanneau();
         etat.source = "mien";
         montrerVue("presets");
         break;
       case "refus":
-        finEnvoiPanneau();
-        $("erreur-panneau").textContent = m.texte;
+        if (panneauUI.envoi) finEnvoiPanneau();
+        $("erreur-panneau").textContent = typeof m.texte === "string" && m.texte ? m.texte : "Preset non enregistré : config.toml est illisible. Corrige le fichier d'abord.";
         $("erreur-panneau").hidden = false;
         break;
       case "existe":
         // un de tes presets porte déjà ce nom : le panneau demande de confirmer le remplacement
-        finEnvoiPanneau();
+        if (panneauUI.envoi) finEnvoiPanneau();
         if (typeof m.nom === "string" && !$("voile").hidden) {
           panneauUI.confirme = m.nom;
           majTitrePanneau();
@@ -3969,8 +4047,16 @@ window.essaim = {
         bandeau(m.texte);
         break;
       case "erreur":
-        // une erreur pendant l'enregistrement (config.toml illisible…) libère le bouton
-        finEnvoiPanneau();
+        // une erreur ne libère pas le bouton d'enregistrement (elle peut venir d'un réglage ou
+        // d'un GIF : l'enregistrement répond par « refus » ; sinon, délai de secours de 8 s) ;
+        // pendant une analyse d'image, c'est la réponse aux contours (image illisible) : la
+        // demande est finie, « Utiliser ce trajet » est libéré
+        if (image.demandee) {
+          image.demandee = false;
+          image.contours = [];
+          majAnalyse(false);
+          dessinerImage();
+        }
         bandeau(m.texte, null, true);
         break;
     }

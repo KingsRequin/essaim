@@ -20,9 +20,13 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
     prend la taille qui lui va (`sourceRectangles`), et aucune n'a moins de 1 px de rayon (opacité
     réduite d'autant) : un trait fin reste continu et un petit point ne clignote pas en bougeant
     (essai relu : `cargo test --release traits_fins_relus -- --ignored`) ; 20 000 pastilles au
-    plus par image, points non finis ignorés ;
+    plus par trait ou anneau (un trait démesuré garde sa longueur, pastilles espacées), 500 000
+    par image en garde-fou de mémoire (un halo sur une fenêtre agrandie en 4K en pose ~33 000 :
+    l'essaim, dessiné après, n'est jamais coupé), points non finis ignorés ; un anneau plus large
+    que son diamètre devient un disque jusqu'à r + largeur / 2, comme le trait de tiny-skia ;
   - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
-    modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
+    modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié ;
+    directement dans le calque, effacé, quand la zone le couvre entier : projecteur). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
   Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Avec une cadence plafonnée, la
   boucle attend l'image suivante sur une minuterie haute résolution
@@ -169,8 +173,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   drapeau ou d'une lettre et de ses accents) avec « … » ; un texte de droite à gauche est écrit
   avec `ETO_RTLREADING` et aligné à droite. Un artiste sans titre est montré à la place du titre. Les moteurs recopient cette image par `Canvas::vignette` : tiny-skia
   la pose, Direct2D la téléverse une fois (`CreateBitmap`, gardée tant que son numéro ne change
-  pas) et la dessine après le lot de pastilles (`DrawBitmap`). Sa zone s'ajoute à celle de
-  l'essaim. Hors des presets, comme l'habillage.
+  pas) et la dessine après le lot de pastilles (`DrawBitmap`). Posée à droite et sous le
+  pointeur, à gauche ou au-dessus faute de place dans l'écran ; le côté pris est gardé et n'est
+  quitté pour la droite ou le dessous que s'il y tient avec 48 px de marge en plus
+  (`etiquette::HYSTERESE`) : un pointeur qui hésite au bord ne la fait pas sauter. Sa zone
+  s'ajoute à celle de l'essaim. Hors des presets, comme l'habillage.
 - **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
   fil « essaim-media » (MTA ; chaque appel asynchrone attendu 2 s au plus, puis annulé et le tour
   sauté : un lecteur figé ne bloque pas le fil), réveillé par
@@ -189,11 +196,24 @@ d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_confi
 (`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
 bornées ; par exemple `bordure`/`repos`), `list_presets` (presets fournis puis ceux de
 l'utilisateur : `name`, `builtin`, `active`, relus à chaque demande), `apply_preset` (`name` :
-comme le menu de l'icône, curseurs du preset compris), `open_settings` (fenêtre des réglages,
-ouverte par la boucle principale), `open_config` ; événement `state` à chaque changement et au
-moins toutes les 2 s, avec `preset` : le nom du preset en place, `null` si les réglages ne sont
-ceux d'aucun (recherché à chaque relecture de `config.toml` ; un preset enregistré ou supprimé
-sans autre changement ne le fait pas bouger, `list_presets` reste juste).
+comme le menu de l'icône, curseurs du preset compris ; `ok: true` dès que les réglages sont
+écrits, avec `"warning"` si seul le jeu de curseurs n'a pas pu être installé), `open_settings` (fenêtre des réglages,
+ouverte par la boucle principale), `open_config` ; événement `state` (`{"event": "state",
+"data": …}`, sans `id`) à chaque changement et au moins toutes les 2 s. Ses champs, les mêmes
+que la réponse à `get_state` (`main.rs`, publiés par `ipc::Shared::publish`) :
+- `paused` : pause demandée par l'utilisateur (icône, raccourci, `set_paused`) ;
+- `fullscreen` : en veille pour un plein écran sur l'écran de la souris ;
+- `active` : l'essaim est affiché (ni en pause, ni en plein écran, ni en pause automatique) ;
+- `gpu` : vrai avec le moteur carte graphique, faux avec le moteur processeur (secours) ;
+- `prisme` : connecté à Prisme ;
+- `config` : les réglages en vigueur (`Config` entière, plus les clés d'avant calculées,
+  `ipc::config_publiee`) ;
+- `preset` : le nom du preset en place, `null` si les réglages ne sont ceux d'aucun (recherché à
+  chaque relecture de `config.toml` ; un preset enregistré ou supprimé sans autre changement ne
+  le fait pas bouger, `list_presets` reste juste).
+
+Avant la première publication de la boucle principale (juste après le lancement), `get_state`
+répond `{"ok": true, "data": null}` : un client attend l'événement `state` ou redemande.
 Clés d'avant les déclencheurs, encore lues et écrites par Horizon : `orbite.vitesse_basse` et
 `orbite.eloignement_grave` (les modulations de base basse → vitesse et grave → rayon, calculées à
 la publication, réécrites, ajoutées ou retirées par `set_config`) et `fissures.actives` (le
@@ -201,7 +221,9 @@ déclencheur clic → fissure) ; `ipc::config_publiee`, `ALIAS`.
 Toute connexion avec un en-tête `Origin` est refusée (pages web, mais aussi applis web locales :
 Tauri, Electron) ; 8 clients au plus, 3 s au total pour la poignée de main (comptées depuis
 l'acceptation : un client qui envoie un octet de temps en temps ne garde pas sa place), messages
-de 64 Ko au plus, client fermé après 60 s sans message. `open_config` passe une fois toutes les
+de 64 Ko au plus, client fermé après 60 s sans rien recevoir de lui (les événements `state` qu'il
+reçoit ne comptent pas) : un client qui ne fait qu'écouter envoie une requête (`get_state`) ou
+un ping WebSocket de temps en temps, moins d'une minute d'écart. `open_config` passe une fois toutes les
 5 s au plus ; `set_config` et `apply_preset` sont étalés à 20 par seconde, tous clients
 confondus (au-delà, la demande attend son tour jusqu'à 2 s, puis « trop de demandes »). Un
 jeton aléatoire est écrit au premier lancement dans `%APPDATA%\Essaim\ipc.jeton` ; il n'est pas
@@ -447,10 +469,13 @@ dégagé ; au plus une inversion du sens par image) et la teinte
   les redonnent toutes les 3 s (un calque sans zone depuis 10 s est retiré). `Effets` possède
   `Loin`, lui passe le son, le cadre de la fenêtre au premier plan (`win::cadre_premier_plan`,
   relu à chaque image dessinée par `main::lire_fenetre`, aussi pour les rebonds) et l'écran du
-  pointeur. `loin::Fenetre::lire` y ajoute l'écran de la fenêtre (son DPI : halo et équerres y
-  sont à sa taille, même si le pointeur est ailleurs) et sa zone de travail : une équerre qui
-  sortirait de la zone de travail (fenêtre agrandie, ancrée au bord, barre des tâches) se
-  retourne dans le cadre. Les éclats du halo sont vidés quand la fenêtre change ; chaque bande du
+  pointeur. `loin::FenetreLue` y ajoute l'écran de la fenêtre (son DPI : halo et équerres y
+  sont à sa taille, même si le pointeur est ailleurs) et la zone de travail de l'écran de chacun
+  de ses coins (`MonitorFromPoint` par coin : une fenêtre à cheval sur deux écrans a ses coins
+  sur l'un et l'autre) ; ces appels à Windows ne sont refaits que quand la fenêtre ou son cadre
+  change, et au moins chaque seconde (écrans changés). Une équerre qui sortirait de la zone de
+  travail de son coin (fenêtre agrandie, ancrée au bord, barre des tâches) se retourne dans le
+  cadre. Les éclats du halo sont vidés quand la fenêtre change ; chaque bande du
   liseré a l'épaisseur de son écran. Leurs zones s'ajoutent à celles
   des fissures (`Effets::zones_loin`), et ils sont dessinés sur tous les écrans
   (`Effets::dessiner_loin`). `Backend::frame` redessine, par écran, un seul rectangle qui englobe
@@ -507,7 +532,8 @@ autorise le renommage d'un exécutable lancé) et le nouveau mis à sa place, ch
 antivirus qui tient le fichier) ; à défaut, le nouveau est copié, sinon l'ancien revient : il
 reste toujours un `essaim.exe`. Le déplacement de l'exécutable en cours attend que `.nouveau`
 puisse s'ouvrir en exclusif (antivirus fini) ; la sortie d'Essaim attend un remplacement en
-cours (`maj::attendre_remplacement`, 10 s au plus) et aucun ne commence pendant la fermeture. Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
+cours (`maj::attendre_remplacement`, au plus `maj::duree_remplacement_max` : quatre séries
+d'attentes complètes, ~15,4 s, plus 5 s de marge) et aucun ne commence pendant la fermeture. Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
 d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
 ne vérifie rien.
 

@@ -89,10 +89,13 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   `luminosite` (la lueur des têtes, +200 %), `trainee` (+300 %), `opacite` (−1 : transparent ;
   une quantité positive est sans effet seule, l'opacité étant déjà au plus, mais compense une
   autre modulation qui la baisse). En négatif, ces parts multipliées s'arrêtent à leur borne :
-  le rayon et la traînée à −90 % (× 0,1), l'accélération, la taille et la lueur à −100 % ; la
-  fenêtre des réglages affiche cet effet borné et arrête la glissière là où plus rien ne change
-  (−0,25 pour le rayon, −0,33 pour la traînée, −0,5 pour l'accélération et la lueur, −0,67 pour la
-  taille ; avec la stéréo, qui agit dans les deux sens, autant de chaque côté).
+  le rayon et la traînée à −90 % (× 0,1), l'accélération, la taille et la lueur à −100 % ; une
+  figure, elle, ne descend pas sous la moitié de sa taille (échelle × rayon, au moins × 0,5). La
+  fenêtre des réglages affiche cet effet borné, source à fond, et son infobulle dit d'où la
+  source à fond ne change plus rien (−22,5 % pour le rayon, −30 % pour la traînée, −50 % pour
+  l'accélération et la lueur, −66,7 % pour la taille) ; la glissière va quand même de −100 à
+  100 % : la quantité est multipliée par la source, et une source à mi-course distingue encore
+  ce que la source à fond confond.
 - `sur` : `"tout"` (les comètes et les satellites), `"cometes"`, `"satellites"`, `"figures"`
   (toutes les figures autour du pointeur) ou une figure : `"arcs"`, `"quatre_temps"`,
   `"anneau"`, `"orbe"`, `"voix"`, `"trame"`, `"pinceau"` (le trait), `"pendule"`, `"gouttes"`.
@@ -117,7 +120,9 @@ Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillem
 `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`, `[essaim] par_kick_min` et
 `par_kick_max`) sont convertis avec leurs valeurs ; `config.toml` est réécrit une fois au
 lancement, commentaires gardés. Un preset sans `[declencheurs]` dont la liste de modulations est
-vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dans le preset. Un preset d'avant garde son allure (essai
+vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dans le preset (une
+réaction non écrite y compte comme coupée, même la montée, active par défaut). Un preset d'avant
+garde son allure (essai
 `presets_comme_avant`, sur les presets fournis jusqu'à la version 0.6).
 
 ### Les effets
@@ -255,7 +260,8 @@ vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dan
   `reaction_montee`, `reaction_drop`. Le trait et le pendule n'ont ni échelle, ni rotation, ni
   décalage. Les modulations peuvent viser chaque figure (`sur`, ci-dessus). Dans la fenêtre des
   réglages, *Copier sur toutes les figures* (sous *+ Avancé* d'une figure) donne sa teinte, son
-  opacité et ses réactions aux huit autres (Ctrl+Z pour revenir) ; tant que le panneau d'une
+  opacité et ses réactions aux huit autres (Ctrl+Z pour revenir, tant qu'aucun preset n'a été
+  appliqué depuis, ici ou ailleurs) ; tant que le panneau d'une
   figure active est affiché, le grand aperçu montre une croix au pointeur et, en pointillés, le
   cadre de sa zone une fois posée (échelle, décalage), absents de l'export GIF.
 - **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres, le halo et le
@@ -297,7 +303,7 @@ vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dan
   d'un bord de l'écran), en blanc cerné de sombre pour rester lisibles sur tout fond, soulignés
   d'un filet à la couleur de l'essaim qui bat avec le kick. Ils restent `duree` secondes (1,5 à
   8, 3 par défaut) puis s'effacent ; le reste du temps, rien. `taille` règle le texte (9 à 20).
-  Un titre de plus de 48 lettres est coupé. C'est une information, pas une allure de l'essaim :
+  Une ligne plus large que 480 px (à 100 %) est coupée, avec « … ». C'est une information, pas une allure de l'essaim :
   comme l'habillage, l'étiquette ne fait pas partie des presets. Il faut que le lecteur annonce
   son morceau à Windows (comme pour l'infobulle).
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
@@ -474,7 +480,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     dont les réglages en cours s'écartent de peu est marqué *modifié* (cadre pointillé).
     Installer ou importer un preset ne remplace jamais un preset différent du même nom (à la
     casse près), et les noms réservés de Windows (CON, NUL, COM1…) sont refusés.
-  - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir) ; une fois sur trois
+  - *Surprends-moi* tire des réglages au hasard, en partant des réglages par défaut (pas de
+    ceux en place : un réglage avancé changé à la main n'y survit pas ; Ctrl+Z pour revenir) ;
+    l'habillage et les réglages de la machine restent. Une fois sur trois
     environ, une ou deux figures (jamais plus) d'allure tirée dans des bornes sages (échelle 0,8
     à 1,3, réactions 50 à 150 %), parfois avec une modulation sur l'une d'elles.
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application* (une entrée coupée
