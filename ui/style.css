@@ -517,6 +517,7 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .raccourcis .touche { font-size: var(--texte-mini); font-weight: 800; letter-spacing: 0.04em; padding: var(--trait-controle) var(--esp-2); box-shadow: inset 0 0 0 var(--trait-fin) var(--bord-controle); white-space: nowrap; }
 /* raccourcis pris par une autre application */
 .note.signalee { color: var(--signal-texte); font-weight: 700; }
+.raccourcis .refuse { color: var(--signal-texte); }
 /* Preset automatique coupé : les règles estompées, avec une note en tête. */
 .note-coupe { margin: 0 0 var(--esp-3); color: var(--signal-texte); font-weight: 700; }
 #bloc-regles { transition: opacity 0.15s; }

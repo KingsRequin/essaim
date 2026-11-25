@@ -8,10 +8,16 @@
 
 const TAU = Math.PI * 2;
 const SAT_R_MAX = 1.9;
-// Dépassement des satellites en mode ressorts, point le plus loin d'un trajet de rayon 1, marge,
-// retard du centre au plus et étendue de la fenêtre (px à 100 %) : comme SAT_DEPASSEMENT,
-// ETENDUE_FORME, MARGIN, CENTER_LAG_MAX et MAX_EXTENT de render.rs.
-const SAT_DEPASSEMENT = 1.4, ETENDUE_FORME = 1.3, MARGE = 12, RETARD_CENTRE_MAX = 30, ETENDUE_MAX = 2400;
+// Dépassement des satellites en mode ressorts, marge, retard du centre au plus et étendue de la
+// fenêtre (px à 100 %) : comme SAT_DEPASSEMENT, MARGIN, CENTER_LAG_MAX et MAX_EXTENT de render.rs.
+const SAT_DEPASSEMENT = 1.4, MARGE = 12, RETARD_CENTRE_MAX = 30, ETENDUE_MAX = 2400;
+// Point le plus loin du centre de chaque trajet de rayon 1 (comme render::etendue_forme) ; 1,2
+// pour des contours (image, icône) et une forme inconnue.
+const ETENDUES_FORMES = {
+  cercle: 1, hexagone: 1.05, pentagone: 1.1, losange: 1.15, lissajous: 1.19, triangle: 1.2, huit: 1.2, trefle: 1.2,
+  coeur: 1.22, etoile: 1.25, fleur: 1.25, carre: 1.25, ellipse: 1.3, astroide: 1.3,
+};
+const etendueForme = (forme) => ETENDUES_FORMES[forme] || 1.2;
 // Points de toutes les traînées au plus, tours de trajet qu'une traînée couvre au plus : comme
 // POINTS_TRAINEES et TOURS_TRAINEE.
 const POINTS_TRAINEES = 60000, TOURS_TRAINEE = 5;
@@ -608,9 +614,10 @@ function pousser(tr, t, x, y, vie, ecart, max = TRAINEE_POINTS_MAX) {
 const vieUtile = (vie, w) => (Number.isFinite(w) && w > 1e-3 ? Math.min(vie, (TOURS_TRAINEE * TAU) / w) : vie);
 
 // Facteur du rayon et décalage (en rayons) d'un groupe, ramenés ensemble pour que son point le
-// plus loin du centre reste à moins de `dispo` (comme render::borne_etendue).
+// plus loin du centre (`portee` rayons : étendue de la forme × anneau extérieur ou satellite le
+// plus écarté) reste à moins de `dispo` (comme render::borne_etendue).
 function borneEtendue(facteur, decalage, rayon, portee, dispo) {
-  const total = Math.abs(decalage) * rayon + ETENDUE_FORME * portee * rayon * facteur;
+  const total = Math.abs(decalage) * rayon + portee * rayon * facteur;
   if (!(Number.isFinite(total) && total > dispo && total > 0)) return [facteur, decalage];
   const k = dispo / total;
   return [facteur * k, decalage * k];
@@ -680,10 +687,13 @@ class Apercu {
     this.pointsTrainee = TRAINEE_POINTS_MAX;
     this.pointsTotal = POINTS_TRAINEES;
     // vitesse angulaire des comètes et des satellites, lissée (Swarm::w_lisse), vie utile des
-    // traînées des comètes par anneau (Swarm::vies), ce qui fait le trajet (Swarm::cle_trajet)
+    // traînées des comètes par anneau (Swarm::vies), formes des deux trajets à l'image d'avant
+    // (Swarm::formes) et modulations (source, cible, groupe) des valeurs lissées
+    // (Swarm::cles_modulations)
     this.wLisse = [0, 0];
     this.vies = [];
-    this.cleTrajet = null;
+    this.formes = null;
+    this.clesModulations = [];
     this.sats = [];
     this.fixes = [];
     this.teinteImposee = null;
@@ -736,10 +746,12 @@ class Apercu {
   }
 
   // Points au plus d'une traînée à cette image : son plafond, et la part de chacune dans le
-  // plafond de toutes (render.rs : POINTS_TRAINEES partagés également), jamais sous
-  // POINTS_TRAINEE_MIN.
+  // plafond de toutes (render::part_trainee : POINTS_TRAINEES partagés également entre toutes
+  // celles que le réglage permet, satellites au maximum : une salve ne raccourcit pas les
+  // comètes), jamais sous POINTS_TRAINEE_MIN.
   plafondTrainee() {
-    const n = this.trainees.length + this.sats.length + this.fixes.length;
+    const maximum = Math.max(0, finiOu(+((this.reglages || {}).essaim || {}).maximum, 0));
+    const n = this.trainees.length + Math.max(maximum, this.sats.length) + this.fixes.length;
     return Math.max(POINTS_TRAINEE_MIN, Math.min(this.pointsTrainee, Math.floor(this.pointsTotal / Math.max(1, n))));
   }
 
@@ -1562,14 +1574,21 @@ class Apercu {
     const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
     const presence = Math.max(0, Math.min(1, son.basse * 2.5));
     const liste = (c.modulations || {}).liste || [];
-    // trajet changé (preset, forme, rayon de base, modulation ajoutée, retirée ou déplacée) : les
-    // traînées et les valeurs lissées repartent de zéro (comme render::CleTrajet)
+    // forme d'un trajet changée : les traînées de ce groupe repartent de zéro ; un rayon qu'on
+    // glisse, une modulation ajoutée les laissent (comme render::Swarm::formes)
     const formeSats = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
-    const cle = JSON.stringify([o.forme, formeSats, o.rayon, liste.map((m) => [m.source, m.cible, m.sur || "tout"])]);
-    if (cle !== this.cleTrajet) {
-      for (const tr of this.trainees.concat(this.sats.map((q) => q.trainee), this.fixes.map((q) => q.trainee))) { tr.length = 0; tr.espace = 1; }
+    const vider = (tr) => { tr.length = 0; tr.espace = 1; };
+    const formesAvant = this.formes || [];
+    if (formesAvant[0] !== o.forme) this.trainees.forEach(vider);
+    if (formesAvant[1] !== formeSats) for (const q of this.sats.concat(this.fixes)) vider(q.trainee);
+    this.formes = [o.forme, formeSats];
+    // modulation ajoutée, retirée ou déplacée : les valeurs lissées repartent de zéro (comme
+    // render::Swarm::cles_modulations), comparées sur place
+    const cles = this.clesModulations;
+    const memes = cles.length === liste.length && liste.every((m, i) => cles[i][0] === m.source && cles[i][1] === m.cible && cles[i][2] === (m.sur || "tout"));
+    if (!memes) {
+      this.clesModulations = liste.map((m) => [m.source, m.cible, m.sur || "tout"]);
       this.valeurs = [];
-      this.cleTrajet = cle;
     }
     // modulations : valeur visée de chacune (source, seuil, à l'envers), lissée à son rythme
     this.avancerSources(dt, [coups.kicks, coups.caisses, coups.aigus, coups.drops, coups.contretemps ? 1 : 0], son.tension || 0);
@@ -1615,7 +1634,10 @@ class Apercu {
     const rayon = o.rayon * S;
     const lim = RETARD_CENTRE_MAX * (1 + 5 * Math.min(1, Math.max(0, finiOu(+o.inertie, 0))));
     const dispo = Math.max(0, ETENDUE_MAX / 2 - MARGE - lim) * S;
-    const portees = [nContours > 1 ? 1 : anneau(nAnneaux - 1)[0], SAT_R_MAX * ((c.ressorts || {}).actif ? SAT_DEPASSEMENT : 1)];
+    const portees = [
+      etendueForme(o.forme) * (nContours > 1 ? 1 : anneau(nAnneaux - 1)[0]),
+      etendueForme(formeSats) * SAT_R_MAX * ((c.ressorts || {}).actif ? SAT_DEPASSEMENT : 1),
+    ];
     portees.forEach((portee, g) => {
       [this.facteurs[g], this.mods[g].decalage] = borneEtendue(this.facteurs[g], this.mods[g].decalage, rayon, portee, dispo);
     });

@@ -59,8 +59,11 @@ pub enum Etat {
     AJour(SystemTime),
     /// Version téléchargée et mise en place, en attente d'un redémarrage.
     Prete(String),
-    /// La dernière recherche a échoué (pas de réseau, fichier refusé…).
+    /// La dernière recherche a échoué (pas de réseau, réponse illisible…).
     Echec(String),
+    /// Une version plus récente a été trouvée, mais n'a pas pu être mise en place (dossier de
+    /// l'exécutable en lecture seule, téléchargement coupé, fichier refusé, exécutable tenu).
+    Impossible { version: String, texte: String },
 }
 
 impl Etat {
@@ -77,6 +80,7 @@ impl Etat {
             }
             Etat::Prete(version) => json!({ "etat": "prete", "version": version }),
             Etat::Echec(texte) => json!({ "etat": "echec", "texte": texte }),
+            Etat::Impossible { version, texte } => json!({ "etat": "impossible", "version": version, "texte": texte }),
         }
     }
 }
@@ -116,11 +120,67 @@ pub fn exe() -> Option<&'static Path> {
     EXE.get().map(PathBuf::as_path)
 }
 
+/// Attentes avant de réessayer d'effacer l'ancienne version : l'instance d'avant, qui vient de
+/// relancer celle-ci, la tient le temps de finir de sortir (un antivirus aussi, parfois).
+const ATTENTES_ANCIEN: [Duration; 3] = [Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(10)];
+
+/// Efface `essaim.exe.ancien` à côté de `exe`, en réessayant après chacune des `attentes`. Vrai
+/// s'il n'y est plus.
+fn effacer_ancien(exe: &Path, attentes: &[Duration]) -> bool {
+    let vieux = ancien(exe);
+    let mut attentes = attentes.iter();
+    loop {
+        match std::fs::remove_file(&vieux) {
+            Ok(()) => return true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(e) => match attentes.next() {
+                Some(&d) => std::thread::sleep(d),
+                None => {
+                    log::info!("mise à jour : {} encore tenu ({e})", vieux.display());
+                    return false;
+                }
+            },
+        }
+    }
+}
+
+/// Fichier où est notée la dernière version lancée (`annoncer_version`).
+fn fichier_version() -> PathBuf {
+    crate::config::dir().join("version")
+}
+
+/// Faut-il annoncer la version `actuelle`, la dernière lancée étant `vue` (contenu du fichier,
+/// absent avant la première) ? Pas au tout premier lancement (`premier` : aucun réglage encore,
+/// l'accueil s'ouvre) ; oui pour toute autre version, ou si le fichier manque encore (première
+/// version qui le tient, arrivée par une mise à jour).
+fn a_annoncer(vue: Option<&str>, actuelle: &str, premier: bool) -> bool {
+    !premier && vue.map(str::trim) != Some(actuelle)
+}
+
+/// Au lancement : première fois de cette version (mise à jour faite, « Redémarrer → ») : une
+/// bulle « Essaim X.Y.Z installé ». La version est notée dans `%APPDATA%\Essaim\version`.
+pub fn annoncer_version(premier: bool) {
+    let actuelle = env!("CARGO_PKG_VERSION");
+    let chemin = fichier_version();
+    let vue = std::fs::read_to_string(&chemin).ok();
+    if vue.as_deref().map(str::trim) == Some(actuelle) {
+        return;
+    }
+    if a_annoncer(vue.as_deref(), actuelle, premier) {
+        log::info!("première fois de la version {actuelle}");
+        crate::win::bulle(&format!("Essaim {actuelle} installé."));
+    }
+    if let Err(e) = std::fs::write(&chemin, actuelle) {
+        log::warn!("version lancée non notée dans {} ({e})", chemin.display());
+    }
+}
+
 /// Efface l'ancienne version laissée par une mise à jour et lance la vérification périodique.
 pub fn start(actif: bool) {
     regler(actif);
     let Ok(exe) = std::env::current_exe() else { return };
-    let _ = std::fs::remove_file(ancien(&exe));
+    // l'instance d'avant peut tenir encore l'ancienne version : réessayé plus loin, sur le fil
+    let ancien_reste = !effacer_ancien(&exe, &[]);
     let _ = std::fs::remove_file(nouveau(&exe));
     let _ = EXE.set(exe.clone());
     // une compilation de travail ne se remplace pas toute seule
@@ -128,6 +188,9 @@ pub fn start(actif: bool) {
         return;
     }
     let lance = std::thread::Builder::new().name("mise à jour".into()).spawn(move || {
+        if ancien_reste {
+            effacer_ancien(&exe, &ATTENTES_ANCIEN);
+        }
         std::thread::sleep(PREMIERE_VERIFICATION);
         loop {
             if ACTIF.load(Ordering::Relaxed) && reserver() {
@@ -198,6 +261,42 @@ pub fn attendre_remplacement(delai: Duration) -> bool {
     }
 }
 
+/// Versions dont l'échec de mise en place a déjà été dit par une bulle (une fois chacune : la
+/// recherche suivante, six heures plus tard, ne la répète pas).
+static BULLES_ECHEC: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Vrai la première fois que `version` est demandée à `vues` (et la note).
+fn premiere_fois(vues: &Mutex<Vec<String>>, version: &str) -> bool {
+    let mut vues = vues.lock().unwrap_or_else(|e| e.into_inner());
+    if vues.iter().any(|v| v == version) {
+        return false;
+    }
+    vues.push(version.to_owned());
+    true
+}
+
+/// Texte de la bulle d'échec : il tient dans une bulle (250 caractères au plus, `win::bulle`).
+fn texte_bulle_echec(version: &str, cause: &str) -> String {
+    let debut = format!("Mise à jour vers Essaim {version} impossible : ");
+    let place = 250usize.saturating_sub(debut.encode_utf16().count() + 1);
+    let mut cause_courte = String::new();
+    for c in cause.chars() {
+        if cause_courte.encode_utf16().count() + c.len_utf16() > place {
+            cause_courte.push('…');
+            break;
+        }
+        cause_courte.push(c);
+    }
+    debut + &cause_courte
+}
+
+/// Échec d'une recherche : avant d'avoir trouvé une version plus récente (la recherche), ou
+/// en la mettant en place ; `apres_bulle` : la bulle du téléchargement était déjà partie.
+enum Rate {
+    Recherche(anyhow::Error),
+    MiseEnPlace { version: String, erreur: anyhow::Error, apres_bulle: bool },
+}
+
 /// La recherche, une fois réservée (`reserver`) : son résultat reste dans `ETAT`.
 fn recherche(exe: &Path) {
     noter(match verifier(exe) {
@@ -207,12 +306,37 @@ fn recherche(exe: &Path) {
             Etat::Prete(version)
         }
         Ok(None) => Etat::AJour(SystemTime::now()),
-        Err(e) => {
+        Err(Rate::Recherche(e)) => {
             log::warn!("mise à jour : {e:#}");
             Etat::Echec(format!("{e:#}"))
         }
+        Err(Rate::MiseEnPlace { version, erreur, apres_bulle }) => {
+            let texte = format!("{erreur:#}");
+            log::warn!("mise à jour vers {version} impossible : {texte}");
+            // la bulle du téléchargement annonçait une mise à jour : sans suite, elle laisserait
+            // croire qu'elle viendra
+            if apres_bulle && premiere_fois(&BULLES_ECHEC, &version) {
+                crate::win::bulle(&texte_bulle_echec(&version, &texte));
+            }
+            Etat::Impossible { version, texte }
+        }
     });
     EN_COURS.store(false, Ordering::SeqCst);
+}
+
+/// Le dossier de `exe` accepte-t-il un nouveau fichier ? (La mise en place y écrit la nouvelle
+/// version, puis renomme l'exécutable.) Essayé avec un fichier jetable, effacé aussitôt.
+fn inscriptible(exe: &Path) -> anyhow::Result<()> {
+    let essai = exe.with_extension("exe.essai");
+    let _ = std::fs::remove_file(&essai);
+    let dossier = exe.parent().unwrap_or(exe);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&essai)
+        .with_context(|| format!("le dossier {} n'accepte pas de nouveau fichier : range essaim.exe dans un dossier à toi (Documents, par exemple)", dossier.display()))?;
+    let _ = std::fs::remove_file(&essai);
+    Ok(())
 }
 
 fn ancien(exe: &Path) -> PathBuf {
@@ -223,9 +347,30 @@ fn nouveau(exe: &Path) -> PathBuf {
     exe.with_extension("exe.nouveau")
 }
 
+/// Version plus récente trouvée : numéro, adresses de l'exécutable et de sa signature, empreinte
+/// SHA-256 publiée.
+struct Trouvee {
+    version: String,
+    url: String,
+    url_signature: String,
+    empreinte: String,
+}
+
 /// Cherche une version plus récente ; si elle existe, la télécharge et la met en place.
 /// Renvoie son numéro.
-fn verifier(exe: &Path) -> anyhow::Result<Option<String>> {
+fn verifier(exe: &Path) -> Result<Option<String>, Rate> {
+    let Some(v) = trouver().map_err(Rate::Recherche)? else { return Ok(None) };
+    let rate = |erreur, apres_bulle| Rate::MiseEnPlace { version: v.version.clone(), erreur, apres_bulle };
+    // dossier en lecture seule (Program Files…) : rien n'est téléchargé pour rien
+    inscriptible(exe).map_err(|e| rate(e, false))?;
+    log::info!("mise à jour : téléchargement de la version {}", v.version);
+    crate::win::bulle(&format!("Téléchargement de la mise à jour (version {})…", v.version));
+    installer(exe, &v).map_err(|e| rate(e, true))?;
+    Ok(Some(v.version))
+}
+
+/// Demande à GitHub la dernière version publiée ; `None` si elle n'est pas plus récente.
+fn trouver() -> anyhow::Result<Option<Trouvee>> {
     let api = format!("https://api.github.com/repos/{DEPOT}/releases/latest");
     let reponse: serde_json::Value = serde_json::from_slice(&telecharger(&api)?).context("réponse de GitHub illisible")?;
     let tag = reponse["tag_name"].as_str().context("version publiée sans numéro")?;
@@ -247,28 +392,29 @@ fn verifier(exe: &Path) -> anyhow::Result<Option<String>> {
         Ok(url.to_owned())
     };
     let (fichier, signature) = (fichier(NOM_EXE)?, fichier(NOM_SIG)?);
-    let url = adresse(fichier)?;
-    let signature = telecharger(&adresse(signature)?)?;
     let empreinte = fichier["digest"]
         .as_str()
         .and_then(|d| d.strip_prefix("sha256:"))
         .context("empreinte SHA-256 absente de la version publiée")?;
+    Ok(Some(Trouvee { version: version.to_owned(), url: adresse(fichier)?, url_signature: adresse(signature)?, empreinte: empreinte.to_owned() }))
+}
 
-    log::info!("mise à jour : téléchargement de la version {version}");
-    crate::win::bulle(&format!("Téléchargement de la mise à jour (version {version})…"));
-    let octets = telecharger(&url)?;
+/// Télécharge la version trouvée, la vérifie (empreinte, signature) et la met à la place de
+/// `exe`.
+fn installer(exe: &Path, v: &Trouvee) -> anyhow::Result<()> {
+    let signature = telecharger(&v.url_signature)?;
+    let octets = telecharger(&v.url)?;
     if !octets.starts_with(b"MZ") {
         bail!("le fichier téléchargé n'est pas un exécutable");
     }
     let obtenue = hex(&sha256(&octets)?);
-    if !obtenue.eq_ignore_ascii_case(empreinte) {
-        bail!("empreinte différente de celle publiée ({obtenue} au lieu de {empreinte})");
+    if !obtenue.eq_ignore_ascii_case(&v.empreinte) {
+        bail!("empreinte différente de celle publiée ({obtenue} au lieu de {})", v.empreinte);
     }
-    if !CLES.iter().any(|cle| signature_valide(cle, &message_signe(version, &obtenue), &signature)) {
-        bail!("signature de la version {version} absente ou fausse : mise à jour refusée");
+    if !CLES.iter().any(|cle| signature_valide(cle, &message_signe(&v.version, &obtenue), &signature)) {
+        bail!("signature de la version {} absente ou fausse : mise à jour refusée", v.version);
     }
-    remplacer(exe, &octets)?;
-    Ok(Some(version.to_owned()))
+    remplacer(exe, &octets)
 }
 
 /// Attentes entre les essais d'un déplacement de fichier : un antivirus qui examine le nouvel
@@ -549,6 +695,64 @@ mod tests {
         assert_eq!(Etat::AJour(quand).json(), json!({ "etat": "a_jour", "heure": 1_795_000_000u64 }));
         assert_eq!(Etat::Prete("9.9.9".into()).json(), json!({ "etat": "prete", "version": "9.9.9" }));
         assert_eq!(Etat::Echec("api.github.com a répondu 403".into()).json(), json!({ "etat": "echec", "texte": "api.github.com a répondu 403" }));
+        assert_eq!(
+            Etat::Impossible { version: "9.9.9".into(), texte: "dossier en lecture seule".into() }.json(),
+            json!({ "etat": "impossible", "version": "9.9.9", "texte": "dossier en lecture seule" })
+        );
+    }
+
+    #[test]
+    fn dossier_inscriptible_ou_non() {
+        let dossier = std::env::temp_dir().join(format!("essaim-maj-ecrire-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let exe = dossier.join("essaim.exe");
+        inscriptible(&exe).unwrap();
+        // l'essai ne laisse rien derrière lui
+        assert_eq!(std::fs::read_dir(&dossier).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dossier);
+        // dossier absent (clé USB retirée…) : refusé, avec le dossier dans le message
+        let e = inscriptible(&exe).unwrap_err();
+        assert!(format!("{e:#}").contains("essaim-maj-ecrire"), "{e:#}");
+    }
+
+    #[test]
+    fn une_bulle_d_echec_par_version() {
+        let vues = Mutex::new(Vec::new());
+        assert!(premiere_fois(&vues, "1.2.0"));
+        assert!(!premiere_fois(&vues, "1.2.0"));
+        assert!(premiere_fois(&vues, "1.3.0"));
+        let t = texte_bulle_echec("1.2.0", &"é".repeat(400));
+        assert!(t.starts_with("Mise à jour vers Essaim 1.2.0 impossible : "));
+        assert!(t.encode_utf16().count() <= 250, "{}", t.encode_utf16().count());
+    }
+
+    #[test]
+    fn version_annoncee_une_fois() {
+        // premier lancement (aucun réglage) : rien à annoncer
+        assert!(!a_annoncer(None, "1.0.0", true));
+        // nouvelle version, ou première avec ce fichier après une mise à jour
+        assert!(a_annoncer(Some("0.9.0"), "1.0.0", false));
+        assert!(a_annoncer(None, "1.0.0", false));
+        // déjà vue (fin de ligne laissée par un éditeur comprise)
+        assert!(!a_annoncer(Some("1.0.0\r\n"), "1.0.0", false));
+    }
+
+    #[test]
+    fn ancien_efface_des_qu_il_est_libre() {
+        let dossier = std::env::temp_dir().join(format!("essaim-maj-ancien-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let exe = dossier.join("essaim.exe");
+        let attentes = [Duration::from_millis(100), Duration::from_millis(200), Duration::from_millis(300)];
+        // absent : rien à faire
+        assert!(effacer_ancien(&exe, &[]));
+        // tenu un instant (l'instance d'avant finit de sortir) : effacé au nouvel essai
+        std::fs::write(ancien(&exe), b"MZ").unwrap();
+        let fil = verrouiller(&ancien(&exe), Duration::from_millis(150));
+        assert!(!effacer_ancien(&exe, &[]));
+        assert!(effacer_ancien(&exe, &attentes));
+        fil.join().unwrap();
+        assert!(!ancien(&exe).exists());
+        let _ = std::fs::remove_dir_all(&dossier);
     }
 
     #[test]

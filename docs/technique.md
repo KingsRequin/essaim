@@ -35,13 +35,19 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   de cinq tours de leur trajet au plus (`render::vie_utile`, vitesse angulaire lissée ~0,5 s :
   au-delà, elle repasse sur elle-même sans rien montrer de plus ; un tour mordait sur des presets
   fournis, qui en font près de 4 basse à fond) et toutes ensemble comptent 60 000 points au plus, partagés
-  également (`POINTS_TRAINEES`, 4 000 au plus par traînée ; les plus vieux points partent).
+  également (`POINTS_TRAINEES`, 4 000 au plus par traînée ; les plus vieux points partent) entre
+  toutes celles que le réglage permet (`render::part_trainee` : comètes × anneaux, maximum de
+  satellites, permanents) : la part ne bouge pas quand une salve de satellites arrive, et les
+  comètes ne raccourcissent pas.
   Le trajet de chaque groupe (anneau extérieur, satellite le plus écarté, avec son dépassement en
   mode ressorts, décalage et retard du centre compris) est ramené à moins de 1 200 px du pointeur
   (`render::borne_etendue`, rayon et décalage réduits ensemble) : au-delà, les points sont
-  retirés (traînée laissée derrière par un saut du pointeur). Un trajet changé (forme, rayon de
-  base, modulations ajoutées, retirées ou déplacées : un preset appliqué) vide les traînées et
-  les valeurs lissées des modulations. Cadence calée sur le
+  retirés (traînée laissée derrière par un saut du pointeur). Le point le plus loin de chaque
+  forme vient de `render::etendue_forme` (cercle 1, hexagone 1,05… ellipse et astroïde 1,3 ;
+  contours 1,2), pas d'un pire cas commun. Une forme de trajet changée (un preset appliqué) vide
+  les traînées de son groupe (comètes ou satellites) ; une modulation ajoutée, retirée ou déplacée
+  remet à zéro les valeurs lissées sans toucher aux traînées ; un rayon glissé ne vide rien (le
+  trajet glisse). Cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Un `DwmFlush` rendu en moins de
   2 ms, moins d'une demi-période après le précédent, n'a rien composé (écran éteint, pas de
   rafraîchissement) : la boucle attend alors elle-même la période de l'écran le plus rapide (le
@@ -628,12 +634,23 @@ antivirus qui tient le fichier) ; à défaut, le nouveau est copié, sinon l'anc
 reste toujours un `essaim.exe`. Le déplacement de l'exécutable en cours attend que `.nouveau`
 puisse s'ouvrir en exclusif (antivirus fini) ; la sortie d'Essaim attend un remplacement en
 cours (`maj::attendre_remplacement`, au plus `maj::duree_remplacement_max` : quatre séries
-d'attentes complètes, ~15,4 s, plus 5 s de marge) et aucun ne commence pendant la fermeture. Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
-d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
-ne vérifie rien.
+d'attentes complètes, ~15,4 s, plus 5 s de marge) et aucun ne commence pendant la fermeture.
+Avant tout téléchargement, le dossier de l'exécutable doit accepter un nouveau fichier
+(`maj::inscriptible`, un `essaim.exe.essai` créé puis effacé) : sinon (Program Files…), rien
+n'est téléchargé et l'état le dit. Un échec après la bulle « Téléchargement… » (réseau coupé,
+empreinte ou signature refusée, exécutable tenu) en ouvre une seconde avec la cause, une fois
+par version (`BULLES_ECHEC`). Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
+d'instance unique est fermé, puis le même chemin est relancé, avec `--reglages` si la fenêtre
+des réglages était ouverte au moment de la demande. Au lancement, `.ancien` est effacé, et
+réessayé sur le fil de mise à jour 2, 7 puis 17 s plus tard (l'instance d'avant le tient le temps
+de finir de sortir). La dernière version lancée est notée dans `%APPDATA%\Essaim\version` : une
+autre (ou le fichier absent hors premier lancement) donne la bulle « Essaim X.Y.Z installé. »
+(`maj::annoncer_version`). Une compilation de travail (debug) ne vérifie rien.
 
-L'avancement tient dans `maj::Etat` (jamais, recherche, à jour, prête, échec), que la fenêtre
-des réglages envoie à la page quand il change (message `maj`, vue Application). Son bouton
+L'avancement tient dans `maj::Etat` (jamais, recherche, à jour, prête, échec de la recherche,
+mise en place impossible avec la version trouvée), que la fenêtre
+des réglages envoie à la page quand il change (message `maj`, vue Application : « Recherche
+impossible » ou « Mise à jour vers la version X impossible »). Son bouton
 *Chercher une mise à jour* (`chercher_maj` → `maj::chercher`) lance la même recherche sur un
 fil à part, même si `[mise_a_jour] auto` est coupé ; une seule recherche à la fois (`EN_COURS`),
 et plus aucune une fois qu'une version attend le redémarrage. *Redémarrer* (`redemarrer`) envoie

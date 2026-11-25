@@ -7,7 +7,8 @@
 //! Options : `--reglages` ouvre la fenêtre des réglages (de l'instance en cours s'il y en a
 //! une) ; `--stream` ouvre la fenêtre pour le stream ; `--quitter` ferme l'instance en cours ;
 //! `--restaurer-bordure` rend sa couleur à la fenêtre restée colorée (fermeture, plantage, pause
-//! et plein écran le font tout seuls).
+//! et plein écran le font tout seuls). Lancé sans option pendant qu'une instance tourne, il lui
+//! fait ouvrir ses réglages et s'arrête.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
@@ -241,7 +242,18 @@ fn main() {
     };
     init_log(!deja);
     if deja {
-        log::info!("déjà lancé, sortie");
+        // relancé à la main (double-clic sur essaim.exe) pendant qu'il tourne : sans rien faire,
+        // on croirait que rien ne se passe ; la première instance ouvre ses réglages
+        if args.is_empty() {
+            if let Some(h) = fenetre_instance() {
+                unsafe {
+                    let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(win::CMD_CONFIG), LPARAM(0));
+                }
+            }
+            log::info!("déjà lancé : réglages de l'instance en cours ouverts, sortie");
+        } else {
+            log::info!("déjà lancé, sortie");
+        }
         return;
     }
     unsafe {
@@ -267,9 +279,9 @@ fn main() {
         default_hook(info);
     }));
     log::info!("démarrage d'Essaim {}", env!("CARGO_PKG_VERSION"));
-    let relancer = run(open_settings, open_stream).unwrap_or_else(|e| {
+    let relance = run(open_settings, open_stream).unwrap_or_else(|e| {
         log::error!("arrêt sur erreur : {e:#}");
-        false
+        None
     });
     bordure::restore();
     // une mise à jour en train de remplacer l'exécutable, ou des curseurs en cours d'écriture,
@@ -277,13 +289,14 @@ fn main() {
     maj::attendre_remplacement(maj::duree_remplacement_max());
     souris::attendre_curseurs(Duration::from_secs(2));
     // nouvelle version en place : le verrou est rendu avant de lancer la suivante
-    if let (true, Some(exe)) = (relancer, maj::exe()) {
+    if let (Some(relance), Some(exe)) = (relance, maj::exe()) {
         if let Ok(v) = verrou {
             unsafe {
                 let _ = CloseHandle(v);
             }
         }
-        match std::process::Command::new(exe).spawn() {
+        // la fenêtre des réglages était ouverte (« Redémarrer → ») : elle se rouvre
+        match std::process::Command::new(exe).args(relance.reglages.then_some("--reglages")).spawn() {
             Ok(_) => log::info!("relance pour la mise à jour"),
             Err(e) => log::error!("relance impossible : {e}"),
         }
@@ -422,8 +435,15 @@ impl Son {
     }
 }
 
-/// Boucle de l'appli. Renvoie vrai s'il faut relancer Essaim (mise à jour prête).
-fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
+/// Relance demandée pour passer à la nouvelle version.
+struct Relance {
+    /// La fenêtre des réglages était ouverte au moment de la demande : la nouvelle version la
+    /// rouvre (`--reglages`).
+    reglages: bool,
+}
+
+/// Boucle de l'appli. Renvoie la relance à faire s'il en faut une (mise à jour prête).
+fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>> {
     // premier lancement (aucun réglage encore) : la fenêtre des réglages et son accueil
     let premier = !config::path().exists();
     // réglages d'une version d'avant les modulations : convertis une fois pour toutes
@@ -440,6 +460,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut son = Son::default();
 
     let _tray = win::Tray::new()?;
+    // première fois de cette version (mise à jour faite) : une bulle le dit
+    maj::annoncer_version(premier);
     maj::start(conf.cfg.mise_a_jour.auto);
     win::raccourcis(conf.cfg.raccourcis.actif);
     let mut raccourcis = conf.cfg.raccourcis.actif;
@@ -521,7 +543,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     // retour du dernier `DwmFlush` (composition vide détectée par son écart avec le suivant)
     let mut dernier_flush = start;
     let mut stat_send = Duration::ZERO;
-    let mut relancer = false;
+    let mut relance = None;
     // charge publiée chaque seconde pour la fenêtre des réglages
     let (mut charge_busy, mut charge_frames, mut charge_depuis) = (Duration::ZERO, 0u32, start);
     let (mut stat_frames, mut stat_time, mut stat_busy, mut stat_max, mut next_stat) =
@@ -543,7 +565,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                     break;
                 }
                 win::CMD_REDEMARRER if maj::prete().is_some() => {
-                    relancer = true;
+                    // lu maintenant : la fenêtre se ferme avec Essaim
+                    relance = Some(Relance { reglages: reglages_ouverts() });
                     sortir = true;
                     break;
                 }
@@ -1028,7 +1051,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
     }
     drop(son);
-    Ok(relancer)
+    Ok(relance)
 }
 
 #[cfg(test)]

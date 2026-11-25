@@ -372,6 +372,8 @@ impl Fenetre {
         let curseurs = crate::souris::actuel();
         let curseurs_nom = self.nom_du_jeu(&curseurs);
         let refus = crate::win::raccourcis_refuses();
+        let demarrage = demarrage_actif();
+        let (demarrage_coche, demarrage_ailleurs) = demarrage.json();
         let mut etat = json!({
             "type": "etat",
             "reglages": cfg,
@@ -385,7 +387,9 @@ impl Fenetre {
             "raccourcis_raisons": refus.iter().map(|r| json!({ "raccourci": r.raccourci, "raison": r.raison })).collect::<Vec<_>>(),
             "proche": proche.map(|(n, p)| json!({ "nom": p.name, "ecarts": n })),
             "defauts": Config::default(),
-            "demarrage": demarrage_actif(),
+            // coché seulement pour l'exécutable en cours ; inscrit pour un autre : son chemin
+            "demarrage": demarrage_coche,
+            "demarrage_ailleurs": demarrage_ailleurs,
             "version": env!("CARGO_PKG_VERSION"),
             "illisible": illisible,
             "prisme": crate::prisme::present(),
@@ -734,7 +738,11 @@ impl Fenetre {
             }
             Demande::Demarrage { actif } => {
                 match regler_demarrage(actif) {
-                    Ok(()) => self.message(if actif { "Essaim démarrera avec Windows." } else { "Essaim ne démarrera plus avec Windows." }),
+                    Ok(()) if actif => {
+                        let exe = std::env::current_exe().unwrap_or_default();
+                        self.message(&message_demarrage_active(&exe, &dossiers_provisoires()));
+                    }
+                    Ok(()) => self.message("Essaim ne démarrera plus avec Windows."),
                     Err(e) => self.erreur(&format!("Démarrage avec Windows non modifié : {e}.")),
                 }
                 self.etat();
@@ -897,14 +905,70 @@ const CLE_RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 /// Entrées de démarrage coupées ou permises dans le Gestionnaire des tâches (onglet Démarrage).
 const CLE_RUN_APPROUVE: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
 
-/// Essaim démarre-t-il avec la session ? Valeur `Essaim` de la clé Run de l'utilisateur, et pas
-/// coupée dans le Gestionnaire des tâches.
-fn demarrage_actif() -> bool {
-    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_SZ};
-    let inscrit = unsafe { RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, None, None) }.is_ok();
-    if !inscrit {
-        return false;
+/// Démarrage avec la session, tel que la page le montre.
+#[derive(Debug, PartialEq)]
+enum Demarrage {
+    /// Inscrit pour l'exécutable en cours, et permis.
+    Actif,
+    /// Inscrit et permis, mais pour un autre exécutable (déplacé, autre copie) : c'est lui qui
+    /// démarrera, ou rien s'il n'existe plus.
+    Ailleurs(String),
+    /// Pas inscrit, ou coupé dans le Gestionnaire des tâches.
+    Inactif,
+}
+
+impl Demarrage {
+    /// Pour la page : `demarrage` (coché ou non) et `demarrage_ailleurs` (chemin inscrit, ou null).
+    fn json(&self) -> (bool, Option<&str>) {
+        match self {
+            Demarrage::Actif => (true, None),
+            Demarrage::Ailleurs(chemin) => (false, Some(chemin.as_str())),
+            Demarrage::Inactif => (false, None),
+        }
     }
+}
+
+/// Chemin de l'exécutable dans une valeur de la clé Run : entre guillemets (suivi d'éventuels
+/// arguments), ou toute la valeur.
+fn exe_de_la_commande(valeur: &str) -> &str {
+    let v = valeur.trim();
+    match v.strip_prefix('"') {
+        Some(reste) => reste.split('"').next().unwrap_or(reste).trim(),
+        None => v,
+    }
+}
+
+/// État du démarrage d'après la valeur `Essaim` de la clé Run (`valeur`), sa permission dans le
+/// Gestionnaire des tâches (`permis`) et l'exécutable en cours (`exe`) : chemins comparés sans
+/// guillemets ni casse.
+fn etat_demarrage(valeur: Option<&str>, permis: bool, exe: &std::path::Path) -> Demarrage {
+    let Some(valeur) = valeur.filter(|_| permis) else { return Demarrage::Inactif };
+    let inscrit = exe_de_la_commande(valeur);
+    let meme = |a: &str, b: &str| a.replace('/', "\\").to_lowercase() == b.replace('/', "\\").to_lowercase();
+    if meme(inscrit, &exe.to_string_lossy()) {
+        Demarrage::Actif
+    } else {
+        Demarrage::Ailleurs(inscrit.to_owned())
+    }
+}
+
+/// Essaim démarre-t-il avec la session, et lequel ? Valeur `Essaim` de la clé Run de
+/// l'utilisateur, pas coupée dans le Gestionnaire des tâches, comparée à l'exécutable en cours.
+fn demarrage_actif() -> Demarrage {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_SZ};
+    // la commande inscrite (taille demandée d'abord, en octets)
+    let mut taille = 0u32;
+    let valeur = unsafe {
+        if RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, None, Some(&mut taille)).is_err() {
+            None
+        } else {
+            let mut tampon = vec![0u16; (taille as usize).div_ceil(2).max(1)];
+            let mut n = (tampon.len() * 2) as u32;
+            RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, Some(tampon.as_mut_ptr() as *mut _), Some(&mut n))
+                .is_ok()
+                .then(|| String::from_utf16_lossy(&tampon[..(n as usize / 2).min(tampon.len())]).trim_end_matches('\0').to_owned())
+        }
+    };
     let mut etat = [0u8; 12];
     let mut n = etat.len() as u32;
     let lu = unsafe {
@@ -912,7 +976,33 @@ fn demarrage_actif() -> bool {
     }
     .is_ok();
     // sans valeur : permise ; sinon, premier octet pair (02, 06) = permise, impair (03) = coupée
-    !lu || n == 0 || demarrage_approuve(etat[0])
+    let permis = !lu || n == 0 || demarrage_approuve(etat[0]);
+    etat_demarrage(valeur.as_deref(), permis, &std::env::current_exe().unwrap_or_default())
+}
+
+/// `exe` est-il dans un dossier qu'on vide (Téléchargements, dossier temporaire) ? Comparé sans
+/// casse, dossier par dossier.
+fn dans_un_dossier_provisoire(exe: &std::path::Path, provisoires: &[std::path::PathBuf]) -> bool {
+    let bas = |p: &std::path::Path| std::path::PathBuf::from(p.to_string_lossy().replace('/', "\\").to_lowercase());
+    let exe = bas(exe);
+    provisoires.iter().filter(|d| !d.as_os_str().is_empty()).any(|d| exe.starts_with(bas(d)))
+}
+
+/// Message après l'activation du démarrage : un exécutable laissé dans Téléchargements ou le
+/// dossier temporaire risque d'être effacé, et le démarrage ne trouverait plus rien.
+fn message_demarrage_active(exe: &std::path::Path, provisoires: &[std::path::PathBuf]) -> String {
+    let mut m = String::from("Essaim démarrera avec Windows.");
+    if dans_un_dossier_provisoire(exe, provisoires) {
+        m.push_str(" Il est lancé depuis un dossier qu'on vide souvent : range d'abord essaim.exe dans un dossier où il restera, puis réactive cette option.");
+    }
+    m
+}
+
+/// Dossiers qu'on vide : Téléchargements et dossier temporaire.
+fn dossiers_provisoires() -> Vec<std::path::PathBuf> {
+    let mut d: Vec<std::path::PathBuf> = dossier_connu(&windows::Win32::UI::Shell::FOLDERID_Downloads).into_iter().collect();
+    d.push(std::env::temp_dir());
+    d
 }
 
 /// Premier octet de la valeur de `StartupApproved\Run` : l'entrée est-elle permise ?
@@ -1003,12 +1093,13 @@ fn depuis_base64(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Dossier Images de l'utilisateur, là où Windows le place (il peut être déplacé ou redirigé).
-fn dossier_images() -> Option<std::path::PathBuf> {
+/// Dossier connu de l'utilisateur (Images, Téléchargements…), là où Windows le place (il peut
+/// être déplacé ou redirigé).
+fn dossier_connu(id: &windows::core::GUID) -> Option<std::path::PathBuf> {
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Pictures, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT};
     unsafe {
-        let p = SHGetKnownFolderPath(&FOLDERID_Pictures, KF_FLAG_DEFAULT, None).ok()?;
+        let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
         let s = p.to_string().ok();
         CoTaskMemFree(Some(p.0 as *const _));
         s.map(std::path::PathBuf::from)
@@ -1021,7 +1112,7 @@ fn enregistrer_gif(nom: &str, donnees: &str) -> Result<std::path::PathBuf, Strin
     if !octets.starts_with(b"GIF89a") || octets.len() > 40 << 20 {
         return Err("ce n'est pas un GIF".into());
     }
-    let dossier = dossier_images().ok_or("dossier Images introuvable")?.join("Essaim");
+    let dossier = dossier_connu(&windows::Win32::UI::Shell::FOLDERID_Pictures).ok_or("dossier Images introuvable")?.join("Essaim");
     std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
     ecrire_sans_ecraser(&dossier, &nom_de_gif(nom), "gif", &octets)
 }
@@ -1722,6 +1813,32 @@ mod tests {
     fn demarrage_coupe_dans_le_gestionnaire_des_taches() {
         assert!(demarrage_approuve(0x02) && demarrage_approuve(0x06));
         assert!(!demarrage_approuve(0x03) && !demarrage_approuve(0x07));
+    }
+
+    #[test]
+    fn demarrage_compare_au_chemin_de_l_exe() {
+        use std::path::{Path, PathBuf};
+        let exe = Path::new(r"C:\Outils\Essaim\essaim.exe");
+        // inscrit pour lui : guillemets, casse et barres obliques ne comptent pas
+        assert_eq!(etat_demarrage(Some(r#""C:\Outils\Essaim\essaim.exe""#), true, exe), Demarrage::Actif);
+        assert_eq!(etat_demarrage(Some(r#""c:/outils/essaim/ESSAIM.EXE" --reglages"#), true, exe), Demarrage::Actif);
+        assert_eq!(etat_demarrage(Some(r"C:\Outils\Essaim\essaim.exe"), true, exe), Demarrage::Actif);
+        // pour un autre exécutable (déplacé depuis Téléchargements) : son chemin
+        let ailleurs = etat_demarrage(Some(r#""C:\Users\a\Downloads\essaim.exe""#), true, exe);
+        assert_eq!(ailleurs, Demarrage::Ailleurs(r"C:\Users\a\Downloads\essaim.exe".into()));
+        assert_eq!(ailleurs.json(), (false, Some(r"C:\Users\a\Downloads\essaim.exe")));
+        // absent, ou coupé dans le Gestionnaire des tâches
+        assert_eq!(etat_demarrage(None, true, exe), Demarrage::Inactif);
+        assert_eq!(etat_demarrage(Some(r#""C:\Outils\Essaim\essaim.exe""#), false, exe), Demarrage::Inactif);
+        assert_eq!(Demarrage::Actif.json(), (true, None));
+        // dossier provisoire : le message prévient
+        let provisoires = [PathBuf::from(r"C:\Users\a\Downloads"), PathBuf::from(r"C:\Users\a\AppData\Local\Temp\")];
+        assert!(dans_un_dossier_provisoire(Path::new(r"c:\users\A\downloads\essaim.exe"), &provisoires));
+        assert!(dans_un_dossier_provisoire(Path::new(r"C:\Users\a\AppData\Local\Temp\x\essaim.exe"), &provisoires));
+        assert!(!dans_un_dossier_provisoire(Path::new(r"C:\Users\a\Downloads2\essaim.exe"), &provisoires));
+        assert!(!dans_un_dossier_provisoire(exe, &provisoires));
+        assert!(message_demarrage_active(Path::new(r"C:\Users\a\Downloads\essaim.exe"), &provisoires).contains("range d'abord essaim.exe dans un dossier où il restera"));
+        assert_eq!(message_demarrage_active(exe, &provisoires), "Essaim démarrera avec Windows.");
     }
 
     #[test]

@@ -72,6 +72,7 @@ const etat = {
   raccourcisRefuses: [], // raccourcis globaux non enregistrés (pris ailleurs, ou volés à AltGr)
   raccourcisRaisons: {}, // raccourci → raison du refus
   demarrage: false,
+  demarrageAilleurs: null, // chemin d'un autre essaim.exe inscrit au démarrage
   pause: false,
   jeux: null,
   detailDemande: null,
@@ -2091,8 +2092,14 @@ function construireAvance(def, zone) {
     } else if (def.demarrage) {
       const b = el("button", "puce debut", "Démarrer Essaim avec Windows");
       b.id = "demarrage";
+      // inscrit pour un autre essaim.exe (déplacé, autre copie) : non coché, et un clic inscrit
+      // celui-ci à la place
       b.addEventListener("click", () => envoyer({ cmd: "demarrage", actif: !etat.demarrage }));
-      l.append(b);
+      const note = el("p", "note");
+      note.id = "note-demarrage";
+      note.hidden = true;
+      l.append(b, note);
+      decrire(b, note.id);
     } else {
       const b = el("button", "puce debut", "Revoir l'accueil");
       b.addEventListener("click", () => ouvrirAccueil());
@@ -2293,6 +2300,8 @@ function recevoirMaj(m) {
     a_jour: `À jour : aucune version plus récente${typeof m.heure === "number" && m.heure > 0 ? ` (vérifié à ${heure(m.heure)})` : ""}.`,
     prete: prete ? `Version ${m.version} téléchargée et vérifiée : elle s'applique au redémarrage.` : "",
     echec: `Recherche impossible : ${String(m.texte || "erreur inconnue")}.`,
+    // version trouvée, mais pas mise en place (dossier en lecture seule, fichier refusé…)
+    impossible: `Mise à jour${typeof m.version === "string" ? ` vers la version ${m.version}` : ""} impossible : ${String(m.texte || "erreur inconnue")}.`,
   };
   $("maj-etat").textContent = textes[m.etat] || "";
   // pendant la recherche, le bouton reste focalisable (aria-disabled : un clic ne fait rien) ;
@@ -2798,6 +2807,11 @@ function majReglages() {
   $("avec-preset").setAttribute("aria-pressed", !!val("souris", "avec_preset"));
   const d = $("demarrage");
   if (d) d.setAttribute("aria-pressed", etat.demarrage);
+  const noteDemarrage = $("note-demarrage");
+  if (noteDemarrage) {
+    noteDemarrage.hidden = !etat.demarrageAilleurs;
+    noteDemarrage.textContent = etat.demarrageAilleurs ? `Le démarrage pointe vers ${etat.demarrageAilleurs} : clique pour y mettre cet essaim.exe.` : "";
+  }
   majSorties();
   majNomActif();
 }
@@ -3155,19 +3169,23 @@ function dessinerAuto() {
   dessinerPausesApplis();
 }
 
-// Raccourcis globaux qu'une autre application a déjà pris (`raccourcis_refuses` de l'appli,
-// absent d'une version plus ancienne : rien n'est dit).
+// Raison du refus d'un raccourci (`raccourcis_raisons`) : une autre application le garde, ou la
+// touche écrit un caractère avec AltGr (= Ctrl+Alt) sur une des dispositions de clavier installées
+// (texte de l'appli : win::ECRIT_UN_CARACTERE, dit ici en une seule formulation) ; une autre
+// raison est reprise telle quelle ; sans raison connue : la première.
+const PRIS_AILLEURS = "pris par une autre application";
+function raisonRefus(r) {
+  const t = etat.raccourcisRaisons[r];
+  return !t ? PRIS_AILLEURS : /caract[eè]re/i.test(t) ? "AltGr y écrit un caractère sur un des claviers installés" : t;
+}
+
+// Raccourcis globaux non enregistrés, quand les raccourcis sont actifs (`raccourcis_refuses` de
+// l'appli, absent d'une version plus ancienne : aucun).
+const raccourcisRefuses = () => (etat.reglages && etat.reglages.raccourcis && etat.reglages.raccourcis.actif ? etat.raccourcisRefuses : []);
+
+// Raccourcis globaux qu'une autre application a déjà pris, ou écartés (rien n'est dit sinon).
 function dessinerRaccourcisRefuses() {
-  const refuses = etat.reglages.raccourcis.actif ? etat.raccourcisRefuses : [];
-  // raison de chaque refus (`raccourcis_raisons`) : une autre application le garde, ou la touche
-  // écrit un caractère avec AltGr (= Ctrl+Alt) sur une des dispositions de clavier installées
-  // (texte de l'appli : win::ECRIT_UN_CARACTERE, dit ici en une seule formulation) ; une autre
-  // raison est reprise telle quelle ; sans raison connue : la première
-  const PRIS = "pris par une autre application";
-  const raison = (r) => {
-    const t = etat.raccourcisRaisons[r];
-    return !t ? PRIS : /caract[eè]re/i.test(t) ? "AltGr y écrit un caractère sur un des claviers installés" : t;
-  };
+  const refuses = raccourcisRefuses(), PRIS = PRIS_AILLEURS, raison = raisonRefus;
   const groupes = new Map();
   for (const r of refuses) groupes.set(raison(r), [...(groupes.get(raison(r)) || []), r]);
   const phrase = ([texte, liste]) => texte === PRIS
@@ -3787,8 +3805,11 @@ const ETAPES_ACCUEIL = [
     titre: "À savoir",
     corps: () => {
       const l = el("div", "raccourcis");
+      // un raccourci que Windows a refusé (ou écarté pour AltGr) est marqué, avec sa raison
+      const refuses = raccourcisRefuses();
       for (const [k, t] of [["Ctrl + Alt + →", "preset suivant, partout dans Windows"], ["Ctrl + Alt + ←", "preset précédent"], ["Ctrl + Alt + P", "pause"], ["Ctrl + Alt + F", "projecteur"], ["04 Auto", "un preset par application ou par heure"], ["Icône", "presets et pause dans la zone de notification"]]) {
-        l.append(el("span", "touche", k), el("span", "", t));
+        const refuse = refuses.find((r) => r === k.replace(/ /g, ""));
+        l.append(el("span", "touche", k), refuse ? el("span", "refuse", `${t} — non enregistré : ${raisonRefus(refuse)}`) : el("span", "", t));
       }
       return [l, el("p", "note", "Les cases à côté de chaque réglage notent sur 10 son impact sur la puissance utilisée.")];
     },
@@ -4029,7 +4050,10 @@ window.essaim = {
             if (x && typeof x.raccourci === "string" && typeof x.raison === "string") etat.raccourcisRaisons[x.raccourci] = x.raison.slice(0, 80);
           }
         }
-        etat.demarrage = m.demarrage;
+        // inscrit pour un autre exécutable : non coché, avec son chemin (champ absent d'une appli
+        // plus ancienne)
+        etat.demarrage = m.demarrage === true;
+        etat.demarrageAilleurs = typeof m.demarrage_ailleurs === "string" && m.demarrage_ailleurs ? m.demarrage_ailleurs.slice(0, 300) : null;
         if (premier) {
           if (typeof m.version === "string") {
             $("version").textContent = "v" + m.version;
@@ -4294,8 +4318,9 @@ function avancerGrille(maintenant, son) {
   const ids = [...visibles], n = ids.length, debut = performance.now();
   const restant = () => BUDGET_GRILLE - (performance.now() - debut);
   for (let k = 0; k < n && (k === 0 || restant() > 0); k++) {
-    const id = ids[(tourGrille + k) % n];
-    tourGrille = (tourGrille + k + 1) % n;
+    // la liste a pu raccourcir depuis le dernier tour : `tourGrille` est ramené dans ses bornes
+    const id = ids[tourGrille % n];
+    tourGrille = (tourGrille % n + 1) % n;
     const t = tuiles.get(id);
     if (!t || t.erreur || !t.p.reglages) continue;
     // une vignette en erreur est laissée de côté jusqu'à ce que ses réglages changent
@@ -4322,8 +4347,11 @@ function avancerGrille(maintenant, son) {
         return;
       }
       if (anime) {
+        // aucun temps écoulé (deux passages dans la même image) : pas de pas nul, `avancer`
+        // divise par le temps écoulé
+        const pas = Math.min(0.1, Math.max(0, (maintenant - (t.vu || maintenant)) / 1000));
         ap.dimensionner();
-        ap.avancer(Math.min(0.1, Math.max(0, (maintenant - (t.vu || maintenant)) / 1000)), son);
+        if (pas > 0) ap.avancer(pas, son);
         ap.dessiner();
       }
       t.vu = maintenant;

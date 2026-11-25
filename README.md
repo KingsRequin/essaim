@@ -171,6 +171,7 @@ installer, pas de droits administrateur. Au premier lancement, la fenêtre des r
 - Le curseur **Dotter** est à côté : `curseur-Dotter.zip` (voir l'étape 3 plus bas).
 - Essaim se met ensuite à jour tout seul : une notification prévient du téléchargement, puis
   propose de redémarrer. Pour ne pas attendre : *Chercher une mise à jour* dans la vue *Application*.
+- Relancer `essaim.exe` pendant qu'il tourne ouvre sa fenêtre des réglages.
 
 **Depuis les sources :** Essaim se compile en une commande.
 
@@ -198,7 +199,8 @@ Désinstaller (installation depuis les sources) :
 
 Désinstaller (`essaim.exe` téléchargé) : décoche *Démarrer Essaim avec Windows* dans la vue
 *Application*, quitte Essaim (icône de la zone de notification → *Quitter*), puis supprime
-`essaim.exe`. Pour ne rien garder, supprime aussi le dossier `%APPDATA%\Essaim`.
+`essaim.exe` (et `essaim.exe.ancien` à côté, s'il reste d'une mise à jour). Pour ne rien
+garder, supprime aussi le dossier `%APPDATA%\Essaim`.
 
 ## Questions fréquentes
 

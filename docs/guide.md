@@ -92,8 +92,11 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   le rayon et la traînée à −90 % (× 0,1), l'accélération, la taille et la lueur à −100 % ; une
   figure, elle, reste entre la moitié et deux fois et demie sa taille (échelle × rayon, de × 0,5
   à × 2,5 : elle ne couvre jamais l'écran). Quel que soit le réglage, l'essaim reste à moins de
-  1 200 px du pointeur (rayon et décalage réduits ensemble au-delà), et une traînée ne fait pas
-  plus de cinq tours de son trajet (au-delà, elle repasserait sur elle-même). La
+  1 200 px du pointeur (rayon et décalage réduits ensemble au-delà, selon le point le plus loin
+  de sa forme : un cercle va plus loin qu'une ellipse de même rayon), et une traînée ne fait pas
+  plus de cinq tours de son trajet (au-delà, elle repasserait sur elle-même). Les aperçus
+  montrent cette borne à l'échelle 100 % : sur un écran à 150 ou 200 %, l'essaim, plus grand,
+  l'atteint plus tôt. La
   fenêtre des réglages affiche cet effet borné, source à fond, et son infobulle dit d'où la
   source à fond ne change plus rien (−22,5 % pour le rayon, −30 % pour la traînée, −50 % pour
   l'accélération et la lueur, −66,7 % pour la taille) ; la glissière va quand même de −100 à
@@ -495,7 +498,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     jour, *Chercher une mise à jour*, *Mises à jour automatiques* et *Ouvrir config.toml* ; à
     droite, le démarrage avec Windows, l'accueil à revoir, les pauses (*ne pas déranger*, sur
     batterie), les captures et le stream.
-  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Application*).
+  - Au premier lancement, un accueil en trois étapes (à revoir depuis *Application*) ; dans *À
+    savoir*, un raccourci que Windows n'a pas enregistré est marqué, avec sa raison.
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
     niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
     *Aigus* s'allume sur les attaques des aigus. Sous *Pause*, l'état de l'écoute : *Son capté*,
@@ -522,7 +526,11 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     environ, une ou deux figures (jamais plus) d'allure tirée dans des bornes sages (échelle 0,8
     à 1,3, réactions 50 à 150 %), parfois avec une modulation sur l'une d'elles.
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application* (une entrée coupée
-    dans le Gestionnaire des tâches est montrée inactive ; la réactiver ici lève la coupure).
+    dans le Gestionnaire des tâches est montrée inactive ; la réactiver ici lève la coupure). Une
+    entrée qui lance un autre `essaim.exe` (copie déplacée, autre dossier) est montrée non cochée,
+    avec une note « pointe vers … » : un clic y met l'exécutable en cours. Activé depuis
+    Téléchargements ou le dossier temporaire, le message demande de ranger d'abord `essaim.exe`
+    dans un dossier où il restera.
   - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 5 ou flèches
     (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme
     une boîte (boîte ouverte : Ctrl+1 à 5 et Ctrl+S n'agissent pas). Fenêtre étroite ou zoomée
@@ -565,7 +573,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes ;
   au-delà de 1 Mo, l'ancien devient `essaim.old.log`).
 - `essaim.exe --quitter` ferme l'instance en cours ; `essaim.exe --stream` ouvre la fenêtre pour
-  le stream (celle de l'instance en cours s'il y en a une).
+  le stream (celle de l'instance en cours s'il y en a une). Relancer `essaim.exe` sans option
+  pendant qu'il tourne (double-clic) ouvre les réglages de l'instance en cours.
 - `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été
   tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
   lancement suivant aussi).
@@ -582,17 +591,24 @@ version publiée sur GitHub (`KingsRequin/essaim`, *Releases*). Si elle est plus
 2. son empreinte SHA-256 est comparée à celle publiée par GitHub, et sa signature à la clé
    de l'auteur intégrée à Essaim : un fichier abîmé ou qui ne vient pas de l'auteur est refusé ;
 3. le nouveau fichier prend la place de l'exécutable en cours, et l'ancien devient
-   `essaim.exe.ancien` (effacé au lancement suivant) ;
+   `essaim.exe.ancien` (effacé au lancement suivant, dans les secondes qui suivent) ;
 4. une seconde notification propose de redémarrer. Clic dessus, ou *Redémarrer avec la version…*
-   dans le menu de l'icône. Sans clic, la nouvelle version démarre avec la session suivante.
+   dans le menu de l'icône. Sans clic, la nouvelle version démarre avec la session suivante. À
+   son premier lancement, une notification « Essaim X.Y.Z installé » le confirme ; redémarrée
+   depuis la fenêtre des réglages, elle la rouvre.
+
+Si la mise en place échoue après la première notification (réseau coupé, fichier refusé,
+exécutable tenu), une notification le dit avec la cause, une fois par version.
 
 Sans attendre : *Chercher une mise à jour*, dans la vue *Application* des réglages, lance la
 même recherche tout de suite, même si les mises à jour automatiques sont coupées. Le résultat
-s'affiche au-dessus du bouton : *À jour* avec l'heure de la recherche, la raison d'un échec, ou
-la version téléchargée avec un bouton *Redémarrer*.
+s'affiche au-dessus du bouton : *À jour* avec l'heure de la recherche, *Recherche impossible*
+(GitHub injoignable…) ou *Mise à jour vers la version… impossible* (version trouvée mais pas
+mise en place) avec la raison, ou la version téléchargée avec un bouton *Redémarrer*.
 
 Le dossier de l'exécutable doit être modifiable (c'est le cas de
-`%LOCALAPPDATA%\Programs\Essaim`, pas de `Program Files`). Couper : *Mises à jour automatiques*
+`%LOCALAPPDATA%\Programs\Essaim`, pas de `Program Files`) : sinon, rien n'est téléchargé et
+*Application* le dit. Couper : *Mises à jour automatiques*
 dans *Application*, ou `[mise_a_jour] auto = false`. Les échecs (pas de réseau, fichier
 refusé) sont notés dans le journal et affichés dans *Application*, et Essaim réessaie six heures
 plus tard.

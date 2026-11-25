@@ -29,9 +29,22 @@ const MAX_EXTENT: f32 = 2400.0;
 /// en mode ressorts (nés au centre, ils rejoignent leur place avec un dépassement de ~37 %).
 const SAT_R_MAX: f32 = 1.9;
 const SAT_DEPASSEMENT: f32 = 1.4;
-/// Point le plus loin du centre d'un trajet de rayon 1, toutes formes confondues (ellipse,
-/// astroïde : 1,3 ; contours d'une image : 1,2).
-const ETENDUE_FORME: f32 = 1.3;
+/// Point le plus loin du centre du trajet `forme` de rayon 1 (`chemin`) : sommet d'un polygone,
+/// bout d'un pétale, mesuré pour le cœur et la courbe de Lissajous (arrondi au-dessus), 1,2 pour
+/// des contours (`mettre_a_l_echelle`). Vérifié par `les_trajets_sont_continus`.
+fn etendue_forme(forme: Forme) -> f32 {
+    match forme {
+        Forme::Cercle => 1.0,
+        Forme::Hexagone => 1.05,
+        Forme::Pentagone => 1.1,
+        Forme::Losange => 1.15,
+        Forme::Lissajous => 1.19,
+        Forme::Triangle | Forme::Huit | Forme::Trefle | Forme::Trace | Forme::Icone => 1.2,
+        Forme::Coeur => 1.22,
+        Forme::Etoile | Forme::Fleur | Forme::Carre => 1.25,
+        Forme::Ellipse | Forme::Astroide => 1.3,
+    }
+}
 const SAT_TRAIL: f64 = 0.25;
 const TRAIL_STEP: f64 = 1.0 / 90.0;
 /// Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points) :
@@ -375,6 +388,13 @@ const POINTS_TRAINEES: usize = 60_000;
 /// touchent aucun.
 const TOURS_TRAINEE: f64 = 5.0;
 
+/// Part de chaque traînée dans `POINTS_TRAINEES` (`TRAIL_POINTS_MAX` au plus), à parts égales
+/// entre toutes celles que le réglage permet : `cometes`, `satellites` (le maximum, pas ceux qui
+/// vivent en ce moment) et `fixes`.
+fn part_trainee(cometes: usize, satellites: usize, fixes: usize) -> usize {
+    (POINTS_TRAINEES / (cometes + satellites + fixes).max(1)).min(TRAIL_POINTS_MAX)
+}
+
 /// Vie utile d'une traînée de vie `vie` (s) qui tourne à `w` radians/s (lissée) : au plus
 /// `TOURS_TRAINEE` tours de son trajet.
 fn vie_utile(vie: f64, w: f32) -> f64 {
@@ -382,11 +402,11 @@ fn vie_utile(vie: f64, w: f32) -> f64 {
 }
 
 /// Facteur du rayon et décalage (en rayons) d'un groupe, ramenés ensemble (la forme garde ses
-/// proportions) pour que son point le plus loin du centre — `ETENDUE_FORME` × `portee` (anneau
-/// extérieur, satellite le plus écarté) × `rayon` (px) × facteur, plus le décalage — reste à moins
-/// de `dispo` px.
+/// proportions) pour que son point le plus loin du centre — `portee` (en rayons : étendue de la
+/// forme × anneau extérieur ou satellite le plus écarté) × `rayon` (px) × facteur, plus le
+/// décalage — reste à moins de `dispo` px.
 fn borne_etendue(facteur: f32, decalage: f32, rayon: f32, portee: f32, dispo: f32) -> (f32, f32) {
-    let total = decalage.abs() * rayon + ETENDUE_FORME * portee * rayon * facteur;
+    let total = decalage.abs() * rayon + portee * rayon * facteur;
     if total.is_finite() && total > dispo && total > 0.0 {
         let k = dispo / total;
         (facteur * k, decalage * k)
@@ -700,32 +720,15 @@ pub struct Swarm {
     w_lisse: [f32; 2],
     /// Vie utile des traînées des comètes, anneau par anneau (s).
     vies: Vec<f64>,
-    /// Ce qui fait le trajet : changé (preset, forme, rayon, modulations ajoutées ou retirées), les
-    /// traînées et les valeurs lissées des modulations repartent de zéro.
-    cle_trajet: Option<CleTrajet>,
+    /// Forme du trajet des comètes et de celui des satellites à l'image d'avant : changée, les
+    /// traînées du groupe repartent de zéro (elles suivraient l'ancien trajet jusqu'à leur fin).
+    /// Un rayon, une quantité, une couleur changés n'en font pas partie : le trajet glisse.
+    formes: Option<(Forme, Forme)>,
+    /// Modulations (source, cible, groupe), dans l'ordre : la liste changée (ajout, retrait,
+    /// déplacement), chaque valeur lissée appartiendrait à une autre ; elles repartent de zéro.
+    cles_modulations: Vec<(crate::config::Source, crate::config::Cible, crate::config::Groupe)>,
     /// Tampons du dessin, gardés d'une image à l'autre (le dessin ne prend que `&self`).
     tampons: std::cell::RefCell<Tampons>,
-}
-
-/// Forme du trajet des comètes et de celui des satellites, rayon de base, et modulations (source,
-/// cible, groupe, dans l'ordre) : ce qui déplace le trajet ou change à qui appartient chaque
-/// valeur lissée. Une quantité, une opacité, une couleur n'en font pas partie.
-#[derive(PartialEq)]
-struct CleTrajet {
-    formes: (Forme, Forme),
-    rayon: f32,
-    modulations: Vec<(crate::config::Source, crate::config::Cible, crate::config::Groupe)>,
-}
-
-impl CleTrajet {
-    fn de(cfg: &Config) -> Self {
-        let o = &cfg.orbite;
-        Self {
-            formes: (o.forme, cfg.essaim.forme.suivie(o.forme)),
-            rayon: o.rayon,
-            modulations: cfg.modulations.liste.iter().map(|m| (m.source, m.cible, m.sur)).collect(),
-        }
-    }
 }
 
 /// Trajet d'un groupe pendant une image : rotation au début et son avance, rayon et décalage
@@ -813,7 +816,8 @@ impl Swarm {
             tetes: Vec::new(),
             w_lisse: [0.0; 2],
             vies: Vec::new(),
-            cle_trajet: None,
+            formes: None,
+            cles_modulations: Vec::new(),
             tampons: Default::default(),
         }
     }
@@ -993,20 +997,27 @@ impl Swarm {
         if !self.pitch.is_finite() {
             self.pitch = 50.0;
         }
-        // trajet changé (preset appliqué, forme, rayon de base, modulation ajoutée, retirée ou
-        // déplacée) : les traînées suivraient l'ancien trajet jusqu'à leur fin, et chaque valeur
-        // lissée appartiendrait à une autre modulation ; tout repart de zéro
-        let cle = CleTrajet::de(cfg);
-        if self.cle_trajet.as_ref() != Some(&cle) {
-            for tr in self.trails.iter_mut().chain(self.sats.iter_mut().chain(self.fixes.iter_mut()).map(|s| &mut s.trail)) {
-                tr.clear();
-            }
+        // forme d'un trajet changée (preset appliqué, autre forme) : les traînées de ce groupe
+        // suivraient l'ancien trajet jusqu'à leur fin ; elles repartent de zéro. Un rayon qu'on
+        // glisse, une modulation ajoutée (teinte, opacité…) les laissent : le trajet glisse.
+        let formes = (o.forme, cfg.essaim.forme.suivie(o.forme));
+        let avant = self.formes.replace(formes);
+        if avant.map(|f| f.0) != Some(formes.0) {
+            self.trails.iter_mut().for_each(Trail::clear);
+        }
+        if avant.map(|f| f.1) != Some(formes.1) {
+            self.sats.iter_mut().chain(self.fixes.iter_mut()).for_each(|s| s.trail.clear());
+        }
+        // modulation ajoutée, retirée ou déplacée : chaque valeur lissée appartiendrait à une
+        // autre ; elles repartent de zéro (comparées sur place, sans rien allouer)
+        let liste = &cfg.modulations.liste;
+        if !self.cles_modulations.iter().copied().eq(liste.iter().map(|m| (m.source, m.cible, m.sur))) {
+            self.cles_modulations.clear();
+            self.cles_modulations.extend(liste.iter().map(|m| (m.source, m.cible, m.sur)));
             self.valeurs.clear();
-            self.cle_trajet = Some(cle);
         }
         // modulations : valeur visée de chacune (source, seuil, à l'envers), lissée à son rythme
         self.sources.avancer(dt, [kicks, caisses, aigus, drops, contre as u32], au.tension);
-        let liste = &cfg.modulations.liste;
         self.valeurs.resize(liste.len(), 0.0);
         for (m, v) in liste.iter().zip(self.valeurs.iter_mut()) {
             let vise = modulation::visee(m, self.sources.valeur(m.source, &au, depth, presence));
@@ -1055,7 +1066,10 @@ impl Swarm {
         // retirés (un grand rayon modulé sur un grand écran les y jetait tous : l'essaim
         // disparaissait). Le rayon et le décalage sont ramenés ensemble.
         let rayon = o.rayon * scale;
-        let portees = [if contours_cometes > 1 { 1.0 } else { anneau(anneaux - 1).0 }, SAT_R_MAX * if re.actif { SAT_DEPASSEMENT } else { 1.0 }];
+        let portees = [
+            etendue_forme(o.forme) * if contours_cometes > 1 { 1.0 } else { anneau(anneaux - 1).0 },
+            etendue_forme(cfg.essaim.forme.suivie(o.forme)) * SAT_R_MAX * if re.actif { SAT_DEPASSEMENT } else { 1.0 },
+        ];
         let dispo = (MAX_EXTENT / 2.0 - MARGIN * scale - lim).max(0.0);
         for (g, &portee) in portees.iter().enumerate() {
             (self.facteurs[g], self.mods[g].decalage) = borne_etendue(self.facteurs[g], self.mods[g].decalage, rayon, portee, dispo);
@@ -1113,8 +1127,9 @@ impl Swarm {
                 })
                 .collect();
         }
-        // part de chaque traînée dans le budget de points commun
-        let part = (POINTS_TRAINEES / (self.trails.len() + self.sats.len() + self.fixes.len()).max(1)).min(TRAIL_POINTS_MAX);
+        // part de chaque traînée dans le budget de points commun, comptée sur les nombres maximaux
+        // du réglage (stables) : une salve de satellites ne raccourcit pas les comètes
+        let part = part_trainee(anneaux * nombre, e.maximum.max(self.sats.len()), self.fixes.len());
         // vitesse : celle du trajet plus celle des modulations (accélérée aussi), jamais négative ;
         // lissée, elle borne la vie utile des traînées (`TOURS_TRAINEE` tours de trajet)
         let vitesse = |g: usize| self.dir * self.vitesse(g);
@@ -2935,11 +2950,10 @@ mod tests {
             Forme::Carre, Forme::Pentagone, Forme::Ellipse, Forme::Coeur, Forme::Trefle, Forme::Lissajous, Forme::Astroide,
         ] {
             let mut p = chemin(forme, 0.0);
-            // chaque trajet tient dans le rayon prévu par les bornes du dessin (1,3)
-            for i in 0..720 {
-                let (x, y) = chemin(forme, i as f32 * TAU / 720.0);
-                assert!((x * x + y * y).sqrt() <= 1.31, "{forme:?} : ({x}, {y}) trop loin");
-            }
+            // chaque trajet tient dans son étendue (`etendue_forme`), qui ne le surestime pas
+            let loin = (0..7200).map(|i| chemin(forme, i as f32 * TAU / 7200.0)).map(|(x, y)| x.hypot(y)).fold(0.0f32, f32::max);
+            assert!(loin <= etendue_forme(forme) + 1e-4, "{forme:?} : {loin} au-delà de {}", etendue_forme(forme));
+            assert!(loin >= etendue_forme(forme) - 0.01, "{forme:?} : {loin}, étendue {} trop large", etendue_forme(forme));
             for i in 1..=720 {
                 let q = chemin(forme, i as f32 * TAU / 720.0);
                 let d = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt();
@@ -3176,7 +3190,7 @@ mod tests {
         assert_eq!(borne_etendue(2.0, 0.5, 20.0, 1.0, 1000.0), (2.0, 0.5));
         // trop grand : ramené juste à `dispo`, rayon et décalage d'autant
         let (f, d) = borne_etendue(5.0, 1.0, 200.0, 2.65, 1000.0);
-        assert!((d.abs() * 200.0 + ETENDUE_FORME * 2.65 * 200.0 * f - 1000.0).abs() < 0.1);
+        assert!((d.abs() * 200.0 + 2.65 * 200.0 * f - 1000.0).abs() < 0.1);
         assert!((f / d - 5.0).abs() < 1e-4);
     }
 
@@ -3231,15 +3245,32 @@ mod tests {
         assert!(longueur(&s) > 5);
         let lissee = s.valeurs[0];
         assert!(lissee != 0.0);
-        // autre forme : les traînées repartent de zéro
+        // autre forme : les traînées repartent de zéro (il ne reste que les points de cette image)
+        let duree = |s: &Swarm| s.trails.iter().map(|tr| tr.back().unwrap().0 - tr.front().unwrap().0).fold(0.0f64, f64::max);
         cfg.orbite.forme = Forme::Etoile;
         avancer(&mut s, &cfg, 1);
-        assert!(longueur(&s) <= 2, "{}", longueur(&s));
+        assert!(duree(&s) <= dt as f64 + 1e-9, "{}", duree(&s));
         avancer(&mut s, &cfg, 30);
-        // autre rayon de base : de même
-        cfg.orbite.rayon += 10.0;
+        // rayon glissé cran par cran : les traînées restent, les valeurs lissées aussi
+        // (valeurs lissées marquées : remises à zéro, elles en seraient loin après un pas)
+        s.valeurs.iter_mut().for_each(|v| *v = 123.0);
+        for i in 0..10 {
+            cfg.orbite.rayon += 1.0;
+            avancer(&mut s, &cfg, 1);
+            assert!(longueur(&s) > 5, "{}", longueur(&s));
+            if i == 0 {
+                // celles qui se lissent assez pour qu'on voie d'où elles partent
+                let lentes = cfg.modulations.liste.iter().zip(&s.valeurs).filter(|(m, _)| m.lissage > 0.2);
+                assert!(lentes.clone().count() > 0 && lentes.clone().all(|(_, &v)| v > 50.0), "{:?}", s.valeurs);
+            }
+        }
+        // une modulation de teinte ajoutée : les traînées restent, les valeurs lissées repartent
+        // de zéro (la liste a changé)
+        cfg.modulations.liste.push(Modulation { source: Source::Basse, cible: Cible::Teinte, sur: Groupe::Tout, quantite: 1.0, ..Default::default() });
+        s.valeurs.iter_mut().for_each(|v| *v = 123.0);
         avancer(&mut s, &cfg, 1);
-        assert!(longueur(&s) <= 2);
+        assert!(longueur(&s) > 5);
+        assert!(s.valeurs.iter().all(|&v| v != 123.0));
         // une modulation retirée en tête : les valeurs lissées repartent de zéro (la suivante
         // n'hérite pas de la valeur de celle d'avant)
         avancer(&mut s, &cfg, 30);
@@ -3247,5 +3278,37 @@ mod tests {
         s.valeurs.iter_mut().for_each(|v| *v = 123.0);
         avancer(&mut s, &cfg, 1);
         assert!(s.valeurs.iter().all(|&v| v != 123.0));
+    }
+
+    #[test]
+    fn forme_des_satellites_changee_seules_leurs_trainees_repartent() {
+        let mut cfg = Config::default();
+        cfg.essaim.fixes = 4;
+        let mut s = Swarm::new();
+        let dt = 1.0 / 60.0;
+        for i in 0..30 {
+            s.update(i as f64 * dt as f64, dt, C, AudioView::default(), &cfg, 1.0);
+        }
+        cfg.essaim.forme = crate::config::FormeSatellites::Carre;
+        assert_ne!(cfg.essaim.forme.suivie(cfg.orbite.forme), cfg.orbite.forme);
+        s.update(30.0 * dt as f64, dt, C, AudioView::default(), &cfg, 1.0);
+        assert!(s.trails.iter().all(|tr| tr.len() > 3), "comètes vidées");
+        assert!(s.fixes.iter().all(|q| q.trail.back().unwrap().0 - q.trail.front().unwrap().0 <= dt as f64 + 1e-9), "satellites gardés");
+    }
+
+    #[test]
+    fn part_des_trainees_stable_pendant_une_salve() {
+        // 8 comètes, 64 satellites au plus, 8 permanents : la part ne dépend pas de ceux qui vivent
+        assert_eq!(part_trainee(8, 64, 8), POINTS_TRAINEES / 80);
+        assert_eq!(part_trainee(0, 0, 0), TRAIL_POINTS_MAX);
+        let mut cfg = Config::default();
+        (cfg.orbite.nombre, cfg.essaim.maximum) = (2, 64);
+        let mut s = Swarm::new();
+        let dt = 1.0 / 60.0;
+        s.update(0.0, dt, C, AudioView::default(), &cfg, 1.0);
+        let avant = part_trainee(s.trails.len(), cfg.essaim.maximum.max(s.sats.len()), s.fixes.len());
+        s.ajouter_satellites(40, 0.0, &cfg);
+        let apres = part_trainee(s.trails.len(), cfg.essaim.maximum.max(s.sats.len()), s.fixes.len());
+        assert_eq!(avant, apres);
     }
 }

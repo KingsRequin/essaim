@@ -168,6 +168,7 @@ question « The settings window doesn't open »).
 - The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
 - Essaim then updates itself: a notification tells you about the download, then offers to
   restart. To skip the wait: *Chercher une mise à jour* in the *Application* view.
+- Running `essaim.exe` again while it is running opens its settings window.
 
 **From source:** Essaim builds with one command.
 
@@ -193,8 +194,8 @@ Uninstall (installed from source):
 `powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1` (your settings are kept).
 
 Uninstall (downloaded `essaim.exe`): untick *Démarrer Essaim avec Windows* in the *Application*
-view, quit Essaim (tray icon → *Quitter*), then delete `essaim.exe`. To keep nothing, also delete
-the `%APPDATA%\Essaim` folder.
+view, quit Essaim (tray icon → *Quitter*), then delete `essaim.exe` (and `essaim.exe.ancien`
+next to it, if an update left one). To keep nothing, also delete the `%APPDATA%\Essaim` folder.
 
 ## FAQ
 
