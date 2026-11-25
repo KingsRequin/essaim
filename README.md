@@ -108,7 +108,7 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | | |
 |---|---|
 | 🤖 **Si … alors …** | Des règles choisissent le preset : `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*… ; ou selon l'appli au premier plan, ou l'heure |
-| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, session verrouillée, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
+| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, session verrouillée, écran éteint, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut (la bordure colorée est alors coupée) |
 | 🫶 **Sans flashs** | Pour les personnes sensibles aux flashs : éclats adoucis, trois par seconde au plus, bordure qui ne clignote plus (tout seul si Windows réduit les animations) |
 | 📺 **Fenêtre pour le stream** | L'essaim au centre d'une fenêtre à fond transparent, à ajouter dans OBS en *Capture de jeu* |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un plugin d'Horizon met Essaim en pause, change de preset et ouvre ses réglages depuis la barre |
@@ -206,8 +206,8 @@ Désinstaller (`essaim.exe` téléchargé) : décoche *Démarrer Essaim avec Win
 <summary><b>Est-ce que ça ralentit mon PC ou mes jeux ?</b></summary>
 
 Avec la carte graphique, une image coûte 0,31 ms de calcul au banc d'essai ; en usage, environ
-3 % d'un cœur du processeur. Quand la fenêtre sous le pointeur passe en plein écran (jeu, vidéo), tout s'arrête et
-Essaim se retire de cet écran ; au repos (souris
+3 % d'un cœur du processeur. Quand la fenêtre sous le pointeur passe en plein écran (jeu, vidéo), tout s'arrête
+(un menu ou une notification par-dessus n'y change rien) ; au repos (souris
 immobile, pas de musique), la cadence baisse. La fenêtre des réglages affiche la puissance
 utilisée, mesurée en direct.
 </details>

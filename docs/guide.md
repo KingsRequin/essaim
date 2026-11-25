@@ -310,7 +310,8 @@ garde son allure (essai
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs. La fenêtre des réglages d'Essaim
-  se colore comme les autres.
+  se colore comme les autres. Avec *Masquer des captures*, elle n'est pas colorée (elle se
+  verrait dans un partage d'écran).
 
 Le son analysé est celui que joue Windows (capture loopback de la sortie par défaut, ou de celle
 choisie dans *Écoute › Avancé › Sortie son écoutée*, `[audio] sortie`, propre à l'ordinateur et hors
@@ -354,8 +355,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   réglages est ouverte).
 - **Plein écran** : l'essaim se met en veille quand la fenêtre **sous le pointeur** est en plein
   écran (jeu, vidéo), qu'elle ait le clavier ou non ; avec un jeu en plein écran sur un écran et
-  le pointeur sur l'autre, il continue. Après 10 s de plein écran, Essaim retire sa fenêtre
-  transparente de cet écran (elle ne reste pas au-dessus du jeu) et la remet à la sortie.
+  le pointeur sur l'autre, il continue. Un menu, une notification, une bulle ou la surcouche
+  d'une autre appli (Discord, Steam, NVIDIA) au-dessus d'une vidéo en plein écran ne la font pas
+  reprendre ; une vraie fenêtre (à barre de titre) passée devant, si.
 - **Pauses automatiques** (`[pause]`, propres à la machine, hors presets) :
   - `ne_pas_deranger` (oui par défaut) : pause quand Windows ne veut pas être dérangé (appli en
     plein écran sur l'écran du pointeur, jeu Direct3D en plein écran exclusif, mode
@@ -366,7 +368,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - `applis` : pause tant que l'une de ces applications est au premier plan (onglet *04 Auto*,
     avec la dernière application utilisée à ajouter d'un clic). Une appli du Store compte sous
     son propre exécutable ; `ApplicationFrameHost.exe`, qui les héberge, les désigne toutes.
-  Toujours, en plus : session verrouillée, déconnectée de la console ou ouverte à distance.
+  Toujours, en plus : session verrouillée, déconnectée de la console ou ouverte à distance, et
+  écran éteint (« Écran éteint » : délai d'extinction de Windows, la session restant ouverte ;
+  pas quand il est seulement atténué).
   La raison s'affiche sous le bouton Pause.
 - **Qualité adaptative** (`[rendu] adaptatif`, oui par défaut) : si une image demande plus de
   4 ms de calcul, la cadence baisse par paliers (120, 60, 30 images/s au plus) et remonte quand
@@ -376,6 +380,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   120, par exemple).
 - **Masquer des captures** (`[rendu] masquer_captures`) : l'essaim reste à l'écran mais
   n'apparaît plus dans les captures, enregistrements et partages d'écran (Windows 10 2004 et plus).
+  La bordure colorée, elle, est dessinée par Windows dans la fenêtre de l'autre application et
+  ne peut pas être cachée des captures : tant que ce réglage est actif, la bordure n'est pas
+  colorée.
 - **Sans flashs** (`[rendu] sans_flashs`, propre à la machine) : pour les personnes sensibles aux
   flashs. Tout éclat (kick, rafale, drop, et tout déclencheur `eclat`, quels que soient sa force et
   son événement) est à moitié de sa force et au plus trois par seconde, sans halo blanc ; les ondes
@@ -394,9 +401,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   réglages, pas le pointeur, et continue quand l'essaim du pointeur est en pause, en plein écran ou
   masqué par la frappe (le son reste écouté tant qu'elle est ouverte). Elle reste capturable même
   avec *Masquer des captures*. L'essaim y grandit avec la fenêtre et y tient toujours entier, éclats
-  et ondes compris, quelle que soit sa forme. Elle tourne à environ 60 images/s même sur un écran
-  plus rapide (72 à 144 Hz, 60 à 240 Hz), et jamais au-dessus de `[rendu] cadence` si elle est
-  fixée.
+  et ondes compris, quelle que soit sa forme. Sans `[rendu] cadence`, elle tourne à 60 images/s
+  au moins sans suivre tout un écran plus rapide (72 à 144 Hz, 60 à 240 Hz) ; avec une cadence
+  fixée, elle la tient (jamais en dessous sur un écran assez rapide, jamais au-dessus).
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier. Pour Windows, AltGr vaut

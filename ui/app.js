@@ -1656,7 +1656,7 @@ const PANNEAUX = [
   // l'essaim. La bordure est réglée par le preset ; équerres, halo et liseré sont hors des presets.
   {
     id: "bordure", famille: "Fenêtre et écran", titre: "Bordure", actif: ["bordure", "active"],
-    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11). Pas en mode sans flashs.",
+    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11). Pas en mode sans flashs, ni quand Essaim est masqué des captures (elle se verrait dans un partage d'écran).",
     base: [
       { libelle: "Luminosité au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
       { quand: ["bordure"], libelle: "S'illumine quand" },
@@ -1772,7 +1772,7 @@ const APPLICATION = {
     { groupe: "Captures et stream", id: "groupe-captures" },
     {
       bascule: "Masquer Essaim des captures et des streams", section: "rendu", cle: "masquer_captures",
-      note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. Il faut Windows 10 version 2004 ou plus récent.",
+      note: "L'essaim reste visible à l'écran, mais n'apparaît plus dans les captures d'écran, les enregistrements ni les partages d'écran (OBS, Discord, Teams…), y compris celles qu'on fait pour vérifier son rendu. La bordure colorée de la fenêtre active, dessinée par Windows dans l'autre application, ne peut pas être cachée : elle n'est plus colorée tant que cette option est cochée. Il faut Windows 10 version 2004 ou plus récent.",
     },
     {
       choix: "Fond de la fenêtre pour le stream", section: "stream", cle: "fond",

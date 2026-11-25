@@ -72,9 +72,15 @@ const VEILLE_LECTURE: Duration = Duration::from_millis(40);
 const LECTURE_CLICS: Duration = Duration::from_millis(30);
 /// Capture du son impossible à lancer : nouvel essai après ce délai.
 const SON_REESSAI: Duration = Duration::from_secs(30);
-/// Pause plein écran plus longue : le calque de l'écran couvert est détruit (une fenêtre
-/// superposée vide resterait au-dessus d'un jeu en plein écran sans bordure).
-const LIBERER_PLEIN_ECRAN: Duration = Duration::from_secs(10);
+/// Recherche du plein écran sous le pointeur : à ce rythme, et au plus une fois par seconde en
+/// veille profonde (rien n'est dessiné, elle relit toutes les fenêtres).
+const LECTURE_PLEIN_ECRAN: Duration = Duration::from_millis(250);
+const LECTURE_PLEIN_ECRAN_VEILLE: Duration = Duration::from_secs(1);
+/// Habillage seul (pointeur masqué par la frappe) : redessiné à ce rythme au plus.
+const HABILLAGE_SEUL: Duration = Duration::from_millis(16);
+/// `DwmFlush` rendu plus vite que cela : rien n'a été composé (écran éteint, pas de
+/// rafraîchissement) ; la boucle attend alors elle-même un rafraîchissement.
+const COMPOSITION_MIN: Duration = Duration::from_millis(2);
 
 fn start_instant() -> Instant {
     Instant::now()
@@ -315,15 +321,29 @@ fn lire_fenetre(effets: &mut effets::Effets, cfg: &config::Config) -> Option<(f3
     effets.fenetre.filter(|_| cfg.particules.rebonds)
 }
 
-/// Bouton principal (`secondaire` = faux) ou secondaire de la souris enfoncé. Boutons inversés
-/// dans Windows (gauchers) : `GetAsyncKeyState` lit le bouton physique, le principal est alors
-/// le droit.
-fn bouton(secondaire: bool) -> bool {
+/// Bouton principal (`secondaire` = faux) ou secondaire de la souris : (enfoncé, appuyé depuis la
+/// lecture précédente). Boutons inversés dans Windows (gauchers) : `GetAsyncKeyState` lit le
+/// bouton physique, le principal est alors le droit.
+///
+/// Le second (bit faible de `GetAsyncKeyState`) attrape un appui relâché entre deux lectures (tap
+/// du pavé tactile, plus court que l'attente entre deux images). Il est partagé par tous les
+/// processus : une autre application qui le lit le remet à zéro, et ce clic-là reste manqué ; il
+/// ne fait jamais voir un clic qui n'a pas eu lieu, ne servant qu'en plus du bit fort
+/// (`nouveau_clic`).
+fn bouton(secondaire: bool) -> (bool, bool) {
     unsafe {
         let inverses = GetSystemMetrics(SM_SWAPBUTTON) != 0;
         let vk = if inverses != secondaire { VK_RBUTTON } else { VK_LBUTTON };
-        GetAsyncKeyState(vk.0 as i32) < 0
+        let etat = GetAsyncKeyState(vk.0 as i32);
+        (etat < 0, etat & 1 != 0)
     }
+}
+
+/// Nouveau clic : bouton enfoncé alors qu'il ne l'était pas à la lecture précédente (`avant`), ou
+/// appuyé puis relâché entre les deux (`appuye` sans `enfonce`). Un bouton tenu ne compte qu'une
+/// fois.
+fn nouveau_clic(enfonce: bool, appuye: bool, avant: bool) -> bool {
+    (enfonce && !avant) || (appuye && !enfonce)
 }
 
 
@@ -463,21 +483,23 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut raison_publiee = String::new();
     let mut adaptatif = adaptatif::Adaptatif::default();
     // cadence visée sans le plafond adaptatif (0 = celle de l'écran), et fréquence de l'écran du
-    // pointeur (0 = inconnue) : la raison « Allégé » n'est dite que si ce plafond joue
+    // pointeur (0 = inconnue) : la raison « Allégé » n'est dite que si ce plafond joue ; la
+    // fréquence sert aussi d'attente quand `DwmFlush` ne compose rien
     let mut cadence_visee = conf.cfg.rendu.cadence;
     let mut frequence = 0u32;
-    // plus haute fréquence des écrans : au-dessus de celle de l'écran du pointeur, `DwmFlush`
-    // (qui suit le compositeur, calé sur l'écran le plus rapide) ne règle plus la cadence
-    let mut frequence_max = win::frequence_max(&monitors);
 
     let start = Instant::now();
     let mut last = start;
     let mut user_paused = false;
-    // plein écran sous le pointeur : son écran, depuis quand, calque de cet écran déjà libéré
-    let mut plein_ecran: Option<(isize, Instant, bool)> = None;
+    // fenêtre en plein écran sous le pointeur (gardée pour l'hystérésis de `win::plein_ecran_sous`)
+    // et écran du pointeur (un changement fait relire le plein écran tout de suite)
+    let mut plein_ecran: Option<isize> = None;
+    let mut ecran_pointeur: Option<isize> = None;
     let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut droit_avant = false;
+    // appuis notés par Windows avant le lancement : lus et oubliés (pas de clic fantôme au départ)
+    let _ = (bouton(false), bouton(true));
     // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) ; le cadre de la
     // fenêtre au premier plan est relu à chaque image (`lire_fenetre`)
     let mut doux = win::sans_flashs(conf.cfg.rendu.sans_flashs);
@@ -491,6 +513,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut preset: Option<(u32, Option<String>)> = None;
     let mut next_conf = start;
     let mut next_fs = start;
+    // retour du dernier `DwmFlush` (composition vide détectée par son écart avec le suivant)
+    let mut dernier_flush = start;
     let mut stat_send = Duration::ZERO;
     let mut relancer = false;
     // charge publiée chaque seconde pour la fenêtre des réglages
@@ -560,7 +584,6 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
         if win::take_display_changed() {
             monitors = win::monitors();
-            frequence_max = win::frequence_max(&monitors);
             // seuls les calques des écrans disparus ou déplacés sont refaits : un calque refait
             // sous la souris lui ferait perdre son curseur
             let refaits = backend.ecrans_changes(&monitors);
@@ -585,31 +608,31 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
 
         let cur = win::cursor_state();
-        if now >= next_fs {
-            next_fs = now + Duration::from_millis(250);
-            // la fenêtre sous le pointeur, pas celle qui a le clavier
-            let ecran = cur.as_ref().and_then(|c| win::plein_ecran_sous(c.pos.0, c.pos.1));
-            if ecran != plein_ecran.map(|p| p.0) {
-                match (ecran, plein_ecran) {
-                    (Some(_), None) => log::info!("plein écran : en veille"),
-                    (None, _) => log::info!("fin du plein écran"),
-                    (Some(_), Some(_)) => log::info!("plein écran sur un autre écran"),
+        // position illisible (un instant, bureau sécurisé…) : l'état du plein écran est gardé, pas
+        // de fausse sortie
+        if let Some(c) = &cur {
+            // pointeur passé sur un autre écran : relu tout de suite, avant de dessiner (sinon
+            // l'essaim passerait un instant sur le jeu de cet écran)
+            let ecran = win::ecran_sous(c.pos.0, c.pos.1);
+            if ecran_pointeur != Some(ecran) {
+                ecran_pointeur = Some(ecran);
+                next_fs = now;
+            }
+            if now >= next_fs {
+                next_fs = now + if profond { LECTURE_PLEIN_ECRAN_VEILLE } else { LECTURE_PLEIN_ECRAN };
+                // la fenêtre sous le pointeur, pas celle qui a le clavier
+                let fenetre = win::plein_ecran_sous(c.pos.0, c.pos.1, plein_ecran);
+                if fenetre != plein_ecran {
+                    match (fenetre, plein_ecran) {
+                        (Some(_), None) => log::info!("plein écran : en veille"),
+                        (None, _) => log::info!("fin du plein écran"),
+                        (Some(_), Some(_)) => log::info!("plein écran : autre fenêtre"),
+                    }
+                    plein_ecran = fenetre;
                 }
-                plein_ecran = ecran.map(|e| (e, now, false));
             }
         }
         let fs_paused = plein_ecran.is_some();
-        // plein écran qui dure : le calque de son écran est détruit (il resterait au-dessus du
-        // jeu) ; refait à la sortie, à la première image qui touche cet écran
-        if let Some((ecran, depuis, libere @ false)) = plein_ecran.as_mut() {
-            if now - *depuis >= LIBERER_PLEIN_ECRAN {
-                *libere = true;
-                if backend.liberer_ecran(*ecran) {
-                    effets.oublier_loin();
-                    log::info!("plein écran prolongé : calque de son écran libéré");
-                }
-            }
-        }
         // réglages : relus toutes les secondes, ou tout de suite s'ils viennent de la fenêtre
         let timed = now >= next_conf;
         if timed {
@@ -658,6 +681,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let ecoute = if conf.cfg.audio.actif { son.lancee } else { Some(start) };
         automatique.tick(&conf.cfg, now, shared.view().bpm, ecoute);
         let cfg = &conf.cfg;
+        // bordure colorée : dessinée par DWM dans la fenêtre d'une autre appli, elle ne peut pas
+        // être exclue des captures ; avec « Masquer des captures », elle n'est pas colorée
+        let colorer = !cfg.rendu.masquer_captures;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
         // preset en place (interface locale, infobulle de l'icône) : recherché quand les réglages changent
         if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
@@ -702,15 +728,15 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             last_kicks = au.kicks;
             last_sound = now;
         }
-        let (down, droit) = (bouton(false), bouton(true));
-        if down || droit {
+        let ((down, appui), (droit, appui_droit)) = (bouton(false), bouton(true));
+        let (clic_neuf, droit_neuf) = (nouveau_clic(down, appui, was_down), nouveau_clic(droit, appui_droit, droit_avant));
+        if down || droit || clic_neuf || droit_neuf {
             last_click = now;
         }
         // changement de piste : vu même en pause (pas de rafale en retard à la reprise)
         let pistes = media::pistes();
         let nouvelle_piste = pistes != pistes_vues;
         pistes_vues = pistes;
-        let (clic_neuf, droit_neuf) = (down && !was_down, droit && !droit_avant);
         // bordure : ses déclencheurs (kick, clic…), même quand le pointeur est masqué par la frappe ;
         // rien en mode sans flashs
         let declencheurs = &cfg.declencheurs.liste;
@@ -722,7 +748,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let masque = cur.as_ref().filter(|c| active && !c.showing).map(|c| c.pos);
         let Some(cur) = cur.filter(|c| active && c.showing) else {
             // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
-            border.tick(active, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
+            border.tick(active && colorer, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
             // l'habillage (équerres, liseré) continue comme elle ; tout le reste est effacé
             match masque.filter(|_| effets.habillage(cfg)) {
                 Some(pos) => {
@@ -758,11 +784,17 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             if profond {
                 profond = false;
                 charge::publier_veille(false);
+                // le plein écran, lu moins souvent en veille profonde, est relu tout de suite
+                next_fs = now;
             }
-            // l'habillage se redessine à 60 i/s ; sans lui, rien n'est dessiné : une lecture
-            // toutes les 40 ms suffit (clics, retour du pointeur)
+            // l'habillage se redessine à 60 i/s (moins sous le plafond de la batterie) ; sans lui,
+            // rien n'est dessiné : une lecture toutes les 40 ms suffit (clics, retour du pointeur)
             let habille = active && masque.is_some() && effets.habillage(cfg);
-            win::attendre(if !active { Duration::from_millis(100) } else if habille { Duration::from_millis(16) } else { VEILLE_LECTURE });
+            let habillage = match retenue.plafond {
+                0 => HABILLAGE_SEUL,
+                p => HABILLAGE_SEUL.max(Duration::from_secs_f64(1.0 / f64::from(p))),
+            };
+            win::attendre(if !active { Duration::from_millis(100) } else if habille { habillage } else { VEILLE_LECTURE });
             continue;
         };
         cleared = false;
@@ -799,7 +831,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 charge::publier_veille(true);
                 log::info!("veille profonde : plus rien n'est dessiné");
             }
-            border.tick(true, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
+            border.tick(colorer, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
             if habille {
                 let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
                 last = now;
@@ -813,6 +845,12 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             profond = false;
             charge::publier_veille(false);
             log::info!("fin de la veille profonde");
+            // le plein écran, lu au plus une fois par seconde en veille profonde, est relu avant
+            // la première image (l'essaim ne doit pas passer un instant sur un jeu)
+            if next_fs > now {
+                next_fs = now;
+                continue;
+            }
         }
 
         // repos : souris immobile et pas de musique depuis 2 s → cadence réduite
@@ -824,10 +862,6 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         };
         cadence_visee = pauses::plafonner(cadence, retenue.plafond);
         let cadence = pauses::plafonner(cadence_visee, adaptatif.plafond());
-        // cadence de l'écran avec des écrans à fréquences mélangées : le compositeur suit le plus
-        // rapide, `DwmFlush` donnerait sa cadence ; l'attente se cale alors sur la fréquence de
-        // l'écran du pointeur (sans synchronisation sur son balayage)
-        let cadence = pauses::cadence_ecran(cadence, frequence, frequence_max);
         // cadence choisie : attente jusqu'à l'image suivante, par tranches courtes pour que les
         // clics restent lus (un clic de 60 ms doit être vu)
         if cadence > 0 {
@@ -960,9 +994,21 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             (stat_frames, stat_time, stat_busy, stat_send, stat_max, next_stat) =
                 (0, 0.0, Duration::ZERO, Duration::ZERO, Duration::ZERO, now + Duration::from_secs(60));
         }
-        // cadence de l'écran : une image par rafraîchissement (une cadence choisie attend en haut)
-        if cadence == 0 && unsafe { DwmFlush() }.is_err() {
-            win::attendre(Duration::from_millis(7));
+        // cadence de l'écran : une image par rafraîchissement (une cadence choisie attend en haut).
+        // `DwmFlush` rendu aussitôt (rien de composé : écran éteint avant que Windows ne le
+        // signale, aucun rafraîchissement) ou en échec : un rafraîchissement est attendu ici, la
+        // boucle ne tourne pas à vide
+        if cadence == 0 {
+            let avant = Instant::now();
+            let ok = unsafe { DwmFlush() }.is_ok();
+            let periode = Duration::from_secs_f64(1.0 / f64::from(if frequence > 0 { frequence } else { 60 }));
+            // rendu vite ET moins d'une demi-période depuis le précédent : une image lourde, qui
+            // trouve le rafraîchissement suivant tout proche, n'est pas prise pour du vide
+            let vide = avant.elapsed() < COMPOSITION_MIN && dernier_flush.elapsed() < periode / 2;
+            if !ok || vide {
+                win::attendre(periode.saturating_sub(dernier_flush.elapsed()));
+            }
+            dernier_flush = Instant::now();
         }
     }
     drop(son);
@@ -972,6 +1018,20 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clics_et_taps_entre_deux_lectures() {
+        // bouton enfoncé : une fois, pas à chaque lecture tant qu'il est tenu
+        assert!(nouveau_clic(true, true, false));
+        assert!(nouveau_clic(true, false, false));
+        assert!(!nouveau_clic(true, false, true));
+        // tap du pavé tactile, appuyé et relâché entre deux lectures : compté
+        assert!(nouveau_clic(false, true, false));
+        // deuxième tap d'un double-clic, après un premier vu enfoncé
+        assert!(nouveau_clic(false, true, true));
+        // ni enfoncé ni appuyé (relâché, ou bit lu par une autre appli) : rien
+        assert!(!nouveau_clic(false, false, true) && !nouveau_clic(false, false, false));
+    }
 
     #[test]
     fn journal_trop_gros_renomme_puis_rouvert() {

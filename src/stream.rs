@@ -512,20 +512,19 @@ impl Panne {
     }
 }
 
-/// Cadence de la fenêtre quand `[rendu] cadence` n'est pas fixée : celle d'une capture de stream.
-const CADENCE_STREAM: f32 = 60.0;
+/// Cadence de la fenêtre quand `[rendu] cadence` n'est pas fixée (celle d'une capture de stream),
+/// et plancher de l'intervalle : jamais moins d'images que cela.
+const CADENCE_STREAM: u32 = 60;
 
 /// Intervalle de synchronisation de `Present` sur un écran à `frequence` Hz (0 = inconnue) : une
-/// image tous les `n` rafraîchissements, pour rester près de 60 images/s sur un écran rapide
-/// (144 Hz : 72 i/s, 240 Hz : 60 i/s) au lieu d'en calculer autant que l'écran en affiche. Avec
-/// `[rendu] cadence` fixée (`cadence` > 0), l'intervalle la respecte. DXGI accepte 1 à 4.
+/// image tous les `n` rafraîchissements, `n = max(1, fréquence / max(cadence, 60))` arrondi vers
+/// le bas (`cadence` : `[rendu] cadence`, 0 = non fixée, compte pour 60). La fenêtre reste ainsi
+/// au moins à 60 images/s et au moins à la cadence choisie (144 Hz : 72 i/s, 90 Hz : 90 i/s,
+/// 240 Hz : 60 i/s) sans en calculer autant que l'écran en affiche ; une cadence choisie plus basse
+/// est tenue par `periode_min`. DXGI accepte 1 à 4.
 fn intervalle_synchro(frequence: u32, cadence: u32) -> u32 {
-    let n = match (frequence, cadence) {
-        (0, _) => 1,
-        (f, 0) => (f as f32 / CADENCE_STREAM).round() as u32,
-        (f, c) => f.div_ceil(c),
-    };
-    n.clamp(1, 4)
+    // cadence non fixée (0) : 60 aussi
+    (frequence / cadence.max(CADENCE_STREAM)).clamp(1, 4)
 }
 
 /// Écart minimal entre deux images pour `[rendu] cadence` (0 : aucun), quand l'intervalle de
@@ -806,14 +805,24 @@ mod tests {
 
     #[test]
     fn synchro_a_la_frequence_de_l_ecran() {
-        assert_eq!([60, 75, 120, 144, 165, 240, 360].map(|f| intervalle_synchro(f, 0)), [1, 1, 2, 2, 3, 4, 4]);
+        assert_eq!([60, 75, 90, 120, 144, 165, 240, 360].map(|f| intervalle_synchro(f, 0)), [1, 1, 1, 2, 2, 2, 4, 4]);
         // fréquence inconnue : chaque rafraîchissement
         assert_eq!(intervalle_synchro(0, 0), 1);
-        // cadence fixée : jamais au-dessus
-        assert_eq!(intervalle_synchro(144, 30), 4);
+        // cadence fixée haute : jamais en dessous (240 Hz pour 100 : 120 i/s, pas 80)
         assert_eq!(intervalle_synchro(144, 144), 1);
+        assert_eq!(intervalle_synchro(144, 100), 1);
         assert_eq!(intervalle_synchro(60, 144), 1);
-        assert_eq!(intervalle_synchro(240, 100), 3);
+        assert_eq!(intervalle_synchro(240, 100), 2);
+        // cadence fixée basse : 60 i/s au moins par l'intervalle, `periode_min` tient le reste
+        assert_eq!(intervalle_synchro(144, 30), 2);
+        // aucune combinaison ne descend sous max(cadence, 60) quand l'écran va au moins aussi vite
+        for f in [60u32, 75, 90, 100, 120, 144, 165, 175, 240, 360] {
+            for c in [0u32, 30, 60, 75, 100, 120, 144, 240] {
+                let voulu = c.max(60);
+                let n = intervalle_synchro(f, c);
+                assert!(f < voulu || f / n >= voulu, "{f} Hz, cadence {c} : {} i/s", f / n);
+            }
+        }
         assert_eq!(periode_min(0), Duration::ZERO);
         assert_eq!(periode_min(50), Duration::from_millis(20));
     }

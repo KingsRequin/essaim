@@ -426,20 +426,21 @@ pub fn frequence_fenetre(hwnd: HWND) -> u32 {
     frequence_moniteur(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) })
 }
 
-/// Plus haute fréquence parmi les écrans `monitors` (identifiants de `monitors()`), 0 = inconnue.
-pub fn frequence_max(monitors: &[(isize, crate::layer::IRect)]) -> u32 {
-    monitors.iter().map(|m| frequence_moniteur(HMONITOR(m.0 as *mut c_void))).max().unwrap_or(0)
-}
-
 /// Ce qu'il faut savoir d'une fenêtre pour chercher celle qui est sous le pointeur.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct VueFenetre {
     /// Visible et non réduite.
     pub visible: bool,
     /// Masquée par DWM (`DWMWA_CLOAKED` : bureau virtuel caché, appli du Store suspendue…).
     pub masquee: bool,
+    pub style: u32,
     pub style_etendu: u32,
     pub classe: String,
+    /// A une propriétaire (`GetWindow(GW_OWNER)`) : menu, bulle, liste déroulante, dialogue d'une
+    /// autre fenêtre.
+    pub possedee: bool,
+    /// En plein écran sur l'écran du pointeur (`covers_monitor`, même écran que le point).
+    pub plein_ecran: bool,
     /// Cadre affiché, sans la marge invisible de redimensionnement.
     pub cadre: RECT,
 }
@@ -449,27 +450,71 @@ pub struct VueFenetre {
 /// être ce qu'on regarde).
 const CLASSES_PAS_SOUS_POINTEUR: [&str; 6] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "EssaimOverlay", "tooltips_class32"];
 
+/// Classe des menus (menu contextuel, menu d'une barre).
+const CLASSE_MENU: &str = "#32768";
+
+/// Fenêtre de passage, qui ne couvre pas l'écran et passe au-dessus de ce qu'on regarde sans
+/// l'être : menu, fenêtre d'outil (`WS_EX_TOOLWINDOW` : bulles, notifications, palettes), fenêtre
+/// qui ne prend jamais le clavier (`WS_EX_NOACTIVATE`), fenêtre possédée (menu, liste, bulle ou
+/// dialogue d'une autre), surcouche toujours devant (`WS_EX_LAYERED` + `WS_EX_TOPMOST` : celles de
+/// Discord, Steam, NVIDIA, même sans `WS_EX_TRANSPARENT`). Survolée au-dessus d'une vidéo en plein
+/// écran, elle ne lève pas la pause.
+pub fn de_passage(v: &VueFenetre) -> bool {
+    let ex = v.style_etendu;
+    let surcouche = (WS_EX_LAYERED | WS_EX_TOPMOST).0;
+    !v.plein_ecran
+        && (v.classe == CLASSE_MENU
+            || ex & WS_EX_TOOLWINDOW.0 != 0
+            || ex & WS_EX_NOACTIVATE.0 != 0
+            || v.possedee
+            || ex & surcouche == surcouche)
+}
+
 /// La fenêtre `v` est-elle celle que le pointeur survole en (`x`, `y`), si rien n'est au-dessus ?
-/// Un calque traversé par la souris (d'Essaim ou d'une autre surcouche) n'en est pas une.
+/// Un calque traversé par la souris (d'Essaim ou d'une autre surcouche) n'en est pas une, ni une
+/// fenêtre de passage (`de_passage`).
 pub fn retenue_sous_point(v: &VueFenetre, x: i32, y: i32) -> bool {
     let r = v.cadre;
     v.visible
         && !v.masquee
         && !calque(v.style_etendu)
         && !CLASSES_PAS_SOUS_POINTEUR.contains(&v.classe.as_str())
+        && !de_passage(v)
         && (r.left..r.right).contains(&x)
         && (r.top..r.bottom).contains(&y)
 }
 
+/// Vraie fenêtre de premier niveau (à barre de titre ou bord de redimensionnement : une
+/// application qu'on regarde), parmi celles que `retenue_sous_point` garde déjà. Survolée, elle
+/// lève la pause d'un plein écran resté derrière.
+fn vraie_fenetre(v: &VueFenetre) -> bool {
+    v.style & WS_CAPTION.0 == WS_CAPTION.0 || v.style & WS_THICKFRAME.0 != 0
+}
+
 /// Première fenêtre retenue (`retenue_sous_point`) parmi `fenetres`, données dans l'ordre Z (du
-/// dessus vers le dessous) : celle sous le pointeur.
-pub fn premiere_sous_point<T>(fenetres: impl IntoIterator<Item = (T, VueFenetre)>, x: i32, y: i32) -> Option<T> {
-    fenetres.into_iter().find(|(_, v)| retenue_sous_point(v, x, y)).map(|(h, _)| h)
+/// dessus vers le dessous) : celle sous le pointeur, avec sa vue.
+fn survolee<T>(fenetres: impl IntoIterator<Item = (T, VueFenetre)>, x: i32, y: i32) -> Option<(T, VueFenetre)> {
+    fenetres.into_iter().find(|(_, v)| retenue_sous_point(v, x, y))
+}
+
+/// Fenêtre en plein écran qui met l'essaim en pause, parmi `fenetres` (ordre Z, du dessus vers le
+/// dessous) avec le pointeur en (`x`, `y`). `precedente` : celle retenue au dernier passage, si
+/// elle couvre encore l'écran du pointeur (`None` sinon). La fenêtre survolée en plein écran
+/// l'emporte ; sinon la précédente reste tant que la fenêtre survolée n'est pas une vraie fenêtre
+/// (`vraie_fenetre`) : une fenêtre sans cadre ni bulle reconnue, un instant de flottement de
+/// l'ordre Z, ne lèvent pas la pause.
+pub fn plein_ecran_retenu<T>(fenetres: impl IntoIterator<Item = (T, VueFenetre)>, x: i32, y: i32, precedente: Option<T>) -> Option<T> {
+    match survolee(fenetres, x, y) {
+        Some((h, v)) if v.plein_ecran => Some(h),
+        Some((_, v)) if vraie_fenetre(&v) => None,
+        _ => precedente,
+    }
 }
 
 /// Vue de `hwnd` pour `retenue_sous_point`, ou `None` si elle ne peut pas contenir le point (lue
 /// d'abord : visibilité et rectangle, deux appels peu coûteux ; le reste seulement ensuite).
-fn vue_fenetre(hwnd: HWND, x: i32, y: i32) -> Option<VueFenetre> {
+/// `ecran` : celui du point.
+fn vue_fenetre(hwnd: HWND, x: i32, y: i32, ecran: HMONITOR) -> Option<VueFenetre> {
     unsafe {
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return None;
@@ -483,18 +528,38 @@ fn vue_fenetre(hwnd: HWND, x: i32, y: i32) -> Option<VueFenetre> {
         if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut cadre as *mut RECT as *mut c_void, std::mem::size_of::<RECT>() as u32).is_err() {
             cadre = r;
         }
-        let mut masquee = 0u32;
-        let lu = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut masquee as *mut u32 as *mut c_void, 4);
         let mut classe = [0u16; 64];
         let n = GetClassNameW(hwnd, &mut classe) as usize;
         Some(VueFenetre {
             visible: true,
-            masquee: lu.is_ok() && masquee != 0,
+            masquee: masquee_par_dwm(hwnd),
+            style: GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
             style_etendu: GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
             classe: String::from_utf16_lossy(&classe[..n]),
+            possedee: GetWindow(hwnd, GW_OWNER).is_ok_and(|p| !p.is_invalid()),
+            plein_ecran: plein_ecran_sur(hwnd, ecran),
             cadre,
         })
     }
+}
+
+/// Fenêtre masquée par DWM (`DWMWA_CLOAKED`).
+fn masquee_par_dwm(hwnd: HWND) -> bool {
+    let mut masquee = 0u32;
+    let lu = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut masquee as *mut u32 as *mut c_void, 4) };
+    lu.is_ok() && masquee != 0
+}
+
+/// `hwnd` est en plein écran sur l'écran `ecran`.
+fn plein_ecran_sur(hwnd: HWND, ecran: HMONITOR) -> bool {
+    unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) == ecran && covers_monitor(hwnd) }
+}
+
+/// La fenêtre `hwnd`, retenue en plein écran au dernier passage, couvre-t-elle encore l'écran
+/// `ecran` (elle existe, visible, non réduite, non masquée) ?
+fn couvre_encore(hwnd: HWND, ecran: HMONITOR) -> bool {
+    let la = unsafe { IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() };
+    la && !masquee_par_dwm(hwnd) && plein_ecran_sur(hwnd, ecran)
 }
 
 /// Fenêtres de premier niveau, du dessus vers le dessous (ordre Z).
@@ -508,17 +573,27 @@ fn fenetres_ordre_z() -> Vec<HWND> {
     liste
 }
 
-/// Écran (identifiant de `monitors()`) que la fenêtre sous le point occupe en plein écran (jeu,
-/// vidéo F11…), ou `None`. C'est la fenêtre survolée qui compte, pas celle qui a le clavier : un
+/// Fenêtre en plein écran (jeu, vidéo F11…) sous le point qui met l'essaim en pause, ou `None`
+/// (`plein_ecran_retenu`). C'est la fenêtre survolée qui compte, pas celle qui a le clavier : un
 /// jeu en plein écran sur un écran et le pointeur sur l'autre, rien n'est retenu ; une vidéo en
-/// plein écran survolée pendant qu'on tape ailleurs, si. Une énumération des fenêtres par appel
-/// (la boucle l'appelle toutes les 250 ms).
-pub fn plein_ecran_sous(x: i32, y: i32) -> Option<isize> {
-    let fenetres = fenetres_ordre_z().into_iter().filter_map(|h| vue_fenetre(h, x, y).map(|v| (h, v)));
-    let h = premiere_sous_point(fenetres, x, y)?;
-    let mon = unsafe { MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) };
-    let ici = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
-    (mon == ici && covers_monitor(h)).then_some(mon.0 as isize)
+/// plein écran survolée pendant qu'on tape ailleurs, si. `precedente` : la fenêtre rendue au
+/// dernier appel (gardée tant qu'elle couvre l'écran du point et qu'aucune vraie fenêtre n'est
+/// survolée). Une énumération des fenêtres par appel (la boucle l'appelle toutes les 250 ms).
+pub fn plein_ecran_sous(x: i32, y: i32, precedente: Option<isize>) -> Option<isize> {
+    let ecran = ecran_du_point(x, y);
+    let precedente = precedente.map(|h| HWND(h as *mut c_void)).filter(|&h| couvre_encore(h, ecran));
+    let fenetres = fenetres_ordre_z().into_iter().filter_map(|h| vue_fenetre(h, x, y, ecran).map(|v| (h, v)));
+    plein_ecran_retenu(fenetres, x, y, precedente).map(|h| h.0 as isize)
+}
+
+/// Écran sous le point (le plus proche s'il tombe entre deux).
+fn ecran_du_point(x: i32, y: i32) -> HMONITOR {
+    unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) }
+}
+
+/// Identifiant (celui de `monitors()`) de l'écran sous le point.
+pub fn ecran_sous(x: i32, y: i32) -> isize {
+    ecran_du_point(x, y).0 as isize
 }
 
 /// Cadre affiché (gauche, haut, droite, bas, en pixels de l'écran) de la fenêtre au premier
@@ -601,12 +676,7 @@ pub fn calque(style_etendu: u32) -> bool {
 pub fn plein_ecran_sur_ecran_du(pointeur: Option<(i32, i32)>) -> bool {
     unsafe fn fenetre_plein_ecran(hwnd: HWND) -> bool {
         unsafe {
-            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || calque(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32) {
-                return false;
-            }
-            let mut masquee = 0u32;
-            let lu = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut masquee as *mut u32 as *mut c_void, 4);
-            if lu.is_ok() && masquee != 0 {
+            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || calque(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32) || masquee_par_dwm(hwnd) {
                 return false;
             }
             let mut pid = 0u32;
@@ -789,6 +859,32 @@ pub fn session_retenue() -> Option<&'static str> {
     } else {
         None
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Écran éteint (session ouverte : délai d'extinction de Windows, bouton de l'écran sur un
+// portable) : `GUID_CONSOLE_DISPLAY_STATE`, notifié à la fenêtre de l'icône
+// (`RegisterPowerSettingNotification`, `WM_POWERBROADCAST` + `PBT_POWERSETTINGCHANGE`). Rien n'est
+// composé : `DwmFlush` rendrait la main tout de suite et la boucle tournerait à vide.
+
+/// `GUID_CONSOLE_DISPLAY_STATE` (6FE69556-704A-47A0-8F24-C28D936FDA47) : 0 éteint, 1 allumé,
+/// 2 atténué.
+const GUID_ETAT_ECRAN: windows::core::GUID = windows::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+
+static ECRAN_ETEINT: AtomicBool = AtomicBool::new(false);
+
+/// Nouvel état de l'écran (`Data` de `POWERBROADCAST_SETTING` pour `GUID_ETAT_ECRAN`) : seul 0
+/// (éteint) retire l'essaim ; atténué (2), il reste visible.
+fn etat_ecran(valeur: u32) {
+    let eteint = valeur == 0;
+    if ECRAN_ETEINT.swap(eteint, Ordering::Relaxed) != eteint {
+        log::info!("{}", if eteint { "écran éteint" } else { "écran rallumé" });
+    }
+}
+
+/// L'écran est éteint, session ouverte (`pauses.rs` : pause automatique « Écran éteint »).
+pub fn ecran_eteint() -> bool {
+    ECRAN_ETEINT.load(Ordering::Relaxed)
 }
 
 /// Raccourcis clavier enregistrés (le menu les affiche alors à côté des entrées).
@@ -1132,6 +1228,15 @@ unsafe fn tray_message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT 
         if msg == WM_POWERBROADCAST && wp.0 == PBT_APMPOWERSTATUSCHANGE as usize {
             POWER_CHANGED.with(|p| p.set(true));
         }
+        if msg == WM_POWERBROADCAST && wp.0 == PBT_POWERSETTINGCHANGE as usize && lp.0 != 0 {
+            use windows::Win32::System::Power::POWERBROADCAST_SETTING;
+            let s = lp.0 as *const POWERBROADCAST_SETTING;
+            // `Data` : un DWORD pour cet état, pas forcément aligné
+            if (*s).PowerSetting == GUID_ETAT_ECRAN && (*s).DataLength >= 4 {
+                etat_ecran(std::ptr::read_unaligned(std::ptr::addr_of!((*s).Data) as *const u32));
+            }
+            return LRESULT(1);
+        }
         // sortie de veille : écrans et alimentation ont pu changer pendant le sommeil
         if msg == WM_POWERBROADCAST && wp.0 == PBT_APMRESUMEAUTOMATIC as usize {
             DISPLAY_CHANGED.with(|d| d.set(true));
@@ -1164,6 +1269,8 @@ unsafe fn tray_message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT 
 
 pub struct Tray {
     hwnd: HWND,
+    /// Inscription aux changements d'état de l'écran (`GUID_ETAT_ECRAN`).
+    ecran: Option<windows::Win32::System::Power::HPOWERNOTIFY>,
 }
 
 impl Tray {
@@ -1190,7 +1297,12 @@ impl Tray {
             if !WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION).as_bool() {
                 log::warn!("session : notifications de verrouillage indisponibles");
             }
-            Ok(Self { hwnd })
+            // l'état courant arrive aussitôt après l'inscription
+            use windows::Win32::System::Power::RegisterPowerSettingNotification;
+            let ecran = RegisterPowerSettingNotification(HANDLE(hwnd.0), &GUID_ETAT_ECRAN, DEVICE_NOTIFY_WINDOW_HANDLE)
+                .inspect_err(|e| log::warn!("écran : notifications d'extinction indisponibles ({e})"))
+                .ok();
+            Ok(Self { hwnd, ecran })
         }
     }
 }
@@ -1199,6 +1311,9 @@ impl Drop for Tray {
     fn drop(&mut self) {
         unsafe {
             TRAY_HWND.store(0, Ordering::Relaxed);
+            if let Some(e) = self.ecran.take() {
+                let _ = windows::Win32::System::Power::UnregisterPowerSettingNotification(e);
+            }
             let _ = WTSUnRegisterSessionNotification(self.hwnd);
             let _ = Shell_NotifyIconW(NIM_DELETE, &nid(self.hwnd));
             let _ = DestroyWindow(self.hwnd);
@@ -1421,16 +1536,16 @@ mod tests {
 
     #[test]
     fn fenetre_sous_le_pointeur() {
+        let sous_point = |z: [(&'static str, VueFenetre); 8], x, y| survolee(z, x, y).map(|(n, _)| n);
         let vue = |classe: &str, cadre: (i32, i32, i32, i32)| VueFenetre {
             visible: true,
-            masquee: false,
-            style_etendu: 0,
             classe: classe.to_owned(),
             cadre: RECT { left: cadre.0, top: cadre.1, right: cadre.2, bottom: cadre.3 },
+            ..Default::default()
         };
         let ecran_gauche = (0, 0, 1920, 1080);
-        let jeu = vue("UnityWndClass", ecran_gauche);
-        let editeur = vue("Notepad", (1920, 0, 3000, 800));
+        let jeu = VueFenetre { plein_ecran: true, ..vue("UnityWndClass", ecran_gauche) };
+        let editeur = VueFenetre { style: WS_OVERLAPPEDWINDOW.0, ..vue("Notepad", (1920, 0, 3000, 800)) };
         // calques (Essaim, autre surcouche), infobulle, barre des tâches, fenêtre masquée par DWM
         // ou cachée : au-dessus dans l'ordre Z, ils ne comptent pas
         let calque_essaim = VueFenetre { style_etendu: (WS_EX_LAYERED | WS_EX_TRANSPARENT).0, ..vue("EssaimOverlay", ecran_gauche) };
@@ -1444,15 +1559,60 @@ mod tests {
                 .map(|(n, v)| (n, v.clone()))
         };
         // pointeur sur l'écran du jeu : le jeu, même sous l'infobulle et la barre
-        assert_eq!(premiere_sous_point(z(), 510, 510), Some("jeu"));
-        assert_eq!(premiere_sous_point(z(), 10, 1050), Some("jeu"));
+        assert_eq!(sous_point(z(), 510, 510), Some("jeu"));
+        assert_eq!(sous_point(z(), 10, 1050), Some("jeu"));
         // pointeur sur l'éditeur de l'autre écran : l'éditeur (le jeu, ailleurs, ne compte pas)
-        assert_eq!(premiere_sous_point(z(), 2000, 100), Some("editeur"));
+        assert_eq!(sous_point(z(), 2000, 100), Some("editeur"));
         // sous l'éditeur, rien : ni bureau ni fenêtre
-        assert_eq!(premiere_sous_point(z(), 3500, 100), None);
+        assert_eq!(sous_point(z(), 3500, 100), None);
         // bord droit et bas exclus
         assert!(!retenue_sous_point(&jeu, 1920, 10) && !retenue_sous_point(&jeu, 10, 1080));
         assert!(!retenue_sous_point(&vue("WorkerW", ecran_gauche), 10, 10) && !retenue_sous_point(&vue("Progman", ecran_gauche), 10, 10));
+    }
+
+    #[test]
+    fn menus_et_bulles_au_dessus_d_une_video_gardent_la_pause() {
+        let vue = |classe: &str, cadre: (i32, i32, i32, i32)| VueFenetre {
+            visible: true,
+            classe: classe.to_owned(),
+            cadre: RECT { left: cadre.0, top: cadre.1, right: cadre.2, bottom: cadre.3 },
+            ..Default::default()
+        };
+        let ecran = (0, 0, 1920, 1080);
+        let video = VueFenetre { plein_ecran: true, style: WS_POPUP.0, ..vue("Chrome_WidgetWin_1", ecran) };
+        let petit = (800, 400, 1100, 700);
+        // fenêtres de passage au-dessus de la vidéo : menu, outil, sans activation, possédée,
+        // surcouche toujours devant (Discord, Steam, NVIDIA) sans `WS_EX_TRANSPARENT`
+        let passages = [
+            vue("#32768", petit),
+            VueFenetre { style_etendu: WS_EX_TOOLWINDOW.0, ..vue("Notif", petit) },
+            VueFenetre { style_etendu: WS_EX_NOACTIVATE.0, ..vue("Bulle", petit) },
+            VueFenetre { possedee: true, style: WS_OVERLAPPEDWINDOW.0, ..vue("Liste", petit) },
+            VueFenetre { style_etendu: (WS_EX_LAYERED | WS_EX_TOPMOST).0, ..vue("Surcouche", ecran) },
+        ];
+        for p in &passages {
+            assert!(de_passage(p), "{}", p.classe);
+            // sans pause avant : la vidéo est trouvée sous la fenêtre de passage
+            assert_eq!(plein_ecran_retenu([("passage", p.clone()), ("video", video.clone())], 900, 500, None), Some("video"), "{}", p.classe);
+        }
+        // une fenêtre de passage en plein écran (jeu en surcouche toujours devant) compte
+        let jeu_devant = VueFenetre { plein_ecran: true, ..passages[4].clone() };
+        assert!(!de_passage(&jeu_devant));
+        assert_eq!(plein_ecran_retenu([("jeu", jeu_devant), ("video", video.clone())], 900, 500, None), Some("jeu"));
+
+        // hystérésis : une fenêtre sans cadre inconnue (ni outil, ni possédée) au-dessus de la
+        // vidéo encore en plein écran garde la pause ; rien de retenu sous le point aussi
+        let popup = VueFenetre { style: WS_POPUP.0, ..vue("Popup", petit) };
+        assert_eq!(plein_ecran_retenu([("popup", popup.clone())], 900, 500, Some("video")), Some("video"));
+        assert_eq!(plein_ecran_retenu(std::iter::empty::<(&str, VueFenetre)>(), 900, 500, Some("video")), Some("video"));
+        // sans pause avant, la même fenêtre ne la crée pas
+        assert_eq!(plein_ecran_retenu([("popup", popup)], 900, 500, None), None);
+        // une vraie fenêtre (barre de titre) survolée la lève
+        let appli = VueFenetre { style: WS_OVERLAPPEDWINDOW.0, ..vue("Notepad", petit) };
+        assert_eq!(plein_ecran_retenu([("appli", appli), ("video", video)], 900, 500, Some("video")), None);
+        // la précédente ne couvre plus l'écran (`None` donné par l'appelant) : plus de pause
+        let fenetree = VueFenetre { style: WS_OVERLAPPEDWINDOW.0, ..vue("Chrome_WidgetWin_1", (0, 0, 1600, 900)) };
+        assert_eq!(plein_ecran_retenu([("video", fenetree)], 900, 500, None), None);
     }
 
     #[test]

@@ -30,11 +30,10 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
     modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié ;
     directement dans le calque, effacé, quand la zone le couvre entier : projecteur). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
   Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
-  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Écrans à fréquences mélangées
-  (`win::frequence_max`, relue au changement d'écran) et pointeur sur un plus lent : le
-  compositeur suit le plus rapide, la cadence est alors plafonnée à la fréquence de l'écran du
-  pointeur (`pauses::cadence_ecran`, attente sur minuterie, sans synchronisation sur son
-  balayage). Avec une cadence plafonnée, la
+  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Un `DwmFlush` rendu en moins de
+  2 ms, moins d'une demi-période après le précédent, n'a rien composé (écran éteint, pas de
+  rafraîchissement) : la boucle attend alors elle-même la fréquence de l'écran du pointeur (60 si
+  inconnue) au lieu de tourner à vide. Avec une cadence plafonnée, la
   boucle attend l'image suivante sur une minuterie haute résolution
   (`CreateWaitableTimerExW` + `MsgWaitForMultipleObjects`, réveil au moins toutes les 30 ms pour
   lire les clics) au lieu de se réveiller à chaque rafraîchissement. Au-delà de 0,05 s entre
@@ -59,30 +58,43 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   `win::cadre_premier_plan` pour le halo, les équerres et les rebonds) : fenêtres sans cadre ni
   barre de titre (barres et menus superposés, comme ceux d'Horizon), outils
   (`WS_EX_TOOLWINDOW`), barre des tâches, bureau, calques et fenêtre de stream d'Essaim, plein
-  écran ; la fenêtre des réglages d'Essaim se colore comme les autres. Couleur
+  écran ; la fenêtre des réglages d'Essaim se colore comme les autres. Avec `[rendu]
+  masquer_captures`, aucune bordure n'est colorée (`Border::reset`) : DWM la dessine dans la
+  fenêtre d'une autre appli, elle ne peut pas être exclue des captures et se verrait dans un
+  partage d'écran. Couleur
   quantifiée, envoyée seulement si elle change (60 fois par seconde au plus) ; une fenêtre qui
   refuse (appli administrateur) est notée une fois au journal. Essai réel :
   `cargo test --release bordure_reelle -- --ignored --nocapture` avec un Bloc-notes ouvert.
 - **Plein écran** (jeu, vidéo) sous le pointeur : tout se met en veille et la flèche d'origine
   revient. C'est la fenêtre survolée qui compte, pas celle qui a le clavier
-  (`win::plein_ecran_sous`, toutes les 250 ms) : `EnumWindows` dans l'ordre Z, première fenêtre
+  (`win::plein_ecran_sous`, toutes les 250 ms, une fois par seconde en veille profonde, et tout
+  de suite quand le pointeur change d'écran ou sort de la veille profonde, avant de dessiner) :
+  `EnumWindows` dans l'ordre Z, première fenêtre
   visible, non réduite, non masquée par DWM (`DWMWA_CLOAKED`), qui n'est ni un calque traversé par
   la souris (d'Essaim ou d'une autre surcouche), ni le bureau (`Progman`, `WorkerW`), ni une
-  barre des tâches, ni une infobulle, et dont le cadre contient le point. Un jeu en plein écran
+  barre des tâches, ni une infobulle, ni une fenêtre de passage qui ne couvre pas l'écran
+  (`win::de_passage` : menu `#32768`, `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`, fenêtre possédée
+  `GW_OWNER`, ou `WS_EX_LAYERED` + `WS_EX_TOPMOST` comme les surcouches de Discord, Steam ou
+  NVIDIA), et dont le cadre contient le point. Hystérésis (`win::plein_ecran_retenu`) : la
+  fenêtre en plein écran retenue reste tant qu'elle couvre l'écran du pointeur et que la fenêtre
+  survolée n'est pas une vraie fenêtre (barre de titre ou bord de redimensionnement). Un menu,
+  une notification ou une bulle au-dessus d'une vidéo en plein écran ne lève donc pas la pause.
+  Position du pointeur illisible un instant : l'état est gardé. Un jeu en plein écran
   sur un écran et le pointeur sur l'autre : l'essaim continue ; une vidéo en plein écran survolée
   pendant qu'on tape ailleurs : veille. Compte comme plein écran une fenêtre qui couvre son écran
   (cadre lu par `DWMWA_EXTENDED_FRAME_BOUNDS`) sans être agrandie ni avoir de barre de titre ou
   de bord de redimensionnement : une fenêtre agrandie, barre des tâches masquée, ne compte pas.
   En pause et en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
-  Plein écran qui dure plus de 10 s : le calque de l'écran couvert est détruit
-  (`Backend::liberer_ecran`), les autres écrans gardent les leurs. Un calque vide resterait
-  sinon au-dessus d'un jeu en plein écran sans bordure (une fenêtre superposée posée sur lui
-  peut le faire sortir de la présentation directe). C'est la seule exception à la règle des
-  fenêtres qui ne disparaissent ni n'apparaissent sous la souris : pendant le jeu, le pointeur
-  lui appartient ; le calque est recréé une fois, à la première image qui retouche cet écran
-  après la sortie du plein écran.
+  Le calque de l'écran reste en place, vide (aucune fenêtre ne disparaît sous la souris) : un
+  calque vide reste ainsi au-dessus d'un jeu en plein écran sans bordure ; son effet sur la
+  présentation du jeu n'est pas mesuré.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global), bouton principal et
   bouton secondaire (clic droit) ; boutons inversés (`SM_SWAPBUTTON`) : le principal est le droit.
+  En plus du bit fort (enfoncé), le bit faible (appuyé depuis la dernière lecture) compte un
+  clic appuyé et relâché entre deux lectures (tap du pavé tactile ; `main::nouveau_clic`). Ce bit
+  est partagé entre processus : une autre appli qui le lit l'efface, ce clic-là reste manqué ;
+  il ne crée pas de faux clic. Il est lu une fois avant la boucle pour oublier les appuis
+  antérieurs au lancement.
 - **Rebonds** : cadre affiché de la fenêtre au premier plan (`DWMWA_EXTENDED_FRAME_BOUNDS`, relu
   à chaque image par `main::lire_fenetre` ; mêmes fenêtres que la bordure, `bordure::eligible` :
   ni bureau, ni barre des tâches, ni barre ou menu sans cadre, ni fenêtre réduite ou en plein
@@ -127,7 +139,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   descend vers 0,08 s).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
   **Veille** : rien de neuf depuis `[rendu] veille_apres` (60 s) → fondu de 1 s, puis plus aucun
-  dessin ; souris, son et clics restent lus toutes les 40 ms (réveil en 0,25 s au plus).
+  dessin ; souris, son et clics restent lus toutes les 40 ms (réveil en 0,25 s au plus), le plein
+  écran une fois par seconde (relu dès le réveil, avant la première image).
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur ; nouvel essai 10 s plus tard,
   puis attente triplée à chaque échec (10 min au plus, remise à 10 s après 5 min sans erreur).
   Les calques processeur ne sont remplacés qu'après une image carte graphique réussie ; un calque
@@ -152,7 +165,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   l'exécutable lu est l'hôte (au lancement, le contenu n'est pas encore attaché au cadre), il est
   relu toutes les 500 ms (`appli::Suivie`) ; session verrouillée, déconnectée ou à
   distance (`WTSRegisterSessionNotification` → `WM_WTSSESSION_CHANGE`, `SM_REMOTESESSION`),
-  prioritaire sur les autres. Traitées comme le plein
+  prioritaire sur les autres, puis écran éteint, session ouverte (« Écran éteint » :
+  `RegisterPowerSettingNotification` de `GUID_CONSOLE_DISPLAY_STATE` sur la fenêtre de l'icône,
+  `PBT_POWERSETTINGCHANGE` ; 0 éteint, l'état atténué ne compte pas). Traitées comme le plein
   écran (bordure rendue, son coupé), notées au journal ; raison publiée (`charge::publier_raison`).
   « Allégé » (plafond adaptatif) n'est dit que s'il limite vraiment : pas quand il est au-dessus
   de la cadence choisie, de repos, de la batterie ou de la fréquence de l'écran du pointeur
@@ -178,13 +193,16 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   caractère sur ce clavier).
 - **Masquer des captures** : `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` sur chaque
   calque (`win::masquer_captures`). Les essais par capture `BitBlt` ne voient alors plus l'essaim.
+  La bordure colorée, dessinée par DWM dans une fenêtre d'une autre appli, n'est pas excluable :
+  elle n'est pas colorée tant que le réglage est actif.
 - **Fenêtre pour le stream** (`stream.rs`) : fenêtre ordinaire (classe `EssaimStream`), son
   propre fil, son propre `Swarm` et ses `Effets`. Affichage : périphérique Direct3D 11 (carte
   graphique, sinon WARP), chaîne d'échange DXGI à retournement (`FLIP_DISCARD`), présentée tous
   les `n` rafraîchissements de l'écran de la fenêtre (`stream::intervalle_synchro` :
-  `n = max(1, round(fréquence / 60))`, 4 au plus ; 144 Hz → 72 i/s, 240 Hz → 60 i/s ; avec
-  `[rendu] cadence` fixée, jamais au-dessus, une attente complète ce que 4 ne suffit pas à
-  tenir ; fréquence relue chaque seconde, la fenêtre peut changer d'écran), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
+  `n = max(1, fréquence / max(c, 60))` en division entière, `c` = `[rendu] cadence` si fixée,
+  sinon 60 ; 4 au plus ; 90 Hz → 90 i/s, 144 Hz → 72 i/s, 240 Hz → 60 i/s : jamais sous 60 ni
+  sous la cadence choisie ; une cadence choisie plus basse est tenue par une attente ; fréquence
+  relue chaque seconde, la fenêtre peut changer d'écran), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
   sprites). Le tampon garde la transparence, prémultipliée (fond `"transparent"`, effacé à 0) : la
   *Capture de jeu* d'OBS le reprend sur la carte graphique (*Autoriser la transparence*, *Valeurs
   alpha prémultipliées*) ; DWM l'affiche sans transparence, sur noir. Essai réel relu sur la carte

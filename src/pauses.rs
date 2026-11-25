@@ -1,6 +1,7 @@
 //! Pauses automatiques (`[pause]`, propres à la machine, hors presets) : Windows ne veut pas être
 //! dérangé, batterie, application de la liste au premier plan ; et, sans réglage, session
-//! verrouillée, déconnectée ou à distance (`win::session_retenue`, notifiée par Windows). Le
+//! verrouillée, déconnectée ou à distance (`win::session_retenue`), écran éteint
+//! (`win::ecran_eteint`), notifiés par Windows. Le
 //! reste est interrogé à intervalles
 //! (pas de hook) : l'état de notification de l'utilisateur et l'application au premier plan
 //! chaque seconde, l'alimentation toutes les 5 s ou dès que Windows la signale changée
@@ -74,14 +75,6 @@ pub fn plafonner(cadence: u32, plafond: u32) -> u32 {
         (0, p) => p,
         (c, p) => c.min(p),
     }
-}
-
-/// Cadence à tenir pour `cadence` (0 = celle de l'écran, réglée par `DwmFlush`) quand l'écran du
-/// pointeur est à `frequence` Hz et le plus rapide des écrans à `frequence_max` (0 = inconnue).
-/// Écrans à fréquences mélangées et pointeur sur un plus lent : `DwmFlush` suivrait le
-/// compositeur, calé sur le plus rapide ; la cadence devient celle de l'écran du pointeur.
-pub fn cadence_ecran(cadence: u32, frequence: u32, frequence_max: u32) -> u32 {
-    if cadence == 0 && frequence > 0 && frequence_max > frequence { frequence } else { cadence }
 }
 
 /// Raison lisible (courte, pour la ligne d'état de la fenêtre des réglages) de ce qui retient
@@ -195,9 +188,12 @@ impl Pauses {
         let batterie = effet_batterie(cfg.batterie, self.alimentation.0, self.alimentation.1);
         // une appli du Store compte aussi sous le nom de l'hôte (règles écrites avant)
         let appli = self.premier_plan.as_ref().and_then(|a| a.noms().find_map(|exe| appli_en_pause(&cfg.applis, exe)));
-        // session verrouillée, déconnectée ou à distance : toujours, quel que soit `[pause]`
+        // session verrouillée, déconnectée ou à distance, écran éteint : toujours, quel que soit
+        // `[pause]`
         let pause = if let Some(s) = crate::win::session_retenue() {
             Some(s.to_owned())
+        } else if crate::win::ecran_eteint() {
+            Some("Écran éteint".to_owned())
         } else if self.derange {
             Some("Ne pas déranger".to_owned())
         } else if batterie == EffetBatterie::Pause {
@@ -293,18 +289,6 @@ mod tests {
         assert_eq!(plafonner(144, 0), 144);
         assert_eq!(plafonner(144, 60), 60);
         assert_eq!(plafonner(20, 30), 20);
-    }
-
-    #[test]
-    fn cadence_des_ecrans_melanges() {
-        // pointeur sur l'écran à 60 Hz, voisin à 144 : 60 images/s, plus `DwmFlush`
-        assert_eq!(cadence_ecran(0, 60, 144), 60);
-        // écrans pareils, ou pointeur sur le plus rapide : `DwmFlush` règle (0)
-        assert_eq!(cadence_ecran(0, 144, 144), 0);
-        assert_eq!(cadence_ecran(0, 60, 60), 0);
-        // fréquence inconnue : rien ne change ; cadence choisie : elle reste
-        assert_eq!(cadence_ecran(0, 0, 144), 0);
-        assert_eq!(cadence_ecran(30, 60, 144), 30);
     }
 
     #[test]
