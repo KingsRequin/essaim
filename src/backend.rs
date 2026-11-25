@@ -1,10 +1,14 @@
 //! Choix du moteur de dessin : carte graphique (DirectComposition + Direct2D, `gpu.rs`) d'abord,
-//! processeur (tiny-skia + fenêtres superposées, `layer.rs`) en secours. Une erreur de la carte
-//! graphique en cours de route (pilote réinitialisé, sortie de veille…) fait basculer sur le
-//! processeur ; la carte graphique est retentée 10 s plus tard, puis à intervalles croissants
-//! (30 s, 90 s… jusqu'à 10 min) tant qu'elle échoue. Pendant un essai, les calques processeur
-//! restent : ils ne sont remplacés qu'après une image réussie sur la carte graphique (sinon, une
-//! carte qui échoue à chaque fois créerait et détruirait des fenêtres à chaque essai).
+//! processeur (tiny-skia + fenêtres superposées, `layer.rs`) en secours.
+//!
+//! Périphérique perdu (pilote réinitialisé, sortie de veille…) : un nouveau `Gpu` est fait et les
+//! mêmes fenêtres lui sont rattachées (nouvelle cible DirectComposition sur chacune), sans en
+//! créer ni en détruire sous la souris. Toute autre erreur, une reconstruction qui échoue ou une
+//! deuxième perte en moins de `RECONSTRUCTION` font basculer sur le processeur ; la carte
+//! graphique est alors retentée 10 s plus tard, puis à intervalles croissants (30 s, 90 s…
+//! jusqu'à 10 min) tant qu'elle échoue. Pendant un essai, les calques processeur restent : ils ne
+//! sont remplacés qu'après une image réussie sur la carte graphique (sinon, une carte qui échoue
+//! à chaque fois créerait et détruirait des fenêtres à chaque essai).
 //!
 //! Dans les deux cas : un calque immobile par écran touché (par l'essaim, qui peut déborder sur
 //! l'écran voisin, ou par une fissure), refait seulement si son écran change de place ou de
@@ -22,6 +26,9 @@ const RETRY_FIRST: Duration = Duration::from_secs(10);
 const RETRY_MAX: Duration = Duration::from_secs(600);
 /// Carte graphique sans erreur pendant ce temps : ses échecs passés sont oubliés.
 const STABLE: Duration = Duration::from_secs(300);
+/// Deux pertes du périphérique plus rapprochées : la carte graphique n'est plus refaite sur
+/// place, le processeur prend le relais.
+const RECONSTRUCTION: Duration = Duration::from_secs(10);
 
 /// Attente avant le prochain essai de la carte graphique après `echecs` échecs d'affilée.
 fn retry_delay(echecs: u32) -> Duration {
@@ -42,6 +49,8 @@ pub struct Backend {
     echecs: u32,
     /// Depuis quand la carte graphique dessine sans erreur.
     gpu_depuis: Option<Instant>,
+    /// Dernière reconstruction après une perte du périphérique.
+    reconstruit: Option<Instant>,
 }
 
 /// L'écran `rect` est-il touché par l'essaim ou une fissure ?
@@ -87,7 +96,19 @@ fn frame_gpu(
     }
     let t0 = Instant::now();
     gpu.commit()?;
+    // fenêtres montrées seulement une fois leur premier contenu remis au compositeur
+    layers.iter_mut().for_each(GpuLayer::montrer);
     Ok(sent + t0.elapsed())
+}
+
+/// Efface tous les calques de la carte graphique et remet l'image au compositeur.
+fn clear_gpu(gpu: &Gpu, layers: &mut [GpuLayer]) -> windows::core::Result<Duration> {
+    for l in layers.iter_mut() {
+        l.clear(gpu)?;
+    }
+    gpu.commit()?;
+    layers.iter_mut().for_each(GpuLayer::montrer);
+    Ok(Duration::ZERO)
 }
 
 /// Une image sur le processeur (calques créés au besoin).
@@ -119,7 +140,7 @@ fn frame_cpu(
 impl Backend {
     pub fn new(want_gpu: bool) -> Self {
         let now = Instant::now();
-        let mut b = Self { kind: Kind::Cpu(Vec::new()), want_gpu, retry_at: None, echecs: 1, gpu_depuis: None };
+        let mut b = Self { kind: Kind::Cpu(Vec::new()), want_gpu, retry_at: None, echecs: 1, gpu_depuis: None, reconstruit: None };
         if want_gpu {
             match Gpu::new() {
                 Ok(g) => {
@@ -221,25 +242,64 @@ impl Backend {
             Kind::Gpu(gpu, layers) => frame_gpu(gpu, layers, monitors, swarm, items, draw, now),
             Kind::Cpu(layers) => Ok(frame_cpu(layers, monitors, swarm, items, draw, now)),
         };
-        resultat.unwrap_or_else(|e| {
-            self.kind = Kind::Cpu(Vec::new());
-            let d = self.echec(now);
-            log::warn!("dessin : erreur de la carte graphique ({e}), bascule sur le processeur ; nouvel essai dans {} s", d.as_secs());
-            Duration::ZERO
-        })
+        resultat.unwrap_or_else(|e| self.erreur_gpu(e, now, |gpu, layers| frame_gpu(gpu, layers, monitors, swarm, items, draw, now)))
     }
 
     /// Efface tout (pause, curseur masqué).
     pub fn clear(&mut self) {
         match &mut self.kind {
             Kind::Gpu(gpu, layers) => {
-                for l in layers.iter_mut() {
-                    let _ = l.clear(gpu);
+                if let Err(e) = clear_gpu(gpu, layers) {
+                    self.erreur_gpu(e, Instant::now(), |g, l| clear_gpu(g, l));
                 }
-                let _ = gpu.commit();
             }
             Kind::Cpu(layers) => layers.iter_mut().for_each(Layer::clear),
         }
+    }
+
+    /// Erreur de la carte graphique pendant une image ou un effacement. Périphérique perdu (et pas
+    /// déjà refait il y a moins de `RECONSTRUCTION`) : refait, les mêmes fenêtres rattachées, puis
+    /// `refaire` redonne l'image. Sinon, ou si cela échoue : bascule sur le processeur.
+    fn erreur_gpu(&mut self, e: windows::core::Error, now: Instant, refaire: impl FnOnce(&Gpu, &mut Vec<GpuLayer>) -> windows::core::Result<Duration>) -> Duration {
+        let Kind::Gpu(gpu, _) = &self.kind else { return Duration::ZERO };
+        let perdu = crate::gpu::perte(&e) || gpu.perdu();
+        if perdu && self.reconstruit.is_none_or(|t| now - t >= RECONSTRUCTION) {
+            self.reconstruit = Some(now);
+            match self.reconstruire(refaire) {
+                Ok(sent) => {
+                    log::info!("dessin : périphérique de la carte graphique perdu ({e}), refait sur les mêmes calques");
+                    return sent;
+                }
+                Err(e2) => {
+                    let d = self.echec(now);
+                    log::warn!("dessin : périphérique de la carte graphique perdu ({e}) et impossible à refaire ({e2}), bascule sur le processeur ; nouvel essai dans {} s", d.as_secs());
+                    return Duration::ZERO;
+                }
+            }
+        }
+        self.kind = Kind::Cpu(Vec::new());
+        let d = self.echec(now);
+        log::warn!("dessin : erreur de la carte graphique ({e}), bascule sur le processeur ; nouvel essai dans {} s", d.as_secs());
+        Duration::ZERO
+    }
+
+    /// Nouveau périphérique, mêmes fenêtres : chacune lâche ses objets DirectComposition, l'ancien
+    /// périphérique est libéré (une fenêtre n'a qu'une cible), puis chacune est rattachée au
+    /// nouveau et `refaire` dessine. En cas d'échec, le moteur est laissé sur le processeur (les
+    /// fenêtres des calques sont alors détruites).
+    fn reconstruire(&mut self, refaire: impl FnOnce(&Gpu, &mut Vec<GpuLayer>) -> windows::core::Result<Duration>) -> windows::core::Result<Duration> {
+        let Kind::Gpu(_, layers) = &mut self.kind else { return Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL)) };
+        let mut layers = std::mem::take(layers);
+        layers.iter_mut().for_each(GpuLayer::detacher);
+        // l'ancien périphérique part ici
+        self.kind = Kind::Cpu(Vec::new());
+        let gpu = Gpu::new()?;
+        for l in layers.iter_mut() {
+            gpu.rattacher(l)?;
+        }
+        let sent = refaire(&gpu, &mut layers)?;
+        self.kind = Kind::Gpu(gpu, layers);
+        Ok(sent)
     }
 }
 
@@ -335,7 +395,7 @@ mod tests {
         assert_eq!(retry_delay(u32::MAX), RETRY_MAX);
         // échecs d'affilée : attente croissante ; après un long moment sans erreur, on repart de 10 s
         let t0 = Instant::now();
-        let mut b = Backend { kind: Kind::Cpu(Vec::new()), want_gpu: true, retry_at: None, echecs: 0, gpu_depuis: None };
+        let mut b = Backend { kind: Kind::Cpu(Vec::new()), want_gpu: true, retry_at: None, echecs: 0, gpu_depuis: None, reconstruit: None };
         let suite: Vec<u64> = (0..3).map(|_| b.echec(t0).as_secs()).collect();
         assert_eq!(suite, [10, 30, 90]);
         assert_eq!(b.retry_at, Some(t0 + Duration::from_secs(90)));

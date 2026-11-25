@@ -20,13 +20,14 @@ use crate::audio::{AudioShared, AudioView};
 use crate::canvas::Canvas;
 use crate::config::{self, Config, Fond};
 use crate::effets::Effets;
-use crate::gpu::{make_disc, Pinceau};
+use crate::gpu::{planche_pastilles, Pinceau};
 use crate::render::Swarm;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use windows::core::{w, Interface, PCWSTR};
-use windows::Win32::Foundation::{DXGI_STATUS_OCCLUDED, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::core::{w, Interface, GUID, PCWSTR};
+use windows::Win32::Foundation::{DXGI_STATUS_OCCLUDED, HANDLE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT};
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
@@ -35,6 +36,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Power::{RegisterPowerSettingNotification, UnregisterPowerSettingNotification, POWERBROADCAST_SETTING};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::Matrix3x2;
 
@@ -42,8 +44,22 @@ const CLASSE: PCWSTR = w!("EssaimStream");
 /// Fenêtre ouverte (0 : aucune ; `OUVERTURE` : réservée, en cours de création).
 static FENETRE: AtomicIsize = AtomicIsize::new(0);
 const OUVERTURE: isize = -1;
-/// Fenêtre cachée (`DXGI_STATUS_OCCLUDED`) : pause entre deux essais de présentation.
+/// Fenêtre hors de vue (écran éteint, session verrouillée) : pause entre deux essais de
+/// présentation.
 const CACHEE: Duration = Duration::from_millis(100);
+/// Fenêtre seulement recouverte (`DXGI_STATUS_OCCLUDED` sans être hors de vue) : elle est encore
+/// présentée pour la capture d'OBS, mais `Present` n'attend plus l'écran : la boucle se cale
+/// d'elle-même sur ce rythme.
+const RECOUVERTE: Duration = Duration::from_micros(16_667);
+/// Affichage perdu : premier nouvel essai après ce délai, doublé à chaque échec jusqu'à
+/// `PANNE_MAX` ; une ligne de journal par `NOTE_PANNE` au plus.
+const PANNE_PREMIERE: Duration = Duration::from_secs(1);
+const PANNE_MAX: Duration = Duration::from_secs(30);
+const NOTE_PANNE: Duration = Duration::from_secs(60);
+/// Écran éteint (`GUID_CONSOLE_DISPLAY_STATE`, notifié à la fenêtre).
+static ECRAN_ETEINT: AtomicBool = AtomicBool::new(false);
+/// `GUID_CONSOLE_DISPLAY_STATE` : état de l'écran de la console (0 éteint, 1 allumé, 2 atténué).
+const GUID_CONSOLE_DISPLAY_STATE: GUID = GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
 /// Taille de départ de la zone de dessin (px).
 const TAILLE: i32 = 480;
 /// Marge laissée vide le long des bords (px de la fenêtre).
@@ -75,17 +91,17 @@ pub fn ouvrir(son: Arc<AudioShared>) {
         // ouverte : ramenée devant (si elle se ferme à l'instant, son fil libère la place)
         Place::Ouverte(hwnd) => {
             unsafe {
-                if IsWindow(Some(hwnd)).as_bool() {
-                    let _ = ShowWindow(hwnd, SW_RESTORE);
-                    let _ = SetForegroundWindow(hwnd);
-                }
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
             }
             return;
         }
     }
     let lance = std::thread::Builder::new().name("essaim-stream".into()).spawn(move || {
-        let resultat = run(son);
-        FENETRE.store(0, Ordering::Release);
+        // libère la place à la sortie du fil, même s'il panique
+        let place = Tenue(Cell::new(OUVERTURE));
+        let resultat = run(son, &place);
+        drop(place);
         match resultat {
             Ok(()) => log::info!("stream : fenêtre fermée"),
             Err(e) => echec(&e.to_string()),
@@ -105,12 +121,35 @@ enum Place {
     Ouverte(HWND),
 }
 
-/// Réserve la place de la fenêtre, d'un seul geste (`compare_exchange`).
+/// Réserve la place de la fenêtre, d'un seul geste (`compare_exchange`). Une place marquée
+/// ouverte sur une fenêtre qui n'existe plus est reprise.
 fn reserver() -> Place {
-    match FENETRE.compare_exchange(0, OUVERTURE, Ordering::AcqRel, Ordering::Acquire) {
-        Ok(_) => Place::Reservee,
-        Err(OUVERTURE) => Place::EnOuverture,
-        Err(h) => Place::Ouverte(HWND(h as *mut _)),
+    loop {
+        match FENETRE.compare_exchange(0, OUVERTURE, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return Place::Reservee,
+            Err(OUVERTURE) => return Place::EnOuverture,
+            Err(h) => {
+                if unsafe { IsWindow(Some(HWND(h as *mut _))) }.as_bool() {
+                    return Place::Ouverte(HWND(h as *mut _));
+                }
+                // fenêtre disparue sans que son fil ait rendu la place : reprise (si elle vient
+                // de changer, nouvel essai)
+                if FENETRE.compare_exchange(h, OUVERTURE, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                    return Place::Reservee;
+                }
+            }
+        }
+    }
+}
+
+/// Place tenue par le fil de la fenêtre (`OUVERTURE`, puis sa fenêtre) : rendue quand le fil
+/// s'arrête, panique comprise, seulement si elle est encore la sienne (une place reprise par
+/// `reserver` n'est pas rendue par l'ancien fil).
+struct Tenue(Cell<isize>);
+
+impl Drop for Tenue {
+    fn drop(&mut self) {
+        let _ = FENETRE.compare_exchange(self.0.get(), 0, Ordering::AcqRel, Ordering::Acquire);
     }
 }
 
@@ -134,6 +173,14 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             WM_DESTROY => {
                 PostQuitMessage(0);
                 LRESULT(0)
+            }
+            WM_POWERBROADCAST if wp.0 == PBT_POWERSETTINGCHANGE as usize && lp.0 != 0 => {
+                let r = &*(lp.0 as *const POWERBROADCAST_SETTING);
+                if r.PowerSetting == GUID_CONSOLE_DISPLAY_STATE && r.DataLength >= 4 {
+                    let etat = std::ptr::read_unaligned(r.Data.as_ptr() as *const u32);
+                    ECRAN_ETEINT.store(etat == 0, Ordering::Relaxed);
+                }
+                LRESULT(1)
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
@@ -242,7 +289,7 @@ struct Rendu {
     _d3d: ID3D11Device,
     chaine: IDXGISwapChain1,
     dc: ID2D1DeviceContext,
-    disc: ID2D1Bitmap1,
+    planche: ID2D1Bitmap1,
     /// Tampon de la chaîne vu par Direct2D, et sa taille ; refait quand la fenêtre change de taille.
     cible: Option<(ID2D1Bitmap1, (u32, u32))>,
     pinceau: Pinceau,
@@ -284,8 +331,24 @@ impl Rendu {
             let _ = fabrique.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
             let usine: ID2D1Factory1 = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dc = usine.CreateDevice(&dxgi)?.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
-            let disc = make_disc(&dc)?;
-            Ok(Self { _d3d: d3d, chaine, dc, disc, cible: None, pinceau: Pinceau::default() })
+            let planche = planche_pastilles(&dc)?;
+            Ok(Self { _d3d: d3d, chaine, dc, planche, cible: None, pinceau: Pinceau::default() })
+        }
+    }
+
+    /// Libère tout avant d'en refaire un : la fenêtre n'accepte qu'une chaîne d'échange, et
+    /// Direct3D ne détruit ses objets qu'une fois le contexte vidé (`ClearState` + `Flush`).
+    fn liberer(self) {
+        let Self { _d3d: d3d, chaine, dc, planche, cible, pinceau } = self;
+        unsafe { dc.SetTarget(None) };
+        // vue Direct2D du tampon et ressources de dessin d'abord, puis la chaîne
+        drop((cible, pinceau, planche, dc));
+        drop(chaine);
+        if let Ok(ctx) = unsafe { d3d.GetImmediateContext() } {
+            unsafe {
+                ctx.ClearState();
+                ctx.Flush();
+            }
         }
     }
 
@@ -316,8 +379,8 @@ impl Rendu {
 
     /// Dessine une image de `l` × `h` sur `fond` : `draw` dessine en px à 100 % autour de
     /// (0, 0), agrandi `z` fois et centré. Sans `presenter`, l'image reste dans le tampon (essais).
-    /// `Ok(true)` : la fenêtre n'est pas visible (`DXGI_STATUS_OCCLUDED`), inutile de redessiner
-    /// avant que `visible` le dise.
+    /// `Ok(true)` : la fenêtre n'est pas visible (`DXGI_STATUS_OCCLUDED` : recouverte, écran
+    /// éteint…).
     fn image(&mut self, l: u32, h: u32, fond: D2D1_COLOR_F, z: f32, presenter: bool, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<bool> {
         self.cible(l, h)?;
         unsafe {
@@ -325,7 +388,7 @@ impl Rendu {
             self.dc.SetTransform(&Matrix3x2::identity());
             self.dc.Clear(Some(&fond));
             self.dc.SetTransform(&Matrix3x2 { M11: z, M12: 0.0, M21: 0.0, M22: z, M31: l as f32 / 2.0, M32: h as f32 / 2.0 });
-            let peint = self.pinceau.peindre(&self.dc, &self.disc, draw);
+            let peint = self.pinceau.peindre(&self.dc, &self.planche, draw);
             self.dc.EndDraw(None, None)?;
             peint?;
             if presenter {
@@ -345,7 +408,7 @@ impl Rendu {
     }
 }
 
-fn run(son: Arc<AudioShared>) -> windows::core::Result<()> {
+fn run(son: Arc<AudioShared>, place: &Tenue) -> windows::core::Result<()> {
     let hwnd = unsafe {
         let instance = GetModuleHandleW(None)?;
         let wc = WNDCLASSW {
@@ -374,9 +437,16 @@ fn run(son: Arc<AudioShared>) -> windows::core::Result<()> {
             None,
         )?
     };
-    FENETRE.store(hwnd.0 as isize, Ordering::Relaxed);
+    FENETRE.store(hwnd.0 as isize, Ordering::Release);
+    place.0.set(hwnd.0 as isize);
+    // écran éteint ou rallumé : notifié à la fenêtre (l'état présent arrive tout de suite)
+    ECRAN_ETEINT.store(false, Ordering::Relaxed);
+    let ecran = unsafe { RegisterPowerSettingNotification(HANDLE(hwnd.0), &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE) }.ok();
     let resultat = boucle(hwnd, &son);
     unsafe {
+        if let Some(e) = ecran {
+            let _ = UnregisterPowerSettingNotification(e);
+        }
         if IsWindow(Some(hwnd)).as_bool() {
             let _ = DestroyWindow(hwnd);
         }
@@ -392,8 +462,57 @@ fn dessiner(cv: &mut dyn Canvas, swarm: &Swarm, effets: &Effets, t: f64, cfg: &C
     cv.circle(0.0, 0.0, POINTEUR, (255, 255, 255), 0.95);
 }
 
+/// Personne ne peut voir la fenêtre : réduite, écran éteint, ou session verrouillée,
+/// déconnectée ou à distance. Seulement recouverte, elle reste présentée (capture d'OBS).
+fn hors_de_vue(hwnd: HWND) -> bool {
+    unsafe { IsIconic(hwnd) }.as_bool() || ECRAN_ETEINT.load(Ordering::Relaxed) || crate::win::session_retenue().is_some()
+}
+
+/// Attente avant le nouvel essai qui suit `echecs` échecs d'affilée de l'affichage.
+fn attente_panne(echecs: u32) -> Duration {
+    PANNE_PREMIERE.saturating_mul(2u32.saturating_pow(echecs.saturating_sub(1))).min(PANNE_MAX)
+}
+
+/// Affichage perdu (pilote réinitialisé, sortie de veille…) : essais espacés, journal sobre.
+#[derive(Default)]
+struct Panne {
+    /// Échecs d'affilée.
+    echecs: u32,
+    /// Prochain essai.
+    prochain: Option<Instant>,
+    /// Dernière ligne du journal, et échecs tus depuis.
+    note: Option<Instant>,
+    tus: u32,
+}
+
+impl Panne {
+    fn echec(&mut self, now: Instant, quoi: &str, e: &windows::core::Error) {
+        self.echecs = self.echecs.saturating_add(1);
+        let attente = attente_panne(self.echecs);
+        self.prochain = Some(now + attente);
+        if self.note.is_none_or(|t| now - t >= NOTE_PANNE) {
+            log::warn!("stream : {quoi} ({e}) ; {} autre(s) échec(s) depuis la dernière note, nouvel essai dans {} s", self.tus, attente.as_secs());
+            (self.note, self.tus) = (Some(now), 0);
+        } else {
+            self.tus += 1;
+        }
+    }
+
+    /// Une image a été présentée : les échecs passés sont oubliés.
+    fn retablie(&mut self) {
+        if self.echecs > 0 {
+            log::info!("stream : affichage rétabli après {} échec(s)", self.echecs);
+            *self = Self::default();
+        }
+    }
+
+    fn attendre(&self, now: Instant) -> bool {
+        self.prochain.is_some_and(|p| now < p)
+    }
+}
+
 fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
-    let mut rendu = Rendu::new(hwnd)?;
+    let mut rendu = Some(Rendu::new(hwnd)?);
     log::info!("stream : fenêtre ouverte");
     let mut conf = config::Watched::load();
     let (mut swarm, mut effets) = (Swarm::new(), Effets::new());
@@ -403,13 +522,16 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let (mut avant, mut relu) = (debut, debut);
     let mut pistes = crate::media::pistes();
     let mut doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
-    let mut panne: Option<Instant> = None;
+    let mut panne = Panne::default();
     let mut cachee = false;
     loop {
         unsafe {
             let mut msg = MSG::default();
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
+                    if let Some(r) = rendu.take() {
+                        r.liberer();
+                    }
                     return Ok(());
                 }
                 let _ = TranslateMessage(&msg);
@@ -428,19 +550,22 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
         let mut zone = RECT::default();
         let _ = unsafe { GetClientRect(hwnd, &mut zone) };
         let (l, h) = (zone.right - zone.left, zone.bottom - zone.top);
-        if l <= 0 || h <= 0 || unsafe { IsIconic(hwnd) }.as_bool() {
-            avant = now;
-            std::thread::sleep(Duration::from_millis(50));
-            continue;
-        }
-        // cachée (écran verrouillé ou éteint…) : un essai toutes les `CACHEE`, sans dessiner
-        if cachee {
+        let reduite = l <= 0 || h <= 0 || unsafe { IsIconic(hwnd) }.as_bool();
+        // hors de vue (écran éteint, session verrouillée) : rien n'est simulé, un essai de
+        // présentation toutes les `CACHEE`
+        if !reduite && cachee {
             std::thread::sleep(CACHEE);
-            if !rendu.visible() {
-                avant = Instant::now();
-                continue;
+            cachee = !rendu.as_ref().is_none_or(Rendu::visible) && hors_de_vue(hwnd);
+        }
+        if reduite || cachee {
+            // les coups joués entre-temps sont lus et jetés : pas de rafale au retour
+            swarm.oublier_coups(&son.view());
+            effets.oublier_coups(son);
+            avant = Instant::now();
+            if reduite {
+                std::thread::sleep(Duration::from_millis(50));
             }
-            cachee = false;
+            continue;
         }
         let t = (now - debut).as_secs_f64();
         let dt = (now - avant).as_secs_f32().clamp(0.0005, 0.25);
@@ -462,22 +587,38 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
         vue = (vue * (-dt / OUBLI).exp()).max(demi_cote(&swarm, &effets, cfg));
         affichee = suivre(affichee, calibree.max(vue), dt);
         let z = zoom(l, h, affichee);
-        if panne.is_some_and(|p| now - p < Duration::from_secs(1)) {
+        // affichage perdu : refait quand vient l'heure du prochain essai
+        if rendu.is_none() && !panne.attendre(now) {
+            match Rendu::new(hwnd) {
+                Ok(r) => rendu = Some(r),
+                Err(e) => panne.echec(now, "affichage impossible à refaire", &e),
+            }
+        }
+        let Some(r) = rendu.as_mut() else {
             std::thread::sleep(Duration::from_millis(50));
             continue;
-        }
-        let dessin = rendu.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, true, |cv| dessiner(cv, &swarm, &effets, t, cfg));
-        match dessin {
+        };
+        match r.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, true, |cv| dessiner(cv, &swarm, &effets, t, cfg)) {
             Err(e) => {
-                // pilote réinitialisé, sortie de veille… : tout est refait, au plus une fois par seconde
-                log::warn!("stream : erreur d'affichage ({e}), nouvel essai");
-                panne = Some(now);
-                match Rendu::new(hwnd) {
-                    Ok(r) => rendu = r,
-                    Err(e) => log::warn!("stream : affichage impossible à refaire ({e})"),
+                // pilote réinitialisé, sortie de veille… : l'ancien affichage est libéré (la
+                // fenêtre n'accepte qu'une chaîne d'échange), puis refait à l'essai suivant
+                if let Some(r) = rendu.take() {
+                    r.liberer();
+                }
+                panne.echec(now, "erreur d'affichage", &e);
+            }
+            Ok(occultee) => {
+                panne.retablie();
+                if occultee {
+                    if hors_de_vue(hwnd) {
+                        cachee = true;
+                    } else {
+                        // seulement recouverte : toujours présentée (OBS la capture), au rythme
+                        // de l'écran que `Present` ne donne plus
+                        std::thread::sleep(RECOUVERTE.saturating_sub(now.elapsed()));
+                    }
                 }
             }
-            Ok(c) => (panne, cachee) = (None, c),
         }
     }
 }
@@ -557,12 +698,79 @@ mod tests {
         assert_eq!(reserver(), Place::Reservee);
         assert!(ouverte());
         assert_eq!(reserver(), Place::EnOuverture);
-        FENETRE.store(0x1234, Ordering::Release);
-        assert_eq!(reserver(), Place::Ouverte(HWND(0x1234 as *mut _)));
-        FENETRE.store(0, Ordering::Release);
+        // fil arrêté (panique comprise) avant d'avoir sa fenêtre : la place est rendue
+        drop(Tenue(Cell::new(OUVERTURE)));
+        assert!(!ouverte());
+        // fenêtre ouverte : ramenée devant, pas rouverte
+        let hwnd = fenetre_essai();
+        FENETRE.store(hwnd.0 as isize, Ordering::Release);
+        assert_eq!(reserver(), Place::Ouverte(hwnd));
+        // fenêtre disparue sans que son fil ait rendu la place : reprise
+        let _ = unsafe { DestroyWindow(hwnd) };
         assert_eq!(reserver(), Place::Reservee);
+        assert_eq!(FENETRE.load(Ordering::Acquire), OUVERTURE);
+        // l'ancien fil s'arrête ensuite : il ne rend pas la place reprise
+        drop(Tenue(Cell::new(hwnd.0 as isize)));
+        assert!(ouverte());
         FENETRE.store(0, Ordering::Release);
         assert!(!ouverte());
+    }
+
+    #[test]
+    fn essais_d_affichage_espaces() {
+        let attentes: Vec<u64> = (1..=7).map(|n| attente_panne(n).as_secs()).collect();
+        assert_eq!(attentes, [1, 2, 4, 8, 16, 30, 30]);
+        assert_eq!(attente_panne(u32::MAX), PANNE_MAX);
+        let t0 = Instant::now();
+        let mut p = Panne::default();
+        assert!(!p.attendre(t0));
+        let e = windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL);
+        p.echec(t0, "essai", &e);
+        p.echec(t0, "essai", &e);
+        assert!(p.attendre(t0 + Duration::from_millis(1500)));
+        assert!(!p.attendre(t0 + Duration::from_secs(2)));
+        assert_eq!(p.tus, 1, "une seule ligne de journal par minute");
+        p.retablie();
+        assert!(!p.attendre(t0) && p.echecs == 0);
+    }
+
+    /// Trait fin (0,8 px) horizontal sur la carte graphique, relu : continu et d'intensité
+    /// régulière, qu'il tombe sur une ligne de pixels (y = 10,0) ou entre deux (10,5) ; petites
+    /// pastilles de même lumière où qu'elles tombent (pas de clignotement).
+    /// `cargo test --release traits_fins_relus -- --ignored`
+    #[test]
+    #[ignore]
+    fn traits_fins_relus() {
+        let hwnd = fenetre_essai();
+        let (l, h) = (64u32, 64u32);
+        let mut r = Rendu::new(hwnd).unwrap();
+        // `image` centre (0, 0) : (x, y) de la fenêtre = (x − 32, y − 32) du dessin
+        let c = (l as f32 / 2.0, h as f32 / 2.0);
+        let mut relu = |draw: &dyn Fn(&mut dyn Canvas)| {
+            r.image(l, h, couleur_fond(Fond::Transparent), 1.0, false, |cv| draw(cv)).unwrap();
+            relire(&r)
+        };
+        for y in [10.0f32, 10.5] {
+            let px = relu(&|cv| cv.line((8.0 - c.0, y - c.1), (56.0 - c.0, y - c.1), 0.8, (255, 255, 255), 1.0, true));
+            // lumière de chaque colonne du trait (hors des bouts)
+            let colonnes: Vec<u32> = (14..50).map(|x| (5..16).map(|yy| px[(yy * l + x) as usize][3] as u32).sum()).collect();
+            let (min, max) = (*colonnes.iter().min().unwrap(), *colonnes.iter().max().unwrap());
+            eprintln!("y = {y} : lumière par colonne {min} à {max}");
+            assert!(min > 0, "y = {y} : trait coupé");
+            assert!(min as f32 >= 0.85 * max as f32, "y = {y} : intensité irrégulière ({min} à {max})");
+            // à peu près la lumière d'un trait de 0,8 px (0,8 × 255)
+            assert!((150..=260).contains(&max), "y = {y} : lumière {max}");
+        }
+        let mut lumieres = Vec::new();
+        for k in 0..4 {
+            let d = k as f32 * 0.25;
+            let px = relu(&|cv| cv.circle(32.0 + d - c.0, 32.0 + d - c.1, 0.4, (255, 255, 255), 1.0));
+            lumieres.push(px.iter().map(|p| p[3] as u32).sum::<u32>());
+        }
+        let _ = unsafe { DestroyWindow(hwnd) };
+        eprintln!("petite pastille selon sa position : {lumieres:?}");
+        let (min, max) = (*lumieres.iter().min().unwrap(), *lumieres.iter().max().unwrap());
+        assert!(min > 0 && min as f32 >= 0.8 * max as f32, "pastille qui clignote : {lumieres:?}");
     }
 
     #[test]
