@@ -105,9 +105,15 @@ impl Rng {
     pub fn graine(g: u64) -> Self {
         Self(g | 1)
     }
+    /// Suite tirée de l'heure ; dans les essais, toujours la même (un échec se rejoue).
+    #[cfg(not(test))]
     pub fn seeded() -> Self {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
         Self(t | 1)
+    }
+    #[cfg(test)]
+    pub fn seeded() -> Self {
+        Self::graine(0x2545_f491_4f6c_dd1d)
     }
     pub fn f(&mut self) -> f32 {
         self.0 ^= self.0 << 13;

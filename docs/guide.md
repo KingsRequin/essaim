@@ -63,7 +63,7 @@ l'ordre de la liste.
   rotation perd d'un coup jusqu'à 80 % de sa vitesse, puis repart).
 - `force` : pour un éclat, la bordure ou le frein, de 0 à 1 ; pour une onde, des éclats, une
   fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour un rebond ou une poussée, de
-  0,2 à 3 (l'élan). `delai` : secondes au moins entre deux fois ;
+  0 à 3 (l'élan). `delai` : secondes au moins entre deux fois ;
   `probabilite` : la chance de se déclencher à chaque événement (0,33 : un sur trois).
 - Un événement ou une action inconnus (preset d'une version plus récente) ne font rien.
 
@@ -334,6 +334,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     défaut : 30 images/s au plus) ou `"pause"` ;
   - `applis` : pause tant que l'une de ces applications est au premier plan (onglet *04 Auto*,
     avec la dernière application utilisée à ajouter d'un clic).
+  Toujours, en plus : session verrouillée, déconnectée de la console ou ouverte à distance.
   La raison s'affiche sous le bouton Pause.
 - **Qualité adaptative** (`[rendu] adaptatif`, oui par défaut) : si une image demande plus de
   4 ms de calcul, la cadence baisse par paliers (120, 60, 30 images/s au plus) et remonte quand
@@ -366,6 +367,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   prioritaires), puis un preset par application au premier plan (nom de l'exécutable), puis par
   plage horaire (qui peut passer minuit). Quand plus aucune règle ne s'applique, les réglages
   d'avant reviennent, sauf ceux retouchés pendant la règle, qui sont gardés (curseurs compris).
+  Ils sont gardés dans `auto-avant.toml` tant qu'une règle agit : un arrêt d'Essaim ou du PC ne
+  les perd pas.
   Renommer ou supprimer un preset met à jour ou retire les règles qui le citent. Les fenêtres
   d'Essaim ne comptent pas.
   - Une règle : `{ si = "artiste = Skrillex", alors = "Delta" }`. Clés : `artiste` et `titre` (du
@@ -377,15 +380,19 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - `artiste =` reconnaît aussi un des artistes d'un champ « A, B & C feat. D » ; `bpm =` est vrai
     à 2 BPM près. Une donnée absente (rien ne joue, tempo inconnu) rend la condition fausse.
   - La première règle vraie l'emporte. Un changement dû à la musique (artiste, titre, tempo)
-    attend qu'elle soit stable 2 s : un tempo qui hésite autour d'un seuil ne fait pas clignoter
-    les presets. Une règle illisible est ignorée et notée au journal.
+    attend qu'elle soit stable 2 s, tout autre changement 1 s : un tempo qui hésite autour d'un
+    seuil ou un Alt+Tab aller-retour ne font pas clignoter les presets. En pause (le son n'est
+    plus écouté), le tempo garde sa dernière valeur. Un preset appliqué par une règle sur le
+    tempo ne change pas `[audio]` (sinon il changerait la mesure du tempo qui l'a choisi). Une
+    règle illisible est ignorée et notée au journal.
 - **Fenêtre des réglages** (`essaim.exe --reglages`, *Réglages…*, ou « Essaim - réglages » dans
   le menu Démarrer). Elle est claire ou sombre selon le thème des applications de Windows.
   - *01 Presets* : la grille des presets, chacun animé comme l'essaim autour du pointeur et au
     rythme du vrai son (en silence, sur un kick de démonstration). Recherche, filtre par source
     (fournis, mes presets, communauté), aperçus *Direct*, *Survol* ou *Figé*. Un clic applique ;
     le cadre rouge marque le preset actif. *Enregistrer le preset* garde les réglages actuels
-    (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque. Filtre par
+    (`%APPDATA%\Essaim\profils\<nom>.toml`) et peut les proposer à la bibliothèque ; le nom d'un
+    de ses presets demande de confirmer le remplacement. Filtre par
     forme ; un arrêt sur une vignette l'affiche en grand à côté ; *Comparer* sur deux presets les
     montre côte à côte avec la liste de leurs réglages différents.
   - *02 Réglages* : des sous-onglets rangés par familles repliables (seule celle du panneau
@@ -416,10 +423,12 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     suit le sien, à sa place ; un texte les garde tous, une lettre chacune). Une image à fond
     transparent donne le plus net. Un clic sur l'aperçu y montre l'effet du
     clic. *Exporter en GIF* enregistre trois secondes de l'aperçu (320 px, 20 images/s) dans
-    `Images\Essaim` et le montre dans l'Explorateur.
+    `Images\Essaim` (sans écraser un GIF du même nom) et le montre dans l'Explorateur ; quitter la
+    vue l'abandonne.
   - *04 Auto* : les règles du preset automatique (*Si … alors …*, avec le bouton *Artiste en
-    cours* qui remplit la condition pour le morceau qui joue ; par application ; par heure), les
-    pauses par application et les raccourcis.
+    cours* qui remplit la condition pour le morceau qui joue ; par application ; par heure ;
+    estompées quand le preset automatique est coupé), les pauses par application et les
+    raccourcis (ceux qu'une autre application a déjà pris sont signalés).
   - *Application* (l'engrenage, à droite des onglets) : ce qui tient à Essaim sur ce PC et non
     à l'allure de l'essaim, hors presets. À gauche, la version installée, où en est la mise à
     jour, *Chercher une mise à jour*, *Mises à jour automatiques* et *Ouvrir config.toml* ; à
@@ -449,10 +458,12 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *Surprends-moi* tire des réglages au hasard (Ctrl+Z pour revenir) ; une fois sur trois
     environ, une ou deux figures (jamais plus) d'allure tirée dans des bornes sages (échelle 0,8
     à 1,3, réactions 50 à 150 %), parfois avec une modulation sur l'une d'elles.
-  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application*.
+  - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application* (une entrée coupée
+    dans le Gestionnaire des tâches est montrée inactive ; la réactiver ici lève la coupure).
   - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 5 ou flèches
     (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme
-    une boîte.
+    une boîte (boîte ouverte : Ctrl+1 à 5 et Ctrl+S n'agissent pas). Fenêtre étroite ou zoomée
+    (Ctrl+molette) : colonnes resserrées, puis une seule colonne qui défile.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
   - Préréglages fournis (56), chacun avec sa forme, ses couleurs, ses effets et ses propres
@@ -488,7 +499,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
     curseurs, ni à la secousse du projecteur et à sa sensibilité.
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
-- Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes).
+- Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes ;
+  au-delà de 1 Mo, l'ancien devient `essaim.old.log`).
 - `essaim.exe --quitter` ferme l'instance en cours ; `essaim.exe --stream` ouvre la fenêtre pour
   le stream (celle de l'instance en cours s'il y en a une).
 - `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été

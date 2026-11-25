@@ -806,7 +806,7 @@ pub struct Orbite {
     /// Trajet dessiné à la main d'avant (`forme = "trace"`) : points (x, y). Gardé pour les presets
     /// d'avant ; une image le remplit aussi (son plus grand contour, pour les versions d'avant).
     pub trace: Vec<[f32; 2]>,
-    /// Contours d'une image (`forme = "trace"`), un par anneau de comètes (4 au plus) : points
+    /// Contours d'une image (`forme = "trace"`), un par anneau de comètes (`contours::CONTOURS_MAX`, 24 au plus) : points
     /// (x, y) d'un même repère (pixels de l'image), que le moteur met à l'échelle ensemble.
     pub contours: Vec<Vec<[f32; 2]>>,
     /// Inertie du centre de l'orbite : 0 = suit le pointeur de près, 1 = ressort souple qui
@@ -1058,8 +1058,8 @@ pub const DECLENCHEURS_MAX: usize = 24;
 pub struct Declencheur {
     pub quand: Evenement,
     pub faire: Action,
-    /// Force de l'éclat (0 à 1), de l'illumination de la bordure (0 à 1), ou taille de l'onde,
-    /// des éclats, de la fissure, du carré, de l'implosion (0,2 à 3).
+    /// Force de l'éclat, de l'illumination de la bordure, du frein (0 à 1), ou taille de l'onde,
+    /// des éclats, de la fissure, du carré, de l'implosion… (0,2 à 3) : `Action::bornes_force`.
     pub force: f32,
     /// Satellites, étincelles : au moins `nombre`, au plus `nombre_max`.
     pub nombre: u32,
@@ -1145,6 +1145,19 @@ pub enum Action {
     Frein,
     #[serde(other)]
     Aucune,
+}
+
+impl Action {
+    /// Bornes de la force d'un déclencheur de cette action : une intensité (éclat, bordure,
+    /// frein : 0 à 1), une taille (0,2 à 3), un élan (rebond, poussée : 0 à 3, un petit rebond
+    /// au charleston reste possible) ; sans effet pour les satellites et l'inversion (0 à 3).
+    pub fn bornes_force(self) -> (f32, f32) {
+        match self {
+            Self::Eclat | Self::Bordure | Self::Frein => (0.0, 1.0),
+            Self::Rebond | Self::Poussee | Self::Satellites | Self::Inversion | Self::Aucune => (0.0, 3.0),
+            Self::Onde | Self::Eclats | Self::Fissure | Self::Implosion | Self::Carre | Self::Etincelles | Self::Explosion | Self::Rafale => (0.2, 3.0),
+        }
+    }
 }
 
 /// Trajet des satellites : celui des comètes, ou une forme à eux.
@@ -1509,7 +1522,9 @@ liste = [
 #   faire    : eclat, satellites, inversion (du sens), bordure, onde, eclats, fissure, implosion,
 #              carre, etincelles, explosion, rafale, rebond (de l'orbite), poussee (de la
 #              rotation), frein
-#   force    : 0 à 3 (éclat, bordure et frein : 0 à 1) ; nombre, nombre_max : satellites, étincelles
+#   force    : éclat, bordure et frein : 0 à 1 ; onde, éclats, fissure, implosion, carré,
+#              étincelles, explosion, rafale : 0.2 à 3 ; rebond, poussee : 0 à 3 ;
+#              nombre, nombre_max : satellites, étincelles (0 à 40)
 #   delai    : secondes au moins entre deux fois ; probabilite : chance à chaque fois (0 à 1)
 # Par défaut, les réactions de toujours.
 liste = [
@@ -1537,7 +1552,7 @@ opacite = 0.62          # assombrissement de l'écran (0.2 à 0.95)
 
 [reticule]
 actif = false           # deux fines lignes croisées centrées sur le pointeur
-taille = 40             # longueur de chaque branche
+taille = 40             # longueur de chaque branche (10 à 200)
 opacite = 0.6           # 0.05 à 1
 epaisseur = 1.2         # épaisseur des lignes (0.5 à 6)
 vide = 12               # vide au centre, autour du pointeur (4 à 60)
@@ -1617,7 +1632,13 @@ pub fn set_value(section: &str, key: &str, value: &serde_json::Value) -> Result<
 /// Bornes des réglages numériques : une valeur absurde (fichier mal tapé, client local) ne doit
 /// pas pouvoir surcharger l'appli (des milliers de satellites, une cadence folle…).
 fn limits(section: &str, key: &str) -> (f64, f64) {
-    match (section, key) {
+    limites_connues(section, key).unwrap_or((0.0, 1000.0))
+}
+
+/// Bornes données à `[section] key` ; `None` : aucune (un réglage numérique ne devrait jamais
+/// en manquer, voir l'essai `chaque_reglage_numerique_a_ses_bornes`).
+fn limites_connues(section: &str, key: &str) -> Option<(f64, f64)> {
+    Some(match (section, key) {
         ("eclat", "taille") => (0.0, 20.0),
         ("orbite", "rayon") => (4.0, 200.0),
         ("orbite", "trainee") => (0.01, 3.0),
@@ -1685,9 +1706,9 @@ fn limits(section: &str, key: &str) -> (f64, f64) {
         ("rendu", "veille_apres") => (0.0, 3600.0),
         ("rendu", _) => (0.0, 500.0),
         ("bordure", _) => (0.0, 1.0),
-        (s, k) if FIGURES.contains(&s) && bornes_allure(k).is_some() => bornes_allure(k).unwrap_or((0.0, 1.0)),
-        _ => (0.0, 1000.0),
-    }
+        (s, k) if FIGURES.contains(&s) => return bornes_allure(k),
+        _ => return None,
+    })
 }
 
 /// La valeur `f` est-elle dans `[lo, hi]`, à une erreur d'arrondi près ? Un f32 relu en f64
@@ -1724,7 +1745,8 @@ impl Config {
         }
         self.declencheurs.liste.truncate(DECLENCHEURS_MAX);
         for d in &mut self.declencheurs.liste {
-            d.force = borne(d.force, 0.0, 3.0, 1.0);
+            let (lo, hi) = d.faire.bornes_force();
+            d.force = borne(d.force, lo, hi, 1.0);
             d.nombre = d.nombre.min(40);
             d.nombre_max = d.nombre_max.min(40);
             d.delai = borne(d.delai, 0.0, 10.0, 0.0);
@@ -2124,7 +2146,6 @@ mod tests {
         assert_eq!(c.pause.applis, ["obs64.exe", "zoom.exe"]);
         assert_eq!(c.audio.applis, ["spotify.exe"]);
         assert!(c.rendu.masquer_captures);
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2186,7 +2207,6 @@ mod tests {
         assert_eq!(c.modulations.liste[0].quantite, 5.0 / 40.0);
         super::migrer_fichier_in(&p).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), texte, "rien de plus la deuxième fois");
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2224,7 +2244,6 @@ mod tests {
         let mut c = super::Config::default();
         c.modulations.liste = vec![super::Modulation::default(); 40];
         assert_eq!(c.clamped().modulations.liste.len(), super::MODULATIONS_MAX);
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2250,7 +2269,8 @@ mod tests {
         let c = toml::from_str::<super::Config>("[spectre]\nbandes = 2\n[projecteur]\nduree = 0").unwrap().clamped();
         assert_eq!((c.spectre.bandes, c.projecteur.duree), (8, 0.3));
         // écriture depuis la fenêtre : refusée hors bornes, acceptée dedans
-        let p = std::env::temp_dir().join(format!("essaim-test-effets-{}.toml", std::process::id()));
+        let d = dossier("effets");
+        let p = d.join("config.toml");
         std::fs::write(&p, super::DEFAULT_FILE).unwrap();
         assert!(super::set_value_in(&p, "spectre", "bandes", &serde_json::json!(33)).is_err());
         assert!(super::set_value_in(&p, "reticule", "opacite", &serde_json::json!(0.0)).is_err());
@@ -2269,7 +2289,6 @@ mod tests {
         // la secousse et sa sensibilité sont propres à l'utilisateur : hors presets
         assert!(!crate::profils::in_profile("projecteur", "secousse") && !crate::profils::in_profile("projecteur", "sensibilite"));
         assert!(crate::profils::in_profile("projecteur", "taille") && crate::profils::in_profile("reticule", "vide"));
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
@@ -2291,7 +2310,8 @@ mod tests {
         let actions: Vec<Action> = c.declencheurs.liste.iter().map(|d| d.faire).collect();
         assert_eq!(actions, [Action::Rebond, Action::Poussee, Action::Frein, Action::Aucune]);
         // config d'avant ces sections : écrire un réglage les ajoute ; ils font partie des presets
-        let p = std::env::temp_dir().join(format!("essaim-test-rubans-{}.toml", std::process::id()));
+        let d = dossier("rubans");
+        let p = d.join("config.toml");
         std::fs::write(&p, "[orbite]\nrayon = 30\n").unwrap();
         super::set_value_in(&p, "rubans", "actif", &serde_json::json!(true)).unwrap();
         super::set_value_in(&p, "ressorts", "raideur", &serde_json::json!(24)).unwrap();
@@ -2301,7 +2321,6 @@ mod tests {
         for (s, k) in [("rubans", "actif"), ("rubans", "largeur"), ("ressorts", "actif"), ("ressorts", "etirement")] {
             assert!(crate::profils::in_profile(s, k), "[{s}] {k}");
         }
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
@@ -2388,7 +2407,6 @@ mod tests {
         assert_eq!(c.orbite.rayon, 40.0);
         assert_eq!((c.equerres.actif, c.equerres.bras, c.lisere.actif, c.lisere.epaisseur), (true, 18.0, true, 5.0));
         assert_eq!((c.halo.actif, c.halo.profondeur), (true, 20.0));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2411,7 +2429,8 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
 
     #[test]
     fn ecrire_un_reglage_garde_les_commentaires() {
-        let p = std::env::temp_dir().join(format!("essaim-test-{}.toml", std::process::id()));
+        let d = dossier("commentaires");
+        let p = d.join("config.toml");
         std::fs::write(&p, super::DEFAULT_FILE).unwrap();
         super::set_value_in(&p, "orbite", "rayon", &serde_json::json!(30)).unwrap();
         super::set_value_in(&p, "essaim", "maximum", &serde_json::json!(20)).unwrap();
@@ -2445,15 +2464,142 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         assert_eq!((c.orbite.contours.len(), c.orbite.contours[1][2]), (2, [5.0, 8.0]));
         assert!(c.suit_icone() && c.orbite.chemins().len() == 2);
         assert_eq!(c.automatique.applis[0].preset, "Discret");
-        let _ = std::fs::remove_file(&p);
     }
 
-    /// Dossier temporaire propre à un test (jamais le vrai %APPDATA%).
-    fn dossier(nom: &str) -> std::path::PathBuf {
+    /// Le fichier par défaut dit exactement les réglages par défaut.
+    #[test]
+    fn fichier_par_defaut_egal_aux_reglages_par_defaut() {
+        let lu = serde_json::to_value(super::de_texte(super::DEFAULT_FILE).unwrap()).unwrap();
+        let defaut = serde_json::to_value(super::Config::default()).unwrap();
+        for (section, cles) in defaut.as_object().unwrap() {
+            for (cle, v) in cles.as_object().unwrap() {
+                assert_eq!(&lu[section][cle], v, "[{section}] {cle}");
+            }
+        }
+        assert_eq!(lu, defaut);
+    }
+
+    /// Chaque réglage numérique a ses bornes : aucun ne tombe dans le cas par défaut de `limits`.
+    #[test]
+    fn chaque_reglage_numerique_a_ses_bornes() {
+        let defaut = serde_json::to_value(super::Config::default()).unwrap();
+        let mut sans = Vec::new();
+        for (section, cles) in defaut.as_object().unwrap() {
+            for (cle, v) in cles.as_object().unwrap() {
+                if v.is_number() {
+                    match super::limites_connues(section, cle) {
+                        None => sans.push(format!("[{section}] {cle}")),
+                        Some((lo, hi)) => {
+                            let x = v.as_f64().unwrap();
+                            assert!(super::dans_les_bornes(x, lo, hi), "[{section}] {cle} = {x} hors de ses bornes ({lo} à {hi})");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(sans.is_empty(), "réglages sans bornes : {}", sans.join(", "));
+    }
+
+    /// Bornes de la force des déclencheurs, par action.
+    #[test]
+    fn force_bornee_selon_l_action() {
+        use super::{Action, Declencheur, Evenement};
+        let mut c = super::Config::default();
+        c.declencheurs.liste = vec![
+            Declencheur { force: 2.5, ..Declencheur::new(Evenement::Kick, Action::Eclat) },
+            Declencheur { force: 2.5, ..Declencheur::new(Evenement::Kick, Action::Bordure) },
+            Declencheur { force: 0.05, ..Declencheur::new(Evenement::Kick, Action::Onde) },
+            Declencheur { force: 0.15, ..Declencheur::new(Evenement::Charleston, Action::Rebond) },
+            Declencheur { force: f32::NAN, ..Declencheur::new(Evenement::Kick, Action::Frein) },
+        ];
+        let forces: Vec<f32> = c.clamped().declencheurs.liste.iter().map(|d| d.force).collect();
+        assert_eq!(forces, [1.0, 1.0, 0.2, 0.15, 1.0]);
+        // la valeur par défaut d'un déclencheur est dans les bornes de toute action
+        for a in [Action::Eclat, Action::Onde, Action::Satellites, Action::Frein, Action::Aucune] {
+            let (lo, hi) = a.bornes_force();
+            assert!(lo <= 1.0 && 1.0 <= hi && lo < hi, "{a:?}");
+        }
+    }
+
+    /// Texte entre `debut` et la première occurrence de `fin` qui suit.
+    fn bloc<'a>(texte: &'a str, debut: &str, fin: &str) -> &'a str {
+        let i = texte.find(debut).unwrap_or_else(|| panic!("« {debut} » absent de ui/app.js")) + debut.len();
+        let j = texte[i..].find(fin).unwrap_or_else(|| panic!("fin de « {debut} » introuvable"));
+        &texte[i..i + j]
+    }
+
+    /// Chaînes entre guillemets doubles.
+    fn chaines(s: &str) -> std::collections::BTreeSet<String> {
+        s.split('"').skip(1).step_by(2).map(str::to_owned).collect()
+    }
+
+    /// Valeur littérale qui suit `cle` dans `ligne` (`min: 4,` → « 4 »).
+    fn apres<'a>(ligne: &'a str, cle: &str) -> Option<&'a str> {
+        let i = ligne.find(cle)? + cle.len();
+        let reste = ligne[i..].trim_start();
+        let fin = reste.find([',', '}']).unwrap_or(reste.len());
+        Some(reste[..fin].trim().trim_matches('"'))
+    }
+
+    /// La page des réglages (`ui/app.js`) et Rust disent la même chose : réglages hors presets,
+    /// sections des presets, bornes des glissières, nombres de modulations et de déclencheurs.
+    #[test]
+    fn la_page_suit_les_regles_de_rust() {
+        let app = include_str!("../ui/app.js");
+        let defaut = serde_json::to_value(super::Config::default()).unwrap();
+        let sections = defaut.as_object().unwrap();
+        // sections des presets : celles dont un réglage au moins fait partie des profils
+        let du_preset = |s: &str| sections[s].as_object().unwrap().keys().any(|k| crate::profils::in_profile(s, k));
+        let sections_rust: std::collections::BTreeSet<String> = sections.keys().filter(|s| du_preset(s)).cloned().collect();
+        assert_eq!(chaines(bloc(app, "const SECTIONS_PRESET = [", "];")), sections_rust, "SECTIONS_PRESET");
+        // réglages de ces sections laissés hors des presets
+        let hors_rust: std::collections::BTreeSet<String> = sections_rust
+            .iter()
+            .flat_map(|s| sections[s].as_object().unwrap().keys().filter(|k| !crate::profils::in_profile(s, k)).map(move |k| format!("{s}.{k}")))
+            .collect();
+        assert_eq!(chaines(bloc(app, "const HORS_PRESET = new Set([", "]);")), hors_rust, "HORS_PRESET");
+        // nombres maximaux
+        for (nom, rust) in [("MODULATIONS_MAX", super::MODULATIONS_MAX), ("DECLENCHEURS_MAX", super::DECLENCHEURS_MAX)] {
+            let page: usize = bloc(app, &format!("const {nom} = "), ";").trim().parse().unwrap();
+            assert_eq!(page, rust, "{nom}");
+        }
+        // glissières : mêmes bornes que `limits`
+        let (mut vues, mut ecarts) = (0, Vec::new());
+        for ligne in bloc(app, "const PANNEAUX = [", "\n];").lines() {
+            let (Some(section), Some(cle), Some(min), Some(max)) = (apres(ligne, "section:"), apres(ligne, "cle:"), apres(ligne, "min:"), apres(ligne, "max:")) else {
+                continue;
+            };
+            let (Ok(min), Ok(max)) = (min.parse::<f64>(), max.parse::<f64>()) else { continue };
+            vues += 1;
+            if super::limites_connues(section, cle) != Some((min, max)) {
+                ecarts.push(format!("[{section}] {cle} : page {min} à {max}, Rust {:?}", super::limites_connues(section, cle)));
+            }
+        }
+        assert!(vues >= 30, "{vues} glissières lues seulement : la forme de PANNEAUX a changé ?");
+        assert!(ecarts.is_empty(), "bornes différentes :\n{}", ecarts.join("\n"));
+    }
+
+    /// Dossier temporaire propre à un essai (jamais le vrai %APPDATA%), supprimé à la fin de
+    /// l'essai, même s'il échoue.
+    struct Dossier(std::path::PathBuf);
+
+    impl std::ops::Deref for Dossier {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Dossier {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn dossier(nom: &str) -> Dossier {
         let d = std::env::temp_dir().join(format!("essaim-test-{}-{nom}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        d
+        Dossier(d)
     }
 
     #[test]
@@ -2474,7 +2620,6 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         super::set_value_in(&neuf, "orbite", "rayon", &serde_json::json!(40)).unwrap();
         let text = std::fs::read_to_string(&neuf).unwrap();
         assert!(text.contains("rayon = 40") && text.contains("[bordure]"), "{text}");
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2489,9 +2634,8 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         std::fs::create_dir(&bloque).unwrap();
         assert!(super::ecrire_atomique(&bloque, "x").is_err());
         assert!(bloque.is_dir());
-        let restes: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "tmp")).collect();
+        let restes: Vec<_> = std::fs::read_dir(&*d).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "tmp")).collect();
         assert!(restes.is_empty(), "{restes:?}");
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2513,7 +2657,6 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         });
         let c = super::Config::read(&p).unwrap();
         assert_eq!((c.orbite.rayon, c.essaim.maximum, c.essaim.fixes, c.orbite.nombre), (31.0, 12, 5, 4));
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2545,7 +2688,6 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         remettre_date();
         assert!(w.reload());
         assert_eq!(w.cfg.orbite.rayon, 16.5);
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2562,7 +2704,6 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         assert!(super::set_value_in(&p, "orbite", "trainee", &serde_json::json!(0.01f32 as f64)).is_ok());
         assert!(super::set_value_in(&p, "orbite", "trainee", &serde_json::json!(0.009)).is_err());
         assert!(super::set_value_in(&p, "bordure", "repos", &serde_json::json!(1.01)).is_err());
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2580,7 +2721,6 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         assert_eq!(c.automatique.applis[0].preset, "Nuit");
         assert_eq!(c.orbite.rayon, 25.0);
         assert!(text.contains("# rayon de l'orbite sans basse") && text.contains("trainee = 0.3 "), "{text}");
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

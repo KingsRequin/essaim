@@ -419,6 +419,33 @@ mod tests {
         }
     }
 
+    /// Spirale d'Archimède (13 tours, trait de 6 px) sur 512 × 512 : un seul contour de plusieurs
+    /// dizaines de milliers de points, le pire cas de la simplification (coupes déséquilibrées).
+    #[test]
+    fn spirale_simplifiee_vite() {
+        let (pas, demi_trait) = (19.0f32, 3.0f32);
+        let img = image(512, 512, |x, y| {
+            let (dx, dy) = (x - 256.0, y - 256.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            // distance radiale au bras le plus proche de r = pas × θ / 2π
+            let phase = dy.atan2(dx).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * pas;
+            let d = (r - phase).rem_euclid(pas);
+            if r < 250.0 && d.min(pas - d) < demi_trait { [0, 0, 0, 255] } else { [0, 0, 0, 0] }
+        });
+        let valeurs = flou(&forme(&img, 512, 512, &Options::default()).0, 512, 512);
+        let brut = isocontours(&valeurs, 512, 512, 127.5).into_iter().max_by_key(Vec::len).unwrap();
+        let debut = std::time::Instant::now();
+        let r = contours(&img, 512, 512, &Options { tous: true, ..Default::default() });
+        let duree = debut.elapsed();
+        eprintln!("spirale : {} points bruts, {:?} pour tout le calcul", brut.len(), duree);
+        assert!(brut.len() > 10_000, "{}", brut.len());
+        assert!(!r.contours.is_empty() && r.contours[0].len() <= POINTS_MAX);
+        // en compilation optimisée, le calcul entier tient largement dans une image de réglages
+        if !cfg!(debug_assertions) {
+            assert!(duree < std::time::Duration::from_millis(200), "{duree:?}");
+        }
+    }
+
     #[test]
     fn otsu_entre_deux_paquets() {
         let lum: Vec<u8> = (0..1000).map(|i| if i % 3 == 0 { 40 } else { 200 }).collect();

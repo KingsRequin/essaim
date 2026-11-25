@@ -108,7 +108,10 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   `QUNS_QUIET_TIME`, première heure d'un nouveau compte ; `QUNS_BUSY` seulement si une vraie
   fenêtre couvre un écran, `win::plein_ecran_quelque_part` : Windows le renvoie aussi pour le
   calque transparent d'une autre surcouche), `GetSystemPowerStatus` toutes les 5 s
-  ou sur `WM_POWERBROADCAST`, exécutable au premier plan chaque seconde. Traitées comme le plein
+  ou sur `WM_POWERBROADCAST` (la sortie de veille, `PBT_APMRESUMEAUTOMATIC`, relit aussi les
+  écrans), exécutable au premier plan chaque seconde ; session verrouillée, déconnectée ou à
+  distance (`WTSRegisterSessionNotification` → `WM_WTSSESSION_CHANGE`, `SM_REMOTESESSION`),
+  prioritaire sur les autres. Traitées comme le plein
   écran (bordure rendue, son coupé), notées au journal ; raison publiée (`charge::publier_raison`).
 - **Qualité adaptative** (`adaptatif.rs`) : nourrie chaque seconde par le calcul moyen par
   image ; > 4 ms deux secondes de suite → palier suivant (120, 60, 30 ; ceux qui ne réduiraient
@@ -131,7 +134,10 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   prend le relais : l'essaim rapetisse en ~0,1 s, regrandit en ~2 s. Test : chaque preset fourni
   tient dans sa portée sur une autre musique. Elle relit `config.toml` chaque
   seconde (`config::Watched`) et lit le son par le même `AudioShared` ; la capture du son continue
-  tant qu'elle est ouverte. Pas de `WDA_EXCLUDEFROMCAPTURE` : elle reste capturable.
+  tant qu'elle est ouverte. Pas de `WDA_EXCLUDEFROMCAPTURE` : elle reste capturable. Une seule
+  ouverture à la fois (place réservée avant le fil) ; un échec d'ouverture est dit par une bulle
+  de l'icône. Fenêtre cachée (`Present` répond `DXGI_STATUS_OCCLUDED`) : pas de dessin, un essai
+  `DXGI_PRESENT_TEST` toutes les 100 ms.
 - **Projecteur, réticule, spectre** (`effets.rs`) : le réticule et le spectre s'ajoutent à la
   zone de l'essaim ; le projecteur ajoute l'écran entier du pointeur aux zones à redessiner, le
   temps de l'effet seulement (voile : dégradé radial Direct2D, ou remplissage ligne par ligne sur
@@ -143,16 +149,22 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   sont hors presets (`profils::in_profile`, `HORS_PRESET` dans `ui/app.js`).
 - **Étiquette du morceau** (`etiquette.rs`, tenue par la boucle principale) : un changement de
   piste (`media::pistes`) lance l'affichage. Le texte est écrit une fois par morceau dans une
-  image (GDI : `CreateFontW` Segoe UI, `TextOutW` en blanc sur une section DIB, la plus forte
+  image (GDI : `CreateFontW` Segoe UI, `ExtTextOutW` en blanc sur une section DIB, la plus forte
   composante de chaque pixel donne sa couverture), puis cerné de sombre (plus forte couverture
-  dans un disque de 2 px). Les moteurs recopient cette image par `Canvas::vignette` : tiny-skia
+  dans un disque de 2 px). Chaque ligne tient dans 480 px × l'échelle (`GetTextExtentExPointW`),
+  coupée entre deux groupes de caractères visibles (jamais au milieu d'un emoji composé, d'un
+  drapeau ou d'une lettre et de ses accents) avec « … » ; un texte de droite à gauche est écrit
+  avec `ETO_RTLREADING` et aligné à droite. Un artiste sans titre est montré à la place du titre. Les moteurs recopient cette image par `Canvas::vignette` : tiny-skia
   la pose, Direct2D la téléverse une fois (`CreateBitmap`, gardée tant que son numéro ne change
   pas) et la dessine après le lot de pastilles (`DrawBitmap`). Sa zone s'ajoute à celle de
   l'essaim. Hors des presets, comme l'habillage.
 - **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
-  fil « essaim-media » (MTA, appels asynchrones attendus par `join`), réveillé par
+  fil « essaim-media » (MTA ; chaque appel asynchrone attendu 2 s au plus, puis annulé et le tour
+  sauté : un lecteur figé ne bloque pas le fil), réveillé par
   `CurrentSessionChanged`, `MediaPropertiesChanged` et `PlaybackInfoChanged`, et au moins
-  toutes les 5 s (chaque seconde tant qu'une pochette ou une reprise de lecture est attendue). Miniature décodée en 48 × 48 (`BitmapDecoder`) puis
+  toutes les 5 s (chaque seconde tant qu'une pochette ou une reprise de lecture est attendue). Pochette ignorée au-delà de 16 Mo ou de
+  4096 px de côté (vu dans l'en-tête, avant le décodage) ; miniature décodée en 48 × 48
+  (`BitmapDecoder`) puis
   `appli::teinte_dominante`. Priorité des teintes : pochette (pendant la lecture) > application
   ou site > Prisme. Sans l'API (Windows N), une ligne au journal et rien ne change. Message
   `charge` : `morceau`, `lecture`, `pistes`.
@@ -174,8 +186,13 @@ Clés d'avant les déclencheurs, encore lues et écrites par Horizon : `orbite.v
 la publication, réécrites, ajoutées ou retirées par `set_config`) et `fissures.actives` (le
 déclencheur clic → fissure) ; `ipc::config_publiee`, `ALIAS`.
 Toute connexion avec un en-tête `Origin` est refusée (pages web, mais aussi applis web locales :
-Tauri, Electron) ; 8 clients au plus, 3 s pour la poignée de main, messages de 64 Ko au plus,
-client fermé après 60 s sans message. `set_config` refuse les sections `mise_a_jour`,
+Tauri, Electron) ; 8 clients au plus, 3 s au total pour la poignée de main (comptées depuis
+l'acceptation : un client qui envoie un octet de temps en temps ne garde pas sa place), messages
+de 64 Ko au plus, client fermé après 60 s sans message. `open_config` passe une fois toutes les
+5 s au plus ; `set_config` et `apply_preset` sont étalés à 20 par seconde, tous clients
+confondus (au-delà, la demande attend son tour jusqu'à 2 s, puis « trop de demandes »). Un
+jeton aléatoire est écrit au premier lancement dans `%APPDATA%\Essaim\ipc.jeton` ; il n'est pas
+encore demandé (Horizon ne l'envoie pas). `set_config` refuse les sections `mise_a_jour`,
 `bibliotheque`, `automatique` et `pause` (elles ne changent que par la fenêtre des réglages ou
 le fichier). Le plugin Essaim d'Horizon s'en sert (pause au clic ; dans son panneau, choix du
 preset et ouverture des réglages).
@@ -201,7 +218,9 @@ applications choisies, `audio-commun` ouvre une capture « process loopback » p
 (racine de son arbre de processus, enfants compris), les mélange et revérifie les processus
 toutes les 2 s (README d'`audio-commun`, « Son de certaines applications »). `main::Son` relance
 la capture quand la sortie ou les applications changent ; la fenêtre des réglages demande la
-liste (`Demande::ApplisSonores` → `capture::applis_sonores`).
+liste (`Demande::ApplisSonores` → `capture::applis_sonores`). Si Windows refuse l'écoute par
+application, toute la sortie est écoutée en attendant (nouvel essai toutes les 30 s, sauf sur un
+Windows trop ancien) : `AudioShared::repli_applis`, montré dans la fenêtre des réglages.
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
@@ -228,7 +247,9 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 - **Côté Essaim** (`src/audio.rs`) : échantillons non finis remis à 0 avant tout filtre ;
   compteurs de kicks et d'aigus monotones (une réouverture du flux ne crée pas de faux kicks) ;
   brillance qui retombe en silence ; si la capture ne démarre pas, Essaim continue sans son et
-  réessaie toutes les 30 s.
+  réessaie toutes les 30 s. Au-dessus de 48 kHz, le son des aigus, des bandes, de la montée et
+  des silences est ramené à 48 kHz (passe-bas d'ordre 6 puis un échantillon sur 2, 4 ou 8) ; le
+  kick garde la pleine fréquence.
 - **Tempo** (`audio-commun`, `src/pulsation.rs`, sans FFT) : d'après les seuls instants des
   kicks des 8 dernières secondes. Chaque tempo de 70 à 180 BPM est noté par l'alignement des
   kicks sur sa grille × la part des temps marqués (ce produit écarte le double et la moitié du
@@ -453,6 +474,7 @@ vérifie l'en-tête `MZ`, l'empreinte `digest` (SHA-256 par `BCryptHash`) et la 
 l'une des deux clés publiques de `CLES` (principale, secours), vérifiée par BCrypt. Sans
 signature valide, rien n'est installé : GitHub seul (compte, workflow, dépendance de
 compilation piégée) ne peut pas pousser un exécutable chez les utilisateurs. Le nouveau fichier
+(`essaim.exe.nouveau`, effacé puis créé à neuf, jamais réécrit à travers un fichier existant)
 est écrit puis forcé sur le disque ; l'exécutable en cours est déplacé en `.ancien` (Windows
 autorise le renommage d'un exécutable lancé) et le nouveau mis à sa place, chaque fois par
 `MoveFileExW` (`REPLACE_EXISTING | WRITE_THROUGH`) avec cinq nouveaux essais espacés (un

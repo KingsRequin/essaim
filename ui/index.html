@@ -21,7 +21,7 @@
     <div class="entete-droite">
       <div class="pile serree etat-essaim">
         <button class="puce petite" id="pause" aria-pressed="false" title="Met l'essaim en pause (Ctrl+P)">Pause</button>
-        <span class="t-label" id="etat-essaim" role="status" hidden></span>
+        <span class="t-label" id="etat-essaim" role="status"></span>
       </div>
       <div class="sonde silence" id="sonde" title="Ce que l'essaim entend du son de Windows">
         <span class="temoins">
@@ -35,10 +35,10 @@
         </span>
       </div>
       <nav class="onglets" role="tablist" aria-label="Vues">
-        <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num">01</span>Presets</button>
-        <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num">02</span>Réglages</button>
-        <button class="onglet t-nav" role="tab" id="onglet-curseurs" aria-controls="vue-curseurs" aria-selected="false"><span class="num">03</span>Curseurs</button>
-        <button class="onglet t-nav" role="tab" id="onglet-auto" aria-controls="vue-auto" aria-selected="false"><span class="num">04</span>Auto</button>
+        <button class="onglet t-nav" role="tab" id="onglet-presets" aria-controls="vue-presets" aria-selected="true"><span class="num" aria-hidden="true">01</span>Presets</button>
+        <button class="onglet t-nav" role="tab" id="onglet-reglages" aria-controls="vue-reglages" aria-selected="false"><span class="num" aria-hidden="true">02</span>Réglages</button>
+        <button class="onglet t-nav" role="tab" id="onglet-curseurs" aria-controls="vue-curseurs" aria-selected="false"><span class="num" aria-hidden="true">03</span>Curseurs</button>
+        <button class="onglet t-nav" role="tab" id="onglet-auto" aria-controls="vue-auto" aria-selected="false"><span class="num" aria-hidden="true">04</span>Auto</button>
         <button class="onglet t-nav icone" role="tab" id="onglet-application" aria-controls="vue-application" aria-selected="false" aria-label="Application" title="Application : mises à jour, démarrage, pauses, captures">
           <!-- engrenage : un anneau, et huit dents faites d'un cercle en pointillés -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" focusable="false">
@@ -85,7 +85,7 @@
       <p class="t-texte" id="note-commu" hidden></p>
       <div class="defile" id="defile-grille">
         <div class="grille" id="grille"></div>
-        <div class="vide" id="vide" hidden></div>
+        <div class="vide" id="vide" role="status"></div>
       </div>
       <div class="pied">
         <span class="t-texte">Un clic applique le preset. Le cadre rouge marque celui qui tourne autour de ton pointeur.</span>
@@ -144,14 +144,21 @@
       <button class="puce debut" id="auto-actif" aria-pressed="false">Choisir le preset automatiquement</button>
       <span class="t-titre haut-2">Raccourcis clavier</span>
       <button class="puce debut" id="raccourcis-actif" aria-pressed="true">Raccourcis globaux</button>
-      <div class="raccourcis">
-        <span class="touche">Ctrl + Alt + →</span><span>preset suivant</span>
-        <span class="touche">Ctrl + Alt + ←</span><span>preset précédent</span>
-        <span class="touche">Ctrl + Alt + P</span><span>pause</span>
+      <div class="pile">
+        <div class="raccourcis">
+          <span class="touche">Ctrl + Alt + →</span><span>preset suivant</span>
+          <span class="touche">Ctrl + Alt + ←</span><span>preset précédent</span>
+          <span class="touche">Ctrl + Alt + P</span><span>pause</span>
+          <span class="touche">Ctrl + Alt + F</span><span>projecteur</span>
+        </div>
+        <!-- raccourcis qu'une autre application a déjà pris (app.js) -->
+        <p class="note signalee" id="raccourcis-refuses" role="status"></p>
       </div>
       <p class="note">Ils marchent partout dans Windows, sans surveiller le clavier (pas de hook) : Windows prévient seulement Essaim quand ces touches sont pressées.</p>
     </aside>
     <div class="defile">
+      <p class="note note-coupe" id="note-auto-coupe" hidden>Preset automatique coupé : ces règles ne s'appliquent pas tant que « Choisir le preset automatiquement » est éteint.</p>
+      <div id="bloc-regles">
       <div class="barre-titre"><span class="t-titre">Si … alors …</span><span class="t-label">prioritaire</span></div>
       <p class="note haut-2" id="aide-regle">Clés : <b>artiste</b>, <b>titre</b> (morceau qui joue), <b>appli</b>, <b>bpm</b> (tempo des kicks), <b>heure</b>. Opérateurs : = &nbsp;!= &nbsp;~ (contient) &nbsp;&lt; &nbsp;&gt; &nbsp;&lt;= &nbsp;&gt;=. Plusieurs conditions : « et ». Exemple : <code>bpm &gt; 140 et heure &gt;= 20:00</code>.</p>
       <div class="regles haut-2" id="regles-si"></div>
@@ -177,6 +184,7 @@
         <label><span class="t-label">Preset</span><select class="choix" id="horaire-preset"></select></label>
         <button class="puce" type="submit">Ajouter</button>
       </form>
+      </div>
       <div id="bloc-pauses">
         <div class="barre-titre haut-5"><span class="t-titre">Pause selon l'application</span><span class="t-label">cet ordinateur</span></div>
         <p class="note haut-2">Essaim se met en pause tant que l'une de ces applications est au premier plan (montage, visio, jeu…), et reprend dès que tu en sors.</p>
@@ -247,8 +255,8 @@
     <span class="t-titre" id="titre-image">Trajet d'une image</span>
     <p class="note">Les comètes suivent le contour d'une image : un logo, une silhouette, une icône (une image à fond transparent marche le mieux), ou d'un texte, d'un emoji. Tu peux aussi glisser une image sur la fenêtre.</p>
     <div class="image-trajet">
-      <canvas class="scene" id="toile-image" width="380" height="380" aria-label="L'image et ses contours"></canvas>
-      <canvas class="scene" id="apercu-image" aria-label="Aperçu de l'essaim sur ce trajet"></canvas>
+      <canvas class="scene" id="toile-image" width="380" height="380" role="img" aria-label="L'image et ses contours"></canvas>
+      <canvas class="scene" id="apercu-image" role="img" aria-label="Aperçu de l'essaim sur ce trajet"></canvas>
     </div>
     <div class="groupe-puces aere">
       <button class="puce" id="choisir-image">Choisir une image…</button>
@@ -286,9 +294,9 @@
 </div>
 
 <div class="voile centre" id="voile-accueil" hidden>
-  <div class="boite large accueil" role="dialog" aria-modal="true" aria-labelledby="titre-accueil">
+  <div class="boite large accueil" role="dialog" aria-modal="true" aria-labelledby="titre-accueil" aria-describedby="corps-accueil">
     <span class="t-label" id="etape-accueil">1 / 3</span>
-    <span class="t-affiche petite" id="titre-accueil">Bienvenue</span>
+    <span class="t-affiche petite" id="titre-accueil" tabindex="-1">Bienvenue</span>
     <div class="pile aeree" id="corps-accueil"></div>
     <div class="groupe-puces aere pousse-bas">
       <button class="signal" id="suivant-accueil">Suivant →</button>
@@ -307,16 +315,20 @@
     <p class="t-texte erreur" id="erreur-panneau" role="alert" hidden></p>
     <div class="ressort"></div>
     <div class="groupe-puces aere">
-      <button class="signal" type="submit">Enregistrer →</button>
+      <button class="signal" type="submit" id="valider-panneau">Enregistrer →</button>
       <button class="puce" type="button" id="annuler-panneau">Annuler</button>
     </div>
   </form>
 </div>
 
-<div class="bandeau" id="bandeau" role="status" hidden>
+<div class="bandeau" id="bandeau" hidden>
   <span id="bandeau-texte"></span>
   <button class="puce petite" id="bandeau-action" hidden></button>
   <button class="bandeau-fermer" id="bandeau-fermer" aria-label="Fermer le message">×</button>
 </div>
+<!-- Zones lues par les lecteurs d'écran, toujours présentes : le texte du bandeau y est écrit
+     une fois le bandeau affiché (messages dans l'une, erreurs dans l'autre). -->
+<div class="sr" id="annonce" role="status"></div>
+<div class="sr" id="alerte" role="alert"></div>
 </body>
 </html>

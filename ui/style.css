@@ -30,6 +30,8 @@
   --scene-point: #ffffff;
   /* repère de place d'une figure dans le grand aperçu (croix au pointeur, cadre pointillé) */
   --scene-repere: rgba(255, 255, 255, 0.4);
+  /* texte écrit sur la scène (invite de la boîte « Trajet d'une image ») : 8:1 au moins */
+  --scene-texte: #b3b2ab;
   /* fond de l'image analysée (boîte « Trajet d'une image ») : clair dans les deux thèmes, pour
      qu'un logo sombre se voie */
   --papier-image: #f4f3ee;
@@ -49,6 +51,15 @@
   /* texte courant ; plancher du texte informatif (libellés, notes, petites puces) */
   --texte-base: 14px;
   --texte-mini: 12px;
+  /* messages (bandeau), liste des raccourcis */
+  --texte-note: 13px;
+  /* listes déroulantes ; petits champs soulignés (formulaires Auto) et croix du bandeau */
+  --texte-choix: 15px;
+  --texte-champ: 18px;
+  /* titre du panneau d'enregistrement ; grands chiffres (valeur d'un réglage, version) */
+  --texte-panneau: 50px;
+  --texte-panneau-long: 34px;
+  --texte-chiffre: 46px;
   /* corps du titre de la fenêtre : réduit avec la largeur (requêtes plus bas) */
   --texte-affiche: 88px;
   --largeur-jauge: 72px;
@@ -56,6 +67,18 @@
   --colonne-moyenne: 330px;
   --colonne-large: 380px;
   --colonne-onglets: 210px;
+  /* panneau d'enregistrement, boîtes centrées (et leur marge au bord), loupe, bandeau */
+  --largeur-panneau: 460px;
+  --largeur-boite: 860px;
+  --marge-boite: 48px;
+  --largeur-loupe: 300px;
+  --largeur-bandeau: 680px;
+  /* formulaires Auto : nom d'application, heure, liste des presets */
+  --largeur-champ: 200px;
+  --largeur-heure: 120px;
+  --largeur-choix: 180px;
+  /* case à cocher du panneau */
+  --case: 18px;
 
   --font-affiche: "Archivo", "Arial Narrow", Arial, sans-serif;
   --battement: 0.45s;
@@ -74,6 +97,7 @@
     --scene: #000000;
     --scene-bord: #2c2b28;
     --bord-controle: #74726b; /* 3,9:1 sur --fond, 3,5:1 sur --survol */
+    --scene-texte: #a3a199; /* 8,1:1 sur --scene */
     color-scheme: dark;
   }
 }
@@ -97,7 +121,7 @@ button, input { font-family: inherit; color: inherit; }
 
 /* ---------- Typographie ---------- */
 .t-affiche { font-size: var(--texte-affiche); font-weight: 900; font-stretch: 125%; letter-spacing: -0.035em; line-height: 1; margin: 0; }
-.t-chiffre { font-size: 46px; font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
+.t-chiffre { font-size: var(--texte-chiffre); font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
 .t-numero { font-size: 26px; font-weight: 900; font-stretch: 125%; line-height: 1; font-variant-numeric: tabular-nums; }
 .t-titre { font-size: 22px; font-weight: 900; font-stretch: 115%; text-transform: uppercase; line-height: 1.1; }
 .t-nav { font-size: 22px; font-weight: 800; font-stretch: 110%; }
@@ -152,7 +176,7 @@ button, input { font-family: inherit; color: inherit; }
 .sonde.silence .jauge > span { visibility: hidden; }
 
 .vue { flex-grow: 1; min-height: 0; display: flex; gap: var(--esp-6); padding: var(--esp-5) var(--esp-6) var(--esp-4); }
-.colonne { width: var(--colonne); flex-shrink: 0; display: flex; flex-direction: column; gap: var(--esp-5); overflow-y: auto; padding-right: 6px; }
+.colonne { width: var(--colonne); max-width: 100%; flex-shrink: 0; display: flex; flex-direction: column; gap: var(--esp-5); overflow-y: auto; padding-right: 6px; }
 .principal { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--esp-3); }
 .defile { flex-grow: 1; min-height: 0; overflow-y: auto; padding: var(--esp-1) var(--esp-2) var(--esp-1) 0; }
 .barre-titre { display: flex; align-items: baseline; justify-content: space-between; gap: var(--esp-4); border-bottom: var(--trait-fin) solid var(--filet); padding-bottom: var(--esp-2); }
@@ -198,7 +222,8 @@ button, input { font-family: inherit; color: inherit; }
 .puce[aria-pressed="true"]::before { background: var(--signal); border-color: var(--signal); }
 .puce.petite { padding: 4px 7px; font-size: var(--texte-mini); letter-spacing: 0.04em; }
 .puce.danger { border-color: var(--signal); color: var(--signal-texte); }
-.puce:disabled { opacity: 0.45; cursor: default; }
+.puce:disabled, .puce[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.signal[aria-disabled="true"] { opacity: 0.6; cursor: default; }
 .groupe-puces { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Bouton signal : l'action principale de l'écran, une seule à la fois. */
@@ -263,6 +288,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 
 /* Note sous un réglage (impact, explication). */
 .note { font-size: var(--texte-mini); font-weight: 500; line-height: 1.4; color: var(--encre-2); margin: 0; }
+/* avertissement dans une note (écoute par application refusée) */
+.note.alerte-repli { color: var(--signal-texte); }
 
 /* Puissance utilisée par l'essaim, mesurée en direct. */
 .puissance { display: flex; flex-direction: column; gap: 6px; border-top: var(--trait-fin) solid var(--filet); padding-top: var(--esp-3); }
@@ -296,30 +323,39 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 /* Panneau d'enregistrement : rouge, à droite, par-dessus la fenêtre. */
 .voile { position: fixed; inset: 0; background: var(--voile); display: flex; justify-content: flex-end; z-index: 10; }
 .panneau {
-  width: 460px; max-width: 100%; height: 100%; background: var(--signal); color: var(--sur-signal);
-  padding: var(--esp-6) 36px; display: flex; flex-direction: column; gap: 22px;
+  width: var(--largeur-panneau); max-width: 100%; height: 100%; overflow-y: auto; background: var(--signal); color: var(--sur-signal);
+  padding: var(--esp-6); display: flex; flex-direction: column; gap: var(--esp-5);
 }
+/* sur le rouge, le contour de focus rouge disparaîtrait : il prend la couleur du texte */
+.panneau :focus-visible { outline-color: var(--sur-signal); }
 .panneau .t-label { color: var(--sur-signal); }
 .panneau .champ { border-bottom-color: var(--sur-signal); color: var(--sur-signal); }
+/* champ en focus : son trait s'épaissit (le rouge du focus ordinaire ne se verrait pas ici) */
+.panneau .champ:focus { border-bottom-color: var(--sur-signal); box-shadow: 0 var(--trait-souligne) 0 var(--sur-signal); }
 /* texte indicatif : pleine couleur (4,7:1 au moins sur le rouge), plus maigre que la saisie */
 .panneau .champ::placeholder { color: var(--sur-signal); opacity: 1; font-weight: 500; }
-.panneau .titre { font-size: 50px; font-weight: 900; font-stretch: 125%; line-height: 0.92; text-transform: uppercase; }
+.panneau .titre { font-size: var(--texte-panneau); font-weight: 900; font-stretch: 125%; line-height: 0.92; text-transform: uppercase; overflow-wrap: break-word; }
+.panneau .titre.long { font-size: var(--texte-panneau-long); line-height: 1; }
 .panneau .case { display: flex; gap: var(--esp-3); align-items: flex-start; font-size: var(--texte-base); font-weight: 600; line-height: 1.45; }
-.panneau .case input { accent-color: var(--encre); width: 18px; height: 18px; margin: 1px 0 0; flex-shrink: 0; }
+.panneau .case input { accent-color: var(--encre); width: var(--case); height: var(--case); margin: var(--trait-fin) 0 0; flex-shrink: 0; }
 .panneau .erreur { font-weight: 800; }
 .panneau .puce { border-color: var(--sur-signal); color: var(--sur-signal); }
 .panneau .signal { background: var(--encre); color: var(--fond); }
+.panneau .signal:disabled { opacity: 0.6; cursor: default; }
 
-/* Bandeau : message bref en bas de la fenêtre, avec parfois une action (Annuler). */
+/* Bandeau : message bref en bas de la fenêtre, avec parfois une action (Annuler) ; une erreur a
+   un trait rouge à gauche. */
 .bandeau {
-  position: fixed; left: var(--esp-6); bottom: var(--esp-4); max-width: 680px; z-index: 20;
+  position: fixed; left: var(--esp-6); bottom: var(--esp-4); max-width: min(var(--largeur-bandeau), calc(100% - 2 * var(--esp-4))); z-index: 20;
   display: flex; align-items: center; gap: var(--esp-3);
-  background: var(--encre); color: var(--fond); padding: 10px 10px 10px 18px;
-  font-size: 13px; font-weight: 700;
+  background: var(--encre); color: var(--fond); padding: var(--esp-2) var(--esp-2) var(--esp-2) var(--esp-4);
+  font-size: var(--texte-note); font-weight: 700;
 }
+.bandeau.erreur { box-shadow: inset var(--trait-epais) 0 0 var(--signal); }
 .bandeau .puce { border-color: var(--fond); color: var(--fond); }
 .bandeau .puce:hover { background: var(--fond); color: var(--encre); }
-.bandeau-fermer { background: none; border: 0; color: var(--fond); font-size: 18px; font-weight: 700; cursor: pointer; padding: 0 6px; }
+.bandeau :focus-visible { outline-color: var(--fond); }
+.bandeau-fermer { background: none; border: 0; color: var(--fond); font-size: var(--texte-champ); font-weight: 700; cursor: pointer; padding: 0 var(--esp-2); }
 
 /* Impact sur la puissance : dix cases, remplies selon le score mesuré (rouge à partir de 7). */
 .impact { display: inline-flex; gap: 2px; margin-top: 5px; }
@@ -341,10 +377,13 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 }
 .reglages > .titre-groupe:first-child { padding-top: 10px; }
 
-/* Actions d'une tuile : estompées, pleines au survol, au clavier, menu ouvert ; un favori ou « Installé » reste plein. */
-.tuile .actions > * { opacity: 0.4; transition: opacity 0.12s; }
-.tuile:hover .actions > *, .tuile:focus-within .actions > *, .tuile.menu-ouvert .actions > *, .tuile .actions > [aria-pressed="true"] { opacity: 1; }
-@media (hover: none) { .tuile .actions > * { opacity: 1; } }
+/* Actions d'une tuile : en retrait (texte --encre-2, bord des contrôles, lisibles), pleines au
+   survol, au clavier, menu ouvert ; un favori ou « Installé » garde son cadre rouge. */
+.tuile .actions .puce:not([aria-pressed="true"]):not(.danger) { color: var(--encre-2); border-color: var(--bord-controle); transition: color 0.12s, border-color 0.12s; }
+.tuile:hover .actions .puce:not([aria-pressed]):not(.danger),
+.tuile:focus-within .actions .puce:not([aria-pressed]):not(.danger),
+.tuile.menu-ouvert .actions .puce:not([aria-pressed]):not(.danger) { color: var(--encre); border-color: var(--encre); }
+@media (hover: none) { .tuile .actions .puce:not([aria-pressed]):not(.danger) { color: var(--encre); border-color: var(--encre); } }
 
 /* Tuile proche des réglages en cours (« modifié ») : cadre rouge en pointillé. */
 .tuile.proche .scene { outline: 2px dashed var(--signal); outline-offset: -4px; }
@@ -358,6 +397,8 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 
 /* État vide ou erreur dans la grille. */
 .vide { padding-top: var(--esp-6); display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-4); max-width: 560px; }
+/* toujours là (zone lue par les lecteurs d'écran), sans place quand la grille a des presets */
+.vide:empty { padding: 0; }
 .vide .zero { font-size: 64px; font-weight: 900; font-stretch: 125%; line-height: 0.9; color: var(--signal-texte); }
 
 @media (max-width: 1500px) {
@@ -384,12 +425,39 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
   .entete { gap: var(--esp-3); }
   .entete-droite { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--esp-2); }
 }
+/* Petite fenêtre (ou zoom à 200 %) : toutes les colonnes se resserrent, les onglets passent à la
+   ligne plutôt que d'être coupés. */
 @media (max-width: 1000px) {
-  :root { --texte-affiche: 46px; }
-  .colonne { width: 230px; }
+  :root { --texte-affiche: 46px; --texte-chiffre: 32px; --colonne: 230px; --colonne-moyenne: 230px; --colonne-large: 230px; --colonne-onglets: 150px; }
   .vue { gap: var(--esp-5); padding-left: var(--esp-5); padding-right: var(--esp-5); }
   .entete { padding-left: var(--esp-5); padding-right: var(--esp-5); }
+  .onglets { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--esp-1); }
+  /* grille des réglages : la glissière garde une largeur utile */
+  .reglages { grid-template-columns: minmax(0, 110px) minmax(96px, 1fr) minmax(72px, max-content); }
+  .reglages > .glissiere { padding-right: var(--esp-3); }
+  .reglages .valeur-saisie { min-width: 72px; }
+  /* un bouton trop long pour sa colonne passe à la ligne plutôt que d'être coupé */
+  .signal, .colonne .puce { white-space: normal; text-align: left; }
 }
+/* Très petite largeur (fenêtre de 1 180 px à 200 % de zoom) : une seule colonne, la page entière
+   défile ; seule la grille des presets garde son propre défilement (ses aperçus ne s'animent que
+   visibles). */
+@media (max-width: 720px) {
+  body { overflow-y: auto; }
+  .fenetre { height: auto; min-height: 100%; }
+  .entete { flex-wrap: wrap; }
+  /* (sélecteurs doublés : les règles de la vue Réglages viennent plus bas dans la feuille) */
+  .vue, .principal.vue-panneaux { flex-direction: column; }
+  .vue .colonne, .vue .colonne.moyenne, .vue .colonne.large, .vue .sous-onglets { width: auto; overflow: visible; padding-right: 0; }
+  .colonne .scene.carree { width: min(100%, var(--largeur-loupe)); }
+  .principal, .defile { flex: none; overflow: visible; min-height: auto; }
+  #defile-grille { height: 70vh; overflow-y: auto; }
+  /* libellé et valeur sur une ligne, la glissière dessous (dense : la valeur remonte à côté du libellé) */
+  .reglages { grid-template-columns: minmax(0, 1fr) minmax(72px, max-content); grid-auto-flow: row dense; }
+  .reglages > .glissiere { grid-column: 1 / -1; grid-row: auto; padding-right: 0; }
+  .avance { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Ouverture (lancement.js) : un voile au-dessus de tout, où le logo s'assemble. Tant qu'il est là,
    l'en-tête cache son titre et son filet : ceux du voile viennent se poser exactement dessus,
    puis le voile s'en va. Il n'existe pas si Windows demande moins d'animations. */
@@ -403,16 +471,16 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 }
 @media (prefers-reduced-motion: reduce) {
   .sonde .temoin.coup { animation: none; }
-  .tuile .scene, .tuile .actions > * { transition: none; }
+  .tuile .scene, .tuile .actions .puce { transition: none; }
 }
 
 /* ---------- Boîtes centrées (dessin, comparaison, accueil) ---------- */
 .voile.centre { justify-content: center; align-items: center; }
 .boite {
-  background: var(--fond); color: var(--encre); padding: var(--esp-5) 28px; max-width: calc(100% - 48px); max-height: calc(100% - 48px);
+  background: var(--fond); color: var(--encre); padding: var(--esp-5); max-width: calc(100% - var(--marge-boite)); max-height: calc(100% - var(--marge-boite));
   display: flex; flex-direction: column; gap: var(--esp-4); overflow: auto; border-top: var(--trait-epais) solid var(--signal);
 }
-.boite.large { width: 860px; }
+.boite.large { width: var(--largeur-boite); }
 .image-trajet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-4); }
 .image-trajet canvas { aspect-ratio: 1; width: 100%; }
 .comparaison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-5); }
@@ -421,13 +489,13 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 
 /* Loupe : aperçu en grand d'un preset survolé. */
 .loupe {
-  position: fixed; z-index: 15; width: 300px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  position: fixed; z-index: 15; width: var(--largeur-loupe); padding: var(--esp-2); display: flex; flex-direction: column; gap: var(--esp-2);
   background: var(--fond); box-shadow: 0 0 0 var(--trait-controle) var(--encre); pointer-events: none;
 }
 .loupe canvas { aspect-ratio: 1; }
 
-/* Accueil. */
-.accueil { min-height: 480px; }
+/* Accueil : jamais plus haut que la fenêtre (la boîte défile alors). */
+.accueil { min-height: min(480px, calc(100vh - var(--marge-boite))); }
 .t-affiche.petite { font-size: 54px; }
 .accueil .choix-accueil { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--esp-3); max-height: 300px; overflow: auto; }
 
@@ -438,15 +506,21 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .regle .vide-regle { grid-column: 1 / -1; color: var(--encre-2); }
 .regle.simple { grid-template-columns: minmax(0, 1fr) auto; }
 .ajout-regle { display: flex; flex-wrap: wrap; gap: var(--esp-4); align-items: flex-end; padding-top: var(--esp-3); }
-.ajout-regle label { display: flex; flex-direction: column; gap: 4px; }
-.champ.petit { font-size: 18px; width: 200px; padding-bottom: 4px; border-bottom-width: var(--trait-controle); }
-.champ.petit[type="time"] { width: 120px; }
+.ajout-regle label { display: flex; flex-direction: column; gap: var(--esp-1); }
+.champ.petit { font-size: var(--texte-champ); width: var(--largeur-champ); max-width: 100%; padding-bottom: var(--esp-1); border-bottom-width: var(--trait-controle); }
+.champ.petit[type="time"] { width: var(--largeur-heure); }
 .choix {
-  font-family: inherit; font-size: 15px; font-weight: 700; color: var(--encre); background: var(--fond);
-  border: 0; border-bottom: var(--trait-controle) solid var(--encre); padding: 4px 0; min-width: 180px;
+  font-family: inherit; font-size: var(--texte-choix); font-weight: 700; color: var(--encre); background: var(--fond);
+  border: 0; border-bottom: var(--trait-controle) solid var(--encre); padding: var(--esp-1) 0; min-width: min(var(--largeur-choix), 100%); max-width: 100%;
 }
-.raccourcis { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; font-weight: 600; }
-.raccourcis .touche { font-size: var(--texte-mini); font-weight: 800; letter-spacing: 0.04em; padding: 2px 6px; box-shadow: inset 0 0 0 1px var(--bord-controle); white-space: nowrap; }
+.raccourcis { display: grid; grid-template-columns: auto 1fr; gap: var(--esp-2) var(--esp-3); font-size: var(--texte-note); font-weight: 600; }
+.raccourcis .touche { font-size: var(--texte-mini); font-weight: 800; letter-spacing: 0.04em; padding: var(--trait-controle) var(--esp-2); box-shadow: inset 0 0 0 var(--trait-fin) var(--bord-controle); white-space: nowrap; }
+/* raccourcis pris par une autre application */
+.note.signalee { color: var(--signal-texte); font-weight: 700; }
+/* Preset automatique coupé : les règles estompées, avec une note en tête. */
+.note-coupe { margin: 0 0 var(--esp-3); color: var(--signal-texte); font-weight: 700; }
+#bloc-regles { transition: opacity 0.15s; }
+#bloc-regles.estompe:hover, #bloc-regles.estompe:focus-within { opacity: 0.7; }
 
 /* ---------- Utilitaires (espacements sur les jetons --esp-*) ---------- */
 .contenu { display: contents; }
@@ -572,7 +646,9 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 
 /* En-tête : état de l'écoute du son et veille, sous le bouton Pause. */
 .etat-essaim { align-items: flex-start; width: max(8.5em, calc(var(--largeur-jauge) * 2)); }
-#etat-essaim { display: flex; flex-direction: column; white-space: nowrap; }
+/* une ligne par état, tronquée (« … ») : le texte entier est dans son infobulle */
+#etat-essaim { display: flex; flex-direction: column; white-space: nowrap; max-width: 100%; }
+#etat-essaim > span { overflow: hidden; text-overflow: ellipsis; }
 #etat-essaim[data-etat="erreur"] { color: var(--signal-texte); }
-/* Morceau en cours (API média de Windows) : discret, tronqué. */
-#etat-essaim .morceau { max-width: calc(var(--largeur-jauge) * 2); overflow: hidden; text-overflow: ellipsis; color: var(--encre-2); font-weight: 400; letter-spacing: 0; text-transform: none; }
+/* Morceau en cours (API média de Windows) : discret. */
+#etat-essaim .morceau { color: var(--encre-2); font-weight: 400; letter-spacing: 0; text-transform: none; }

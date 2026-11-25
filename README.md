@@ -108,7 +108,7 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | | |
 |---|---|
 | 🤖 **Si … alors …** | Des règles choisissent le preset : `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*… ; ou selon l'appli au premier plan, ou l'heure |
-| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
+| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, session verrouillée, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut |
 | 🫶 **Sans flashs** | Pour les personnes sensibles aux flashs : éclats adoucis, trois par seconde au plus, bordure qui ne clignote plus (tout seul si Windows réduit les animations) |
 | 📺 **Fenêtre pour le stream** | L'essaim au centre d'une fenêtre à fond transparent, à ajouter dans OBS en *Capture de jeu* |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un plugin d'Horizon met Essaim en pause, change de preset et ouvre ses réglages depuis la barre |
@@ -266,7 +266,8 @@ marcher sous Windows 10 (avec WebView2, installé avec Edge), mais n'y a pas ét
 <summary><b>Où sont mes réglages ?</b></summary>
 
 Dans `%APPDATA%\Essaim` : `config.toml` (commenté, modifiable à la main), tes presets dans
-`profils\`, et le journal `essaim.log`.
+`profils\`, et le journal `essaim.log` (l'ancien dans `essaim.old.log`). Tant qu'une règle du
+preset automatique agit, tes réglages d'avant attendent dans `auto-avant.toml`.
 </details>
 
 ## Feuille de route

@@ -284,8 +284,14 @@ fn remplacer(exe: &Path, octets: &[u8]) -> anyhow::Result<()> {
 fn remplacer_avec(exe: &Path, octets: &[u8], attentes: &[Duration]) -> anyhow::Result<()> {
     use std::io::Write;
     let (neuf, vieux) = (nouveau(exe), ancien(exe));
+    // un `.nouveau` laissé là (ou un lien placé à sa place) est effacé, puis le fichier est créé
+    // à neuf : jamais d'écriture à travers un fichier existant
     let ecrire = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&neuf)?;
+        match std::fs::remove_file(&neuf) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&neuf)?;
         f.write_all(octets)?;
         f.sync_all()
     };
@@ -522,6 +528,8 @@ mod tests {
         std::fs::create_dir_all(&dossier).unwrap();
         let exe = dossier.join("essaim.exe");
         std::fs::write(&exe, b"MZ ancienne").unwrap();
+        // un `.nouveau` laissé par un essai d'avant est remplacé, pas complété
+        std::fs::write(nouveau(&exe), b"reste d'un essai d'avant, plus long que l'exe").unwrap();
         remplacer(&exe, b"MZ nouvelle").unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), b"MZ nouvelle");
         assert_eq!(std::fs::read(ancien(&exe)).unwrap(), b"MZ ancienne");

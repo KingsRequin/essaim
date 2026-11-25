@@ -110,7 +110,13 @@ enum Demande {
     Regler { section: String, cle: String, valeur: Value },
     Appliquer { nom: String },
     /// Enregistre les réglages actuels sous `nom` ; `publier` ouvre la proposition sur GitHub.
-    Enregistrer { nom: String, publier: bool },
+    /// Un autre preset de ce nom n'est remplacé que si `remplacer` (sinon réponse `existe`).
+    Enregistrer {
+        nom: String,
+        publier: bool,
+        #[serde(default)]
+        remplacer: bool,
+    },
     Supprimer { nom: String },
     /// Copie un preset de la bibliothèque dans les presets de l'utilisateur.
     Installer { nom: String, reglages: Value, appliquer: bool },
@@ -158,6 +164,22 @@ enum Demande {
     ChercherMaj,
     /// Redémarre sur la version téléchargée, comme le menu de l'icône.
     Redemarrer,
+    /// Zoom de la page au clavier (Ctrl+plus : 1, Ctrl+moins : -1, Ctrl+0 : 0) : WebView2 ne
+    /// les traite pas lui-même, ses raccourcis de navigateur étant coupés (Ctrl+P, Ctrl+R…).
+    Zoom { pas: i32 },
+}
+
+/// Paliers du zoom de la page, comme ceux d'Edge.
+const ZOOMS: [f64; 9] = [0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75];
+const ZOOM_NORMAL: usize = 4;
+
+/// Palier de zoom après la touche `pas` (1 : plus grand, -1 : plus petit, 0 : normal).
+fn zoom_suivant(actuel: usize, pas: i32) -> usize {
+    match pas.signum() {
+        0 => ZOOM_NORMAL,
+        1 => (actuel + 1).min(ZOOMS.len() - 1),
+        _ => actuel.saturating_sub(1),
+    }
 }
 
 struct Fenetre {
@@ -180,6 +202,8 @@ struct Fenetre {
     montree: bool,
     /// Dernier état de la mise à jour envoyé à la page (rien au départ).
     maj: Option<crate::maj::Etat>,
+    /// Palier du zoom de la page (dans `ZOOMS`).
+    zoom: usize,
 }
 
 thread_local! {
@@ -221,13 +245,19 @@ impl Fenetre {
         };
         let presets: Vec<Value> =
             liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg, "date": date(p) })).collect();
+        let curseurs = crate::souris::actuel();
+        let curseurs_nom = self.nom_du_jeu(&curseurs);
         self.envoyer(&json!({
             "type": "etat",
             "reglages": cfg,
             "presets": presets,
             "actif": actif,
             "depot": cfg.bibliotheque.depot,
-            "curseurs": crate::souris::actuel(),
+            "curseurs": curseurs,
+            // nom affiché du jeu (« Windows par défaut » plutôt que « @main.cpl,-1020 »)
+            "curseurs_nom": curseurs_nom,
+            // raccourcis clavier que Windows a refusés (déjà pris par une autre application)
+            "raccourcis_refuses": crate::win::raccourcis_refuses(),
             "proche": proche.map(|(n, p)| json!({ "nom": p.name, "ecarts": n })),
             "defauts": Config::default(),
             "demarrage": demarrage_actif(),
@@ -291,7 +321,7 @@ impl Fenetre {
             Demande::Appliquer { nom } => {
                 let liste = profils::list();
                 let avant = profils::capturer();
-                match liste.iter().find(|p| p.name == nom).map(|p| (p, profils::apply(p))) {
+                match liste.iter().find(|p| profils::meme_nom(&p.name, &nom)).map(|p| (p, profils::apply(p))) {
                     Some((p, Ok(()))) => {
                         config::request_reload();
                         self.curseurs_du_preset(&p.cfg);
@@ -303,7 +333,7 @@ impl Fenetre {
                 }
                 self.etat();
             }
-            Demande::Enregistrer { nom, publier } => {
+            Demande::Enregistrer { nom, publier, remplacer } => {
                 let mut cfg = match Config::read(&config::path()) {
                     Ok(c) => c,
                     Err(e) => {
@@ -311,6 +341,14 @@ impl Fenetre {
                         return;
                     }
                 };
+                // un autre preset de ce nom : la page demande d'abord s'il faut le remplacer (le
+                // preset en place, lui, se met à jour sans question)
+                if !remplacer && profils::existe(&nom) {
+                    let actif = profils::list().iter().any(|p| profils::meme_nom(&p.name, &nom) && profils::same(&p.cfg, &cfg));
+                    if !actif {
+                        return self.envoyer(&json!({ "type": "existe", "nom": nom.trim() }));
+                    }
+                }
                 // le preset garde le jeu de curseurs installé en ce moment
                 cfg.souris.jeu = crate::souris::actuel();
                 match profils::save(&nom, &cfg) {
@@ -342,7 +380,7 @@ impl Fenetre {
                     Ok((nom, cfg)) => {
                         if appliquer {
                             self.avant = profils::capturer();
-                            let p = profils::list().into_iter().find(|p| p.name == nom);
+                            let p = profils::list().into_iter().find(|p| profils::meme_nom(&p.name, &nom));
                             match p.as_ref().map(profils::apply) {
                                 Some(Ok(())) => self.curseurs_du_preset(&cfg),
                                 Some(Err(e)) => self.erreur(&format!("Preset « {nom} » installé mais non appliqué : {e}.")),
@@ -387,7 +425,8 @@ impl Fenetre {
                 match crate::souris::installer(&jeu).and_then(|()| config::set_value("souris", "jeu", &json!(jeu))) {
                     Ok(()) => {
                         config::request_reload();
-                        self.message(&format!("Curseurs « {jeu} » installés."));
+                        let nom = self.nom_du_jeu(&jeu);
+                        self.message(&format!("Curseurs « {nom} » installés."));
                     }
                     Err(e) => self.erreur(&format!("Curseurs non installés : {e}.")),
                 }
@@ -463,7 +502,8 @@ impl Fenetre {
                 }
                 None => self.erreur("Rien à annuler."),
             },
-            Demande::AppliquerReglages { nom, reglages } => match serde_json::from_value::<Config>(reglages) {
+            // comme un preset installé : réglages d'avant convertis, puis bornés
+            Demande::AppliquerReglages { nom, reglages } => match config_distante(reglages) {
                 Ok(cfg) => {
                     self.avant = profils::capturer();
                     match config::apply_keys(&cfg, |s, k| profils::in_profile(s, k) && (s, k) != ("souris", "jeu")) {
@@ -475,7 +515,7 @@ impl Fenetre {
                     }
                     self.etat();
                 }
-                Err(e) => self.erreur(&format!("Réglages illisibles : {e}.")),
+                Err(e) => self.erreur(&format!("Réglages refusés : {e}.")),
             },
             Demande::Pause => commande(crate::win::CMD_PAUSE),
             Demande::Icone => {
@@ -488,6 +528,12 @@ impl Fenetre {
                 self.maj();
             }
             Demande::Redemarrer => commande(crate::win::CMD_REDEMARRER),
+            Demande::Zoom { pas } => {
+                self.zoom = zoom_suivant(self.zoom, pas);
+                if let Err(e) = self.vue.zoom(ZOOMS[self.zoom]) {
+                    log::warn!("réglages : zoom impossible ({e})");
+                }
+            }
             Demande::Demarrage { actif } => {
                 match regler_demarrage(actif) {
                     Ok(()) => self.message(if actif { "Essaim démarrera avec Windows." } else { "Essaim ne démarrera plus avec Windows." }),
@@ -524,6 +570,14 @@ impl Fenetre {
         self.jeux.get_or_insert_with(crate::souris::jeux)
     }
 
+    /// Nom affiché du jeu de curseurs `cle` (sa clé s'il est inconnu, vide si `cle` l'est).
+    fn nom_du_jeu(&mut self, cle: &str) -> String {
+        if cle.is_empty() {
+            return String::new();
+        }
+        self.jeux().iter().find(|j| j.cle == cle).map_or_else(|| cle.to_owned(), |j| j.nom.clone())
+    }
+
     fn importer(&mut self, chemins: &[std::path::PathBuf]) {
         let (mut faits, mut erreurs) = (Vec::new(), Vec::new());
         for c in chemins {
@@ -553,7 +607,7 @@ impl Fenetre {
     /// bibliothèque : GitHub propose alors une copie du dépôt et une pull request.
     fn publier(&self, nom: &str) {
         let depot = Config::read(&config::path()).unwrap_or_default().bibliotheque.depot;
-        let texte = match std::fs::read_to_string(profils::dir().join(format!("{nom}.toml"))) {
+        let texte = match std::fs::read_to_string(profils::fichier(nom)) {
             Ok(t) => t,
             Err(e) => return self.erreur(&format!("Preset « {nom} » enregistré, mais illisible pour la publication ({e}).")),
         };
@@ -629,6 +683,8 @@ impl Fenetre {
                 "pistes": crate::media::pistes(),
                 "raison": crate::charge::raison(),
                 "prisme": crate::prisme::present(),
+                // écoute par application refusée par Windows : tout le son est écouté en attendant
+                "repli": self.son.repli_applis(),
             }));
             if dates() != self.dates {
                 self.etat();
@@ -649,11 +705,30 @@ fn commande(cmd: usize) {
 }
 
 const CLE_RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+/// Entrées de démarrage coupées ou permises dans le Gestionnaire des tâches (onglet Démarrage).
+const CLE_RUN_APPROUVE: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
 
-/// Essaim démarre-t-il avec la session (valeur `Essaim` de la clé Run de l'utilisateur) ?
+/// Essaim démarre-t-il avec la session ? Valeur `Essaim` de la clé Run de l'utilisateur, et pas
+/// coupée dans le Gestionnaire des tâches.
 fn demarrage_actif() -> bool {
-    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
-    unsafe { RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, None, None) }.is_ok()
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_SZ};
+    let inscrit = unsafe { RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, None, None) }.is_ok();
+    if !inscrit {
+        return false;
+    }
+    let mut etat = [0u8; 12];
+    let mut n = etat.len() as u32;
+    let lu = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, CLE_RUN_APPROUVE, w!("Essaim"), RRF_RT_REG_BINARY, None, Some(etat.as_mut_ptr() as *mut _), Some(&mut n))
+    }
+    .is_ok();
+    // sans valeur : permise ; sinon, premier octet pair (02, 06) = permise, impair (03) = coupée
+    !lu || n == 0 || demarrage_approuve(etat[0])
+}
+
+/// Premier octet de la valeur de `StartupApproved\Run` : l'entrée est-elle permise ?
+fn demarrage_approuve(octet: u8) -> bool {
+    octet & 1 == 0
 }
 
 /// Démarrage avec la session : l'exécutable en cours, ou plus rien.
@@ -666,7 +741,11 @@ fn regler_demarrage(actif: bool) -> Result<(), String> {
             let octets: Vec<u8> = valeur.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
             RegSetKeyValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), REG_SZ.0, Some(octets.as_ptr() as *const _), octets.len() as u32)
                 .ok()
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            // une coupure faite dans le Gestionnaire des tâches est levée : sans valeur, l'entrée
+            // est permise
+            let r = RegDeleteKeyValueW(HKEY_CURRENT_USER, CLE_RUN_APPROUVE, w!("Essaim"));
+            if r.is_ok() || r == windows::Win32::Foundation::ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(r.to_hresult().message()) }
         } else {
             let r = RegDeleteKeyValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"));
             if r.is_ok() || r == windows::Win32::Foundation::ERROR_FILE_NOT_FOUND { Ok(()) } else { Err(r.to_hresult().message()) }
@@ -755,9 +834,29 @@ fn enregistrer_gif(nom: &str, donnees: &str) -> Result<std::path::PathBuf, Strin
     }
     let dossier = dossier_images().ok_or("dossier Images introuvable")?.join("Essaim");
     std::fs::create_dir_all(&dossier).map_err(|e| e.to_string())?;
-    let f = dossier.join(format!("{}.gif", nom_de_gif(nom)));
-    std::fs::write(&f, octets).map_err(|e| e.to_string())?;
-    Ok(f)
+    ecrire_sans_ecraser(&dossier, &nom_de_gif(nom), "gif", &octets)
+}
+
+/// Écrit `octets` dans `dossier\<nom>.<ext>`, ou `<nom> (2).<ext>`, `(3)`… si le nom est pris :
+/// un fichier existant n'est jamais écrasé (création exclusive). Renvoie le chemin écrit.
+fn ecrire_sans_ecraser(dossier: &std::path::Path, nom: &str, ext: &str, octets: &[u8]) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    for i in 1..=999 {
+        let f = dossier.join(if i == 1 { format!("{nom}.{ext}") } else { format!("{nom} ({i}).{ext}") });
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&f) {
+            Ok(mut fichier) => {
+                if let Err(e) = fichier.write_all(octets) {
+                    drop(fichier);
+                    let _ = std::fs::remove_file(&f);
+                    return Err(e.to_string());
+                }
+                return Ok(f);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err(format!("trop de fichiers « {nom} » dans {}", dossier.display()))
 }
 
 /// Nom de fichier du GIF : sans caractère interdit ni nom réservé par Windows (« CON »…).
@@ -925,7 +1024,15 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         .with_custom_protocol("essaim".into(), |_, req| servir(req))
         .with_url(format!("{ORIGINE}index.html"))
         .with_background_color((r, g, b, 255))
-        .with_ipc_handler(move |req| recus.borrow_mut().push(req.into_body()))
+        // seule la page d'Essaim parle à l'appli (pas une page où une navigation aurait mené)
+        .with_ipc_handler(move |req| {
+            let origine = req.uri().to_string();
+            if origine_permise(&origine) {
+                recus.borrow_mut().push(req.into_body());
+            } else {
+                log::warn!("réglages : message ignoré, venu de « {origine} »");
+            }
+        })
         .with_drag_drop_handler(|ev| {
             // fichiers de preset glissés sur la fenêtre : importés (et rien d'autre ne s'ouvre)
             if let wry::DragDropEvent::Drop { paths, .. } = ev {
@@ -937,7 +1044,9 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         })
         .with_navigation_handler(|url| url.starts_with(ORIGINE))
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-        .with_hotkeys_zoom(false)
+        // Ctrl+molette ; Ctrl+plus, Ctrl+moins et Ctrl+0 passent par la page (demande `zoom`),
+        // les raccourcis de navigateur étant coupés
+        .with_hotkeys_zoom(true)
         .with_default_context_menus(cfg!(debug_assertions))
         .with_browser_accelerator_keys(false)
         .with_devtools(cfg!(debug_assertions))
@@ -955,6 +1064,7 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         reduite: false,
         montree: false,
         maj: None,
+        zoom: ZOOM_NORMAL,
     };
     FENETRE.with(|f| *f.borrow_mut() = Some(fenetre));
     unsafe {
@@ -974,6 +1084,11 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
     FENETRE.with(|f| f.borrow_mut().take());
     drop(contexte);
     Ok(())
+}
+
+/// Adresse de la page d'où vient un message : seule celle d'Essaim est écoutée.
+fn origine_permise(adresse: &str) -> bool {
+    adresse.starts_with(ORIGINE)
 }
 
 fn traiter_recus() {
@@ -1194,5 +1309,49 @@ mod tests {
         assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"redemarrer"}"#).unwrap(), Demande::Redemarrer));
         assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"prete"}"#).unwrap(), Demande::Prete));
         assert!(serde_json::from_str::<Demande>(r#"{"cmd":"formater_disque"}"#).is_err());
+        // `remplacer` est facultatif (faux), et lu quand il est là
+        let d: Demande = serde_json::from_str(r#"{"cmd":"enregistrer","nom":"Nuit","publier":false}"#).unwrap();
+        assert!(matches!(d, Demande::Enregistrer { remplacer: false, .. }));
+        let d: Demande = serde_json::from_str(r#"{"cmd":"enregistrer","nom":"Nuit","publier":false,"remplacer":true}"#).unwrap();
+        assert!(matches!(d, Demande::Enregistrer { remplacer: true, .. }));
+        assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"zoom","pas":-1}"#).unwrap(), Demande::Zoom { pas: -1 }));
+    }
+
+    #[test]
+    fn messages_d_une_autre_page_ignores() {
+        assert!(origine_permise("http://essaim.localhost/index.html"));
+        for autre in ["https://exemple.org/", "http://essaim.localhost.exemple.org/", "http://essaim.localhostx/", "about:blank", ""] {
+            assert!(!origine_permise(autre), "{autre}");
+        }
+    }
+
+    #[test]
+    fn zoom_par_paliers() {
+        assert_eq!(ZOOMS[ZOOM_NORMAL], 1.0);
+        assert_eq!(zoom_suivant(ZOOM_NORMAL, 1), ZOOM_NORMAL + 1);
+        assert_eq!(zoom_suivant(ZOOMS.len() - 1, 1), ZOOMS.len() - 1);
+        assert_eq!(zoom_suivant(0, -1), 0);
+        assert_eq!(zoom_suivant(7, 0), ZOOM_NORMAL);
+        assert!(ZOOMS.windows(2).all(|z| z[0] < z[1]));
+    }
+
+    #[test]
+    fn demarrage_coupe_dans_le_gestionnaire_des_taches() {
+        assert!(demarrage_approuve(0x02) && demarrage_approuve(0x06));
+        assert!(!demarrage_approuve(0x03) && !demarrage_approuve(0x07));
+    }
+
+    #[test]
+    fn gif_jamais_ecrase() {
+        let d = std::env::temp_dir().join(format!("essaim-test-gif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let a = ecrire_sans_ecraser(&d, "Nuit", "gif", b"GIF89a 1").unwrap();
+        let b = ecrire_sans_ecraser(&d, "Nuit", "gif", b"GIF89a 2").unwrap();
+        let c = ecrire_sans_ecraser(&d, "Nuit", "gif", b"GIF89a 3").unwrap();
+        assert_eq!((a.file_name().unwrap(), b.file_name().unwrap(), c.file_name().unwrap()), ("Nuit.gif".as_ref(), "Nuit (2).gif".as_ref(), "Nuit (3).gif".as_ref()));
+        assert_eq!(std::fs::read(&a).unwrap(), b"GIF89a 1");
+        assert_eq!(std::fs::read(&c).unwrap(), b"GIF89a 3");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

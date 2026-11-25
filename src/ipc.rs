@@ -24,14 +24,21 @@
 //!
 //! Les pages web et les applis web locales (Tauri, Electron) sont refusées : tout en-tête
 //! `Origin` ferme la connexion. `set_config` ne touche pas aux réglages qui font télécharger ou
-//! changer de comportement en arrière-plan (`SECTIONS_PROTEGEES`).
+//! changer de comportement en arrière-plan (`SECTIONS_PROTEGEES`). La poignée de main doit finir
+//! dans les 3 s ; `open_config` passe une fois toutes les 5 s au plus, `set_config` et
+//! `apply_preset` sont étalés à 20 par seconde (tous clients confondus).
+//!
+//! Un jeton aléatoire est écrit au premier lancement dans `%APPDATA%\Essaim\ipc.jeton`, lisible
+//! par l'utilisateur seul (droits du dossier). Il n'est pas encore demandé aux clients.
 
 use crate::config::{Action, Cible, Config, Declencheur, Evenement, Groupe, Modulation, Source};
 use crate::modulation;
 use crate::profils::{self, Profile};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -49,6 +56,81 @@ const INACTIVITE_MAX: Duration = Duration::from_secs(60);
 /// Sections que `set_config` refuse : mises à jour, dépôt de la bibliothèque, règles
 /// automatiques et pauses. Elles ne se changent que dans la fenêtre des réglages ou le fichier.
 const SECTIONS_PROTEGEES: [&str; 4] = ["mise_a_jour", "bibliotheque", "automatique", "pause"];
+/// Temps laissé à un client pour finir la poignée de main, depuis l'acceptation de la connexion.
+const POIGNEE_MAX: Duration = Duration::from_secs(3);
+/// `open_config` ouvre une fenêtre : une fois par ce délai au plus.
+const OUVERTURE_MIN: Duration = Duration::from_secs(5);
+/// Écritures (`set_config`, `apply_preset`) par seconde, tous clients confondus ; au-delà, elles
+/// attendent leur tour, jusqu'à `ATTENTE_MAX` (puis sont refusées).
+const ECRITURES_PAR_S: f64 = 20.0;
+const ATTENTE_MAX: Duration = Duration::from_secs(2);
+
+/// Ce que touchent les commandes : fichier des réglages et presets (remplacés dans les essais,
+/// qui ne doivent jamais toucher aux vrais), et débits.
+pub struct Contexte {
+    config: PathBuf,
+    lister: fn() -> Vec<Profile>,
+    appliquer: fn(&str) -> Result<(), String>,
+    debit: Mutex<Debit>,
+}
+
+impl Contexte {
+    fn new(config: PathBuf, lister: fn() -> Vec<Profile>, appliquer: fn(&str) -> Result<(), String>) -> Self {
+        Self { config, lister, appliquer, debit: Mutex::new(Debit::new(Instant::now())) }
+    }
+
+    /// Les vrais réglages et presets de l'utilisateur.
+    fn reel() -> Self {
+        Self::new(crate::config::path(), profils::list, profils::appliquer)
+    }
+
+    fn debit(&self) -> std::sync::MutexGuard<'_, Debit> {
+        self.debit.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Attend le tour d'une écriture, ou la refuse si la file est trop longue.
+    fn tour_d_ecriture(&self) -> Result<(), String> {
+        let attente = self.debit().ecriture(Instant::now())?;
+        if !attente.is_zero() {
+            std::thread::sleep(attente);
+        }
+        Ok(())
+    }
+}
+
+/// Débits des commandes coûteuses (seau à jetons pour les écritures).
+struct Debit {
+    config_ouverte: Option<Instant>,
+    jetons: f64,
+    rempli: Instant,
+}
+
+impl Debit {
+    fn new(maintenant: Instant) -> Self {
+        Self { config_ouverte: None, jetons: ECRITURES_PAR_S, rempli: maintenant }
+    }
+
+    fn ouverture(&mut self, maintenant: Instant) -> Result<(), String> {
+        if self.config_ouverte.is_some_and(|t| maintenant.saturating_duration_since(t) < OUVERTURE_MIN) {
+            return Err(format!("open_config : une fois toutes les {} s au plus", OUVERTURE_MIN.as_secs()));
+        }
+        self.config_ouverte = Some(maintenant);
+        Ok(())
+    }
+
+    /// Attente avant une écriture (zéro s'il reste un jeton) ; refusée au-delà d'`ATTENTE_MAX`.
+    fn ecriture(&mut self, maintenant: Instant) -> Result<Duration, String> {
+        let ecoule = maintenant.saturating_duration_since(self.rempli).as_secs_f64();
+        self.jetons = (self.jetons + ecoule * ECRITURES_PAR_S).min(ECRITURES_PAR_S);
+        self.rempli = maintenant;
+        let attente = Duration::from_secs_f64(((1.0 - self.jetons) / ECRITURES_PAR_S).max(0.0));
+        if attente > ATTENTE_MAX {
+            return Err("trop de demandes : réessaie dans un instant".into());
+        }
+        self.jetons -= 1.0;
+        Ok(attente)
+    }
+}
 
 /// Commandes qui doivent passer par la boucle principale.
 pub enum Cmd {
@@ -101,6 +183,10 @@ pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
         }
     };
     log::info!("interface locale : ws://127.0.0.1:{PORT}");
+    if let Err(e) = ecrire_jeton(&crate::config::dir()) {
+        log::warn!("interface locale : jeton non écrit ({e})");
+    }
+    let contexte = Arc::new(Contexte::reel());
     let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let _ = std::thread::Builder::new().name("essaim-ipc".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -112,10 +198,10 @@ pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
             // la place est rendue quand le client se termine, ou tout de suite si son fil
             // ne démarre pas (la fermeture est alors détruite avec la garde)
             let slot = Slot::take(&clients);
-            let (shared, tx) = (shared.clone(), tx.clone());
+            let (shared, tx, contexte) = (shared.clone(), tx.clone(), contexte.clone());
             let _ = std::thread::Builder::new().name("essaim-ipc-client".into()).spawn(move || {
                 let _slot = slot;
-                if let Err(e) = client(stream, &shared, &tx) {
+                if let Err(e) = client(stream, &shared, &tx, &contexte) {
                     log::debug!("interface locale : client fermé ({e})");
                 }
             });
@@ -154,13 +240,57 @@ impl Drop for Slot {
     }
 }
 
-fn client(stream: TcpStream, shared: &Shared, tx: &Sender<Cmd>) -> anyhow::Result<()> {
-    // une poignée de main qui traîne ne doit pas garder sa place
-    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+/// Flux du client borné par une échéance : chaque lecture ou écriture n'attend que le temps qui
+/// reste avant elle (un client qui envoie un octet de temps en temps ne gagne rien).
+struct Borne {
+    flux: TcpStream,
+    echeance: Option<Instant>,
+}
+
+impl Borne {
+    /// Temps restant avant l'échéance, appliqué à la socket ; erreur s'il est écoulé.
+    fn reste(&self, ecriture: bool) -> std::io::Result<()> {
+        let Some(e) = self.echeance else { return Ok(()) };
+        let reste = e.saturating_duration_since(Instant::now());
+        if reste.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "poignée de main trop longue"));
+        }
+        if ecriture { self.flux.set_write_timeout(Some(reste)) } else { self.flux.set_read_timeout(Some(reste)) }
+    }
+}
+
+impl Read for Borne {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reste(false)?;
+        self.flux.read(buf)
+    }
+}
+
+impl Write for Borne {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.reste(true)?;
+        self.flux.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.flux.flush()
+    }
+}
+
+/// Poignée de main WebSocket, finie avant `delai` depuis l'acceptation ou abandonnée.
+fn poignee(stream: TcpStream, delai: Duration) -> anyhow::Result<WebSocket<Borne>> {
     let limites = WebSocketConfig::default().max_message_size(Some(MESSAGE_MAX)).max_frame_size(Some(MESSAGE_MAX));
-    let mut ws: WebSocket<TcpStream> = tungstenite::accept_hdr_with_config(stream, check_origin, Some(limites))?;
-    ws.get_mut().set_read_timeout(Some(Duration::from_millis(250)))?;
+    let flux = Borne { flux: stream, echeance: Some(Instant::now() + delai) };
+    let mut ws = tungstenite::accept_hdr_with_config(flux, check_origin, Some(limites))?;
+    let b = ws.get_mut();
+    b.echeance = None;
+    b.flux.set_read_timeout(Some(Duration::from_millis(250)))?;
+    b.flux.set_write_timeout(Some(Duration::from_secs(3)))?;
+    Ok(ws)
+}
+
+fn client(stream: TcpStream, shared: &Shared, tx: &Sender<Cmd>, contexte: &Contexte) -> anyhow::Result<()> {
+    // une poignée de main qui traîne ne doit pas garder sa place
+    let mut ws = poignee(stream, POIGNEE_MAX)?;
     let (mut sent_version, mut last_push, mut dernier_message) = (u64::MAX, Instant::now(), Instant::now());
     loop {
         if dernier_message.elapsed() >= INACTIVITE_MAX {
@@ -173,7 +303,7 @@ fn client(stream: TcpStream, shared: &Shared, tx: &Sender<Cmd>) -> anyhow::Resul
         }
         match lu {
             Ok(Message::Text(t)) => {
-                let reply = handle(t.as_str(), shared, tx);
+                let reply = handle(t.as_str(), shared, tx, contexte);
                 ws.send(Message::Text(reply.to_string().into()))?;
             }
             Ok(Message::Close(_)) => return Ok(()),
@@ -190,21 +320,35 @@ fn client(stream: TcpStream, shared: &Shared, tx: &Sender<Cmd>) -> anyhow::Resul
     }
 }
 
-fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>) -> Value {
+fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>, ctx: &Contexte) -> Value {
     let raw: Value = serde_json::from_str(text).unwrap_or(Value::Null);
     let id = raw.get("id").cloned().unwrap_or(Value::Null);
+    let envoyer = |cmd: Cmd| tx.send(cmd).map(|_| Value::Null).map_err(|e| e.to_string());
     let result = serde_json::from_value::<Request>(raw).map_err(|e| e.to_string()).and_then(|r| match r {
         Request::GetState => Ok(shared.snapshot().1),
-        Request::SetPaused { paused } => tx.send(Cmd::SetPaused(paused)).map(|_| Value::Null).map_err(|e| e.to_string()),
-        Request::OpenConfig => tx.send(Cmd::OpenConfig).map(|_| Value::Null).map_err(|e| e.to_string()),
-        Request::OpenSettings => tx.send(Cmd::OpenSettings).map(|_| Value::Null).map_err(|e| e.to_string()),
-        Request::ListPresets => Ok(presets_publies(&profils::list(), &Config::read(&crate::config::path()).unwrap_or_default())),
-        Request::ApplyPreset { name } => profils::appliquer(&name).map(|_| Value::Null),
-        Request::SetConfig { section, .. } if SECTIONS_PROTEGEES.contains(&section.as_str()) => {
-            Err(format!("la section [{section}] ne se change pas par l'interface locale"))
+        Request::SetPaused { paused } => envoyer(Cmd::SetPaused(paused)),
+        Request::OpenConfig => ctx.debit().ouverture(Instant::now()).and_then(|()| envoyer(Cmd::OpenConfig)),
+        Request::OpenSettings => envoyer(Cmd::OpenSettings),
+        Request::ListPresets => Ok(presets_publies(&(ctx.lister)(), &Config::read(&ctx.config).unwrap_or_default())),
+        Request::ApplyPreset { name } => {
+            if !(ctx.lister)().iter().any(|p| profils::meme_nom(&p.name, &name)) {
+                return Err(format!("aucun preset « {name} »"));
+            }
+            ctx.tour_d_ecriture()?;
+            (ctx.appliquer)(&name).map(|_| Value::Null)
         }
-        Request::SetConfig { section, key, value } if ALIAS.contains(&(section.as_str(), key.as_str())) => ecrire_alias(&section, &key, &value).map(|_| Value::Null),
-        Request::SetConfig { section, key, value } => crate::config::set_value(&section, &key, &value).map(|_| Value::Null),
+        Request::SetConfig { section, key, .. } if SECTIONS_PROTEGEES.contains(&section.as_str()) => {
+            Err(format!("[{section}] {key} : la section [{section}] ne se change pas par l'interface locale"))
+        }
+        Request::SetConfig { section, key, value } => {
+            ctx.tour_d_ecriture()?;
+            if ALIAS.contains(&(section.as_str(), key.as_str())) {
+                ecrire_alias(&ctx.config, &section, &key, &value)
+            } else {
+                crate::config::set_value_in(&ctx.config, &section, &key, &value)
+            }
+            .map(|_| Value::Null)
+        }
     });
     match result {
         Ok(data) => json!({ "id": id, "ok": true, "data": data }),
@@ -242,10 +386,10 @@ pub fn config_publiee(cfg: &Config) -> Value {
 
 /// Écrit une clé d'avant : la modulation de base (ajoutée au début si elle manque, retirée à 0),
 /// ou le déclencheur « clic → fissure » (ajouté ou retiré).
-fn ecrire_alias(section: &str, cle: &str, valeur: &Value) -> Result<(), String> {
+fn ecrire_alias(config: &Path, section: &str, cle: &str, valeur: &Value) -> Result<(), String> {
     if section == "fissures" {
         let oui = valeur.as_bool().ok_or("[fissures] actives : vrai ou faux attendu")?;
-        return crate::config::modifier(|c| {
+        return crate::config::modifier_in(config, |c| {
             let l = &mut c.declencheurs.liste;
             let est = |d: &Declencheur| d.quand == Evenement::Clic && d.faire == Action::Fissure;
             if !oui {
@@ -259,7 +403,7 @@ fn ecrire_alias(section: &str, cle: &str, valeur: &Value) -> Result<(), String> 
     let (source, cible, echelle) = base(cle);
     let x = valeur.as_f64().filter(|x| x.is_finite()).ok_or(format!("[{section}] {cle} : nombre attendu"))? as f32;
     let q = ((x / echelle).clamp(-1.0, 1.0) * 1e4).round() / 1e4;
-    crate::config::modifier(|c| {
+    crate::config::modifier_in(config, |c| {
         let l = &mut c.modulations.liste;
         let i = l.iter().position(|m| m.source == source && m.cible == cible && m.sur == Groupe::Tout);
         match (i, q == 0.0) {
@@ -277,9 +421,61 @@ fn ecrire_alias(section: &str, cle: &str, valeur: &Value) -> Result<(), String> 
     .map(|_| crate::config::request_reload())
 }
 
+/// Écrit `ipc.jeton` dans `dossier` s'il n'y est pas : 32 octets aléatoires en hexadécimal. Le
+/// fichier hérite des droits du dossier (`%APPDATA%` : l'utilisateur, le système et les
+/// administrateurs seulement).
+fn ecrire_jeton(dossier: &Path) -> std::io::Result<()> {
+    let p = dossier.join("ipc.jeton");
+    if p.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dossier)?;
+    let mut octets = [0u8; 32];
+    let status = unsafe {
+        use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+        BCryptGenRandom(None, &mut octets, BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+    };
+    if status.is_err() {
+        return Err(std::io::Error::other(format!("tirage aléatoire impossible ({:#x})", status.0)));
+    }
+    let texte: String = octets.iter().map(|o| format!("{o:02x}")).collect();
+    // création exclusive : un autre lancement l'a peut-être écrit entre-temps
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+        Ok(mut f) => f.write_all(texte.as_bytes()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dossier temporaire supprimé à la fin de l'essai.
+    struct Dossier(PathBuf);
+    impl Drop for Dossier {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn dossier(nom: &str) -> Dossier {
+        let d = std::env::temp_dir().join(format!("essaim-test-ipc-{}-{nom}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        Dossier(d)
+    }
+
+    fn aucun_preset() -> Vec<Profile> {
+        Vec::new()
+    }
+    fn jamais_applique(nom: &str) -> Result<(), String> {
+        panic!("preset « {nom} » appliqué pendant un essai")
+    }
+
+    /// Contexte d'essai : config dans un dossier temporaire, aucun preset, rien d'appliqué.
+    fn contexte(d: &Dossier) -> Contexte {
+        Contexte::new(d.0.join("config.toml"), aucun_preset, jamais_applique)
+    }
 
     #[test]
     fn cles_d_avant_publiees() {
@@ -298,10 +494,21 @@ mod tests {
     fn sections_protegees_refusees() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let shared = Shared::default();
-        for section in SECTIONS_PROTEGEES {
-            let r = handle(&json!({ "id": 1, "cmd": "set_config", "section": section, "key": "x", "value": 1 }).to_string(), &shared, &tx);
+        let d = dossier("protegees");
+        let ctx = contexte(&d);
+        // de vraies clés, qui seraient acceptées par `set_value`
+        let cles = [("mise_a_jour", "auto", json!(false)), ("bibliotheque", "depot", json!("a/b")), ("automatique", "actif", json!(true)), ("pause", "batterie", json!("rien"))];
+        assert_eq!(cles.iter().map(|(s, ..)| *s).collect::<Vec<_>>(), SECTIONS_PROTEGEES);
+        for (section, key, value) in cles {
+            let r = handle(&json!({ "id": 1, "cmd": "set_config", "section": section, "key": key, "value": value }).to_string(), &shared, &tx, &ctx);
             assert_eq!(r["ok"], false, "{section}");
+            assert!(r["error"].as_str().unwrap().contains("interface locale"), "{r}");
         }
+        assert!(!ctx.config.exists(), "rien n'a été écrit");
+        // une clé ordinaire, elle, est écrite (dans le fichier de l'essai)
+        let r = handle(&json!({ "id": 2, "cmd": "set_config", "section": "orbite", "key": "rayon", "value": 30 }).to_string(), &shared, &tx, &ctx);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(Config::read(&ctx.config).unwrap().orbite.rayon, 30.0);
     }
 
     #[test]
@@ -321,7 +528,8 @@ mod tests {
     #[test]
     fn reglages_ouverts_par_la_boucle_principale() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let r = handle(&json!({ "id": 7, "cmd": "open_settings" }).to_string(), &Shared::default(), &tx);
+        let d = dossier("reglages");
+        let r = handle(&json!({ "id": 7, "cmd": "open_settings" }).to_string(), &Shared::default(), &tx, &contexte(&d));
         assert_eq!(r, json!({ "id": 7, "ok": true, "data": null }));
         assert!(matches!(rx.try_recv(), Ok(Cmd::OpenSettings)));
     }
@@ -330,11 +538,93 @@ mod tests {
     fn preset_inconnu_refuse() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let shared = Shared::default();
-        let r = handle(&json!({ "id": 2, "cmd": "apply_preset", "name": "aucun preset de ce nom ?" }).to_string(), &shared, &tx);
+        let d = dossier("preset");
+        let ctx = contexte(&d);
+        let r = handle(&json!({ "id": 2, "cmd": "apply_preset", "name": "aucun preset de ce nom ?" }).to_string(), &shared, &tx, &ctx);
         assert_eq!(r["ok"], false);
         assert!(r["error"].as_str().unwrap().contains("aucun preset"));
         // sans nom : requête refusée, rien n'est appliqué
-        assert_eq!(handle(&json!({ "id": 3, "cmd": "apply_preset" }).to_string(), &shared, &tx)["ok"], false);
+        assert_eq!(handle(&json!({ "id": 3, "cmd": "apply_preset" }).to_string(), &shared, &tx, &ctx)["ok"], false);
+    }
+
+    #[test]
+    fn ouverture_de_la_config_espacee() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d = dossier("ouverture");
+        let ctx = contexte(&d);
+        let ouvrir = || handle(&json!({ "id": 1, "cmd": "open_config" }).to_string(), &Shared::default(), &tx, &ctx);
+        assert_eq!(ouvrir()["ok"], true);
+        assert_eq!(ouvrir()["ok"], false, "deuxième demande aussitôt : refusée");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::OpenConfig)) && rx.try_recv().is_err());
+        let mut debit = Debit::new(Instant::now());
+        let t = Instant::now();
+        debit.ouverture(t).unwrap();
+        assert!(debit.ouverture(t + Duration::from_secs(4)).is_err());
+        assert!(debit.ouverture(t + OUVERTURE_MIN).is_ok());
+    }
+
+    #[test]
+    fn ecritures_etalees_puis_refusees() {
+        let t = Instant::now();
+        let mut debit = Debit::new(t);
+        // une rafale de 20 passe aussitôt, la suite attend son tour (1/20 s chacune)
+        for _ in 0..20 {
+            assert_eq!(debit.ecriture(t).unwrap(), Duration::ZERO);
+        }
+        let attente = debit.ecriture(t).unwrap();
+        assert!((attente.as_secs_f64() - 0.05).abs() < 1e-6, "{attente:?}");
+        // au-delà de 2 s d'attente : refusée
+        let mut refus = false;
+        for _ in 0..60 {
+            refus |= debit.ecriture(t).is_err();
+        }
+        assert!(refus);
+        // le seau se remplit avec le temps
+        assert_eq!(debit.ecriture(t + Duration::from_secs(10)).unwrap(), Duration::ZERO);
+    }
+
+    #[test]
+    fn poignee_de_main_bornee_dans_le_temps() {
+        let ecoute = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let adresse = ecoute.local_addr().unwrap();
+        // un client qui envoie sa requête un octet toutes les 50 ms, sans jamais la finir
+        let lent = std::thread::spawn(move || {
+            let mut c = TcpStream::connect(adresse).unwrap();
+            for o in b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Lent: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".iter() {
+                if c.write_all(&[*o]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let (flux, _) = ecoute.accept().unwrap();
+        let debut = Instant::now();
+        assert!(poignee(flux, Duration::from_millis(400)).is_err());
+        let duree = debut.elapsed();
+        assert!(duree < Duration::from_millis(1500), "échéance dépassée : {duree:?}");
+        lent.join().unwrap();
+        // un vrai client, lui, passe
+        let ecoute = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let adresse = ecoute.local_addr().unwrap();
+        let client = std::thread::spawn(move || tungstenite::connect(format!("ws://{adresse}/")).map(|_| ()));
+        let (flux, _) = ecoute.accept().unwrap();
+        assert!(poignee(flux, Duration::from_secs(3)).is_ok());
+        assert!(client.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn jeton_ecrit_une_fois() {
+        let d = dossier("jeton");
+        let sous = d.0.join("Essaim");
+        ecrire_jeton(&sous).unwrap();
+        let jeton = std::fs::read_to_string(sous.join("ipc.jeton")).unwrap();
+        assert_eq!(jeton.len(), 64);
+        assert!(jeton.chars().all(|c| c.is_ascii_hexdigit()));
+        ecrire_jeton(&sous).unwrap();
+        assert_eq!(std::fs::read_to_string(sous.join("ipc.jeton")).unwrap(), jeton, "gardé d'un lancement à l'autre");
+        let autre = d.0.join("autre");
+        ecrire_jeton(&autre).unwrap();
+        assert_ne!(std::fs::read_to_string(autre.join("ipc.jeton")).unwrap(), jeton, "tiré au hasard");
     }
 
     #[test]

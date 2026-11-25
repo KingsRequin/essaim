@@ -56,8 +56,8 @@ automatiques refusent un `essaim.exe` sans `essaim.exe.sig` valide (`docs/techni
   le manque et ni l'onde ni les fissures n'apparaissent. Si les clics dans la page n'agissent
   plus, vérifier par `WindowFromPoint` qu'aucune fenêtre d'une autre appli (bulle de SharkApp,
   invisible dans `PrintWindow`) ne couvre le point.
-- Le journal (`%APPDATA%\Essaim\essaim.log`) note chaque changement d'état et, toutes les
-  minutes, la cadence et le temps de calcul par image.
+- Le journal (`%APPDATA%\Essaim\essaim.log`) note chaque changement d'état (sauf le masquage par
+  la frappe) et, toutes les minutes, la cadence et le temps de calcul par image.
 
 ## Règles
 

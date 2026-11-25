@@ -66,6 +66,8 @@ const etat = {
   proche: null,
   depot: "",
   curseurs: "",
+  curseursNom: null, // nom lisible du jeu en place (`curseurs_nom`), s'il est donné
+  raccourcisRefuses: [], // raccourcis globaux pris par une autre application
   demarrage: false,
   pause: false,
   jeux: null,
@@ -228,21 +230,22 @@ const FORMES_REGLAGE = [...FORMES, ["trace", "Image…"], ["icone", "Icône de l
 const FORMES_SATELLITES = [["cometes", "Comme les comètes"], ...FORMES_REGLAGE];
 const NOMS_FORMES = { ...Object.fromEntries(FORMES), trace: "Image", icone: "Icône de l'appli" };
 // Sections enregistrées dans un preset (comme profils::SECTIONS). L'habillage de la fenêtre et
-// de l'écran (equerres, lisere) n'en fait pas partie : il reste d'un preset à l'autre.
+// de l'écran (equerres, halo, lisere) et l'étiquette du morceau (etiquette) n'en font pas
+// partie : ils restent d'un preset à l'autre (HABILLAGE).
 const SECTIONS_PRESET = [
   "orbite", "essaim", "couleur", "eclat", "fissures", "particules", "sillage", "projecteur", "reticule", "spectre", "rubans", "ressorts", "arcs",
   "quatre_temps", "anneau", "orbe", "voix", "trame", "pinceau", "pendule", "gouttes", "audio", "bordure", "souris", "modulations", "declencheurs",
 ];
 // Réglages de ces sections propres à la machine ou à la main de l'utilisateur, hors presets
-// (comme profils::in_profile).
-const HORS_PRESET = new Set(["souris.avec_preset", "audio.sortie", "audio.applis", "projecteur.secousse", "projecteur.sensibilite"]);
+// (comme profils::in_profile) : l'option des curseurs, la sortie et les applications écoutées,
+// le projecteur (allumé ou non, secousse, sensibilité : un geste de la main, pas une allure).
+const HORS_PRESET = new Set(["souris.avec_preset", "audio.sortie", "audio.applis", "projecteur.actif", "projecteur.secousse", "projecteur.sensibilite"]);
 
 const FORMES_CONNUES = new Set(FORMES_SATELLITES.map(([id]) => id));
 // point d'un trajet : fini et pas démesuré (comme Config::clamped)
 const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every((v) => Number.isFinite(v) && Math.abs(v) < 1e6);
 const POINTS_MAX = 2000; // par trajet ou par contour (comme Config::clamped)
-// comme contours::CONTOURS_MAX (nom distinct du CONTOURS_MAX d'apercu.js, chargé dans la même page)
-const CONTOURS_DISTANTS_MAX = 24;
+// nombre de contours d'un trajet : CONTOURS_MAX d'apercu.js (chargé avant), comme contours::CONTOURS_MAX
 // Réglages entiers du moteur (u32 dans config.rs) : un nombre distant y est arrondi.
 const ENTIERS = new Set(["orbite.nombre", "orbite.anneaux", "essaim.maximum", "essaim.fixes", "couleur.palette", "spectre.bandes"]);
 // Bornes sûres des réglages sans glissière (comme config::limits) : l'allure du trait et du
@@ -301,7 +304,7 @@ function valeurDistante(section, cle, v, defaut) {
   if (!Array.isArray(defaut) || !Array.isArray(v)) return undefined;
   if (cle === "trace") return v.every(pointValide) ? v.slice(0, POINTS_MAX) : undefined;
   if (cle === "contours") {
-    return v.every((c) => Array.isArray(c) && c.every(pointValide)) ? v.slice(0, CONTOURS_DISTANTS_MAX).map((c) => c.slice(0, POINTS_MAX)) : undefined;
+    return v.every((c) => Array.isArray(c) && c.every(pointValide)) ? v.slice(0, CONTOURS_MAX).map((c) => c.slice(0, POINTS_MAX)) : undefined;
   }
   if (cle === "liste") {
     const max = section === "modulations" ? MODULATIONS_MAX : DECLENCHEURS_MAX;
@@ -401,6 +404,28 @@ function imageCommu(chemin) {
 const INDEX_MAX = 1 << 20;
 const PRESETS_COMMU_MAX = 500;
 
+// Corps d'une réponse en texte, lu par morceaux : la lecture s'arrête (et la requête avec) dès que
+// `max` octets sont dépassés, sans tout recevoir d'abord. Une taille annoncée trop grande
+// (Content-Length) est refusée avant de lire.
+async function lireBorne(r, max, arret) {
+  const annoncee = Number(r.headers.get("content-length"));
+  if (annoncee > max) { arret.abort(); throw new Error("trop grand"); }
+  if (!r.body) return r.text();
+  const lecteur = r.body.getReader(), morceaux = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await lecteur.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) { arret.abort(); throw new Error("trop grand"); }
+    morceaux.push(value);
+  }
+  const octets = new Uint8Array(total);
+  let i = 0;
+  for (const m of morceaux) { octets.set(m, i); i += m.length; }
+  return new TextDecoder().decode(octets);
+}
+
 async function chargerCommu(forcer) {
   if (!etat.depot || (!forcer && etat.commu.etat !== "rien")) return;
   etat.commu = { etat: "charge", liste: [], message: "" };
@@ -412,9 +437,9 @@ async function chargerCommu(forcer) {
     if (r.status === 404) throw new Error("absent");
     if (!r.ok) throw new Error("http " + r.status);
     // index d'un dépôt tiers : taille et nombre de presets bornés
-    const texte = await r.text();
-    if (texte.length > INDEX_MAX) throw new Error("trop grand");
-    const index = JSON.parse(texte);
+    const texte = await lireBorne(r, INDEX_MAX, arret);
+    let index;
+    try { index = JSON.parse(texte); } catch { throw new Error("illisible"); }
     const base = reglagesDeBase();
     const liste = (estObjet(index) && Array.isArray(index.presets) ? index.presets : [])
       .slice(0, PRESETS_COMMU_MAX)
@@ -435,7 +460,11 @@ async function chargerCommu(forcer) {
         ? `La bibliothèque n'est pas encore en ligne : le dépôt ${etat.depot} n'a pas d'index.json.`
         : e.message === "trop grand"
           ? `L'index du dépôt ${etat.depot} est trop grand (1 Mo au plus) : il n'est pas chargé.`
-          : "Bibliothèque injoignable. Vérifie ta connexion, puis réessaie.",
+          : e.message === "illisible"
+            ? `L'index du dépôt ${etat.depot} est mal formé (JSON illisible) : il n'est pas chargé.`
+            : /^http /.test(e.message)
+              ? `Le dépôt ${etat.depot} répond par une erreur (${e.message.slice(5)}). Réessaie plus tard.`
+              : "Bibliothèque injoignable. Vérifie ta connexion, puis réessaie.",
     };
   } finally {
     clearTimeout(delai);
@@ -455,6 +484,14 @@ const observateur = new IntersectionObserver((entrees) => {
   }
 }, { root: $("defile-grille"), rootMargin: "80px" });
 
+// Nom lisible d'un jeu de curseurs : celui de la liste des jeux de Windows, ou celui que l'appli
+// donne pour le jeu en place (`curseurs_nom`) ; à défaut, sa clé du registre.
+function nomJeu(cle) {
+  const j = etat.jeux && etat.jeux.find((x) => x.cle === cle);
+  if (j) return j.nom;
+  return cle === etat.curseurs && etat.curseursNom ? etat.curseursNom : cle;
+}
+
 function detail(p) {
   const c = p.reglages, o = c.orbite;
   const parts = [];
@@ -467,7 +504,7 @@ function detail(p) {
   const sats = c.essaim.fixes + c.essaim.maximum;
   if (sats) parts.push(sats + " satellites" + (c.essaim.forme && c.essaim.forme !== "cometes" ? " en " + (NOMS_FORMES[c.essaim.forme] || "").toLowerCase() : ""));
   if (o.rotation) parts.push("trajet qui tourne");
-  if (c.souris && c.souris.jeu) parts.push("curseurs " + c.souris.jeu);
+  if (c.souris && c.souris.jeu) parts.push("curseurs " + nomJeu(c.souris.jeu));
   if (p.origine === "commu" && p.etiquettes.length) parts.push(p.etiquettes.slice(0, 2).join(", "));
   return parts.join(" · ");
 }
@@ -494,7 +531,7 @@ function creerTuile(p) {
   const apercu = new window.Apercu(canvas);
   // boutons d'action gardés d'un affichage à l'autre (seuls leurs attributs changent) ; menu « Gérer »
   const menu = el("div", "menu-tuile");
-  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, canvas, image, p, signature: null, pret: false, erreur: false, confirmer: 0, boutons: new Map(), menu };
+  const t = { racine, bouton, numero, origine, nom, ligne, actions, apercu, canvas, image, p, signature: null, pret: false, erreur: false, confirmer: 0, duplique: 0, boutons: new Map(), menu };
   image.addEventListener("error", () => { t.imageKo = true; image.hidden = true; canvas.hidden = false; });
   bouton.addEventListener("click", () => { if (etat.renomme !== t.p.id) choisir(t.p); });
   bouton.addEventListener("mouseenter", () => { etat.survol = p.id; montrerLoupe(t); });
@@ -616,9 +653,17 @@ const ACTIONS_TUILE = {
   comparer: (p) => comparer(p),
   installer: (p) => envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: false }),
   gerer: (p) => { etat.menu = etat.menu === p.id ? null : p.id; dessinerPresets(); },
-  dupliquer: (p) => envoyer({ cmd: "dupliquer", nom: p.nom }),
+  // un double clic ne fait qu'une copie : la tuile ignore les clics suivants pendant 2 s
+  dupliquer: (p, t) => {
+    if (t.duplique > performance.now()) return;
+    t.duplique = performance.now() + 2000;
+    envoyer({ cmd: "dupliquer", nom: p.nom });
+  },
   renommer: (p, t) => renommer(t),
-  exporter: (p) => envoyer({ cmd: "exporter", nom: p.nom }),
+  exporter: (p) => {
+    envoyer({ cmd: "exporter", nom: p.nom });
+    bandeau(`Fichier de « ${p.nom} » montré dans l'Explorateur.`);
+  },
   supprimer: (p, t) => {
     if (t.confirmer > performance.now()) {
       envoyer({ cmd: "supprimer", nom: p.nom });
@@ -659,7 +704,7 @@ function actionsTuile(t) {
     const confirmer = t.confirmer > performance.now();
     const suppr = bouton("supprimer", confirmer ? "Confirmer la suppression" : "Supprimer");
     suppr.classList.toggle("danger", confirmer);
-    items.push(bouton("renommer", "Renommer"), bouton("exporter", "Exporter"), suppr);
+    items.push(bouton("renommer", "Renommer"), bouton("exporter", "Exporter", { title: "Montre le fichier .toml du preset dans l'Explorateur" }), suppr);
   }
   remplacer(t.menu, items);
   return [fav, comp, gerer, t.menu];
@@ -733,16 +778,16 @@ function dessinerPresets() {
   const montres = filtrer(liste);
   $("compte").textContent = montres.length + (montres.length > 1 ? " résultats" : " résultat");
 
+  // note de la bibliothèque : refaite seulement si le dépôt change (son bouton garde le focus)
   const note = $("note-commu");
   note.hidden = etat.source !== "commu";
-  if (!note.hidden) {
+  if (!note.hidden && note.dataset.depot !== etat.depot) {
+    note.dataset.depot = etat.depot;
     note.replaceChildren(
       el("strong", "", "Hébergé sur GitHub"),
       document.createTextNode(` — dépôt ${etat.depot}. Installer copie le preset dans Mes presets ; publier le tien passe par une relecture avant d'apparaître ici. `),
+      videUI.lienDepot,
     );
-    const lien = el("button", "puce petite", "Voir le dépôt");
-    lien.addEventListener("click", () => envoyer({ cmd: "ouvrir_depot" }));
-    note.append(lien);
   }
 
   const habillage = signatureHabillage();
@@ -759,30 +804,62 @@ function dessinerPresets() {
   }
   remplacer($("grille"), enfants);
 
-  const vide = $("vide");
-  const attente = etat.source === "commu" && etat.commu.etat === "charge";
-  const erreurCommu = etat.source === "commu" && etat.commu.etat === "erreur";
-  vide.hidden = montres.length > 0;
-  if (!vide.hidden) {
-    vide.replaceChildren();
-    if (attente) {
-      vide.append(el("span", "t-titre", "Chargement de la bibliothèque…"));
-    } else if (erreurCommu) {
-      vide.append(el("span", "zero", "—"), el("span", "t-texte", etat.commu.message));
-      const g = el("div", "groupe-puces");
-      const re = el("button", "puce", "Réessayer");
-      re.addEventListener("click", () => chargerCommu(true));
-      const voir = el("button", "puce", "Voir le dépôt");
-      voir.addEventListener("click", () => envoyer({ cmd: "ouvrir_depot" }));
-      g.append(re, voir);
-      vide.append(g);
-    } else {
-      const texte = etat.recherche ? `Aucun preset pour « ${etat.recherche} » ici.`
-        : etat.source === "favoris" ? "Aucun favori : la puce Favori sous un preset l'ajoute ici." : "Aucun preset ici pour l'instant.";
-      vide.append(el("span", "zero", "0"), el("span", "t-texte", texte));
-      const eff = el("button", "puce", "Tout afficher");
-      eff.addEventListener("click", () => { etat.recherche = ""; $("recherche").value = ""; etat.source = "tout"; dessinerPresets(); });
-      vide.append(eff);
+  dessinerVide(montres.length);
+}
+
+// Grille vide (aucun résultat, bibliothèque en chargement ou injoignable) : zone `role="status"`
+// toujours présente, dont les éléments sont créés une fois ; leur texte ne change que si le
+// message change (sinon il serait relu à chaque état reçu), et les boutons gardent le focus.
+const videUI = (() => {
+  const bouton = (texte, action) => {
+    const b = el("button", "puce", texte);
+    b.type = "button";
+    b.addEventListener("click", action);
+    return b;
+  };
+  const ui = {
+    zero: el("span", "zero"), titre: el("span", "t-titre"), texte: el("span", "t-texte"), boutons: el("div", "groupe-puces"),
+    attendu: false, // « Réessayer » cliqué : le focus est rendu une fois la bibliothèque chargée
+  };
+  ui.reessayer = bouton("Réessayer", () => { ui.attendu = true; chargerCommu(true); });
+  ui.voir = bouton("Voir le dépôt", () => envoyer({ cmd: "ouvrir_depot" }));
+  ui.lienDepot = el("button", "puce petite", "Voir le dépôt");
+  ui.lienDepot.addEventListener("click", () => envoyer({ cmd: "ouvrir_depot" }));
+  // « Tout afficher » disparaît avec la grille vide : le focus va à la première tuile
+  ui.tout = bouton("Tout afficher", () => {
+    etat.recherche = "";
+    $("recherche").value = "";
+    etat.source = "tout";
+    dessinerPresets();
+    const premiere = $("grille").querySelector(".tuile > button");
+    (premiere || $("recherche")).focus();
+  });
+  return ui;
+})();
+const texteSi = (e, t) => { if (e.textContent !== t) e.textContent = t; return e; };
+
+function dessinerVide(resultats) {
+  const v = videUI;
+  let contenu = [];
+  if (resultats) {
+    // des presets : zone vide
+  } else if (etat.source === "commu" && etat.commu.etat === "charge") {
+    contenu = [texteSi(v.titre, "Chargement de la bibliothèque…")];
+  } else if (etat.source === "commu" && etat.commu.etat === "erreur") {
+    remplacer(v.boutons, [v.reessayer, v.voir]);
+    contenu = [texteSi(v.zero, "—"), texteSi(v.texte, etat.commu.message), v.boutons];
+  } else {
+    const texte = etat.recherche ? `Aucun preset pour « ${etat.recherche} » ici.`
+      : etat.source === "favoris" ? "Aucun favori : la puce Favori sous un preset l'ajoute ici." : "Aucun preset ici pour l'instant.";
+    contenu = [texteSi(v.zero, "0"), texteSi(v.texte, texte), v.tout];
+  }
+  remplacer($("vide"), contenu);
+  // après « Réessayer » : le focus revient sur lui (nouvel échec) ou va à la première tuile
+  if (v.attendu && etat.commu.etat !== "charge") {
+    v.attendu = false;
+    if (document.activeElement === document.body || !document.activeElement) {
+      const cible = v.reessayer.isConnected ? v.reessayer : $("grille").querySelector(".tuile > button");
+      if (cible) cible.focus();
     }
   }
 }
@@ -1051,7 +1128,7 @@ const NOMS_ACTIONS = Object.fromEntries(ACTIONS);
 // poussée : × 0,2 à 3) ; nombre : satellites, étincelles
 const ACTION_FORCE = {
   eclat: "pourcent", bordure: "pourcent", onde: "fois", eclats: "fois", fissure: "fois", implosion: "fois", carre: "fois", etincelles: "fois", explosion: "fois", rafale: "fois",
-  rebond: "fois", poussee: "fois", frein: "pourcent",
+  rebond: "elan", poussee: "elan", frein: "pourcent",
 };
 const ACTION_NOMBRE = new Set(["satellites", "etincelles", "explosion", "rafale"]);
 const IMPACT_ACTION = { etincelles: 2, explosion: 2, eclats: 2, fissure: 2 };
@@ -2057,9 +2134,13 @@ function recevoirMaj(m) {
     echec: `Recherche impossible : ${String(m.texte || "erreur inconnue")}.`,
   };
   $("maj-etat").textContent = textes[m.etat] || "";
-  $("chercher-maj").hidden = prete;
-  $("chercher-maj").disabled = m.etat === "recherche";
+  // pendant la recherche, le bouton reste focalisable (aria-disabled : un clic ne fait rien) ;
+  // une version prête le remplace par « Redémarrer → », qui reprend le focus s'il l'avait
+  const chercher = $("chercher-maj"), avaitFocus = document.activeElement === chercher;
+  chercher.setAttribute("aria-disabled", m.etat === "recherche");
+  chercher.hidden = prete;
   $("redemarrer-maj").hidden = !prete;
+  if (prete && avaitFocus) $("redemarrer-maj").focus();
 }
 
 function montrerPanneau(id, focus) {
@@ -2250,11 +2331,15 @@ function ligneDeclencheur(d, i) {
   const genre = ACTION_FORCE[d.faire];
   if (genre === "pourcent") {
     reglages.append(plageMini(`Déclencheur ${n} : force`, 5, 100, 5, Math.min(1, d.force ?? 1), (v) => Math.round(v * 100) + " %", regle("force"), (x) => x / 100, (v) => v * 100).l);
-  } else if (genre === "fois") {
-    reglages.append(plageMini(`Déclencheur ${n} : taille`, 20, 300, 10, d.force ?? 1, (v) => "× " + virgule(v, 1), regle("force"), (x) => x / 100, (v) => v * 100).l);
+  } else if (genre === "fois" || genre === "elan") {
+    // bornes de `Action::bornes_force` (config.rs) : une taille part de × 0,2, un élan (rebond,
+    // poussée) de 0
+    const min = genre === "elan" ? 0 : 20;
+    reglages.append(plageMini(`Déclencheur ${n} : ${genre === "elan" ? "force" : "taille"}`, min, 300, 5, d.force ?? 1, (v) => "× " + virgule(v, 2), regle("force"), (x) => x / 100, (v) => v * 100).l);
   }
   if (ACTION_NOMBRE.has(d.faire)) {
-    const lo = d.nombre ?? 3, hi = d.nombre_max ?? lo;
+    // champ absent : 3, comme la valeur par défaut de config.rs
+    const lo = d.nombre ?? 3, hi = d.nombre_max ?? 3;
     const nombre = (cle, v, nom) => {
       const s = el("input", "champ nombre");
       Object.assign(s, { type: "number", min: 0, max: 40, step: 1, value: v });
@@ -2407,8 +2492,12 @@ function rangeeApplisSon() {
   actualiser.addEventListener("click", () => envoyer({ cmd: "applis_sonores" }));
   const note = el("p", "note", "Coche une ou plusieurs applications pour n'écouter que leur son (ta musique, sans les notifications ni les vidéos d'à côté) ; celles qui jouent en ce moment sont en tête, marquées « en lecture ». Aucune cochée : tout le son de la sortie. Propre à cet ordinateur (hors presets) ; il faut Windows 10 2004 ou plus récent, sinon tout le son est écouté.");
   note.id = "note-applis-son";
+  // Windows refuse en ce moment l'écoute par application : tout le son passe, et on le dit
+  const repli = el("p", "note alerte-repli", "Windows refuse pour l'instant d'écouter une application seule : tout le son est écouté en attendant (nouvel essai toutes les 30 s).");
+  repli.id = "repli-applis-son";
+  repli.hidden = true;
   decrire(groupe, note.id);
-  l.append(nom, groupe, actualiser, note);
+  l.append(nom, groupe, actualiser, note, repli);
   envoyer({ cmd: "applis_sonores" });
   majApplisSon();
   return l;
@@ -2418,6 +2507,8 @@ function majApplisSon() {
   const groupe = $("applis-son");
   if (!groupe || !etat.reglages) return;
   const choisies = val("audio", "applis") || [];
+  const repli = $("repli-applis-son");
+  if (repli) repli.hidden = !(etat.repli && choisies.length);
   // celles qui jouent en ce moment d'abord, marquées
   const liste = (etat.applisSon || []).map((a) => [a.exe, a.nom, !!a.joue]).sort((a, b) => b[2] - a[2]);
   for (const c of choisies) if (!liste.some(([exe]) => nomExe(exe) === nomExe(c))) liste.push([c, c.replace(/\.exe$/i, ""), false]);
@@ -2600,31 +2691,33 @@ function surprise() {
 }
 
 // En-tête : écoute du son (active, coupée, en erreur) et veille, sous le bouton Pause (la pause,
-// elle, se lit sur le bouton). Rien n'est montré tant que l'appli n'envoie pas ces champs.
+// elle, se lit sur le bouton). Rien n'est montré tant que l'appli n'envoie pas ces champs ; la
+// zone (`role="status"`) reste dans la page, vide, pour que ses changements soient lus.
 function majEtatEssaim() {
   const e = $("etat-essaim");
-  // une ligne par état, courte : l'en-tête n'a pas de place en largeur
-  const parts = [];
-  if (etat.capture) parts.push({ active: "Son capté", coupee: "Son coupé", erreur: "Son : erreur" }[etat.capture]);
-  if (etat.veille) parts.push("En veille");
-  if (etat.raison) parts.push(etat.raison);
-  // morceau en cours : son titre, tronqué ; titre et artiste en entier au survol
+  // une ligne par état, courte (l'en-tête n'a pas de place en largeur), tronquée par « … » : le
+  // texte entier est dans son infobulle
+  const parts = []; // [texte, infobulle, classe]
+  if (etat.capture) {
+    const [texte, info] = {
+      active: ["Son capté", "Essaim entend le son de Windows."],
+      coupee: ["Son coupé", "Écoute arrêtée : « Réagir au son » est désactivé, ou Essaim est en pause ou derrière un plein écran."],
+      erreur: ["Son : erreur", "La capture du son de Windows a échoué (voir le journal)."],
+    }[etat.capture];
+    parts.push([texte, `${texte} — ${info}`]);
+  }
+  if (etat.veille) parts.push(["En veille", "En veille"]);
+  if (etat.raison) parts.push([etat.raison, etat.raison]);
+  // morceau en cours : son titre ; titre et artiste en entier au survol
   const m = etat.morceau;
   const titre = m ? m.titre || m.artiste : "";
-  e.hidden = !parts.length && !titre;
-  const cle = parts.join("|") + "|" + (m ? m.titre + "|" + m.artiste : "");
+  if (titre) parts.push([titre, m.titre && m.artiste ? `${m.titre} — ${m.artiste}` : titre, "morceau"]);
+  const cle = JSON.stringify(parts);
   if (e.dataset.texte !== cle) {
     e.dataset.texte = cle;
-    const spans = parts.map((t) => el("span", "", t));
-    if (titre) {
-      const s = el("span", "morceau", titre);
-      s.title = m.titre && m.artiste ? `${m.titre} — ${m.artiste}` : titre;
-      spans.push(s);
-    }
-    e.replaceChildren(...spans);
+    e.replaceChildren(...parts.map(([texte, info, classe]) => Object.assign(el("span", classe || "", texte), { title: info })));
   }
   e.dataset.etat = etat.capture || "";
-  e.title = { active: "Essaim entend le son de Windows.", coupee: "Écoute coupée : « Réagir au son » est désactivé.", erreur: "La capture du son de Windows a échoué (voir le journal)." }[etat.capture] || "";
 }
 
 // Puissance : temps de calcul par image × images par seconde = part d'un cœur du processeur.
@@ -2636,6 +2729,11 @@ function recevoirCharge(m) {
   const mo = m.morceau;
   etat.morceau = mo && typeof mo === "object" ? { titre: String(mo.titre || ""), artiste: String(mo.artiste || "") } : null;
   etat.lecture = typeof m.lecture === "boolean" ? m.lecture : null;
+  const repli = m.repli === true;
+  if (repli !== etat.repli) {
+    etat.repli = repli;
+    majApplisSon();
+  }
   // changement de piste vu par l'appli : la même rafale dans le grand aperçu
   if (typeof m.pistes === "number") {
     if (etat.pistes !== null && m.pistes !== etat.pistes && etat.reglages) grand.evenement("piste");
@@ -2647,8 +2745,8 @@ function recevoirCharge(m) {
     etat.prisme = m.prisme;
     majReglages();
   }
+  // libellé fixe : l'état ne passe que par aria-pressed (et le voyant de la puce)
   $("pause").setAttribute("aria-pressed", etat.pause);
-  $("pause").textContent = etat.pause ? "En pause" : "Pause";
   majEtatEssaim();
   const part = (m.ms * m.ips) / 1000;
   const niveau = m.ips < 1 ? "repos" : part < 0.03 ? "faible" : part < 0.1 ? "moyenne" : "eleve";
@@ -2725,10 +2823,13 @@ function remplirCarte(b, cle) {
 
 function dessinerCurseurs() {
   const zone = $("curseurs");
+  const actuel = etat.jeux && etat.jeux.find((j) => j.cle === etat.curseurs);
+  // jeu en place : son nom (liste des jeux, ou `curseurs_nom` de l'appli), jamais sa clé
+  $("jeu-actuel").textContent = actuel ? actuel.nom
+    : etat.curseurs && etat.curseursNom ? etat.curseursNom
+      : etat.jeux || !etat.curseurs ? "Curseurs de Windows (non nommés)" : "—";
   if (!etat.jeux) return;
-  const actuel = etat.jeux.find((j) => j.cle === etat.curseurs);
-  $("jeu-actuel").textContent = actuel ? actuel.nom : "Curseurs de Windows (non nommés)";
-  $("compte-jeux").textContent = etat.jeux.length + " jeux";
+  $("compte-jeux").textContent = etat.jeux.length + (etat.jeux.length > 1 ? " jeux" : " jeu");
   // détail du jeu en place : demandé une fois par jeu
   if (actuel && etat.detailDemande !== actuel.cle) {
     etat.detailDemande = actuel.cle;
@@ -2786,67 +2887,120 @@ function dessinerDetail(m) {
 // ---------------------------------------------------------------------------------------------
 // Automatique : règles par application et par heure, raccourcis
 
+// Liste des presets d'un formulaire : refaite seulement si les noms changent (une liste ouverte
+// ne se referme pas à chaque état reçu).
 function remplirChoixPresets(id) {
-  const s = $(id), avant = s.value;
+  const s = $(id), avant = s.value, noms = JSON.stringify(etat.presets.map((p) => p.nom));
+  if (s.dataset.noms === noms) return;
+  s.dataset.noms = noms;
   s.replaceChildren(...etat.presets.map((p) => { const o = el("option", "", p.nom); o.value = p.nom; return o; }));
   if (etat.presets.some((p) => p.nom === avant)) s.value = avant;
 }
 
-function ligneRegle(gauche, droite, retirer) {
-  const d = el("div", "regle");
-  const introuvable = !etat.presets.some((p) => p.nom === droite);
-  d.append(el("span", "t-petit", gauche), el("span", "fleche", "→"), el("span", "t-petit", droite + (introuvable ? " (preset introuvable)" : "")));
-  const b = el("button", "puce petite", "Retirer");
-  b.addEventListener("click", retirer);
-  d.append(b);
-  return d;
+// Listes de règles : chaque ligne est gardée d'un affichage à l'autre par sa clé (son contenu,
+// et son rang parmi les lignes identiques), comme `remplacer` le fait ailleurs : la liste n'est
+// pas refaite à chaque état reçu, et le bouton qui a le focus le garde. Après « Retirer », le
+// focus va au « Retirer » de la ligne suivante, ou au premier champ du formulaire d'ajout.
+const listesRegles = new Map(); // id de la liste → { lignes: Map(clé → ligne), vide }
+function dessinerRegles(id, items, texteVide, ajout) {
+  let l = listesRegles.get(id);
+  if (!l) {
+    l = { lignes: new Map(), vide: el("div", "regle") };
+    l.vide.append(el("span", "vide-regle t-petit"));
+    listesRegles.set(id, l);
+  }
+  const zone = $(id), lignes = new Map(), rangs = new Map();
+  const enfants = items.map((it) => {
+    const rang = rangs.get(it.cle) || 0;
+    rangs.set(it.cle, rang + 1);
+    const cle = it.cle + "#" + rang;
+    let x = l.lignes.get(cle);
+    if (!x) {
+      x = { ligne: el("div", it.droite === undefined ? "regle simple" : "regle"), gauche: el("span", "t-petit"), droite: el("span", "t-petit"), bouton: el("button", "puce petite", "Retirer") };
+      x.bouton.type = "button";
+      x.bouton.dataset.cle = id + "|" + cle;
+      x.ligne.append(x.gauche);
+      if (it.droite !== undefined) x.ligne.append(el("span", "fleche", "→"), x.droite);
+      x.ligne.append(x.bouton);
+      x.bouton.addEventListener("click", () => {
+        const rang = [...zone.querySelectorAll("button[data-cle]")].indexOf(x.bouton);
+        x.retirer();
+        const suivant = [...zone.querySelectorAll("button[data-cle]")][rang];
+        (suivant || $(ajout)).focus();
+      });
+    }
+    x.retirer = it.retirer;
+    texteSi(x.gauche, it.gauche);
+    if (it.droite !== undefined) texteSi(x.droite, it.droite);
+    attributs(x.bouton, { "aria-label": it.aria || `Retirer la règle ${it.libelle}` });
+    lignes.set(cle, x);
+    return x.ligne;
+  });
+  l.lignes = lignes;
+  texteSi(l.vide.firstChild, texteVide);
+  remplacer(zone, enfants.length ? enfants : [l.vide]);
 }
+
+// Preset visé par une règle, signalé s'il n'existe plus.
+const presetRegle = (nom) => nom + (etat.presets.some((p) => p.nom === nom) ? "" : " (preset introuvable)");
 
 function dessinerAuto() {
   if (!etat.reglages) return;
   const a = etat.reglages.automatique;
   $("auto-actif").setAttribute("aria-pressed", a.actif);
   $("raccourcis-actif").setAttribute("aria-pressed", etat.reglages.raccourcis.actif);
+  // preset automatique coupé : les règles restent modifiables, estompées, avec une note
+  $("note-auto-coupe").hidden = !!a.actif;
+  $("bloc-regles").classList.toggle("estompe", !a.actif);
   remplirChoixPresets("appli-preset");
   remplirChoixPresets("horaire-preset");
   remplirChoixPresets("si-preset");
-  const vide = (texte) => el("div", "regle", "").appendChild(el("span", "vide-regle t-petit", texte)).parentNode;
   // règles « si … alors … » (absentes d'une appli plus ancienne)
   const regles = a.regles || [];
-  $("regles-si").replaceChildren(...(regles.length ? regles.map((r, i) => ligneRegle("si " + r.si, r.alors, () => {
-    regler("automatique", "regles", regles.filter((_, j) => j !== i));
-    dessinerAuto();
-  })) : [vide("Aucune règle : par exemple « artiste = Skrillex » → un preset.")]));
+  dessinerRegles("regles-si", regles.map((r, i) => ({
+    cle: JSON.stringify([r.si, r.alors]), gauche: "si " + r.si, droite: presetRegle(r.alors), libelle: `« si ${r.si} » → ${r.alors}`,
+    retirer: () => { regler("automatique", "regles", regles.filter((_, j) => j !== i)); dessinerAuto(); },
+  })), "Aucune règle : par exemple « artiste = Skrillex » → un preset.", "si-condition");
   // raccourci : une règle pour l'artiste qui joue
   const artiste = etat.morceau && etat.morceau.artiste;
   $("si-artiste").hidden = !artiste;
   if (artiste) $("si-artiste").textContent = `Artiste en cours : ${artiste.length > 24 ? artiste.slice(0, 23) + "…" : artiste}`;
-  $("regles-applis").replaceChildren(...(a.applis.length ? a.applis.map((r, i) => ligneRegle(r.appli, r.preset, () => {
-    regler("automatique", "applis", a.applis.filter((_, j) => j !== i));
-    dessinerAuto();
-  })) : [vide("Aucune règle : ajoute une application ci-dessous.")]));
-  $("regles-horaires").replaceChildren(...(a.horaires.length ? a.horaires.map((r, i) => ligneRegle(`${r.debut} à ${r.fin}`, r.preset, () => {
-    regler("automatique", "horaires", a.horaires.filter((_, j) => j !== i));
-    dessinerAuto();
-  })) : [vide("Aucune plage horaire.")]));
-  $("applis-ouvertes").replaceChildren(...etat.applis.map((n) => { const o = el("option"); o.value = n; return o; }));
-  dessinerPausesApplis(vide);
+  dessinerRegles("regles-applis", a.applis.map((r, i) => ({
+    cle: JSON.stringify([r.appli, r.preset]), gauche: r.appli, droite: presetRegle(r.preset), libelle: `${r.appli} → ${r.preset}`,
+    retirer: () => { regler("automatique", "applis", a.applis.filter((_, j) => j !== i)); dessinerAuto(); },
+  })), "Aucune règle : ajoute une application ci-dessous.", "appli-nom");
+  dessinerRegles("regles-horaires", a.horaires.map((r, i) => ({
+    cle: JSON.stringify([r.debut, r.fin, r.preset]), gauche: `${r.debut} à ${r.fin}`, droite: presetRegle(r.preset), libelle: `de ${r.debut} à ${r.fin} → ${r.preset}`,
+    retirer: () => { regler("automatique", "horaires", a.horaires.filter((_, j) => j !== i)); dessinerAuto(); },
+  })), "Aucune plage horaire.", "horaire-debut");
+  const applis = JSON.stringify(etat.applis);
+  if ($("applis-ouvertes").dataset.liste !== applis) {
+    $("applis-ouvertes").dataset.liste = applis;
+    $("applis-ouvertes").replaceChildren(...etat.applis.map((n) => { const o = el("option"); o.value = n; return o; }));
+  }
+  dessinerRaccourcisRefuses();
+  dessinerPausesApplis();
+}
+
+// Raccourcis globaux qu'une autre application a déjà pris (`raccourcis_refuses` de l'appli,
+// absent d'une version plus ancienne : rien n'est dit).
+function dessinerRaccourcisRefuses() {
+  const pris = etat.reglages.raccourcis.actif ? etat.raccourcisRefuses : [];
+  texteSi($("raccourcis-refuses"), !pris.length ? ""
+    : pris.length === 1 ? `${pris[0]} : pris par une autre application, il ne marche pas tant qu'elle le garde.`
+      : `${pris.join(", ")} : pris par d'autres applications, ils ne marchent pas tant qu'elles les gardent.`);
 }
 
 // Applications qui mettent Essaim en pause au premier plan (`[pause] applis`, hors presets).
 const nomExe = (texte) => { const n = texte.trim().toLowerCase(); return n && !n.endsWith(".exe") ? n + ".exe" : n; };
-function dessinerPausesApplis(vide) {
+function dessinerPausesApplis() {
   const p = etat.reglages.pause;
   $("bloc-pauses").hidden = !p; // réglage que l'appli ne fournit pas (encore)
   if (!p) return;
-  $("pauses-applis").replaceChildren(...(p.applis.length ? p.applis.map((a, i) => {
-    const d = el("div", "regle simple");
-    const b = el("button", "puce petite", "Retirer");
-    b.setAttribute("aria-label", "Retirer " + a);
-    b.addEventListener("click", () => { regler("pause", "applis", p.applis.filter((_, j) => j !== i)); dessinerAuto(); });
-    d.append(el("span", "t-petit", a), b);
-    return d;
-  }) : [vide("Aucune application : Essaim ne se met pas en pause selon l'application.")]));
+  dessinerRegles("pauses-applis", p.applis.map((a, i) => ({
+    cle: a, gauche: a, aria: `Retirer ${a} des pauses`,
+    retirer: () => { regler("pause", "applis", p.applis.filter((_, j) => j !== i)); dessinerAuto(); },
+  })), "Aucune application : Essaim ne se met pas en pause selon l'application.", "pause-nom");
   const r = $("pause-recente");
   r.hidden = !etat.recente || p.applis.some((a) => nomExe(a) === nomExe(etat.recente));
   r.textContent = `Ajouter « ${etat.recente} »`;
@@ -2930,11 +3084,12 @@ function montrerLoupe(t) {
   clearTimeout(loupe.minuterie);
   loupe.minuterie = setTimeout(() => {
     if (etat.vue !== "presets" || etat.renomme) return;
-    const r = t.racine.getBoundingClientRect(), d = $("loupe"), largeur = 300;
-    const gauche = r.right + 12 + largeur < innerWidth ? r.right + 12 : r.left - 12 - largeur;
+    // largeur de la loupe : son jeton (--largeur-loupe) ; sa hauteur, un peu plus (nom dessous)
+    const r = t.racine.getBoundingClientRect(), d = $("loupe"), largeur = parseFloat(jeton("--largeur-loupe")) || 300, ecart = 12;
+    const gauche = r.right + ecart + largeur < innerWidth ? r.right + ecart : r.left - ecart - largeur;
     if (gauche < 0) return; // pas la place : la vignette suffit
     d.style.left = gauche + "px";
-    d.style.top = borne(r.top - 40, 12, innerHeight - 360) + "px";
+    d.style.top = borne(r.top - 40, ecart, innerHeight - largeur - 60) + "px";
     $("nom-loupe").textContent = t.p.nom;
     loupe.p = t.p;
     loupe.apercu = new window.Apercu($("toile-loupe"));
@@ -2967,7 +3122,7 @@ function libelleReglage(section, cle) {
   const effet = PANNEAUX.find((p) => p.actif && p.actif[0] === section && p.actif[1] === cle);
   if (effet) return [effet.titre];
   const noms = {
-    "couleur.application": "Couleur de l'application", "couleur.site": "Couleur du site", "couleur.musique": "Couleur qui suit la musique",
+    "couleur.application": "Couleur de l'application", "couleur.site": "Couleur du site",
     "couleur.synchro_prisme": "Synchro Prisme", "couleur.pochette": "Couleur de la pochette", "souris.jeu": "Curseurs", "modulations.liste": "Modulations",
     "declencheurs.liste": "Déclencheurs", "particules.rebonds": "Rebonds sur la fenêtre",
   };
@@ -3078,8 +3233,8 @@ const image = {
 };
 const COTE_ANALYSE = 512;
 
-// Couleur d'un jeton de style.css, pour dessiner dans un canevas.
-function couleurJeton(nom) {
+// Valeur d'un jeton de style.css (couleur, taille, police), pour dessiner dans un canevas.
+function jeton(nom) {
   return getComputedStyle(document.documentElement).getPropertyValue(nom).trim();
 }
 
@@ -3150,12 +3305,22 @@ function base64(octets) {
   return btoa(s);
 }
 
+// Une analyse attend sa réponse : « Utiliser ce trajet » ne garderait pas encore ce qu'on voit.
+// Elle est oubliée après 5 s (réponse perdue, image refusée par l'appli).
+function majAnalyse(enCoursAnalyse) {
+  clearTimeout(image.oubli);
+  image.analyse = enCoursAnalyse;
+  if (enCoursAnalyse) image.oubli = setTimeout(() => majAnalyse(false), 5000);
+  attributs($("valider-image"), { "aria-disabled": enCoursAnalyse ? "true" : null, title: enCoursAnalyse ? "Analyse de l'image en cours…" : null });
+}
+
 // Demande les contours à l'appli (un peu après le dernier changement : la glissière du seuil).
 function analyser() {
   clearTimeout(image.attente);
+  majAnalyse(true);
   image.attente = setTimeout(() => {
     const r = rasteriser();
-    if (!r) { image.contours = []; dessinerImage(); return; }
+    if (!r) { image.contours = []; majAnalyse(false); dessinerImage(); return; }
     const px = r.g.getImageData(0, 0, r.c.width, r.c.height).data;
     image.taille = [r.c.width, r.c.height];
     image.rendu = r.c;
@@ -3164,6 +3329,7 @@ function analyser() {
 }
 
 function recevoirContours(m) {
+  majAnalyse(false);
   image.contours = Array.isArray(m.liste) ? m.liste : [];
   if (image.seuil === null) $("seuil-image").value = m.seuil;
   $("valeur-seuil").textContent = (image.seuil === null ? "auto · " : "") + m.seuil + (m.transparence ? " (transparence)" : "");
@@ -3181,19 +3347,20 @@ function dessinerImage() {
   g.clearRect(0, 0, c.width, c.height);
   const [l, h] = image.taille;
   if (!image.rendu || !l || !h) {
-    g.fillStyle = couleurJeton("--scene-guide");
-    g.font = "600 14px Archivo, sans-serif";
+    // invite : couleur et police des jetons de style.css (texte sur la scène, texte courant)
+    g.fillStyle = jeton("--scene-texte");
+    g.font = `600 ${jeton("--texte-base")} ${jeton("--font-affiche")}`;
     g.textAlign = "center";
     g.fillText("Choisis une image, glisse-la ici, ou tape un texte", c.width / 2, c.height / 2);
     return;
   }
   const k = Math.min(c.width / l, c.height / h) * 0.94, ox = (c.width - l * k) / 2, oy = (c.height - h * k) / 2;
-  g.fillStyle = couleurJeton("--papier-image");
+  g.fillStyle = jeton("--papier-image");
   g.fillRect(ox, oy, l * k, h * k);
   g.globalAlpha = 0.45;
   g.drawImage(image.rendu, ox, oy, l * k, h * k);
   g.globalAlpha = 1;
-  g.strokeStyle = couleurJeton("--signal");
+  g.strokeStyle = jeton("--signal");
   g.lineWidth = 2.5;
   g.lineJoin = "round";
   for (const contour of image.contours) {
@@ -3217,6 +3384,7 @@ function reglagesImage() {
 // Garde les contours (arrondis au dixième de pixel) ; le plus grand aussi dans `trace`, pour les
 // versions d'avant.
 function validerImage() {
+  if (image.analyse) return;
   if (!image.contours.length) { bandeau("Pas encore de contour : choisis une image ou tape un texte."); return; }
   const arrondi = image.contours.map((c) => c.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]));
   regler("orbite", "contours", arrondi);
@@ -3352,13 +3520,28 @@ function versBase64(octets) {
   return btoa(s);
 }
 
+// Bouton « Exporter en GIF » : son texte, et occupé (aria-disabled : il garde le focus) pendant
+// l'enregistrement et l'encodage.
+function boutonGif(texte) {
+  const b = $("exporter-gif");
+  b.textContent = texte || "Exporter en GIF";
+  attributs(b, { "aria-disabled": texte ? "true" : null });
+}
+
 function lancerGif() {
-  if (etat.gif) return;
+  if (etat.gif || $("exporter-gif").getAttribute("aria-disabled") === "true") return;
   const c = document.createElement("canvas");
   c.width = c.height = GIF_COTE;
   etat.gif = { c, g: c.getContext("2d", { willReadFrequently: true }), images: [], prochain: 0, fond: getComputedStyle($("grand-apercu")).backgroundColor };
-  $("exporter-gif").textContent = "Enregistrement…";
-  $("exporter-gif").disabled = true;
+  boutonGif("Enregistrement…");
+}
+
+// Vue quittée pendant l'enregistrement : le grand aperçu ne tourne plus, l'export est abandonné.
+function abandonnerGif() {
+  if (!etat.gif) return;
+  etat.gif = null;
+  boutonGif();
+  bandeau("Export du GIF abandonné : l'aperçu n'était plus affiché.");
 }
 
 // Appelée après chaque image du grand aperçu pendant l'enregistrement.
@@ -3375,12 +3558,11 @@ function imageGif(maintenant) {
   e.images.push(idx);
   if (e.images.length < GIF_IMAGES) return;
   etat.gif = null;
-  $("exporter-gif").textContent = "Encodage…";
+  boutonGif("Encodage…");
   setTimeout(() => {
     const nom = $("nom-actif").textContent.replace(/^Preset « (.*) »$/, "$1").replace(/[«»]/g, "").replace(/\s+/g, " ").trim() || "Essaim";
     envoyer({ cmd: "enregistrer_gif", nom, donnees: versBase64(encoderGif(e.images, GIF_COTE)) });
-    $("exporter-gif").textContent = "Exporter en GIF";
-    $("exporter-gif").disabled = false;
+    boutonGif();
   }, 30);
 }
 
@@ -3416,7 +3598,7 @@ const ETAPES_ACCUEIL = [
     titre: "À savoir",
     corps: () => {
       const l = el("div", "raccourcis");
-      for (const [k, t] of [["Ctrl + Alt + →", "preset suivant, partout dans Windows"], ["Ctrl + Alt + ←", "preset précédent"], ["Ctrl + Alt + P", "pause"], ["04 Auto", "un preset par application ou par heure"], ["Icône", "presets et pause dans la zone de notification"]]) {
+      for (const [k, t] of [["Ctrl + Alt + →", "preset suivant, partout dans Windows"], ["Ctrl + Alt + ←", "preset précédent"], ["Ctrl + Alt + P", "pause"], ["Ctrl + Alt + F", "projecteur"], ["04 Auto", "un preset par application ou par heure"], ["Icône", "presets et pause dans la zone de notification"]]) {
         l.append(el("span", "touche", k), el("span", "", t));
       }
       return [l, el("p", "note", "Les cases à côté de chaque réglage notent sur 10 son impact sur la puissance utilisée.")];
@@ -3425,10 +3607,12 @@ const ETAPES_ACCUEIL = [
 ];
 let etapeAccueil = 0;
 
+// Chaque étape met le focus sur son titre : les lecteurs d'écran lisent le titre, puis le corps
+// (aria-describedby de la boîte), et la tabulation repart du haut de l'étape.
 function ouvrirAccueil() {
   etapeAccueil = 0;
   majAccueil();
-  ouvrirBoite("voile-accueil", $("suivant-accueil"));
+  ouvrirBoite("voile-accueil", $("titre-accueil"));
 }
 
 function majAccueil() {
@@ -3437,6 +3621,7 @@ function majAccueil() {
   $("titre-accueil").textContent = e.titre;
   $("corps-accueil").replaceChildren(...e.corps());
   $("suivant-accueil").textContent = etapeAccueil === ETAPES_ACCUEIL.length - 1 ? "Commencer" : "Suivant →";
+  $("titre-accueil").focus();
 }
 
 function fermerAccueil() {
@@ -3485,6 +3670,7 @@ function fermerBoite(id) {
 // et Fin pour passer de l'un à l'autre (la vue suit le focus).
 const VUES = ["presets", "reglages", "curseurs", "auto", "application"];
 function montrerVue(v, focus) {
+  if (v !== "reglages") abandonnerGif();
   etat.vue = v;
   for (const id of VUES) {
     $("vue-" + id).hidden = v !== id;
@@ -3501,8 +3687,10 @@ function montrerVue(v, focus) {
 }
 
 // Bandeau : disparaît seul après quelques secondes, sauf tant que la souris ou le focus clavier
-// est dessus (le délai repart en entier ensuite).
-const minuterie = { id: 0, delai: 6000, suspendu: false };
+// est dessus (le délai repart en entier ensuite). Son texte est aussi écrit, une fois le bandeau
+// affiché, dans une zone toujours présente lue par les lecteurs d'écran : `#annonce`
+// (role="status") pour un message, `#alerte` (role="alert") pour une erreur.
+const minuterie = { id: 0, delai: 6000, suspendu: false, annonce: 0, retour: null };
 function armerBandeau() {
   clearTimeout(minuterie.id);
   if (!minuterie.suspendu) minuterie.id = setTimeout(() => { $("bandeau").hidden = true; }, minuterie.delai);
@@ -3511,17 +3699,36 @@ function suspendreBandeau(oui) {
   minuterie.suspendu = oui;
   if (oui) clearTimeout(minuterie.id); else armerBandeau();
 }
-function bandeau(texte, action) {
+// Ferme le bandeau après son action ou ×, et rend le focus à l'élément qui l'avait avant.
+function fermerBandeau() {
+  const d = $("bandeau"), avait = d.contains(document.activeElement);
+  d.hidden = true;
+  minuterie.suspendu = false;
+  clearTimeout(minuterie.id);
+  const r = minuterie.retour;
+  if (avait && r && r.isConnected && r !== document.body && !r.closest("[inert], [hidden]")) r.focus({ preventScroll: true });
+}
+function bandeau(texte, action, erreur = false) {
+  const d = $("bandeau");
+  // élément à qui rendre le focus : celui d'avant le premier bandeau (pas un bouton du bandeau)
+  if (!d.contains(document.activeElement)) minuterie.retour = document.activeElement;
   $("bandeau-texte").textContent = texte;
+  d.classList.toggle("erreur", erreur);
   const b = $("bandeau-action");
   b.hidden = !action;
   if (action) {
     b.textContent = action.libelle;
-    b.onclick = () => { action.faire(); $("bandeau").hidden = true; };
+    b.onclick = () => { action.faire(); fermerBandeau(); };
   }
-  $("bandeau").hidden = false;
+  d.hidden = false;
   minuterie.delai = action ? 9000 : 6000;
   armerBandeau();
+  // zone lue : vidée, puis remplie après l'affichage (un même texte répété est relu)
+  const zone = $(erreur ? "alerte" : "annonce"), autre = $(erreur ? "annonce" : "alerte");
+  zone.textContent = "";
+  autre.textContent = "";
+  clearTimeout(minuterie.annonce);
+  minuterie.annonce = setTimeout(() => { zone.textContent = texte; }, 100);
 }
 {
   const d = $("bandeau");
@@ -3531,16 +3738,60 @@ function bandeau(texte, action) {
   d.addEventListener("focusout", (e) => { if (!d.contains(e.relatedTarget)) suspendreBandeau(d.matches(":hover")); });
 }
 
+// Panneau d'enregistrement. Son titre suit le nom tapé : « Nouveau preset », ou « Remplacer
+// « X » ? » quand un de tes presets porte déjà ce nom (à la casse près, comme l'appli) ; il est
+// alors remplacé à l'envoi (`remplacer: true`). Si l'appli trouve quand même un preset de ce nom
+// (réponse « existe »), le panneau demande la confirmation de la même façon.
+const panneauUI = { confirme: null, envoi: 0 };
+const presetAMoi = (nom) => etat.presets.find((p) => !p.fourni && p.nom.toLowerCase() === nom.trim().toLowerCase());
+
+function majTitrePanneau() {
+  const nom = $("nom-preset").value.trim();
+  const existant = presetAMoi(nom);
+  const confirme = panneauUI.confirme !== null && panneauUI.confirme.toLowerCase() === nom.toLowerCase();
+  const remplacer = !!existant || confirme;
+  const titre = $("titre-panneau");
+  // titre plus long (le nom du preset) : en plus petit
+  if (remplacer) titre.replaceChildren("Remplacer", el("br"), `« ${existant ? existant.nom : panneauUI.confirme} » ?`);
+  else titre.replaceChildren("Nouveau", el("br"), "preset");
+  titre.classList.toggle("long", remplacer);
+  if (!panneauUI.envoi) $("valider-panneau").textContent = remplacer ? "Remplacer →" : "Enregistrer →";
+  return remplacer;
+}
+
+function finEnvoiPanneau() {
+  clearTimeout(panneauUI.envoi);
+  panneauUI.envoi = 0;
+  $("valider-panneau").disabled = false;
+  majTitrePanneau();
+}
+
 function ouvrirPanneau() {
   const p = etat.presets.find((x) => x.nom === etat.actif && !x.fourni);
   $("nom-preset").value = p ? p.nom : "";
   $("publier").checked = false;
   $("erreur-panneau").hidden = true;
+  panneauUI.confirme = null;
+  finEnvoiPanneau();
   ouvrirBoite("voile", $("nom-preset"));
 }
 
 function fermerPanneau() {
   fermerBoite("voile");
+}
+
+// Envoi : le bouton est désactivé jusqu'à la réponse (enregistré, refusé, existe, erreur), ou
+// 8 s au plus ; le focus reste dans le champ du nom.
+function envoyerPanneau() {
+  if (panneauUI.envoi) return;
+  const remplacer = majTitrePanneau();
+  $("erreur-panneau").hidden = true;
+  panneauUI.envoi = setTimeout(finEnvoiPanneau, 8000);
+  const b = $("valider-panneau");
+  if (document.activeElement === b) $("nom-preset").focus();
+  b.disabled = true;
+  b.textContent = "Enregistrement…";
+  envoyer({ cmd: "enregistrer", nom: $("nom-preset").value, publier: $("publier").checked, ...(remplacer ? { remplacer: true } : {}) });
 }
 
 // Annuler : la dernière action de la page qui le permet (copie d'allure), sinon le dernier preset
@@ -3577,6 +3828,10 @@ window.essaim = {
         etat.proche = m.proche;
         etat.depot = m.depot;
         etat.curseurs = m.curseurs;
+        // nom lisible du jeu en place, raccourcis pris par une autre application (champs absents
+        // d'une appli plus ancienne)
+        etat.curseursNom = typeof m.curseurs_nom === "string" && m.curseurs_nom.trim() ? m.curseurs_nom.trim() : null;
+        etat.raccourcisRefuses = Array.isArray(m.raccourcis_refuses) ? m.raccourcis_refuses.filter((r) => typeof r === "string").slice(0, 8) : [];
         etat.demarrage = m.demarrage;
         if (premier) {
           if (typeof m.version === "string") {
@@ -3586,6 +3841,8 @@ window.essaim = {
           construireReglages();
           construireApplication();
           chargerCommu(false);
+          // noms des jeux de curseurs, pour le détail des tuiles (« curseurs Dotter »)
+          if (!etat.jeux) envoyer({ cmd: "jeux" });
           if (!memoire.lire("accueil", false)) ouvrirAccueil();
         }
         if (typeof m.prisme === "boolean") etat.prisme = m.prisme;
@@ -3634,6 +3891,8 @@ window.essaim = {
       case "jeux":
         etat.jeux = m.jeux;
         dessinerCurseurs();
+        // le détail des tuiles nomme leurs curseurs
+        if (etat.vue === "presets") dessinerPresets();
         break;
       case "detail_jeu":
         dessinerDetail(m);
@@ -3646,17 +3905,34 @@ window.essaim = {
         bandeau(`« ${m.nom} » appliqué.`, { libelle: "Annuler (Ctrl+Z)", faire: annuler });
         break;
       case "enregistre":
+        finEnvoiPanneau();
         fermerPanneau();
         etat.source = "mien";
         montrerVue("presets");
         break;
       case "refus":
+        finEnvoiPanneau();
         $("erreur-panneau").textContent = m.texte;
         $("erreur-panneau").hidden = false;
         break;
+      case "existe":
+        // un de tes presets porte déjà ce nom : le panneau demande de confirmer le remplacement
+        finEnvoiPanneau();
+        if (typeof m.nom === "string" && !$("voile").hidden) {
+          panneauUI.confirme = m.nom;
+          majTitrePanneau();
+          $("erreur-panneau").textContent = `Un de tes presets s'appelle déjà « ${m.nom} » : « Remplacer » l'écrase ; sinon, change le nom.`;
+          $("erreur-panneau").hidden = false;
+          $("nom-preset").focus();
+        }
+        break;
       case "message":
-      case "erreur":
         bandeau(m.texte);
+        break;
+      case "erreur":
+        // une erreur pendant l'enregistrement (config.toml illisible…) libère le bouton
+        finEnvoiPanneau();
+        bandeau(m.texte, null, true);
         break;
     }
   },
@@ -3702,7 +3978,7 @@ function apercuChange() { grandAFiger = true; }
 function repereFigure() {
   // le panneau « Anneau » montre deux figures : ses deux formes (anneau lisse, orbe)
   const sections = etat.panneau === "anneau" ? ["anneau", "orbe"] : etat.panneau in NOMS_FIGURES ? [etat.panneau] : [];
-  for (const s of sections) grand.dessinerRepere(s, couleurJeton("--scene-repere"));
+  for (const s of sections) grand.dessinerRepere(s, jeton("--scene-repere"));
 }
 function figer(ap, son) {
   ap.dimensionner();
@@ -3835,10 +4111,14 @@ $("annuler-panneau").addEventListener("click", fermerPanneau);
 $("voile").addEventListener("click", (e) => { if (e.target === $("voile")) fermerPanneau(); });
 $("panneau").addEventListener("submit", (e) => {
   e.preventDefault();
-  envoyer({ cmd: "enregistrer", nom: $("nom-preset").value, publier: $("publier").checked });
+  envoyerPanneau();
 });
+// le nom change : le message de la dernière tentative ne vaut plus
+$("nom-preset").addEventListener("input", () => { $("erreur-panneau").hidden = true; majTitrePanneau(); });
 $("ouvrir-config").addEventListener("click", () => envoyer({ cmd: "ouvrir_config" }));
-$("chercher-maj").addEventListener("click", () => envoyer({ cmd: "chercher_maj" }));
+$("chercher-maj").addEventListener("click", (e) => {
+  if (e.currentTarget.getAttribute("aria-disabled") !== "true") envoyer({ cmd: "chercher_maj" });
+});
 $("redemarrer-maj").addEventListener("click", () => envoyer({ cmd: "redemarrer" }));
 $("importer").addEventListener("click", () => envoyer({ cmd: "importer" }));
 $("surprise").addEventListener("click", surprise);
@@ -3860,18 +4140,32 @@ for (const b of document.querySelectorAll("[data-simuler]")) {
 $("grand-apercu").addEventListener("contextmenu", (e) => e.preventDefault());
 suivreSouris($("grand-apercu"), grand);
 $("pause").addEventListener("click", () => envoyer({ cmd: "pause" }));
-$("bandeau-fermer").addEventListener("click", () => { $("bandeau").hidden = true; });
+$("bandeau-fermer").addEventListener("click", fermerBandeau);
 
-// Clavier : / chercher, Ctrl+1 à 5 onglets, Ctrl+S enregistrer, Ctrl+Z annuler le dernier preset,
-// Ctrl+P pause, flèches dans la grille, Échap ferme la boîte ouverte.
+// Clavier : / chercher, Ctrl+1 à 5 onglets, Ctrl+S enregistrer (ces deux-là, sans boîte ouverte),
+// Ctrl+Z annuler le dernier preset, Ctrl+P pause, flèches dans la grille, Échap ferme la boîte
+// ouverte.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     const ouverte = ouvertes[ouvertes.length - 1];
     if (ouverte) { FERMETURES[ouverte.id](); return; }
     if (etat.comparer) { etat.comparer = null; dessinerPresets(); return; }
   }
-  if (e.ctrlKey && ["1", "2", "3", "4", "5"].includes(e.key)) { e.preventDefault(); montrerVue(VUES[+e.key - 1]); return; }
-  if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); ouvrirPanneau(); return; }
+  // changer de vue ou ouvrir le panneau : pas sous une boîte ouverte (la fenêtre est inerte) ; le
+  // focus suit l'onglet choisi
+  if (e.ctrlKey && ["1", "2", "3", "4", "5"].includes(e.key)) {
+    e.preventDefault();
+    if (!ouvertes.length) montrerVue(VUES[+e.key - 1], true);
+    return;
+  }
+  // zoom de la page (Ctrl+plus, Ctrl+moins, Ctrl+0) : les raccourcis du navigateur sont coupés,
+  // l'appli applique le palier (reglages.rs, demande « zoom ») ; Ctrl+molette marche seul
+  if (e.ctrlKey && ["+", "=", "-", "0"].includes(e.key)) {
+    e.preventDefault();
+    envoyer({ cmd: "zoom", pas: e.key === "0" ? 0 : e.key === "-" ? -1 : 1 });
+    return;
+  }
+  if (e.ctrlKey && e.key.toLowerCase() === "s") { e.preventDefault(); if (!ouvertes.length) ouvrirPanneau(); return; }
   if (e.ctrlKey && e.key.toLowerCase() === "p") { e.preventDefault(); envoyer({ cmd: "pause" }); return; }
   if (enSaisie()) return;
   if (e.ctrlKey && e.key.toLowerCase() === "z") { e.preventDefault(); annuler(); return; }
