@@ -1,7 +1,8 @@
 //! Qualité adaptative (`[rendu] adaptatif`) : quand une image coûte cher à calculer (machine
 //! chargée, carte graphique lente), la cadence est plafonnée par paliers (celle de l'écran → 120
 //! → 60 → 30 images/s, jamais moins), puis relâchée palier par palier quand le calcul redevient
-//! léger. Nourrie chaque seconde par la mesure de la boucle (temps de calcul moyen par image).
+//! léger, ou à l'essai après un long moment sans seconde lourde. Nourrie chaque seconde par la
+//! mesure de la boucle (temps de calcul moyen par image).
 
 /// Plafonds successifs (images/s) ; avant le premier, aucun plafond.
 pub const PALIERS: [u32; 3] = [120, 60, 30];
@@ -16,6 +17,11 @@ const SECONDES_LOURDES: u32 = 2;
 const LEGER_MS: f32 = LOURD_MS * 0.75;
 /// Secondes légères de suite avant de remonter d'un palier.
 const SECONDES_LEGERES: u32 = 10;
+/// Secondes de suite sans seconde lourde (entre les deux seuils, 3 à 4 ms) avant de remonter d'un
+/// palier à l'essai : sans elles, un calcul moyen restait plafonné pour toujours. Si l'essai
+/// redevient lourd, il redescend deux secondes plus tard, et ne réessaie qu'après autant : pas
+/// d'oscillation rapide.
+const SECONDES_SANS_LOURDE: u32 = 20;
 
 #[derive(Default)]
 pub struct Adaptatif {
@@ -23,6 +29,8 @@ pub struct Adaptatif {
     niveau: usize,
     lourdes: u32,
     legeres: u32,
+    /// Secondes de suite qui ne sont pas lourdes (légères comprises).
+    calmes: u32,
 }
 
 impl Adaptatif {
@@ -37,10 +45,10 @@ impl Adaptatif {
         if ips < 1.0 || !ms.is_finite() {
             return false;
         }
-        (self.lourdes, self.legeres) = match ms {
-            m if m > LOURD_MS => (self.lourdes + 1, 0),
-            m if m < LEGER_MS => (0, self.legeres + 1),
-            _ => (0, 0),
+        (self.lourdes, self.legeres, self.calmes) = match ms {
+            m if m > LOURD_MS => (self.lourdes + 1, 0, 0),
+            m if m < LEGER_MS => (0, self.legeres + 1, self.calmes + 1),
+            _ => (0, 0, self.calmes + 1),
         };
         if self.lourdes >= SECONDES_LOURDES && self.niveau < PALIERS.len() {
             // premier palier qui réduit vraiment : sous la cadence mesurée (un écran à 60 Hz
@@ -48,7 +56,7 @@ impl Adaptatif {
             let n = (self.niveau + 1..=PALIERS.len()).find(|&n| (PALIERS[n - 1] as f32) < ips * 0.95).unwrap_or(PALIERS.len());
             return self.changer(n);
         }
-        if self.legeres >= SECONDES_LEGERES && self.niveau > 0 {
+        if (self.legeres >= SECONDES_LEGERES || self.calmes >= SECONDES_SANS_LOURDE) && self.niveau > 0 {
             return self.changer(self.niveau - 1);
         }
         false
@@ -60,7 +68,7 @@ impl Adaptatif {
     }
 
     fn changer(&mut self, niveau: usize) -> bool {
-        (self.lourdes, self.legeres) = (0, 0);
+        (self.lourdes, self.legeres, self.calmes) = (0, 0, 0);
         let change = niveau != self.niveau;
         self.niveau = niveau;
         change
@@ -128,6 +136,25 @@ mod tests {
         assert_eq!(a.plafond(), 30);
         secondes(&mut a, 40, 2.5, 30.0);
         assert_eq!(a.plafond(), 0, "un calcul ordinaire relâche tous les paliers");
+    }
+
+    #[test]
+    fn calcul_moyen_remonte_a_l_essai() {
+        // 3,5 ms par image : ni lourd ni léger. Il remontait jamais ; il remonte après 20 s
+        let mut a = Adaptatif::default();
+        secondes(&mut a, 6, 5.0, 144.0);
+        assert_eq!(a.plafond(), 30);
+        assert!(secondes(&mut a, 19, 3.5, 30.0).is_empty());
+        assert_eq!(secondes(&mut a, 1, 3.5, 30.0), [60]);
+        // l'essai redevient lourd : il redescend, et ne réessaie que 20 s plus tard
+        assert_eq!(secondes(&mut a, 2, 5.0, 60.0), [30]);
+        assert!(secondes(&mut a, 19, 3.5, 30.0).is_empty());
+        assert_eq!(secondes(&mut a, 1, 3.5, 30.0), [60]);
+        // une seconde lourde isolée remet le compte à zéro
+        secondes(&mut a, 10, 3.5, 60.0);
+        assert!(!a.mesure(5.0, 60.0));
+        assert!(secondes(&mut a, 19, 3.5, 60.0).is_empty());
+        assert_eq!(secondes(&mut a, 1, 3.5, 60.0), [120]);
     }
 
     #[test]

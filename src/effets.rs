@@ -189,6 +189,9 @@ pub struct Effets {
     /// principale donne avant chaque image.
     loin: Loin,
     pub fenetre: Option<(f32, f32, f32, f32)>,
+    /// Bouton de la souris enfoncé à cette image, que la boucle principale donne avant chaque
+    /// image : un glissement (sélection, fenêtre déplacée) n'est pas une secousse.
+    pub bouton: bool,
     /// Écrans de cette fenêtre (échelle, zones de travail), relus seulement quand elle change.
     fenetre_lue: crate::loin::FenetreLue,
 }
@@ -205,7 +208,7 @@ fn ecrans_du_lisere(monitors: &[(isize, IRect)], cursor: (f32, f32), cfg: &Confi
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None, fenetre_lue: Default::default() }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None, bouton: false, fenetre_lue: Default::default() }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -226,10 +229,11 @@ impl Effets {
             self.secousse.oublier();
         } else {
             let en_cours = self.projecteur.is_some_and(|d| t - d < f64::from(p.duree));
-            if !p.secousse {
+            // secousse coupée, ou glissement en cours : le mouvement est oublié au lieu d'être lu
+            if !p.secousse || self.bouton {
                 self.secousse.oublier();
             }
-            let secoue = p.secousse && !en_cours && self.secousse.pousser(t, cursor.0, cursor.1, scale, p.sensibilite);
+            let secoue = p.secousse && !self.bouton && !en_cours && self.secousse.pousser(t, cursor.0, cursor.1, scale, p.sensibilite);
             if demande || secoue {
                 self.projecteur = Some(t);
                 self.secousse.oublier();
@@ -299,9 +303,11 @@ impl Effets {
     }
 
     /// Rien n'est simulé à cette image (frappe, pause, plein écran) : les coups joués entre-temps
-    /// sont lus et jetés, sinon les figures les recevraient tous à la reprise.
+    /// sont lus et jetés, sinon les figures les recevraient tous à la reprise ; un projecteur
+    /// demandé pendant ce temps (Ctrl+Alt+F en pause) ne part pas à la reprise.
     pub fn oublier_coups(&mut self, shared: &AudioShared) {
         self.ecoute.lire(&shared.view());
+        self.demande = false;
     }
 
     /// Y a-t-il un habillage à dessiner, ou encore affiché à effacer ?
@@ -309,9 +315,12 @@ impl Effets {
         Loin::actives(cfg) || self.loin.affiche()
     }
 
-    /// Les calques viennent d'être effacés ou refaits : l'habillage redonnera toutes ses zones.
+    /// Les calques viennent d'être effacés ou refaits (écrans changés, pause) : l'habillage
+    /// redonnera toutes ses zones, et la fenêtre au premier plan est relue (ses écrans, leur
+    /// échelle et leur zone de travail ont pu changer).
     pub fn oublier_loin(&mut self) {
         self.loin.oublier();
+        self.fenetre_lue = Default::default();
     }
 
     /// Projecteur en cours (écran assombri à redessiner en entier à chaque image).
@@ -571,6 +580,35 @@ mod tests {
         e.avance(14.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
         e.avance(14.0 + f64::from(dt) * 12.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
         assert!(e.rect_ecran().is_some());
+    }
+
+    #[test]
+    fn ni_glissement_ni_demande_en_pause() {
+        let mut cfg = Config::default();
+        cfg.projecteur.duree = 1.0;
+        let shared = AudioShared::default();
+        let dt = 1.0 / 60.0;
+        let geste = va_et_vient(250.0, 3.0);
+        // bouton enfoncé (sélection, fenêtre traînée) : le va-et-vient ne lance rien
+        let mut e = Effets::new();
+        e.bouton = true;
+        for i in 0..120 {
+            let t = i as f64 * dt as f64;
+            e.avance(t, dt, geste(t), 1.0, 0.0, &shared, &cfg, &ecran());
+            assert_eq!(e.rect_ecran(), None, "image {i}");
+        }
+        // relâché au milieu du geste : les allers d'avant ne comptent pas
+        e.bouton = false;
+        let t = 120.0 * dt as f64;
+        e.avance(t, dt, geste(t), 1.0, 0.0, &shared, &cfg, &ecran());
+        assert_eq!(e.rect_ecran(), None, "pas de secousse faite de la fin du glissement");
+        // Ctrl+Alt+F pendant une pause : rien ne part à la reprise
+        let mut e = Effets::new();
+        e.demander_projecteur();
+        e.oublier_coups(&shared);
+        e.avance(0.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
+        e.avance(0.2, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
+        assert_eq!(e.rect_ecran(), None);
     }
 
     #[test]

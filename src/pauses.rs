@@ -77,20 +77,45 @@ pub fn plafonner(cadence: u32, plafond: u32) -> u32 {
 
 /// Raison lisible (courte, pour la ligne d'état de la fenêtre des réglages) de ce qui retient
 /// l'essaim ; vide si rien. La pause demandée par l'utilisateur se lit déjà sur le bouton Pause.
-/// La cadence mesurée (`charge`) dit si le plafond de la qualité adaptative joue vraiment.
-pub fn raison(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str>, batterie: u32, adaptatif: u32) -> String {
-    raison_mesuree(pause_utilisateur, plein_ecran, pause, batterie, adaptatif, crate::charge::lire().1)
+/// `autre_limite` : cadence que rien d'autre que la qualité adaptative n'empêche (cadence choisie
+/// ou de repos, batterie, fréquence de l'écran ; 0 = inconnue) ; `avant` : la raison affichée
+/// jusqu'ici. La cadence mesurée (`charge`) départage quand la fréquence de l'écran est inconnue.
+pub fn raison(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str>, batterie: u32, adaptatif: u32, autre_limite: u32, avant: &str) -> String {
+    let adaptatif = if adaptatif_en_cause(adaptatif, autre_limite, crate::charge::lire().1, avant.starts_with(ALLEGE)) { adaptatif } else { 0 };
+    raison_retenue(pause_utilisateur, plein_ecran, pause, batterie, adaptatif)
 }
 
-/// Part de son plafond que doit atteindre la cadence mesurée pour que la qualité adaptative soit
-/// dite en cause : au plafond, la mesure tombe un peu en dessous (59,6 pour 60).
-const PLAFOND_ATTEINT: f32 = 0.9;
+/// Début de la raison du plafond adaptatif.
+const ALLEGE: &str = "Allégé";
 
-/// Comme `raison`, avec les images par seconde mesurées (`ips`, 0 = pas encore de mesure). Le
-/// plafond adaptatif n'est pas affiché quand la cadence reste nettement en dessous : autre chose
-/// la limite (écran à 60 Hz sous un plafond de 120, cadence choisie, repos) et il ne change rien.
-fn raison_mesuree(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str>, batterie: u32, adaptatif: u32, ips: f32) -> String {
-    let adaptatif = if ips >= 1.0 && ips < adaptatif as f32 * PLAFOND_ATTEINT { 0 } else { adaptatif };
+/// Part de son plafond que doit atteindre la cadence mesurée pour que la qualité adaptative soit
+/// dite en cause (au plafond, la mesure tombe un peu en dessous : 59,6 pour 60), et part sous
+/// laquelle elle cesse de l'être : entre les deux, la raison affichée reste (pas de clignotement
+/// quand la mesure hésite autour d'un seuil).
+const PLAFOND_ATTEINT: f32 = 0.9;
+const PLAFOND_QUITTE: f32 = 0.75;
+
+/// Le plafond adaptatif `adaptatif` (0 = aucun) limite-t-il vraiment la cadence ? Non s'il est
+/// au-dessus de ce qui la limite déjà (`autre_limite`, écran à 60 Hz sous un plafond de 120,
+/// cadence choisie plus basse, repos) : il ne change rien. Oui s'il est en dessous. Sans
+/// `autre_limite` connue, la cadence mesurée `ips` décide (0 = pas encore de mesure), avec un
+/// écart entre l'entrée et la sortie ; `affiche` : il est dit en ce moment.
+fn adaptatif_en_cause(adaptatif: u32, autre_limite: u32, ips: f32, affiche: bool) -> bool {
+    if adaptatif == 0 {
+        return false;
+    }
+    if autre_limite > 0 {
+        return adaptatif < autre_limite;
+    }
+    if ips < 1.0 {
+        return true;
+    }
+    let p = adaptatif as f32;
+    if affiche { ips >= p * PLAFOND_QUITTE } else { ips >= p * PLAFOND_ATTEINT }
+}
+
+/// Raison à afficher, le plafond adaptatif déjà retenu ou écarté (0).
+fn raison_retenue(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str>, batterie: u32, adaptatif: u32) -> String {
     if pause_utilisateur {
         String::new()
     } else if plein_ecran {
@@ -100,7 +125,7 @@ fn raison_mesuree(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str
     } else if batterie > 0 && (adaptatif == 0 || batterie <= adaptatif) {
         format!("Batterie : {batterie} i/s")
     } else if adaptatif > 0 {
-        format!("Allégé : {adaptatif} i/s")
+        format!("{ALLEGE} : {adaptatif} i/s")
     } else {
         String::new()
     }
@@ -259,7 +284,7 @@ mod tests {
 
     #[test]
     fn raisons_lisibles() {
-        let raison = |u, f, p, b, a| raison_mesuree(u, f, p, b, a, 0.0);
+        let raison = raison_retenue;
         assert_eq!(raison(true, true, Some("Ne pas déranger"), 30, 60), "");
         assert_eq!(raison(false, true, Some("Ne pas déranger"), 0, 0), "Plein écran");
         assert_eq!(raison(false, false, Some("Appli : obs64.exe"), 30, 0), "Appli : obs64.exe");
@@ -270,13 +295,29 @@ mod tests {
     }
 
     #[test]
-    fn plafond_adaptatif_sans_effet_non_affiche() {
-        // plafond atteint (la mesure tombe juste en dessous) : affiché
-        assert_eq!(raison_mesuree(false, false, None, 0, 60, 59.6), "Allégé : 60 i/s");
-        assert_eq!(raison_mesuree(false, false, None, 0, 30, 30.0), "Allégé : 30 i/s");
-        // écran à 60 Hz sous un plafond de 120 : il ne change rien
-        assert_eq!(raison_mesuree(false, false, None, 0, 120, 60.0), "");
-        // la batterie limite plus bas : c'est elle qui est dite
-        assert_eq!(raison_mesuree(false, false, None, 30, 60, 29.8), "Batterie : 30 i/s");
+    fn plafond_adaptatif_dit_seulement_s_il_joue() {
+        // écran à 60 Hz sous un plafond de 120, ou à 60 sous 60 : il ne change rien
+        assert!(!adaptatif_en_cause(120, 60, 60.0, false));
+        assert!(!adaptatif_en_cause(60, 60, 59.6, true));
+        // cadence choisie (ou de repos) plus basse que lui : rien non plus
+        assert!(!adaptatif_en_cause(60, 30, 30.0, false));
+        // sous l'écran à 144 Hz : il joue, même si la machine peine à le tenir (mesure basse)
+        assert!(adaptatif_en_cause(60, 144, 59.6, false));
+        assert!(adaptatif_en_cause(30, 144, 18.0, false));
+        assert!(!adaptatif_en_cause(0, 144, 144.0, false));
+    }
+
+    #[test]
+    fn frequence_inconnue_mesure_avec_ecart() {
+        // plafond atteint (la mesure tombe juste en dessous) : dit
+        assert!(adaptatif_en_cause(60, 0, 59.6, false));
+        // nettement en dessous : autre chose limite
+        assert!(!adaptatif_en_cause(120, 0, 60.0, false));
+        // entre les deux seuils, l'affichage en cours reste : pas de clignotement
+        assert!(adaptatif_en_cause(60, 0, 50.0, true));
+        assert!(!adaptatif_en_cause(60, 0, 50.0, false));
+        assert!(!adaptatif_en_cause(60, 0, 40.0, true));
+        // pas encore de mesure : dit
+        assert!(adaptatif_en_cause(60, 0, 0.0, false));
     }
 }

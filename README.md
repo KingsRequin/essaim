@@ -223,7 +223,9 @@ dessine seulement autour. Il ne change de jeu de curseurs que si tu le lui deman
 <summary><b>Est-ce qu'Essaim surveille mon clavier ou ma navigation ?</b></summary>
 
 Non. Pas de hook clavier ni souris : les clics sont lus à chaque image, et les raccourcis passent
-par `RegisterHotKey` (Windows ne prévient Essaim que pour ces touches-là). La couleur du site
+par `RegisterHotKey` (Windows ne prévient Essaim que pour ces touches-là). Pour Windows, AltGr
+vaut Ctrl+Alt : sur un clavier où AltGr+touche écrit un caractère (AltGr+F donne « [ » en
+tchèque), Essaim ne prend pas ce raccourci, et le caractère s'écrit toujours. La couleur du site
 vient d'une petite bande du haut de la page à l'écran ; le titre de la fenêtre sert seulement à
 voir qu'on a changé de page. L'adresse n'est pas lue, et rien n'est noté ni envoyé : Essaim ne
 se connecte qu'à GitHub, pour la bibliothèque de presets et les mises à jour. L'interface locale

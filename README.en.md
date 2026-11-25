@@ -218,7 +218,9 @@ option checked).
 <summary><b>Does Essaim watch my keyboard or my browsing?</b></summary>
 
 No. No keyboard or mouse hook: clicks are read once per frame, and hotkeys go through
-`RegisterHotKey` (Windows notifies Essaim of those keys only). The website color comes from a
+`RegisterHotKey` (Windows notifies Essaim of those keys only). To Windows, AltGr is Ctrl+Alt: on
+a keyboard where AltGr+key types a character (AltGr+F types "[" in Czech), Essaim leaves that
+shortcut alone, so the character still types. The website color comes from a
 thin strip at the top of the page on screen; the window title is only used to notice a page
 change. The address is not read, and nothing is logged or sent: Essaim only connects to GitHub,
 for the preset library and updates. The local interface (for Horizon and other plugins) only

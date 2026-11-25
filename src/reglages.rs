@@ -291,15 +291,26 @@ fn lire_demande(texte: &str) -> Result<Demande, Value> {
 }
 
 /// Réponses à un preset de la bibliothèque installé : le message, puis, s'il devait être
-/// appliqué, `applique` (dernier : son bandeau propose « Annuler ») ou l'erreur.
-fn reponses_installation(nom: &str, application: Option<Result<(), String>>) -> Vec<Value> {
+/// appliqué, l'erreur des curseurs s'il y en a une et `applique` (dernier, comme pour
+/// `Appliquer` : son bandeau propose « Annuler »), ou l'erreur d'application.
+fn reponses_installation(nom: &str, application: Option<Result<(), String>>, curseurs: Result<(), String>) -> Vec<Value> {
     let mut r = vec![json!({ "type": "message", "texte": format!("Preset « {nom} » installé dans Mes presets.") })];
     match application {
-        Some(Ok(())) => r.push(json!({ "type": "applique", "nom": nom })),
+        Some(Ok(())) => {
+            if let Err(e) = curseurs {
+                r.push(json!({ "type": "erreur", "texte": format!("Preset appliqué, mais curseurs non installés : {e}.") }));
+            }
+            r.push(json!({ "type": "applique", "nom": nom }));
+        }
         Some(Err(e)) => r.push(json!({ "type": "erreur", "texte": format!("Preset « {nom} » installé mais non appliqué : {e}.") })),
         None => {}
     }
     r
+}
+
+/// Réglage que `config.toml` n'a pas pris : la page retire la valeur qu'elle tenait en attente.
+fn reglage_refuse(section: &str, cle: &str) -> Value {
+    json!({ "type": "reglage_refuse", "section": section, "cle": cle })
 }
 
 /// Réponse `contours` à une image illisible : liste vide, la page n'attend plus son analyse.
@@ -347,17 +358,19 @@ impl Fenetre {
             liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg, "date": date(p) })).collect();
         let curseurs = crate::souris::actuel();
         let curseurs_nom = self.nom_du_jeu(&curseurs);
+        let refus = crate::win::raccourcis_refuses();
         self.envoyer(&json!({
             "type": "etat",
             "reglages": cfg,
             "presets": presets,
             "actif": actif,
-            "depot": cfg.bibliotheque.depot,
             "curseurs": curseurs,
             // nom affiché du jeu (« Windows par défaut » plutôt que « @main.cpl,-1020 »)
             "curseurs_nom": curseurs_nom,
-            // raccourcis clavier que Windows a refusés (déjà pris par une autre application)
-            "raccourcis_refuses": crate::win::raccourcis_refuses(),
+            // raccourcis clavier non enregistrés (« Ctrl+Alt+F »…), et pourquoi : pris par une
+            // autre application, ou la touche écrit un caractère avec AltGr sur ce clavier
+            "raccourcis_refuses": refus.iter().map(|r| r.raccourci).collect::<Vec<_>>(),
+            "raccourcis_raisons": refus.iter().map(|r| json!({ "raccourci": r.raccourci, "raison": r.raison })).collect::<Vec<_>>(),
             "proche": proche.map(|(n, p)| json!({ "nom": p.name, "ecarts": n })),
             "defauts": Config::default(),
             "demarrage": demarrage_actif(),
@@ -455,7 +468,8 @@ impl Fenetre {
                     }
                     Err(e) => {
                         self.erreur(&format!("Réglage refusé : {e}."));
-                        // la page revient à la vraie valeur
+                        // la page retire la valeur en attente, puis revient à la vraie valeur
+                        self.envoyer(&reglage_refuse(&section, &cle));
                         self.etat();
                     }
                 }
@@ -538,11 +552,8 @@ impl Fenetre {
                             r
                         });
                         self.etat();
-                        for m in reponses_installation(&nom, application) {
+                        for m in reponses_installation(&nom, application, curseurs) {
                             self.envoyer(&m);
-                        }
-                        if let Err(e) = curseurs {
-                            self.erreur(&format!("Preset appliqué, mais curseurs non installés : {e}."));
                         }
                     }
                     Err(e) => self.erreur(&format!("Installation impossible : {e}.")),
@@ -1623,13 +1634,22 @@ mod tests {
 
     #[test]
     fn preset_installe_et_applique_annonce() {
-        let r = reponses_installation("Nuit", Some(Ok(())));
+        let r = reponses_installation("Nuit", Some(Ok(())), Ok(()));
         assert_eq!(r.last().unwrap(), &json!({ "type": "applique", "nom": "Nuit" }), "le bandeau « Annuler » reste affiché");
         assert!(r.iter().any(|m| m["type"] == "message"));
-        let r = reponses_installation("Nuit", Some(Err("verrouillé".into())));
+        // curseurs refusés : l'erreur vient avant `applique`, qui garde son bandeau « Annuler »
+        let r = reponses_installation("Nuit", Some(Ok(())), Err("registre verrouillé".into()));
+        assert_eq!(r.last().unwrap(), &json!({ "type": "applique", "nom": "Nuit" }));
+        assert!(r[r.len() - 2]["type"] == "erreur" && r[r.len() - 2]["texte"].as_str().unwrap().contains("curseurs"), "{r:?}");
+        let r = reponses_installation("Nuit", Some(Err("verrouillé".into())), Ok(()));
         assert!(r.iter().all(|m| m["type"] != "applique"));
         assert_eq!(r.last().unwrap()["type"], "erreur");
-        assert_eq!(reponses_installation("Nuit", None).len(), 1, "installé seulement");
+        assert_eq!(reponses_installation("Nuit", None, Ok(())).len(), 1, "installé seulement");
+    }
+
+    #[test]
+    fn reglage_refuse_nomme_sa_cle() {
+        assert_eq!(reglage_refuse("orbite", "rayon"), json!({ "type": "reglage_refuse", "section": "orbite", "cle": "rayon" }));
     }
 
     #[test]

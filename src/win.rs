@@ -385,6 +385,36 @@ pub fn scale_at(x: i32, y: i32) -> f32 {
     })
 }
 
+thread_local! {
+    /// Dernière fréquence lue : écran, images par seconde (oubliée au changement des écrans).
+    static FREQUENCE: Cell<Option<(isize, u32)>> = const { Cell::new(None) };
+}
+
+/// Fréquence de rafraîchissement de l'écran sous le point (Hz) ; 0 si Windows ne la donne pas.
+/// Relue seulement quand le point change d'écran ou que les écrans changent.
+pub fn frequence_ecran(x: i32, y: i32) -> u32 {
+    use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS, MONITORINFOEXW};
+    let mon = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+    if let Some((m, f)) = FREQUENCE.get() {
+        if m == mon.0 as isize {
+            return f;
+        }
+    }
+    let mut mi = MONITORINFOEXW::default();
+    mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    let mut dm = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
+    let f = unsafe {
+        if GetMonitorInfoW(mon, &mut mi.monitorInfo).as_bool() && EnumDisplaySettingsW(PCWSTR(mi.szDevice.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm).as_bool() {
+            // 0 et 1 : « fréquence par défaut du matériel », inconnue
+            if dm.dmDisplayFrequency > 1 { dm.dmDisplayFrequency } else { 0 }
+        } else {
+            0
+        }
+    };
+    FREQUENCE.set(Some((mon.0 as isize, f)));
+    f
+}
+
 /// Une fenêtre en plein écran occupe l'écran où se trouve le point (jeu, vidéo…).
 pub fn fullscreen_under(x: i32, y: i32) -> bool {
     unsafe {
@@ -694,32 +724,117 @@ fn tray_hwnd() -> HWND {
     HWND(TRAY_HWND.load(Ordering::Relaxed) as *mut _)
 }
 
-/// Raccourcis que Windows a refusés au dernier enregistrement (déjà pris par une autre appli).
-static REFUSES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Raccourci non enregistré au dernier passage, et pourquoi.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refus {
+    /// « Ctrl+Alt+F ».
+    pub raccourci: &'static str,
+    pub raison: &'static str,
+}
+
+/// Raison d'un raccourci que Windows a refusé.
+pub const PRIS_AILLEURS: &str = "pris par une autre application";
+/// Raison d'un raccourci écarté parce que Ctrl+Alt+touche (AltGr+touche) écrit un caractère.
+pub const ECRIT_UN_CARACTERE: &str = "produit un caractère sur ce clavier";
+
+/// Raccourcis non enregistrés au dernier passage ; dispositions de clavier installées alors.
+static REFUSES: std::sync::Mutex<Vec<Refus>> = std::sync::Mutex::new(Vec::new());
+static DISPOSITIONS: std::sync::Mutex<Vec<isize>> = std::sync::Mutex::new(Vec::new());
+
+/// Raccourcis globaux : identifiant, touche virtuelle, libellé.
+const RACCOURCIS_GLOBAUX: [(i32, u32, &str); 4] = [(1, 0x27, "Ctrl+Alt+→"), (2, 0x25, "Ctrl+Alt+←"), (3, b'P' as u32, "Ctrl+Alt+P"), (4, b'F' as u32, "Ctrl+Alt+F")];
+
+/// Caractère que Ctrl+Alt+touche écrit sur l'une des dispositions de clavier, d'après ce que
+/// chacune produit (`(disposition, caractère)`, lu par `ToUnicodeEx`) ; `None` si aucune n'écrit
+/// rien d'imprimable. AltGr vaut Ctrl+Alt pour Windows : sur un clavier tchèque, AltGr+F écrit
+/// « [ », et un raccourci Ctrl+Alt+F volerait ce caractère dans toutes les applications. Un
+/// caractère de contrôle (Ctrl+lettre sur certaines dispositions) n'écrit rien.
+pub fn caractere_vole(produits: &[(isize, Option<char>)]) -> Option<char> {
+    produits.iter().filter_map(|p| p.1).find(|c| !c.is_control())
+}
+
+/// Dispositions de clavier installées pour la session (`GetKeyboardLayoutList`).
+fn dispositions() -> Vec<isize> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayoutList, HKL};
+    unsafe {
+        let n = GetKeyboardLayoutList(None);
+        if n <= 0 {
+            return Vec::new();
+        }
+        let mut liste = vec![HKL::default(); n as usize];
+        let n = GetKeyboardLayoutList(Some(&mut liste)).max(0) as usize;
+        liste.truncate(n);
+        liste.into_iter().map(|h| h.0 as isize).collect()
+    }
+}
+
+/// Ce que Ctrl+Alt+`vk` écrit sur la disposition `hkl` (une touche morte compte : elle compose
+/// le caractère suivant). Drapeau 4 : la lecture ne touche pas à l'état des touches mortes.
+fn produit_ctrl_alt(hkl: isize, vk: u32) -> Option<char> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyExW, ToUnicodeEx, HKL, MAPVK_VK_TO_VSC, VK_CONTROL, VK_LCONTROL, VK_MENU, VK_RMENU};
+    let hkl = HKL(hkl as *mut c_void);
+    let mut etat = [0u8; 256];
+    for v in [VK_CONTROL, VK_MENU, VK_LCONTROL, VK_RMENU] {
+        etat[v.0 as usize] = 0x80;
+    }
+    let mut buf = [0u16; 8];
+    unsafe {
+        let scan = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, Some(hkl));
+        let n = ToUnicodeEx(vk, scan, &etat, &mut buf, 0x4, Some(hkl));
+        if n == 0 {
+            return None;
+        }
+        char::decode_utf16(buf.iter().copied()).next().and_then(Result::ok)
+    }
+}
 
 /// Raccourcis globaux (RegisterHotKey, sans hook) : Ctrl+Alt+→ / ← preset suivant / précédent,
-/// Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Les enregistre ou les retire.
+/// Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Les enregistre ou les retire. Un raccourci dont la
+/// touche, avec AltGr, écrit un caractère sur l'une des dispositions installées n'est pas
+/// enregistré (`caractere_vole`).
 pub fn raccourcis(actif: bool) {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_LEFT, VK_RIGHT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT};
     let hwnd = tray_hwnd();
-    let touches = [(1, VK_RIGHT.0 as u32, "Ctrl+Alt+→"), (2, VK_LEFT.0 as u32, "Ctrl+Alt+←"), (3, b'P' as u32, "Ctrl+Alt+P"), (4, b'F' as u32, "Ctrl+Alt+F")];
     RACCOURCIS.store(actif, Ordering::Relaxed);
+    let disp = dispositions();
     let mut refuses = Vec::new();
     unsafe {
-        for (id, vk, libelle) in touches {
+        for (id, vk, libelle) in RACCOURCIS_GLOBAUX {
             let _ = UnregisterHotKey(Some(hwnd), id);
-            if actif && RegisterHotKey(Some(hwnd), id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk).is_err() {
+            if !actif {
+                continue;
+            }
+            let produits: Vec<(isize, Option<char>)> = disp.iter().map(|&h| (h, produit_ctrl_alt(h, vk))).collect();
+            if let Some(c) = caractere_vole(&produits) {
+                log::warn!("raccourci {libelle} non enregistré : il écrit « {c} » sur une des dispositions de clavier");
+                refuses.push(Refus { raccourci: libelle, raison: ECRIT_UN_CARACTERE });
+            } else if RegisterHotKey(Some(hwnd), id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk).is_err() {
                 log::warn!("raccourci {libelle} déjà pris par une autre application");
-                refuses.push(libelle.to_owned());
+                refuses.push(Refus { raccourci: libelle, raison: PRIS_AILLEURS });
             }
         }
     }
+    *DISPOSITIONS.lock().unwrap_or_else(|e| e.into_inner()) = disp;
     *REFUSES.lock().unwrap_or_else(|e| e.into_inner()) = refuses;
 }
 
-/// Raccourcis globaux refusés par Windows au dernier enregistrement (« Ctrl+Alt+F »…) ; vide
-/// quand tous sont pris par Essaim ou que les raccourcis sont coupés.
-pub fn raccourcis_refuses() -> Vec<String> {
+/// Relit les dispositions de clavier installées (à appeler toutes les quelques secondes :
+/// `WM_INPUTLANGCHANGE` ne vient qu'à la fenêtre active) ; si elles ont changé, les raccourcis
+/// sont réévalués.
+pub fn raccourcis_suivent_clavier() {
+    if !RACCOURCIS.load(Ordering::Relaxed) {
+        return;
+    }
+    let disp = dispositions();
+    if *DISPOSITIONS.lock().unwrap_or_else(|e| e.into_inner()) != disp {
+        log::info!("dispositions de clavier changées : raccourcis réévalués");
+        raccourcis(true);
+    }
+}
+
+/// Raccourcis globaux non enregistrés au dernier passage, avec leur raison ; vide quand tous
+/// sont pris par Essaim ou que les raccourcis sont coupés.
+pub fn raccourcis_refuses() -> Vec<Refus> {
     REFUSES.lock().map(|r| r.clone()).unwrap_or_default()
 }
 
@@ -761,6 +876,7 @@ pub fn take_display_changed() -> bool {
     let changed = DISPLAY_CHANGED.with(|d| d.replace(false));
     if changed {
         ECHELLES.with(|e| *e.borrow_mut() = (Vec::new(), None));
+        FREQUENCE.set(None);
     }
     changed
 }
@@ -829,9 +945,11 @@ fn nid(hwnd: HWND) -> NOTIFYICONDATAW {
     n
 }
 
-/// Texte d'une entrée de menu, avec son raccourci si les raccourcis sont actifs.
+/// Texte d'une entrée de menu, avec son raccourci si les raccourcis sont actifs et que celui-ci
+/// a été enregistré.
 fn entree(texte: &str, raccourci: &str) -> Vec<u16> {
-    let t = if RACCOURCIS.load(Ordering::Relaxed) { format!("{texte}\t{raccourci}") } else { texte.to_owned() };
+    let pris = RACCOURCIS.load(Ordering::Relaxed) && !raccourcis_refuses().iter().any(|r| r.raccourci == raccourci);
+    let t = if pris { format!("{texte}\t{raccourci}") } else { texte.to_owned() };
     t.encode_utf16().chain(Some(0)).collect()
 }
 
@@ -1189,6 +1307,17 @@ pub fn pump() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raccourci_qui_ecrit_un_caractere_ecarte() {
+        // français et anglais : Ctrl+Alt+F n'écrit rien, le raccourci peut être pris
+        assert_eq!(caractere_vole(&[(0x040C, None), (0x0409, None)]), None);
+        // un clavier tchèque en plus : AltGr+F écrit « [ »
+        assert_eq!(caractere_vole(&[(0x040C, None), (0x0405, Some('[')), (0x0409, None)]), Some('['));
+        // un caractère de contrôle n'écrit rien
+        assert_eq!(caractere_vole(&[(0x0409, Some('\u{6}'))]), None);
+        assert_eq!(caractere_vole(&[]), None);
+    }
 
     #[test]
     fn rgba_vers_bgra_inverse_rouge_et_bleu() {

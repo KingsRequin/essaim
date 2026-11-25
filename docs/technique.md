@@ -22,7 +22,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
     (essai relu : `cargo test --release traits_fins_relus -- --ignored`) ; 20 000 pastilles au
     plus par trait ou anneau (un trait démesuré garde sa longueur, pastilles espacées), 500 000
     par image en garde-fou de mémoire (un halo sur une fenêtre agrandie en 4K en pose ~33 000 :
-    l'essaim, dessiné après, n'est jamais coupé), points non finis ignorés ; un anneau plus large
+    l'essaim, dessiné après, n'est jamais coupé) ; après une pointe, la place des listes de
+    pastilles est rendue dès qu'elle dépasse 4 fois l'usage de l'image d'avant (et 100 000
+    éléments) ; points non finis ignorés ; un anneau plus large
     que son diamètre devient un disque jusqu'à r + largeur / 2, comme le trait de tiny-skia ;
   - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
     modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié ;
@@ -123,13 +125,31 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   fenêtre couvre un écran, `win::plein_ecran_quelque_part` : Windows le renvoie aussi pour le
   calque transparent d'une autre surcouche), `GetSystemPowerStatus` toutes les 5 s
   ou sur `WM_POWERBROADCAST` (la sortie de veille, `PBT_APMRESUMEAUTOMATIC`, relit aussi les
-  écrans), exécutable au premier plan chaque seconde ; session verrouillée, déconnectée ou à
+  écrans), exécutable au premier plan chaque seconde (une appli du Store, hébergée par
+  `ApplicationFrameHost.exe`, est lue dans sa fenêtre enfant `Windows.UI.Core.CoreWindow` ;
+  `appli::executable`, aussi pour le preset automatique et la teinte de l'appli) ; session verrouillée, déconnectée ou à
   distance (`WTSRegisterSessionNotification` → `WM_WTSSESSION_CHANGE`, `SM_REMOTESESSION`),
   prioritaire sur les autres. Traitées comme le plein
   écran (bordure rendue, son coupé), notées au journal ; raison publiée (`charge::publier_raison`).
+  « Allégé » (plafond adaptatif) n'est dit que s'il limite vraiment : pas quand il est au-dessus
+  de la cadence choisie, de repos, de la batterie ou de la fréquence de l'écran du pointeur
+  (`win::frequence_ecran`, `EnumDisplaySettingsW`, relue au changement d'écran) ; fréquence
+  inconnue : la cadence mesurée décide (dit à 90 % du plafond, retiré sous 75 %, pas de
+  clignotement entre les deux).
 - **Qualité adaptative** (`adaptatif.rs`) : nourrie chaque seconde par le calcul moyen par
   image ; > 4 ms deux secondes de suite → palier suivant (120, 60, 30 ; ceux qui ne réduiraient
-  rien sont sautés), < 1,5 ms dix secondes → palier précédent.
+  rien sont sautés), < 3 ms dix secondes, ou vingt secondes sans seconde > 4 ms (calcul entre
+  3 et 4 ms : remontée à l'essai, qui redescend en 2 s s'il redevient lourd) → palier précédent.
+- **Raccourcis globaux** (`win::raccourcis`) : `RegisterHotKey` (Ctrl+Alt+touche), sans hook.
+  AltGr vaut Ctrl+Alt pour Windows : avant chaque enregistrement, Ctrl+Alt+touche est traduit
+  sur chaque disposition installée (`GetKeyboardLayoutList`, `ToUnicodeEx` avec VK_CONTROL et
+  VK_MENU enfoncés, drapeau 4 : l'état des touches mortes n'est pas touché) ; s'il écrit un
+  caractère (AltGr+F = « [ » en tchèque), le raccourci n'est pas enregistré, sinon il volerait ce
+  caractère dans toutes les applications (`win::caractere_vole`). La liste des dispositions est
+  relue chaque seconde (`WM_INPUTLANGCHANGE` ne vient qu'à la fenêtre active) et les raccourcis
+  réévalués si elle change. Message `etat` de la page : `raccourcis_refuses` (libellés) et
+  `raccourcis_raisons` (`raccourci`, `raison` : pris par une autre application, ou produit un
+  caractère sur ce clavier).
 - **Masquer des captures** : `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` sur chaque
   calque (`win::masquer_captures`). Les essais par capture `BitBlt` ne voient alors plus l'essaim.
 - **Fenêtre pour le stream** (`stream.rs`) : fenêtre ordinaire (classe `EssaimStream`), son
@@ -159,7 +179,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   zone de l'essaim ; le projecteur ajoute l'écran entier du pointeur aux zones à redessiner, le
   temps de l'effet seulement (voile : dégradé radial Direct2D, ou remplissage ligne par ligne sur
   le processeur). Secousse : trois changements de sens horizontaux francs (allers ≥ 60 px,
-  < 0,35 s, plutôt horizontaux) en moins de 0,6 s, lus sur les positions de chaque image. Ces
+  < 0,35 s, plutôt horizontaux) en moins de 0,6 s, lus sur les positions de chaque image ; un
+  bouton de la souris enfoncé (glissement : sélection, fenêtre traînée) efface le geste en cours
+  (`Effets::bouton`). Un Ctrl+Alt+F reçu en pause est oublié (`Effets::oublier_coups`). Ces
   seuils sont ceux de `[projecteur] sensibilite = 5` (`effets::secousse_exigence`) : la course
   minimale double tous les 5 crans en moins (104 px à 1, 30 px à 10), les deux durées
   s'allongent comme l'inverse de sa racine (0,49 s et 0,85 s à 10). `secousse` et `sensibilite`
@@ -473,7 +495,8 @@ dégagé ; au plus une inversion du sens par image) et la teinte
   sont à sa taille, même si le pointeur est ailleurs) et la zone de travail de l'écran de chacun
   de ses coins (`MonitorFromPoint` par coin : une fenêtre à cheval sur deux écrans a ses coins
   sur l'un et l'autre) ; ces appels à Windows ne sont refaits que quand la fenêtre ou son cadre
-  change, et au moins chaque seconde (écrans changés). Une équerre qui sortirait de la zone de
+  change, au moins chaque seconde, et tout de suite quand les écrans changent
+  (`Effets::oublier_loin` vide ce cache). Une équerre qui sortirait de la zone de
   travail de son coin (fenêtre agrandie, ancrée au bord, barre des tâches) se retourne dans le
   cadre. Les éclats du halo sont vidés quand la fenêtre change ; chaque bande du
   liseré a l'épaisseur de son écran. Leurs zones s'ajoutent à celles

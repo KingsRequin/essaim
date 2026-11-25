@@ -121,7 +121,8 @@ Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillem
 `par_kick_max`) sont convertis avec leurs valeurs ; `config.toml` est réécrit une fois au
 lancement, commentaires gardés. Un preset sans `[declencheurs]` dont la liste de modulations est
 vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dans le preset (une
-réaction non écrite y compte comme coupée, même la montée, active par défaut). Un preset d'avant
+réaction non écrite y compte comme coupée, même la montée, active par défaut : ni ses
+modulations ni l'explosion au drop). Un preset d'avant
 garde son allure (essai
 `presets_comme_avant`, sur les presets fournis jusqu'à la version 0.6).
 
@@ -190,8 +191,8 @@ garde son allure (essai
   rapides de gauche à droite) ou Ctrl+Alt+F assombrit l'écran du pointeur autour d'un disque clair
   qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les éclats. *Sensibilité à
   la secousse* (`sensibilite`, 1 à 10, 5 par défaut) : à 1, il faut un geste ample et vif
-  (allers d'au moins 104 px) ; à 10, un petit geste plus lent suffit (30 px). S'il part tout
-  seul, la baisser ; `secousse = false` (*Projecteur lancé par › La secousse de la souris*) ne
+  (allers d'au moins 104 px) ; à 10, un petit geste plus lent suffit (30 px). Un va-et-vient
+  bouton enfoncé (sélection, fenêtre traînée) ne compte pas. S'il part tout seul, la baisser ; `secousse = false` (*Projecteur lancé par › La secousse de la souris*) ne
   garde que le raccourci. Ces deux réglages, propres à la main et à la souris, ne changent pas
   avec le preset. Sous *+ Avancé* : *Taille du projecteur*, le rayon du disque à la fin de l'effet
   (`taille`, 30 à 300, 60 par défaut), et *Obscurité du projecteur*, l'assombrissement de l'écran
@@ -363,7 +364,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   La raison s'affiche sous le bouton Pause.
 - **Qualité adaptative** (`[rendu] adaptatif`, oui par défaut) : si une image demande plus de
   4 ms de calcul, la cadence baisse par paliers (120, 60, 30 images/s au plus) et remonte quand
-  le calcul redevient léger.
+  le calcul redevient léger, ou à l'essai après 20 s sans image lourde. *Allégé* ne s'affiche
+  sous le bouton Pause que si ce plafond limite vraiment (pas sur un écran à 60 Hz plafonné à
+  120, par exemple).
 - **Masquer des captures** (`[rendu] masquer_captures`) : l'essaim reste à l'écran mais
   n'apparaît plus dans les captures, enregistrements et partages d'écran (Windows 10 2004 et plus).
 - **Sans flashs** (`[rendu] sans_flashs`, propre à la machine) : pour les personnes sensibles aux
@@ -387,15 +390,21 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   et ondes compris, quelle que soit sa forme.
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
-  prévient Essaim de ces seules touches, sans hook sur le clavier.
+  prévient Essaim de ces seules touches, sans hook sur le clavier. Pour Windows, AltGr vaut
+  Ctrl+Alt : sur un clavier où AltGr+touche écrit un caractère (AltGr+F donne « [ » en tchèque,
+  hongrois, croate…), le raccourci de cette touche n'est pas pris, pour que le caractère s'écrive
+  toujours ; la fenêtre des réglages le signale (*04 Auto*), et le projecteur reste à la secousse.
+  Une disposition de clavier ajoutée ou retirée est vue dans la seconde.
 - **Preset automatique** (`[automatique]`) : des règles « si … alors … » (`regles`,
   prioritaires), puis un preset par application au premier plan (nom de l'exécutable), puis par
   plage horaire (qui peut passer minuit). Quand plus aucune règle ne s'applique, les réglages
   d'avant reviennent, sauf ceux retouchés pendant la règle, qui sont gardés (curseurs compris).
   Ils sont gardés dans `auto-avant.toml` tant qu'une règle agit : un arrêt d'Essaim ou du PC ne
   les perd pas.
-  Renommer ou supprimer un preset met à jour ou retire les règles qui le citent. Les fenêtres
-  d'Essaim ne comptent pas.
+  Renommer ou supprimer un preset met à jour ou retire les règles qui le citent ; renommer le
+  preset qu'une règle a mis en place ne le réapplique pas (tes retouches restent). Les fenêtres
+  d'Essaim ne comptent pas. Une application du Store compte sous son propre exécutable
+  (`CalculatorApp.exe`), pas sous `ApplicationFrameHost.exe` qui l'héberge.
   - Une règle : `{ si = "artiste = Skrillex", alors = "Delta" }`. Clés : `artiste` et `titre` (du
     morceau qui joue, pas en pause), `appli` (exécutable au premier plan, `.exe` facultatif), `bpm`
     (tempo des kicks, quand il est stable), `heure` (« HH:MM »). Opérateurs : `=`, `!=`, `~`
@@ -453,7 +462,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - *04 Auto* : les règles du preset automatique (*Si … alors …*, avec le bouton *Artiste en
     cours* qui remplit la condition pour le morceau qui joue ; par application ; par heure ;
     estompées quand le preset automatique est coupé), les pauses par application et les
-    raccourcis (ceux qu'une autre application a déjà pris sont signalés).
+    raccourcis (ceux qu'une autre application a déjà pris, ou dont la touche écrit un caractère
+    avec AltGr sur ce clavier, sont signalés).
   - *Application* (l'engrenage, à droite des onglets) : ce qui tient à Essaim sur ce PC et non
     à l'allure de l'essaim, hors presets. À gauche, la version installée, où en est la mise à
     jour, *Chercher une mise à jour*, *Mises à jour automatiques* et *Ouvrir config.toml* ; à

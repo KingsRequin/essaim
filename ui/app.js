@@ -69,7 +69,8 @@ const etat = {
   proche: null,
   curseurs: "",
   curseursNom: null, // nom lisible du jeu en place (`curseurs_nom`), s'il est donné
-  raccourcisRefuses: [], // raccourcis globaux pris par une autre application
+  raccourcisRefuses: [], // raccourcis globaux non enregistrés (pris ailleurs, ou volés à AltGr)
+  raccourcisRaisons: {}, // raccourci → raison du refus
   demarrage: false,
   pause: false,
   jeux: null,
@@ -349,9 +350,10 @@ const ANCIENNES_CLES = [
 // Preset d'avant les modulations ou les déclencheurs (comme migration::migrer) : ses réactions
 // d'alors en deviennent. Sans `[declencheurs]`, elles deviennent les déclencheurs et s'ajoutent
 // aux modulations ; sans `[modulations]`, ou avec les anciennes clés de la basse, les réactions
-// à la basse passent en tête. Une liste de modulations vidée exprès ne reçoit que les réactions
-// écrites dans le preset (une réaction non écrite y compte comme coupée, même la montée, active
-// par défaut). Une modulation de même source, même cible et même groupe déjà là est gardée.
+// à la basse passent en tête. Avec une liste de modulations vidée exprès, seules les réactions
+// écrites dans le preset comptent (une réaction non écrite y est coupée, même la montée, active
+// par défaut : ni ses modulations ni son explosion au drop). Une modulation de même source, même
+// cible et même groupe déjà là est gardée.
 function migrer(p) {
   const ecrite = (s, k) => estObjet(p[s]) && p[s][k] !== undefined;
   const avaitDecl = p.declencheurs !== undefined;
@@ -359,19 +361,15 @@ function migrer(p) {
   const avaitMod = p.modulations !== undefined;
   const basseExplicite = ecrite("orbite", "vitesse_basse") || ecrite("orbite", "eloignement_grave");
   const liste = estObjet(p.modulations) && Array.isArray(p.modulations.liste) ? p.modulations.liste : null;
-  const a = reactionsAvant(p);
   // liste vidée : les réactions non écrites sont coupées
-  let e = a;
-  if (liste && !liste.length) {
-    const seule = (s, k, coupe) => (ecrite(s, k) ? p[s][k] : coupe);
-    const section = (s) => (estObjet(p[s]) ? p[s] : {});
-    e = reactionsAvant({
-      ...p,
-      orbite: { ...section("orbite"), vitesse_basse: seule("orbite", "vitesse_basse", 0), eloignement_grave: seule("orbite", "eloignement_grave", 0) },
-      musique: { ...section("musique"), montee: seule("musique", "montee", false), contretemps: seule("musique", "contretemps", false), stereo: seule("musique", "stereo", 0) },
-      couleur: { ...section("couleur"), musique: seule("couleur", "musique", false) },
-    });
-  }
+  const seule = (s, k, coupe) => (ecrite(s, k) ? p[s][k] : coupe);
+  const section = (s) => (estObjet(p[s]) ? p[s] : {});
+  const e = !liste || liste.length ? reactionsAvant(p) : reactionsAvant({
+    ...p,
+    orbite: { ...section("orbite"), vitesse_basse: seule("orbite", "vitesse_basse", 0), eloignement_grave: seule("orbite", "eloignement_grave", 0) },
+    musique: { ...section("musique"), montee: seule("musique", "montee", false), contretemps: seule("musique", "contretemps", false), stereo: seule("musique", "stereo", 0) },
+    couleur: { ...section("couleur"), musique: seule("couleur", "musique", false) },
+  });
   const meme = (x, y) => y.source === x.source && y.cible === x.cible && (y.sur || "tout") === (x.sur || "tout");
   const tete = !avaitMod || basseExplicite ? e.basse : [];
   const mods = tete.filter((x) => !(liste || []).some((y) => meme(x, y))).concat(liste || []);
@@ -383,7 +381,7 @@ function migrer(p) {
   return {
     ...p,
     modulations: { ...(estObjet(p.modulations) ? p.modulations : {}), liste: mods },
-    ...(avaitDecl ? {} : { declencheurs: { liste: a.decl } }),
+    ...(avaitDecl ? {} : { declencheurs: { liste: e.decl } }),
     particules: { ...particules, ...(estObjet(p.particules) ? p.particules : {}) },
   };
 }
@@ -422,10 +420,19 @@ function suivreRenommages() {
 // Dépôt GitHub de la bibliothèque (« propriétaire/nom ») : celui des réglages en place.
 const depotBibliotheque = () => (etat.reglages && etat.reglages.bibliotheque && typeof etat.reglages.bibliotheque.depot === "string" ? etat.reglages.bibliotheque.depot : "");
 
-// Nom de la copie locale d'un preset de la bibliothèque, ou null.
-function installe(nom) {
-  const p = presetAMoi(nom);
-  return p ? p.nom : null;
+// Nom de la copie locale d'un preset de la bibliothèque, ou null : un de tes presets du même nom
+// (à la casse près) et aux mêmes réglages de preset (comme profils::same_strict). Un preset à toi
+// qui porte seulement le même nom n'en est pas la copie : la tuile propose l'installation, que
+// l'appli refuse en le disant.
+function installe(p) {
+  const local = presetAMoi(p.nom);
+  return local && memesReglagesPreset(local.reglages, p.reglages) ? local.nom : null;
+}
+function memesReglagesPreset(a, b) {
+  return SECTIONS_PRESET.every((s) => {
+    const x = a[s] || {}, y = b[s] || {};
+    return [...new Set([...Object.keys(x), ...Object.keys(y)])].every((k) => HORS_PRESET.has(s + "." + k) || memeValeur(x[k], y[k]));
+  });
 }
 
 function filtrer(liste) {
@@ -594,7 +601,7 @@ function creerTuile(p) {
 
 function choisir(p) {
   if (p.origine === "commu") {
-    const local = installe(p.nom);
+    const local = installe(p);
     if (local !== null) envoyer({ cmd: "appliquer", nom: local });
     else envoyer({ cmd: "installer", nom: p.nom, reglages: p.reglages, appliquer: true });
   } else {
@@ -672,7 +679,7 @@ function majTuile(t, p, rang, habillage) {
   const proche = etat.proche && p.origine !== "commu" && etat.proche.nom === p.nom;
   t.origine.textContent = proche ? "modifié" : p.origine === "commu" ? p.auteur || "communauté" : p.origine === "fourni" ? "fourni" : "à toi";
   t.ligne.textContent = detail(p);
-  const nomLocal = p.origine === "commu" ? installe(p.nom) : p.nom;
+  const nomLocal = p.origine === "commu" ? installe(p) : p.nom;
   const actif = nomLocal !== null && etat.actif === nomLocal;
   t.racine.classList.toggle("active", actif);
   t.racine.classList.toggle("proche", !!proche);
@@ -745,7 +752,7 @@ function actionsTuile(t) {
     "aria-pressed": etat.comparer === p.id, title: "Compare deux presets côte à côte, avec leurs réglages différents",
   });
   if (p.origine === "commu") {
-    const fait = installe(p.nom) !== null;
+    const fait = installe(p) !== null;
     const b = bouton("installer", fait ? "Installé" : "+ Installer", { "aria-pressed": fait ? "true" : null });
     b.disabled = fait;
     return [fav, comp, b];
@@ -998,7 +1005,9 @@ function regler(section, cle, valeur) {
 
 // État reçu : les valeurs en attente par-dessus. Une valeur envoyée est oubliée dès que l'état la
 // reprend (à la tolérance près : l'appli borne les valeurs), ou une seconde après l'envoi.
+let derniersRecus = null; // réglages du dernier état reçu, sans les valeurs en attente
 function reglagesRecus(recus) {
+  derniersRecus = recus;
   let r = recus;
   for (const [k, a] of attente) {
     const vu = recus[a.section] && recus[a.section][a.cle];
@@ -1008,6 +1017,23 @@ function reglagesRecus(recus) {
   return r;
 }
 const enCours = () => [...attente.values()].some((a) => !a.envoyee);
+
+// Valeur envoyée que l'appli a refusée (`reglage_refuse`, avec l'erreur) : elle n'est plus posée
+// sur l'état, la vraie valeur revient tout de suite. Une valeur plus récente qui attend encore son
+// envoi reste (elle sera jugée à son tour). Sans ce message (appli plus ancienne), la valeur est
+// oubliée une seconde après l'envoi.
+function reglageRefuse(section, cle) {
+  const k = section + "." + cle;
+  const a = attente.get(k);
+  if (!a || !a.envoyee) return;
+  attente.delete(k);
+  const sec = derniersRecus && derniersRecus[section];
+  if (!estObjet(sec) || !(cle in sec)) return;
+  etat.reglages = poser(etat.reglages, section, cle, sec[cle]);
+  grand.regler(etat.reglages);
+  apercuChange();
+  majReglages();
+}
 
 // Impact sur la puissance, de 1 à 10. Mesuré par le banc `mesure_impact_reglages` (coût d'une
 // image avec le réglage au minimum puis au maximum, carte graphique, 144 images/s) : score =
@@ -1194,10 +1220,13 @@ function noteQuantite(cible, q, sur) {
     const v = Math.round(Math.abs(x) * 1000) / 10;
     return (x > 0 ? "+" : "−") + virgule(v, Number.isInteger(v) ? 0 : 1) + " %";
   };
+  // un seuil nul (l'opacité, déjà au plus, ne monte pas) ne se dit pas : toute quantité de ce
+  // côté est sans effet, ce que la première ligne dit pour l'opacité
+  const nul = (x) => Math.round(Math.abs(x) * 1000) === 0;
   const limites = [];
   const bas = (Math.max(0, b[1]) - 1) / b[0], haut = (b[2] - 1) / b[0];
-  if (bas > -1) limites.push(`en deçà de ${pc(bas)}`);
-  if (haut < 1) limites.push(`au-delà de ${pc(haut)}`);
+  if (bas > -1 && !nul(bas)) limites.push(`en deçà de ${pc(bas)}`);
+  if (haut < 1 && !nul(haut)) limites.push(`au-delà de ${pc(haut)}`);
   const note = "Effet de cette modulation seule, source à fond, dans les bornes du moteur";
   return limites.length ? `${note} ; ${limites.join(" et ")}, la source à fond ne change plus rien (une source plus faible, si)` : note;
 }
@@ -1275,7 +1304,7 @@ function reactionsAvant(p) {
   if (v("fissures", "actives", true)) decl.push(d("clic", "fissure"));
   if (v("clic", "droit", true)) decl.push(d("clic_droit", "implosion"));
   if (v("musique", "rafale_piste", true)) decl.push(d("piste", "rafale", { nombre: double, nombre_max: double }));
-  return { basse, mods, decl, particules: { rebonds: v("scintillement", "rebonds", true), taille: v("clic", "taille", 1) } };
+  return { basse, mods, decl };
 }
 
 // Allure commune des figures (comme config::Allure) : l'opacité avec les réglages courants, le
@@ -1314,7 +1343,9 @@ function allureAvance(s, geo = true, nom, cache) {
 // rotation et le décalage dépendent de la forme, ils restent). Les valeurs remplacées sont gardées :
 // « Annuler » (Ctrl+Z) les remet tant qu'aucun preset n'a été appliqué depuis.
 const ALLURE_COPIEE = ["teinte", "opacite", "reaction_kick", "reaction_caisse", "reaction_charleston", "reaction_basse", "reaction_montee", "reaction_drop"];
-let annulationLocale = null; // dernière action de la page que « Annuler » défait avant le dernier preset
+// dernière action de la page que « Annuler » défait avant le dernier preset ; `.actif` : le preset
+// en place quand elle a été faite
+let annulationLocale = null;
 function copierAllure(source) {
   const r = etat.reglages;
   if (!r || !r[source]) return;
@@ -1338,6 +1369,7 @@ function copierAllure(source) {
     majReglages();
     bandeau("Allure des figures d'avant remise.");
   };
+  defaire.actif = etat.actif; // preset en place quand l'allure a été copiée
   annulationLocale = defaire;
   bandeau(`Teinte, opacité et réactions de « ${nom} » copiées sur les autres figures.`, { libelle: "Annuler (Ctrl+Z)", faire: defaire });
 }
@@ -3095,10 +3127,18 @@ function dessinerAuto() {
 // Raccourcis globaux qu'une autre application a déjà pris (`raccourcis_refuses` de l'appli,
 // absent d'une version plus ancienne : rien n'est dit).
 function dessinerRaccourcisRefuses() {
-  const pris = etat.reglages.raccourcis.actif ? etat.raccourcisRefuses : [];
-  texteSi($("raccourcis-refuses"), !pris.length ? ""
-    : pris.length === 1 ? `${pris[0]} : pris par une autre application, il ne marche pas tant qu'elle le garde.`
-      : `${pris.join(", ")} : pris par d'autres applications, ils ne marchent pas tant qu'elles les gardent.`);
+  const refuses = etat.reglages.raccourcis.actif ? etat.raccourcisRefuses : [];
+  // raison de chaque refus (`raccourcis_raisons`) : une autre application le garde, ou la touche
+  // écrit un caractère avec AltGr (= Ctrl+Alt) sur un clavier installé ; sans raison connue : la
+  // première
+  const raison = (r) => etat.raccourcisRaisons[r] || "pris par une autre application";
+  const groupes = new Map();
+  for (const r of refuses) groupes.set(raison(r), [...(groupes.get(raison(r)) || []), r]);
+  const phrase = ([texte, liste]) => texte === "pris par une autre application"
+    ? (liste.length === 1 ? `${liste[0]} : pris par une autre application, il ne marche pas tant qu'elle le garde.`
+      : `${liste.join(", ")} : pris par d'autres applications, ils ne marchent pas tant qu'elles les gardent.`)
+    : `${liste.join(", ")} : ${texte} (AltGr y écrit un caractère), ${liste.length === 1 ? "il n'est pas enregistré pour ne pas le voler" : "ils ne sont pas enregistrés pour ne pas le voler"}.`;
+  texteSi($("raccourcis-refuses"), [...groupes].map(phrase).join(" "));
 }
 
 // Applications qui mettent Essaim en pause au premier plan (`[pause] applis`, hors presets).
@@ -3933,14 +3973,16 @@ window.essaim = {
         break;
       case "etat": {
         const premier = !etat.reglages;
+        // un autre preset mis en place d'ailleurs (icône, Horizon, une règle) : Ctrl+Z défait
+        // maintenant ce preset, plus la dernière action de la page (sinon elle remettrait des
+        // valeurs sur un preset qui n'est plus celui d'où elles venaient). Pas tant qu'une valeur
+        // de la page attend (le preset reconnu change alors à cause d'elle), ni pour un retour au
+        // preset en place quand l'action a été faite.
+        if (annulationLocale && !attente.size && m.actif && m.actif !== etat.actif && m.actif !== annulationLocale.actif) annulationLocale = null;
         etat.reglages = reglagesRecus(m.reglages);
         etat.defauts = m.defauts;
         etat.presets = m.presets;
         suivreRenommages();
-        // un autre preset en place (appliqué depuis l'icône, Horizon, une règle) : Ctrl+Z défait
-        // maintenant ce preset, plus la dernière action de la page (sinon elle remettrait des
-        // valeurs sur un preset qui n'est plus celui d'où elles venaient)
-        if (m.actif && m.actif !== etat.actif) annulationLocale = null;
         etat.actif = m.actif;
         etat.proche = m.proche;
         etat.curseurs = m.curseurs;
@@ -3948,6 +3990,12 @@ window.essaim = {
         // d'une appli plus ancienne)
         etat.curseursNom = typeof m.curseurs_nom === "string" && m.curseurs_nom.trim() ? m.curseurs_nom.trim() : null;
         etat.raccourcisRefuses = Array.isArray(m.raccourcis_refuses) ? m.raccourcis_refuses.filter((r) => typeof r === "string").slice(0, 8) : [];
+        etat.raccourcisRaisons = {};
+        if (Array.isArray(m.raccourcis_raisons)) {
+          for (const x of m.raccourcis_raisons.slice(0, 8)) {
+            if (x && typeof x.raccourci === "string" && typeof x.raison === "string") etat.raccourcisRaisons[x.raccourci] = x.raison.slice(0, 80);
+          }
+        }
         etat.demarrage = m.demarrage;
         if (premier) {
           if (typeof m.version === "string") {
@@ -4045,6 +4093,9 @@ window.essaim = {
         break;
       case "message":
         bandeau(m.texte);
+        break;
+      case "reglage_refuse":
+        if (typeof m.section === "string" && typeof m.cle === "string") reglageRefuse(m.section, m.cle);
         break;
       case "erreur":
         // une erreur ne libère pas le bouton d'enregistrement (elle peut venir d'un réglage ou

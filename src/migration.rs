@@ -261,9 +261,9 @@ fn table<'a>(t: &'a mut toml::Table, section: &str) -> &'a mut toml::Table {
 /// Convertit une table TOML (fichier de réglages ou preset) d'avant les modulations ou les
 /// déclencheurs. Les anciennes clés sont retirées ; sans `[declencheurs]`, les réactions
 /// d'avant (valeurs du fichier, ou celles par défaut d'alors) deviennent les déclencheurs et
-/// s'ajoutent aux modulations (sauf à une liste de modulations vidée exprès, qui ne reçoit que
-/// les modulations des réactions écrites dans la table : une réaction non écrite, même active par
-/// défaut comme la montée, y compte comme coupée) ; sans `[modulations]`, ou avec les anciennes clés de la
+/// s'ajoutent aux modulations (sauf à une liste de modulations vidée exprès : seules les réactions
+/// écrites dans la table comptent alors, une réaction non écrite, même active par défaut comme la
+/// montée, est coupée partout, modulations et déclencheurs) ; sans `[modulations]`, ou avec les anciennes clés de la
 /// basse, les réactions à la basse passent en tête des modulations. Une modulation de même
 /// source, même cible et même groupe déjà là est gardée. Renvoie vrai si la table a changé.
 pub fn migrer(t: &mut toml::Table) -> bool {
@@ -298,8 +298,7 @@ pub fn migrer(t: &mut toml::Table) -> bool {
         _ => None,
     };
     let videe = liste.as_ref().is_some_and(Vec::is_empty);
-    let ancien = Ancien::deserialize(vieux.clone()).unwrap_or_default();
-    let mut ecrites = ancien.clone();
+    let mut ecrites = Ancien::deserialize(vieux.clone()).unwrap_or_default();
     if videe {
         let (o, mu) = (&mut ecrites.orbite, &mut ecrites.musique);
         if !ecrite("orbite", "vitesse_basse") {
@@ -336,8 +335,10 @@ pub fn migrer(t: &mut toml::Table) -> bool {
         }
     }
     table(t, "modulations").insert("liste".into(), toml::Value::Array(nouvelle));
+    // une réaction non écrite comptée comme coupée l'est partout : la montée d'une liste vidée
+    // n'amène pas non plus l'explosion au drop
     if !avait_decl {
-        let l: Vec<toml::Value> = ancien.declencheurs().iter().filter_map(|d| toml::Value::try_from(d).ok()).collect();
+        let l: Vec<toml::Value> = ecrites.declencheurs().iter().filter_map(|d| toml::Value::try_from(d).ok()).collect();
         table(t, "declencheurs").insert("liste".into(), toml::Value::Array(l));
     }
     true
@@ -374,6 +375,20 @@ mod tests {
         // réaction d'avant
         let l = modulations("[modulations]\nliste = [{ source = \"montee\", cible = \"rayon\", sur = \"satellites\", quantite = 0.5 }]");
         assert_eq!(l.iter().filter(|m| m.source == Source::Montee && m.cible == Cible::Rayon).count(), 2, "{l:?}");
+        // liste vidée : la montée non écrite n'amène pas non plus l'explosion au drop
+        let decl = |texte: &str| {
+            let mut t: toml::Table = toml::from_str(texte).unwrap();
+            migrer(&mut t);
+            let c: crate::config::Config = toml::Value::Table(t).try_into().unwrap();
+            c.declencheurs.liste.iter().any(|d| d.quand == Evenement::Drop && d.faire == Action::Explosion)
+        };
+        assert!(!decl("[modulations]
+liste = []"));
+        assert!(decl("[modulations]
+liste = []
+[musique]
+montee = true"));
+        assert!(decl(""), "hors liste vidée : la montée par défaut d'alors");
         // même groupe (« tout » écrit ou sous-entendu) : gardée seule
         let l = modulations("[modulations]\nliste = [{ source = \"montee\", cible = \"rayon\", quantite = 0.5 }]");
         assert_eq!(l.iter().filter(|m| m.source == Source::Montee && m.cible == Cible::Rayon).count(), 1, "{l:?}");

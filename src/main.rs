@@ -459,6 +459,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut pauses = pauses::Pauses::default();
     let mut raison_publiee = String::new();
     let mut adaptatif = adaptatif::Adaptatif::default();
+    // cadence visée sans le plafond adaptatif (0 = celle de l'écran), et fréquence de l'écran du
+    // pointeur (0 = inconnue) : la raison « Allégé » n'est dite que si ce plafond joue
+    let mut cadence_visee = conf.cfg.rendu.cadence;
+    let mut frequence = 0u32;
 
     let start = Instant::now();
     let mut last = start;
@@ -590,6 +594,11 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 doux = d;
                 log::info!("{}", if d { "mode sans flashs" } else { "fin du mode sans flashs" });
             }
+            // disposition de clavier ajoutée ou retirée : un raccourci peut se mettre à écrire un
+            // caractère avec AltGr (ou cesser de le faire)
+            win::raccourcis_suivent_clavier();
+            // fréquence de l'écran du pointeur : dit si le plafond adaptatif change quelque chose
+            frequence = win::frequence_ecran(last_pos.0, last_pos.1);
         }
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
@@ -607,7 +616,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // pause automatique : traitée comme le plein écran (rien dessiné, son coupé, bordure rendue)
         let retenue = pauses.tick(&conf.cfg.pause, now);
         let retrait = fs_paused || retenue.pause.is_some();
-        let raison = pauses::raison(user_paused, fs_paused, retenue.pause.as_deref(), retenue.plafond, adaptatif.plafond());
+        // ce qui limite la cadence hors qualité adaptative : cadence choisie (ou de repos),
+        // batterie, fréquence de l'écran
+        let autre_limite = pauses::plafonner(cadence_visee, frequence);
+        let raison = pauses::raison(user_paused, fs_paused, retenue.pause.as_deref(), retenue.plafond, adaptatif.plafond(), autre_limite, &raison_publiee);
         if raison != raison_publiee {
             charge::publier_raison(&raison);
             raison_publiee = raison;
@@ -780,7 +792,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             (true, c) => c.min(cfg.rendu.cadence_repos),
             (false, c) => c,
         };
-        let cadence = pauses::plafonner(pauses::plafonner(cadence, retenue.plafond), adaptatif.plafond());
+        cadence_visee = pauses::plafonner(cadence, retenue.plafond);
+        let cadence = pauses::plafonner(cadence_visee, adaptatif.plafond());
         // cadence choisie : attente jusqu'à l'image suivante, par tranches courtes pour que les
         // clics restent lus (un clic de 60 ms doit être vu)
         if cadence > 0 {
@@ -804,6 +817,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         (swarm.murs, swarm.doux) = (murs, doux);
         swarm.avance(t, dt, cursor, au, cfg, scale);
         effets.moduler_figures(swarm.effets_figures());
+        effets.bouton = down || droit;
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
         etiquette.avance(t, dt, cursor, scale, &au, cfg, layer::ecran_du_pointeur(&monitors, cursor));
         // fissures demandées par les déclencheurs (clic, drop…) ; teinte de tout ce qu'Essaim

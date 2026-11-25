@@ -132,6 +132,9 @@ impl Auto {
             return;
         }
         self.prochain = Some(now + Duration::from_millis(700));
+        for (ancien, nouveau) in profils::renommages() {
+            self.renomme(&ancien, &nouveau);
+        }
         if !self.relu {
             self.relu = true;
             if let Some((avant, apres)) = lire_avant_in(&fichier_avant()) {
@@ -233,6 +236,21 @@ impl Auto {
         self.echec = false;
         self.courant = cible;
         self.courant_musical = musicale;
+    }
+
+    /// Le preset `ancien` s'appelle maintenant `nouveau` (les règles qui le citent sont réécrites
+    /// avec lui) : s'il est en place, il garde sa place sous son nouveau nom, sans être réappliqué
+    /// (ce qui effacerait les retouches faites pendant la règle).
+    fn renomme(&mut self, ancien: &str, nouveau: &str) {
+        let suit = |p: &mut Option<String>| {
+            if p.as_deref().is_some_and(|n| profils::meme_nom(n, ancien)) {
+                *p = Some(nouveau.to_owned());
+            }
+        };
+        suit(&mut self.courant);
+        if let Some((vue, _)) = self.attente.as_mut() {
+            suit(vue);
+        }
     }
 
     /// Note au journal (une fois chacune) les règles dont la condition est illisible.
@@ -527,6 +545,18 @@ mod tests {
         std::fs::write(&p, "avant = 3").unwrap();
         assert!(lire_avant_in(&p).is_none() && !p.exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn preset_renomme_pendant_sa_regle_reste_en_place() {
+        let mut a = Auto { courant: Some("Soirée".into()), ..Default::default() };
+        a.attente = Some((Some("soirée".into()), Instant::now()));
+        a.renomme("Soirée", "Nuit");
+        assert_eq!(a.courant.as_deref(), Some("Nuit"));
+        assert_eq!(a.attente.as_ref().and_then(|x| x.0.as_deref()), Some("Nuit"));
+        // un autre preset renommé ne change rien
+        a.renomme("Calme", "Doux");
+        assert_eq!(a.courant.as_deref(), Some("Nuit"));
     }
 
     #[test]

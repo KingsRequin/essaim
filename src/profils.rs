@@ -298,8 +298,22 @@ pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
     let r = std::fs::rename(fichier(ancien), &cible);
     ecrit();
     r.map_err(|_| format!("aucun profil « {ancien} »"))?;
+    // le preset automatique l'apprend avant de voir les règles réécrites : un preset en place par
+    // une règle change de nom sans être réappliqué (les retouches faites pendant la règle restent)
+    if let Ok(mut r) = RENOMMES.lock() {
+        r.push((ancien.to_owned(), nouveau.to_owned()));
+    }
     regles_suivent(ancien, Some(nouveau));
     Ok(nouveau.to_owned())
+}
+
+/// Renommages faits depuis la fenêtre des réglages, pas encore vus par le preset automatique
+/// (`auto.rs`, fil principal).
+static RENOMMES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Renommages (ancien nom, nouveau) faits depuis le dernier appel, dans l'ordre.
+pub fn renommages() -> Vec<(String, String)> {
+    RENOMMES.lock().map(|mut r| std::mem::take(&mut *r)).unwrap_or_default()
 }
 
 /// Les règles `[automatique]` qui citent le preset `ancien` passent à `nouveau` (renommage) ou

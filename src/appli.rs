@@ -14,7 +14,7 @@ use std::ffi::c_void;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{
@@ -27,7 +27,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Shell::ExtractIconExW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, GetForegroundWindow, GetIconInfo, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, HICON,
+    DestroyIcon, FindWindowExW, GetForegroundWindow, GetIconInfo, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, HICON,
     ICONINFO,
 };
 
@@ -388,8 +388,26 @@ pub fn applis_ouvertes() -> Vec<String> {
     liste
 }
 
-/// Chemin de l'exécutable de la fenêtre (aucun pour les fenêtres d'Essaim).
+/// Chemin de l'exécutable de la fenêtre (aucun pour les fenêtres d'Essaim). Une application du
+/// Store est hébergée par `ApplicationFrameHost.exe` : c'est l'exécutable de sa fenêtre de
+/// contenu (enfant de classe `Windows.UI.Core.CoreWindow`) qui est donné. Réduite ou suspendue,
+/// cette fenêtre n'est plus l'enfant du cadre : l'hôte est donné.
 fn executable(hwnd: HWND) -> Option<String> {
+    let exe = executable_du_processus(hwnd)?;
+    if !hote_du_store(&exe) {
+        return Some(exe);
+    }
+    let contenu = unsafe { FindWindowExW(Some(hwnd), None, w!("Windows.UI.Core.CoreWindow"), PCWSTR::null()) }.ok();
+    Some(contenu.and_then(executable_du_processus).unwrap_or(exe))
+}
+
+/// Le chemin désigne-t-il l'hôte des fenêtres du Store (`ApplicationFrameHost.exe`) ?
+fn hote_du_store(exe: &str) -> bool {
+    nom_exe(exe) == "applicationframehost.exe"
+}
+
+/// Chemin de l'exécutable du processus de la fenêtre (aucun pour Essaim lui-même).
+fn executable_du_processus(hwnd: HWND) -> Option<String> {
     unsafe {
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
@@ -525,7 +543,14 @@ pub fn teinte_dominante(bgra: &[u8]) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::teinte_dominante;
+    use super::{hote_du_store, teinte_dominante};
+
+    #[test]
+    fn hote_des_applis_du_store_reconnu() {
+        assert!(hote_du_store(r"C:\Windows\System32\ApplicationFrameHost.exe"));
+        assert!(hote_du_store("applicationframehost.exe"));
+        assert!(!hote_du_store(r"C:\Program Files\WindowsApps\Microsoft.WindowsCalculator\CalculatorApp.exe"));
+    }
 
     fn image(pixels: &[([u8; 3], usize)]) -> Vec<u8> {
         pixels.iter().flat_map(|&([r, g, b], n)| std::iter::repeat_n([b, g, r, 255], n).flatten()).collect()

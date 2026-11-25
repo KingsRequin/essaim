@@ -238,11 +238,7 @@ impl Pinceau {
     /// de `planche_pastilles` sur le même périphérique.
     pub unsafe fn peindre(&mut self, dc: &ID2D1DeviceContext, planche: &ID2D1Bitmap1, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<()> {
         let sprites = &mut self.sprites;
-        sprites.rects.clear();
-        sprites.sources.clear();
-        sprites.colors.clear();
-        sprites.voiles.clear();
-        sprites.vignette.place = None;
+        sprites.vider();
         // pixels par unité de dessin (la fenêtre pour le stream agrandit l'essaim)
         let mut m = Matrix3x2::default();
         unsafe { dc.GetTransform(&mut m) };
@@ -457,7 +453,30 @@ fn opacite_recouverte(alpha: f32, cover: f32) -> f32 {
     1.0 - (1.0 - alpha.clamp(0.0, 0.999)).powf(1.0 / cover)
 }
 
+/// Vide `v` pour l'image suivante ; si sa place dépasse de loin ce que l'image d'avant a pris
+/// (une image pathologique, un halo démesuré), elle est rendue : la mémoire ne reste pas au
+/// niveau d'une pointe pour toute la session.
+fn vider<T>(v: &mut Vec<T>) {
+    let n = v.len();
+    v.clear();
+    if v.capacity() > RENDRE_AU_DELA && v.capacity() > 4 * n {
+        v.shrink_to(n);
+    }
+}
+
+/// Place (en éléments) en deçà de laquelle un `Vec` des pastilles n'est jamais rendu.
+const RENDRE_AU_DELA: usize = 100_000;
+
 impl SpriteCanvas {
+    /// Vide les pastilles et les voiles de l'image précédente (`vider`).
+    fn vider(&mut self) {
+        vider(&mut self.rects);
+        vider(&mut self.sources);
+        vider(&mut self.colors);
+        vider(&mut self.voiles);
+        self.vignette.place = None;
+    }
+
     /// Rayon minimal d'une pastille, en unités de dessin.
     fn r_min(&self) -> f32 {
         R_MIN_PX / self.echelle
@@ -637,6 +656,16 @@ mod tests {
             s.line((0.0, 0.0), (1.0e9, 0.0), 2.0, (255, 0, 0), 1.0, true);
         }
         assert_eq!(s.rects.len(), MAX_PASTILLES);
+        // image suivante ordinaire : la place de la pointe reste le temps d'une image, puis est rendue
+        s.vider();
+        assert!(s.rects.capacity() >= MAX_PASTILLES, "image d'avant pleine : rien n'est rendu");
+        s.circle(0.0, 0.0, 3.0, (255, 0, 0), 1.0);
+        s.vider();
+        assert!(s.rects.capacity() < RENDRE_AU_DELA && s.colors.capacity() < RENDRE_AU_DELA, "{}", s.rects.capacity());
+        // une place modeste n'est jamais rendue (pas de réallocation à chaque image)
+        let mut v: Vec<u8> = Vec::with_capacity(RENDRE_AU_DELA);
+        vider(&mut v);
+        assert_eq!(v.capacity(), RENDRE_AU_DELA);
     }
 
     #[test]
