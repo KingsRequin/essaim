@@ -191,7 +191,12 @@ fn main() {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--restaurer-bordure") {
-        bordure::restore();
+        // instance en cours : seulement la couleur, son témoin reste son filet
+        if instance_lancee() {
+            bordure::rendre_couleur_seule();
+        } else {
+            bordure::restore();
+        }
         return;
     }
     let open_settings = args.iter().any(|a| a == "--reglages");
@@ -215,6 +220,9 @@ fn main() {
                 let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
         }
+        // rendre la main seulement une fois l'instance sortie : un lancement juste après ne
+        // tombe pas sur son verrou
+        win::attendre_fin_instance(VERROU, Duration::from_secs(5));
         return;
     }
     // verrou d'instance unique, gardé jusqu'à la fin (ou rendu avant de relancer)
@@ -241,7 +249,9 @@ fn main() {
     let principal = std::thread::current().id();
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if std::thread::current().id() == principal {
+        // panique arrêtée dans une procédure de fenêtre (`win::sans_panique`) : l'essaim continue
+        // et colore encore, la bordure et son témoin restent
+        if std::thread::current().id() == principal && !win::panique_arretee() {
             bordure::restore();
         }
         log::error!("plantage : {info}");
@@ -253,6 +263,10 @@ fn main() {
         false
     });
     bordure::restore();
+    // une mise à jour en train de remplacer l'exécutable, ou des curseurs en cours d'écriture,
+    // finissent avant la sortie (sinon : plus d'essaim.exe, ou un jeu de curseurs à moitié écrit)
+    maj::attendre_remplacement(Duration::from_secs(10));
+    souris::attendre_curseurs(Duration::from_secs(2));
     // nouvelle version en place : le verrou est rendu avant de lancer la suivante
     if let (true, Some(exe)) = (relancer, maj::exe()) {
         if let Ok(v) = verrou {
@@ -340,6 +354,14 @@ impl Son {
             (self.capture, self.lancee) = (None, None);
             self.reessai = None;
             log::info!("son : sortie ou applications écoutées changées, capture relancée");
+        }
+        // fil de capture terminé de lui-même (panique rattrapée, `lost` déjà appelé) : relancé
+        // après le délai habituel (une panique qui revient ne relance pas à chaque image)
+        if self.capture.as_ref().is_some_and(|c| !c.actif()) {
+            (self.capture, self.lancee) = (None, None);
+            shared.reset();
+            self.reessai = Some(now + SON_REESSAI);
+            log::error!("son : le fil de capture s'est arrêté seul, nouvel essai dans 30 s");
         }
         if !voulu {
             self.reessai = None;
@@ -845,7 +867,6 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         border.tick(true, &cfg.bordure, rgb, now);
         let env = swarm.env;
         let dessiner = |cv: &mut dyn canvas::Canvas, here: bool| {
-            effets.dessiner_voile(cv, cfg, t, scale);
             for c in &cracks {
                 let age = t - c.born;
                 // éclat coloré au début et sur les kicks, fondu sur la dernière seconde
@@ -859,6 +880,13 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             }
         };
         let draw = |cv: &mut dyn canvas::Canvas, here: bool| {
+            // le voile du projecteur sous tout le reste, habillage compris (comme le moteur carte
+            // graphique, qui le pose avant le lot de sprites) ; il s'estompe avec l'essaim
+            if eveil < 1.0 {
+                effets.dessiner_voile(&mut canvas::Fondu { cv: &mut *cv, k: eveil }, cfg, t, scale);
+            } else {
+                effets.dessiner_voile(cv, cfg, t, scale);
+            }
             // l'habillage ne s'estompe pas avec l'essaim : il reste pendant la veille
             effets.dessiner_loin(cv, cfg, t, scale);
             if eveil < 1.0 {

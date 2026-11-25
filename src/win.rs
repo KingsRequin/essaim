@@ -29,11 +29,42 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 static OVERLAY_CLASS: Once = Once::new();
 const CLASSE_CALQUE: PCWSTR = w!("EssaimOverlay");
 
-extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    if msg == WM_NCHITTEST {
-        return LRESULT(HTTRANSPARENT as isize);
+/// Exécute le corps d'une procédure de fenêtre (ou d'un autre rappel de Windows) en arrêtant une
+/// panique à sa frontière : sortie d'une fonction `extern "system"`, elle arrêterait le processus
+/// d'un coup (`abort`), sans passer par le filtre de plantage qui rend la bordure. Le gestionnaire
+/// de paniques l'a déjà notée au journal ; `None` : le corps a paniqué.
+pub fn sans_panique<T>(lieu: &str, corps: impl FnOnce() -> T) -> Option<T> {
+    // le crochet de panique de `main` ne rend pas la bordure pour une panique arrêtée ici :
+    // l'essaim continue et colore encore
+    let avant = ARRETEE.with(|a| a.replace(true));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(corps));
+    ARRETEE.with(|a| a.set(avant));
+    match r {
+        Ok(r) => Some(r),
+        Err(_) => {
+            log::error!("{lieu} : panique arrêtée");
+            None
+        }
     }
-    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+}
+
+thread_local! {
+    static ARRETEE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Vrai pendant un corps protégé par `sans_panique` : une panique y sera arrêtée.
+pub fn panique_arretee() -> bool {
+    ARRETEE.with(|a| a.get())
+}
+
+extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let corps = || {
+        if msg == WM_NCHITTEST {
+            return LRESULT(HTTRANSPARENT as isize);
+        }
+        unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+    };
+    sans_panique("calque", corps).unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
 pub struct Surface {
@@ -849,6 +880,19 @@ unsafe fn menu(hwnd: HWND) {
 }
 
 extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    sans_panique("icône de notification", || unsafe { tray_message(hwnd, msg, wp, lp) }).unwrap_or_else(|| {
+        // « Fermer » n'est pas laissé à Windows, qui détruirait la fenêtre de l'icône : la
+        // fermeture passe par la boucle principale
+        if msg == WM_CLOSE {
+            commande(CMD_QUIT);
+            LRESULT(0)
+        } else {
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
+    })
+}
+
+unsafe fn tray_message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if msg == WM_TRAY {
             let ev = (lp.0 & 0xFFFF) as u32;
@@ -1103,6 +1147,27 @@ pub fn open_url(url: &str) {
     let wide: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
     unsafe {
         ShellExecuteW(None, w!("open"), PCWSTR(wide.as_ptr()), None, None, SW_SHOWNORMAL);
+    }
+}
+
+/// Attend, `delai` au plus, que le verrou nommé `verrou` (celui de l'instance unique) n'existe
+/// plus : l'instance qui le tenait est sortie (Windows le détruit avec la dernière poignée, à la
+/// fin du processus). Vrai si c'est fait.
+pub fn attendre_fin_instance(verrou: PCWSTR, delai: Duration) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+    let fin = Instant::now() + delai;
+    loop {
+        match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, verrou) } {
+            Err(_) => return true,
+            Ok(h) => unsafe {
+                let _ = CloseHandle(h);
+            },
+        }
+        if Instant::now() >= fin {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

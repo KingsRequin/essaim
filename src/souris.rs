@@ -121,26 +121,69 @@ pub fn actuel() -> String {
     lire_texte(HKEY_CURRENT_USER, CURSEURS, "").unwrap_or_default()
 }
 
+/// Tenu pendant chaque écriture des valeurs de `HKCU\Control Panel\Cursors` : deux fils
+/// (fenêtre des réglages, règle automatique) ne mêlent pas leurs jeux, et la sortie d'Essaim
+/// attend la fin d'une écriture commencée (`attendre_curseurs`). Il n'est pas tenu pendant
+/// `SPI_SETCURSORS`, qui prévient toutes les fenêtres (dont celles du fil principal, qui
+/// pourrait attendre ce verrou).
+static ECRITURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Essaim se ferme : plus aucune écriture ne commence.
+static FERMETURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Écrit sous `ECRITURE`, sauf si Essaim se ferme.
+fn ecrire<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let _verrou = ECRITURE.lock().unwrap_or_else(|e| e.into_inner());
+    if FERMETURE.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Essaim se ferme".into());
+    }
+    f()
+}
+
+/// Fait recharger les curseurs par Windows depuis le registre ; l'appel peut signaler un échec
+/// (code d'erreur périmé) alors que les curseurs ont bien changé : noté, sans plus.
+fn recharger() {
+    if let Err(e) = unsafe { SystemParametersInfoW(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE) } {
+        log::info!("curseurs : SPI_SETCURSORS a renvoyé {e}");
+    }
+}
+
+/// À la sortie d'Essaim : plus aucune écriture de curseurs ne commence, et celle en cours est
+/// attendue `delai` au plus. Faux si le délai est passé avant sa fin.
+pub fn attendre_curseurs(delai: std::time::Duration) -> bool {
+    FERMETURE.store(true, std::sync::atomic::Ordering::SeqCst);
+    let fin = std::time::Instant::now() + delai;
+    loop {
+        match ECRITURE.try_lock() {
+            Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => return true,
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        if std::time::Instant::now() >= fin {
+            log::warn!("curseurs : écriture encore en cours à la sortie");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// Installe le jeu `cle`, comme le bouton Appliquer du panneau de la souris.
 pub fn installer(cle: &str) -> Result<(), String> {
     let jeux = jeux();
     let jeu = jeux.iter().find(|j| j.cle == cle).ok_or_else(|| format!("jeu de curseurs « {cle} » introuvable"))?;
-    let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, true).ok_or("réglages des curseurs de Windows inaccessibles")?;
     let texte = |s: &str| s.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
-    unsafe {
-        for (i, role) in ROLES.iter().enumerate() {
-            let f = jeu.fichiers.get(i).map(String::as_str).unwrap_or("");
-            let _ = RegSetValueExW(k.0, &HSTRING::from(*role), None, REG_EXPAND_SZ, Some(&texte(f)));
+    ecrire(|| {
+        let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, true).ok_or("réglages des curseurs de Windows inaccessibles")?;
+        unsafe {
+            for (i, role) in ROLES.iter().enumerate() {
+                let f = jeu.fichiers.get(i).map(String::as_str).unwrap_or("");
+                let _ = RegSetValueExW(k.0, &HSTRING::from(*role), None, REG_EXPAND_SZ, Some(&texte(f)));
+            }
+            let _ = RegSetValueExW(k.0, PCWSTR::null(), None, REG_SZ, Some(&texte(&jeu.cle)));
+            let source: u32 = if jeu.systeme { 2 } else { 1 };
+            let _ = RegSetValueExW(k.0, w!("Scheme Source"), None, REG_DWORD, Some(&source.to_le_bytes()));
         }
-        let _ = RegSetValueExW(k.0, PCWSTR::null(), None, REG_SZ, Some(&texte(&jeu.cle)));
-        let source: u32 = if jeu.systeme { 2 } else { 1 };
-        let _ = RegSetValueExW(k.0, w!("Scheme Source"), None, REG_DWORD, Some(&source.to_le_bytes()));
-        // recharge les curseurs depuis le registre ; l'appel peut signaler un échec (code
-        // d'erreur périmé) alors que les curseurs ont bien changé : noté, sans plus
-        if let Err(e) = SystemParametersInfoW(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE) {
-            log::info!("curseurs : SPI_SETCURSORS a renvoyé {e}");
-        }
-    }
+        Ok(())
+    })?;
+    recharger();
     log::info!("curseurs : jeu « {} » installé", jeu.nom);
     Ok(())
 }
@@ -242,23 +285,31 @@ impl Etat {
     }
 }
 
-/// Remet des curseurs gardés par `etat`, puis les fait recharger par Windows.
-pub fn restaurer(etat: &Etat) -> Result<(), String> {
-    let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, true).ok_or("réglages des curseurs de Windows inaccessibles")?;
-    unsafe {
-        for (nom, valeur) in &etat.0 {
-            let nom = HSTRING::from(*nom);
-            let _ = match valeur {
-                Some((genre, octets)) => RegSetValueExW(k.0, &nom, None, REG_VALUE_TYPE(*genre), Some(octets)),
-                None => RegDeleteValueW(k.0, &nom),
-            };
+/// Remet les curseurs gardés par `etat` si `condition`, lue sur les curseurs en place sous le
+/// même verrou que l'écriture (aucun autre jeu ne s'installe entre la lecture et l'écriture).
+/// Vrai s'ils ont été remis.
+pub fn restaurer_si(etat: &Etat, condition: impl FnOnce(Option<&Etat>) -> bool) -> Result<bool, String> {
+    let remis = ecrire(|| {
+        if !condition(self::etat().as_ref()) {
+            return Ok(false);
         }
-        if let Err(e) = SystemParametersInfoW(SPI_SETCURSORS, 0, None, SPIF_SENDCHANGE) {
-            log::info!("curseurs : SPI_SETCURSORS a renvoyé {e}");
+        let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, true).ok_or("réglages des curseurs de Windows inaccessibles")?;
+        unsafe {
+            for (nom, valeur) in &etat.0 {
+                let nom = HSTRING::from(*nom);
+                let _ = match valeur {
+                    Some((genre, octets)) => RegSetValueExW(k.0, &nom, None, REG_VALUE_TYPE(*genre), Some(octets)),
+                    None => RegDeleteValueW(k.0, &nom),
+                };
+            }
         }
+        Ok(true)
+    })?;
+    if remis {
+        recharger();
+        log::info!("curseurs : curseurs d'avant remis");
     }
-    log::info!("curseurs : curseurs d'avant remis");
-    Ok(())
+    Ok(remis)
 }
 
 /// Remplace les `%VARIABLE%` d'un chemin.

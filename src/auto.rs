@@ -14,9 +14,12 @@ use std::time::{Duration, Instant};
 const STABLE: Duration = Duration::from_secs(1);
 /// … et celui dû à la musique (artiste, titre, tempo), ce temps-là.
 const STABLE_MUSIQUE: Duration = Duration::from_secs(2);
-/// Réglages d'avant repris au démarrage : le morceau et son tempo ont ce temps pour être relus
-/// avant que la règle soit tenue pour finie.
+/// Réglages d'avant repris au démarrage : la règle n'est tenue pour finie qu'une fois le tempo
+/// relu et ce temps passé…
 const STABLE_REPRISE: Duration = Duration::from_secs(10);
+/// … ou, tempo encore inconnu (il faut quelques secondes de musique, et la capture peut démarrer
+/// tard), ce temps-là : sans lui, une règle sur le tempo serait retirée puis remise.
+const STABLE_REPRISE_SANS_TEMPO: Duration = Duration::from_secs(20);
 
 /// Fichier des réglages d'avant une règle en cours.
 fn fichier_avant() -> PathBuf {
@@ -171,7 +174,7 @@ impl Auto {
         // un changement n'est fait que s'il tient un moment
         if a.actif {
             let stable = if self.repris && cible.is_none() {
-                STABLE_REPRISE
+                if self.bpm.is_some() { STABLE_REPRISE } else { STABLE_REPRISE_SANS_TEMPO }
             } else if musicale || self.courant_musical {
                 STABLE_MUSIQUE
             } else {

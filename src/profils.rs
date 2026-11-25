@@ -91,12 +91,17 @@ fn list_in(dir: &Path) -> Vec<Profile> {
     // relevées avant la lecture : une écriture faite pendant celle-ci invalide le résultat
     let ecritures = ECRITURES.load(Ordering::Relaxed);
     let emp = empreinte(dir);
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(c) = cache.as_ref().filter(|c| c.dossier == dir && c.empreinte == emp && c.ecritures == ecritures) {
-        return c.liste.clone();
+    {
+        let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = cache.as_ref().filter(|c| c.dossier == dir && c.empreinte == emp && c.ecritures == ecritures) {
+            return c.liste.clone();
+        }
     }
+    // lecture hors du verrou : les autres fils (menu de l'icône, boucle principale) n'attendent
+    // pas la lecture de tous les presets ; deux lectures simultanées écrivent chacune un cache
+    // juste pour son empreinte, une autre empreinte le fait relire
     let liste = lire_liste(dir);
-    *cache = Some(Cache { dossier: dir.to_owned(), empreinte: emp, ecritures, liste: liste.clone() });
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Cache { dossier: dir.to_owned(), empreinte: emp, ecritures, liste: liste.clone() });
     liste
 }
 
@@ -243,6 +248,17 @@ pub fn existe(nom: &str) -> bool {
 
 fn existe_in(dir: &Path, nom: &str) -> bool {
     check_name(nom).is_ok_and(|n| existant_in(dir, n).is_some())
+}
+
+/// Nom du fichier du preset de l'utilisateur qui porte déjà ce nom à la casse près (« Soirée »
+/// pour « SOIRÉE ») : le remplacer garde son nom au lieu de le renommer.
+pub fn nom_existant(nom: &str) -> Option<String> {
+    nom_existant_in(&dir(), nom)
+}
+
+fn nom_existant_in(dir: &Path, nom: &str) -> Option<String> {
+    let p = existant_in(dir, check_name(nom).ok()?)?;
+    p.file_stem().map(|s| s.to_string_lossy().into_owned())
 }
 
 /// Fichier d'un profil de l'utilisateur.
@@ -549,8 +565,7 @@ pub fn remettre(avant: &Avant) -> Result<(), String> {
     config::apply_keys(&cfg, in_profile)?;
     config::request_reload();
     match &avant.curseurs {
-        Some(e) if crate::souris::etat().as_ref() != Some(e) => crate::souris::restaurer(e),
-        Some(_) => Ok(()),
+        Some(e) => crate::souris::restaurer_si(e, |en_place| en_place != Some(e)).map(|_| ()),
         None if !avant.jeu.is_empty() && avant.jeu != crate::souris::actuel() => crate::souris::installer(&avant.jeu),
         None => Ok(()),
     }
@@ -567,7 +582,7 @@ pub fn remettre_partiel(avant: &Avant, apres: &Avant) -> Result<(), String> {
     }
     // curseurs : seulement s'ils sont toujours ceux mis par la règle
     match (&avant.curseurs, &apres.curseurs) {
-        (Some(a), Some(p)) if a != p && crate::souris::etat().as_ref() == Some(p) => crate::souris::restaurer(a),
+        (Some(a), Some(p)) if a != p => crate::souris::restaurer_si(a, |en_place| en_place == Some(p)).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -716,6 +731,9 @@ mod tests {
         save_in(&d.0, "Soirée", &Config::default()).unwrap();
         assert!(existe_in(&d.0, "SOIRÉE") && existe_in(&d.0, " soirée ") && !existe_in(&d.0, "Matin"));
         assert!(!existe_in(&d.0, "../Soirée"), "nom invalide");
+        // remplacé sous un nom tapé dans une autre casse : le fichier garde le sien
+        assert_eq!(nom_existant_in(&d.0, " SOIRÉE ").as_deref(), Some("Soirée"));
+        assert_eq!(nom_existant_in(&d.0, "Matin"), None);
         // nom donné dans une autre casse : la copie part du vrai nom
         assert_eq!(dupliquer_in(&d.0, "soirée").unwrap(), "Soirée (copie)");
         assert_eq!(dupliquer_in(&d.0, "Soirée").unwrap(), "Soirée (copie 2)");

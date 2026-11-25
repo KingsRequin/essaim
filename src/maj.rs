@@ -165,8 +165,37 @@ fn reserver() -> bool {
     if prete().is_some() || EN_COURS.swap(true, Ordering::SeqCst) {
         return false;
     }
+    // une recherche a pu finir (version prête) entre la vérification et la réservation
+    if prete().is_some() {
+        EN_COURS.store(false, Ordering::SeqCst);
+        return false;
+    }
     noter(Etat::Recherche);
     true
+}
+
+/// Tenu pendant le remplacement de l'exécutable : la sortie d'Essaim l'attend
+/// (`attendre_remplacement`), pour ne pas laisser l'exécutable à moitié déplacé.
+static REMPLACEMENT: Mutex<()> = Mutex::new(());
+/// Essaim se ferme : aucun remplacement ne commence plus.
+static FERMETURE: AtomicBool = AtomicBool::new(false);
+
+/// À la sortie d'Essaim : plus aucun remplacement ne commence, et celui en cours est attendu
+/// `delai` au plus. Faux si le délai est passé avant sa fin.
+pub fn attendre_remplacement(delai: Duration) -> bool {
+    FERMETURE.store(true, Ordering::SeqCst);
+    let fin = std::time::Instant::now() + delai;
+    loop {
+        match REMPLACEMENT.try_lock() {
+            Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => return true,
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        if std::time::Instant::now() >= fin {
+            log::warn!("mise à jour : remplacement de l'exécutable encore en cours à la sortie");
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// La recherche, une fois réservée (`reserver`) : son résultat reste dans `ETAT`.
@@ -277,8 +306,29 @@ fn deplacer(de: &Path, vers: &Path, attentes: &[Duration]) -> std::io::Result<()
 /// Met `octets` à la place de l'exécutable en cours ; l'ancien reste sous `.ancien`. Chaque
 /// déplacement est réessayé (antivirus) ; si la nouvelle version ne peut pas prendre la place
 /// libérée, l'ancienne y revient, par copie en dernier recours : il ne manque jamais d'exécutable.
+/// Tenu pendant tout le remplacement (`REMPLACEMENT`) ; refusé si Essaim se ferme.
 fn remplacer(exe: &Path, octets: &[u8]) -> anyhow::Result<()> {
+    let _verrou = REMPLACEMENT.lock().unwrap_or_else(|e| e.into_inner());
+    if FERMETURE.load(Ordering::SeqCst) {
+        bail!("Essaim se ferme : remplacement remis au prochain lancement");
+    }
     remplacer_avec(exe, octets, &ATTENTES_DEPLACEMENT)
+}
+
+/// Attend que `p` puisse être ouvert sans partage (un antivirus qui examine le fichier tout juste
+/// écrit le garde ouvert), en réessayant après chacune des `attentes`. Faux s'il est encore tenu.
+fn attendre_libre(p: &Path, attentes: &[Duration]) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    let mut attentes = attentes.iter();
+    loop {
+        if std::fs::OpenOptions::new().read(true).share_mode(0).open(p).is_ok() {
+            return true;
+        }
+        match attentes.next() {
+            Some(&d) => std::thread::sleep(d),
+            None => return false,
+        }
+    }
 }
 
 fn remplacer_avec(exe: &Path, octets: &[u8], attentes: &[Duration]) -> anyhow::Result<()> {
@@ -298,6 +348,11 @@ fn remplacer_avec(exe: &Path, octets: &[u8], attentes: &[Duration]) -> anyhow::R
     if let Err(e) = ecrire() {
         let _ = std::fs::remove_file(&neuf);
         bail!("écriture de {} impossible : {e}", neuf.display());
+    }
+    // la nouvelle version libre (antivirus fini) avant de toucher à l'exécutable en cours : moins
+    // de temps où il n'est plus à sa place. Encore tenue, la suite réessaie quand même.
+    if !attendre_libre(&neuf, attentes) {
+        log::info!("mise à jour : {} encore ouvert par un autre programme", neuf.display());
     }
     let _ = std::fs::remove_file(&vieux);
     // Windows permet de renommer un exécutable lancé ; tant que ceci échoue, rien n'a bougé
@@ -567,6 +622,25 @@ mod tests {
         fil.join().unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), b"MZ ancienne");
         assert!(!nouveau(&exe).exists());
+        let _ = std::fs::remove_dir_all(&dossier);
+    }
+
+    #[test]
+    fn attend_que_la_nouvelle_version_soit_libre() {
+        let dossier = std::env::temp_dir().join(format!("essaim-maj-libre-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let f = dossier.join("essaim.exe.nouveau");
+        std::fs::write(&f, b"MZ").unwrap();
+        let attentes = [Duration::from_millis(100), Duration::from_millis(200), Duration::from_millis(300)];
+        assert!(attendre_libre(&f, &attentes));
+        // tenu un instant (antivirus) : attendu
+        let fil = verrouiller(&f, Duration::from_millis(150));
+        assert!(attendre_libre(&f, &attentes));
+        fil.join().unwrap();
+        // tenu tout du long : abandon après les essais
+        let fil = verrouiller(&f, Duration::from_secs(2));
+        assert!(!attendre_libre(&f, &attentes));
+        fil.join().unwrap();
         let _ = std::fs::remove_dir_all(&dossier);
     }
 

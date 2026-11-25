@@ -55,6 +55,24 @@ enum Resultat {
 }
 
 impl Travail {
+    /// Réponse vide (rien de trouvé), pour un travail qui a échoué.
+    fn vide(&self) -> Resultat {
+        match self {
+            Travail::Page(h) => Resultat::Page(*h, None),
+            Travail::TeinteIcone(exe) => Resultat::TeinteIcone(exe.clone(), None),
+            Travail::Contours(exe) => Resultat::Contours(exe.clone(), Vec::new()),
+        }
+    }
+
+    /// Fait le travail ; une panique (icône abîmée…) donne une réponse vide et le fil continue.
+    fn faire_sans_panique(self) -> Resultat {
+        let vide = self.vide();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.faire())).unwrap_or_else(|_| {
+            log::error!("teinte et contours des applications : panique arrêtée, réponse vide");
+            vide
+        })
+    }
+
     fn faire(self) -> Resultat {
         match self {
             Travail::Page(h) => Resultat::Page(h, teinte_page(HWND(h as *mut c_void))),
@@ -83,10 +101,10 @@ fn fil_teinte() -> Option<&'static Sender<Demande>> {
             .name("essaim-teinte".into())
             .spawn(move || {
                 for (travail, reponse) in recues {
-                    let _ = reponse.send(travail.faire());
+                    let _ = reponse.send(travail.faire_sans_panique());
                 }
             })
-            .map_err(|e| log::warn!("teinte et contours des applications : fil impossible ({e}), calcul sur place"))
+            .map_err(|e| log::warn!("teinte et contours des applications : fil impossible ({e})"))
             .ok()?;
         Some(demandes)
     })
@@ -107,16 +125,11 @@ impl Default for Boite {
 }
 
 impl Boite {
-    /// Confie `travail` au fil ; sans fil, le fait sur place (la réponse attend dans la boîte).
-    fn demander(&self, travail: Travail) {
-        let travail = match fil_teinte() {
-            Some(fil) => match fil.send((travail, self.envoi.clone())) {
-                Ok(()) => return,
-                Err(e) => e.0 .0,
-            },
-            None => travail,
-        };
-        let _ = self.envoi.send(travail.faire());
+    /// Confie `travail` au fil ; faux si le fil manque (jamais lancé, ou arrêté) : le travail
+    /// n'est pas fait, et surtout pas sur place (ce serait sur le fil de rendu).
+    #[must_use]
+    fn demander(&self, travail: Travail) -> bool {
+        fil_teinte().is_some_and(|fil| fil.send((travail, self.envoi.clone())).is_ok())
     }
 
     /// Réponses arrivées depuis le dernier appel, sans attendre.
@@ -166,8 +179,8 @@ impl TeinteAppli {
                 Some(exe) => {
                     self.navigateur = NAVIGATEURS.contains(&nom_exe(&exe).as_str());
                     self.icone = self.cache.get(&exe).copied().flatten();
-                    if !self.cache.contains_key(&exe) && self.demandees.insert(exe.clone()) {
-                        self.boite.demander(Travail::TeinteIcone(exe.clone()));
+                    if !self.cache.contains_key(&exe) && self.demandees.insert(exe.clone()) && !self.boite.demander(Travail::TeinteIcone(exe.clone())) {
+                        self.demandees.remove(&exe);
                     }
                     self.exe = exe;
                     (self.titre, self.mesure, self.titre_lu) = (String::new(), Some(now + Duration::from_millis(300)), None);
@@ -209,8 +222,8 @@ impl TeinteAppli {
             }
             if self.mesure.is_some_and(|m| now >= m) && !self.page_en_cours {
                 self.mesure = Some(now + Duration::from_secs(3));
-                self.page_en_cours = true;
-                self.boite.demander(Travail::Page(self.fenetre));
+                // sans fil : pas de mesure en cours (la suivante réessaie dans 3 s)
+                self.page_en_cours = self.boite.demander(Travail::Page(self.fenetre));
             }
             if let Some(page) = page {
                 if let Some(t) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
@@ -333,8 +346,8 @@ impl IconeAppli {
             return None;
         }
         let Some(contours) = self.cache.get(&self.derniere) else {
-            if self.demandes.insert(self.derniere.clone()) {
-                self.boite.demander(Travail::Contours(self.derniere.clone()));
+            if self.demandes.insert(self.derniere.clone()) && !self.boite.demander(Travail::Contours(self.derniere.clone())) {
+                self.demandes.remove(&self.derniere);
             }
             return None;
         };
@@ -354,12 +367,15 @@ pub fn applis_ouvertes() -> Vec<String> {
     use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
     unsafe extern "system" fn chaque(h: HWND, l: LPARAM) -> windows::core::BOOL {
         let liste = unsafe { &mut *(l.0 as *mut Vec<String>) };
-        if unsafe { IsWindowVisible(h) }.as_bool() && !titre(h).is_empty() {
-            if let Some(exe) = executable(h) {
-                let nom = nom_exe(&exe);
-                if !liste.contains(&nom) {
-                    liste.push(nom);
-                }
+        if !unsafe { IsWindowVisible(h) }.as_bool() {
+            return true.into();
+        }
+        // l'exécutable d'abord : il écarte les fenêtres d'Essaim, dont `GetWindowTextW`
+        // demanderait le titre par un message à leur fil (qui peut attendre celui-ci)
+        if let Some(exe) = executable(h).filter(|_| !titre(h).is_empty()) {
+            let nom = nom_exe(&exe);
+            if !liste.contains(&nom) {
+                liste.push(nom);
             }
         }
         true.into()

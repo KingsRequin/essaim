@@ -174,21 +174,41 @@ enum Request {
     OpenConfig,
 }
 
-pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
-    let listener = match TcpListener::bind(("127.0.0.1", PORT)) {
-        Ok(l) => l,
-        Err(e) => {
-            log::warn!("interface locale : port {PORT} indisponible ({e})");
-            return;
+/// Essais d'ouverture du port : à une relance (mise à jour, `--quitter` puis lancement), l'instance
+/// d'avant peut le tenir encore un instant.
+const ESSAIS_PORT: u32 = 10;
+const ATTENTE_PORT: Duration = Duration::from_millis(500);
+
+/// Ouvre le port, en réessayant `essais` fois en tout, `attente` entre deux.
+fn ecouter(essais: u32, attente: Duration) -> std::io::Result<TcpListener> {
+    let mut i = 1;
+    loop {
+        match TcpListener::bind(("127.0.0.1", PORT)) {
+            Ok(l) => return Ok(l),
+            Err(e) if i >= essais => return Err(e),
+            Err(_) => {
+                i += 1;
+                std::thread::sleep(attente);
+            }
         }
-    };
-    log::info!("interface locale : ws://127.0.0.1:{PORT}");
-    if let Err(e) = ecrire_jeton(&crate::config::dir()) {
-        log::warn!("interface locale : jeton non écrit ({e})");
     }
-    let contexte = Arc::new(Contexte::reel());
-    let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let _ = std::thread::Builder::new().name("essaim-ipc".into()).spawn(move || {
+}
+
+pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
+    let lance = std::thread::Builder::new().name("essaim-ipc".into()).spawn(move || {
+        let listener = match ecouter(ESSAIS_PORT, ATTENTE_PORT) {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("interface locale : port {PORT} indisponible ({e})");
+                return;
+            }
+        };
+        log::info!("interface locale : ws://127.0.0.1:{PORT}");
+        if let Err(e) = ecrire_jeton(&crate::config::dir()) {
+            log::warn!("interface locale : jeton non écrit ({e})");
+        }
+        let contexte = Arc::new(Contexte::reel());
+        let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for stream in listener.incoming().flatten() {
             // quelques clients au plus (Horizon, un outil) : pas de fils sans limite
             if clients.load(Ordering::Relaxed) >= MAX_CLIENTS {
@@ -207,6 +227,9 @@ pub fn start(shared: Arc<Shared>, tx: Sender<Cmd>) {
             });
         }
     });
+    if let Err(e) = lance {
+        log::warn!("interface locale : fil impossible à lancer ({e})");
+    }
 }
 
 // signature imposée par tungstenite (rappel de la poignée de main)

@@ -13,7 +13,7 @@ use crate::profils;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroIsize;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -43,28 +43,64 @@ const ATTENTE_PAGE_MS: u32 = 3000;
 /// Adresse de la page : wry sert le protocole `essaim` sous `http://essaim.localhost/`.
 const ORIGINE: &str = "http://essaim.localhost/";
 
-/// Fenêtre ouverte (0 = aucune).
+/// Fenêtre ouverte (0 = aucune ; `OUVERTURE` : place réservée, fenêtre en cours de création).
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
+const OUVERTURE: isize = -1;
+/// Message privé de la fenêtre : « reviens devant », envoyé d'un autre fil (`open`).
+const WM_DEVANT: u32 = WM_APP + 1;
 
-/// Ouvre la fenêtre, ou la ramène devant si elle l'est déjà.
+/// Ouvre la fenêtre, ou la ramène devant si elle l'est déjà. La place est réservée avant de
+/// lancer le fil (`compare_exchange`) : deux demandes rapprochées n'ouvrent qu'une fenêtre.
+/// Appelée par le fil de rendu : rien ici n'attend le fil de la fenêtre.
 pub fn open(son: Arc<AudioShared>) {
-    let h = WINDOW.load(Ordering::Relaxed);
-    if h != 0 {
-        let hwnd = HWND(h as *mut _);
-        unsafe {
-            if IsWindow(Some(hwnd)).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                let _ = SetForegroundWindow(hwnd);
-                return;
+    match WINDOW.compare_exchange(0, OUVERTURE, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => {}
+        // déjà en cours d'ouverture : la fenêtre arrive
+        Err(OUVERTURE) => return,
+        // ouverte : ramenée devant par son propre fil (si elle se ferme à l'instant, le message
+        // se perd et son fil libère la place)
+        Err(h) => {
+            let hwnd = HWND(h as *mut _);
+            unsafe {
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+                }
+                let _ = PostMessageW(Some(hwnd), WM_DEVANT, WPARAM(0), LPARAM(0));
             }
+            return;
         }
     }
-    let _ = std::thread::Builder::new().name("essaim-reglages".into()).spawn(move || {
-        if let Err(e) = run(son) {
+    let lance = std::thread::Builder::new().name("essaim-reglages".into()).spawn(move || {
+        // rend la place à la fin du fil, même s'il panique
+        let place = Place(Cell::new(OUVERTURE));
+        if let Err(e) = run(son, &place) {
             log::warn!("réglages : fenêtre impossible à ouvrir ({e:#})");
         }
-        WINDOW.store(0, Ordering::Relaxed);
     });
+    if let Err(e) = lance {
+        let _ = WINDOW.compare_exchange(OUVERTURE, 0, Ordering::AcqRel, Ordering::Acquire);
+        log::warn!("réglages : fil impossible à lancer ({e})");
+    }
+}
+
+/// Place de la fenêtre tenue par le fil des réglages (`WINDOW`) : la valeur qu'il y a mise
+/// (`OUVERTURE`, puis la fenêtre). Rendue à sa destruction, seulement si elle est encore la sienne.
+struct Place(Cell<isize>);
+
+impl Place {
+    /// La fenêtre est créée : elle prend la place réservée.
+    fn publier(&self, hwnd: HWND) {
+        let h = hwnd.0 as isize;
+        if WINDOW.compare_exchange(self.0.get(), h, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            self.0.set(h);
+        }
+    }
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        let _ = WINDOW.compare_exchange(self.0.get(), 0, Ordering::AcqRel, Ordering::Acquire);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -173,12 +209,15 @@ enum Demande {
 const ZOOMS: [f64; 9] = [0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75];
 const ZOOM_NORMAL: usize = 4;
 
-/// Palier de zoom après la touche `pas` (1 : plus grand, -1 : plus petit, 0 : normal).
-fn zoom_suivant(actuel: usize, pas: i32) -> usize {
+/// Zoom après la touche `pas` (1 : plus grand, -1 : plus petit, 0 : normal), depuis le zoom
+/// `actuel` de la vue : il peut être entre deux paliers (Ctrl+molette le change par petits pas),
+/// le suivant est alors le premier palier au-delà, dans le sens voulu.
+fn zoom_suivant(actuel: f64, pas: i32) -> f64 {
+    const PRES: f64 = 0.005;
     match pas.signum() {
-        0 => ZOOM_NORMAL,
-        1 => (actuel + 1).min(ZOOMS.len() - 1),
-        _ => actuel.saturating_sub(1),
+        0 => ZOOMS[ZOOM_NORMAL],
+        1 => ZOOMS.iter().copied().find(|&z| z > actuel + PRES).unwrap_or(ZOOMS[ZOOMS.len() - 1]),
+        _ => ZOOMS.iter().rev().copied().find(|&z| z < actuel - PRES).unwrap_or(ZOOMS[0]),
     }
 }
 
@@ -202,8 +241,6 @@ struct Fenetre {
     montree: bool,
     /// Dernier état de la mise à jour envoyé à la page (rien au départ).
     maj: Option<crate::maj::Etat>,
-    /// Palier du zoom de la page (dans `ZOOMS`).
-    zoom: usize,
 }
 
 thread_local! {
@@ -211,6 +248,9 @@ thread_local! {
     /// Messages reçus de la page, traités après chaque message Windows (le gestionnaire de
     /// wry n'a pas accès à la vue).
     static RECUS: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    /// Fermeture demandée pendant qu'une demande de la page était traitée (la vue ne pouvait pas
+    /// être détruite à ce moment) : refaite après elle.
+    static FERMER: Cell<bool> = const { Cell::new(false) };
 }
 
 fn dates() -> (Option<SystemTime>, Option<SystemTime>) {
@@ -349,6 +389,9 @@ impl Fenetre {
                         return self.envoyer(&json!({ "type": "existe", "nom": nom.trim() }));
                     }
                 }
+                // un preset remplacé garde le nom de son fichier (« Soirée » remplacé sous
+                // « SOIRÉE » n'est pas renommé)
+                let nom = profils::nom_existant(&nom).unwrap_or(nom);
                 // le preset garde le jeu de curseurs installé en ce moment
                 cfg.souris.jeu = crate::souris::actuel();
                 match profils::save(&nom, &cfg) {
@@ -529,8 +572,13 @@ impl Fenetre {
             }
             Demande::Redemarrer => commande(crate::win::CMD_REDEMARRER),
             Demande::Zoom { pas } => {
-                self.zoom = zoom_suivant(self.zoom, pas);
-                if let Err(e) = self.vue.zoom(ZOOMS[self.zoom]) {
+                // zoom relu à chaque fois : Ctrl+molette le change sans le dire
+                use wry::WebViewExtWindows;
+                let mut actuel = 1.0;
+                if let Err(e) = unsafe { self.vue.controller().ZoomFactor(&mut actuel) } {
+                    log::warn!("réglages : zoom actuel illisible ({e})");
+                }
+                if let Err(e) = self.vue.zoom(zoom_suivant(actuel, pas)) {
                     log::warn!("réglages : zoom impossible ({e})");
                 }
             }
@@ -1007,14 +1055,61 @@ struct Parent(HWND);
 impl HasWindowHandle for Parent {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         let h = NonZeroIsize::new(self.0 .0 as isize).ok_or(HandleError::Unavailable)?;
-        // SAFETY : la fenêtre vit tant que la vue (détruite avant elle, dans `run`).
+        // SAFETY : la fenêtre vit plus longtemps que la vue, détruite avant elle (`WM_CLOSE`,
+        // ou à la fin de `run`).
         Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(Win32WindowHandle::new(h))) })
     }
 }
 
-fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
+/// Page de téléchargement officielle du runtime WebView2 de Microsoft.
+const ADRESSE_WEBVIEW2: &str = "https://developer.microsoft.com/microsoft-edge/webview2/";
+
+/// Le runtime WebView2 est-il installé ? Méthode donnée par Microsoft : la valeur `pv` (version)
+/// de sa clé EdgeUpdate, pour la machine (64 ou 32 bits) ou pour l'utilisateur, existe et n'est
+/// ni vide ni « 0.0.0.0 ».
+fn webview2_installe() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    const CLIENT: &str = "Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+    let cles = [
+        (HKEY_LOCAL_MACHINE, format!("SOFTWARE\\WOW6432Node\\{CLIENT}")),
+        (HKEY_LOCAL_MACHINE, format!("SOFTWARE\\{CLIENT}")),
+        (HKEY_CURRENT_USER, format!("Software\\{CLIENT}")),
+    ];
+    cles.iter().any(|(racine, chemin)| {
+        let mut buf = [0u16; 64];
+        let mut n = std::mem::size_of_val(&buf) as u32;
+        let lu = unsafe {
+            RegGetValueW(*racine, &windows::core::HSTRING::from(chemin), w!("pv"), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as *mut _), Some(&mut n))
+        }
+        .is_ok();
+        let version = String::from_utf16_lossy(&buf[..(n as usize / 2).min(buf.len())]);
+        lu && version_webview2_valide(&version)
+    })
+}
+
+/// Version lue dans `pv` : vide ou « 0.0.0.0 », le runtime n'est pas (ou plus) installé.
+fn version_webview2_valide(version: &str) -> bool {
+    let v = version.trim_end_matches('\0').trim();
+    !v.is_empty() && v != "0.0.0.0"
+}
+
+/// La fenêtre ne peut pas s'ouvrir faute de WebView2 : le dire par une bulle de l'icône, une fois
+/// par lancement (sinon rien ne se passerait au clic), avec l'adresse où le télécharger.
+fn signaler_webview2_absent() {
+    static DIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !DIT.swap(true, Ordering::Relaxed) {
+        crate::win::bulle(&texte_webview2_absent());
+    }
+}
+
+/// Texte de la bulle : il tient dans une bulle (250 caractères au plus, `win::bulle`).
+fn texte_webview2_absent() -> String {
+    format!("Fenêtre des réglages impossible à ouvrir : il manque le runtime WebView2 de Microsoft. Il se télécharge sur {ADRESSE_WEBVIEW2}")
+}
+
+fn run(son: Arc<AudioShared>, place: &Place) -> anyhow::Result<()> {
     let hwnd = unsafe { creer_fenetre()? };
-    WINDOW.store(hwnd.0 as isize, Ordering::Relaxed);
+    place.publier(hwnd);
     barre_de_titre(hwnd);
 
     let recus = RECUS.with(|r| r.clone());
@@ -1050,7 +1145,22 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         .with_default_context_menus(cfg!(debug_assertions))
         .with_browser_accelerator_keys(false)
         .with_devtools(cfg!(debug_assertions))
-        .build(&Parent(hwnd))?;
+        .build(&Parent(hwnd));
+    let vue = match vue {
+        Ok(v) => v,
+        Err(e) => {
+            // fenêtre encore cachée : la détruire ne montre rien
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            drop(contexte);
+            if !webview2_installe() {
+                signaler_webview2_absent();
+                anyhow::bail!("runtime WebView2 absent ({e})");
+            }
+            return Err(e.into());
+        }
+    };
     let _ = vue.focus();
     let fenetre = Fenetre {
         hwnd,
@@ -1064,7 +1174,6 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         reduite: false,
         montree: false,
         maj: None,
-        zoom: ZOOM_NORMAL,
     };
     FENETRE.with(|f| *f.borrow_mut() = Some(fenetre));
     unsafe {
@@ -1077,10 +1186,15 @@ fn run(son: Arc<AudioShared>) -> anyhow::Result<()> {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
-            traiter_recus();
+            // une panique dans le traitement d'une demande laisse un état douteux : la fenêtre
+            // se ferme proprement
+            if crate::win::sans_panique("réglages", traiter_recus).is_none() || FERMER.with(|f| f.replace(false)) {
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
         }
     }
-    // la vue avant le contexte et la fenêtre
+    // la vue est détruite à `WM_CLOSE`, avant sa fenêtre ; ici seulement si la fenêtre a été
+    // détruite autrement, et toujours avant le contexte
     FENETRE.with(|f| f.borrow_mut().take());
     drop(contexte);
     Ok(())
@@ -1147,9 +1261,54 @@ unsafe fn creer_fenetre() -> windows::core::Result<HWND> {
     )
 }
 
+/// Détruit la vue (WebView2) tant que sa fenêtre existe ; faux si elle est occupée (une demande
+/// de la page en cours, plus haut sur la pile).
+fn detruire_vue() -> bool {
+    match FENETRE.with(|f| f.try_borrow_mut().ok().map(|mut f| f.take())) {
+        Some(vue) => {
+            drop(vue);
+            true
+        }
+        None => false,
+    }
+}
+
 extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    match crate::win::sans_panique("fenêtre des réglages", || unsafe { message(hwnd, msg, wp, lp) }) {
+        Some(r) => r,
+        // état douteux après une panique : la fenêtre se ferme proprement plutôt que de continuer
+        None => unsafe {
+            match msg {
+                WM_DESTROY => PostQuitMessage(0),
+                WM_CLOSE => {
+                    detruire_vue();
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {
+                    let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                }
+            }
+            LRESULT(0)
+        },
+    }
+}
+
+unsafe fn message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
+            WM_DEVANT => {
+                // demandé par un autre fil (`open`) : seulement une fois la fenêtre montrée (elle
+                // se montre d'elle-même quand la page est prête)
+                FENETRE.with(|f| {
+                    if let Ok(f) = f.try_borrow() {
+                        if let Some(f) = f.as_ref().filter(|f| f.montree) {
+                            let _ = SetForegroundWindow(hwnd);
+                            let _ = f.vue.focus();
+                        }
+                    }
+                });
+                return LRESULT(0);
+            }
             WM_TIMER => {
                 FENETRE.with(|f| {
                     if let Ok(mut f) = f.try_borrow_mut() {
@@ -1210,18 +1369,19 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 });
             }
             WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
+                // la vue d'abord, tant que sa fenêtre existe ; occupée, la fermeture est refaite
+                // une fois la demande en cours finie (`FERMER`)
+                if detruire_vue() {
+                    let _ = DestroyWindow(hwnd);
+                } else {
+                    FERMER.with(|f| f.set(true));
+                }
                 return LRESULT(0);
             }
             WM_DESTROY => {
-                FENETRE.with(|f| {
-                    if let Ok(f) = f.try_borrow() {
-                        if let Some(f) = f.as_ref() {
-                            let _ = KillTimer(Some(f.hwnd), TIMER_SON);
-                            let _ = KillTimer(Some(f.hwnd), TIMER_FICHIERS);
-                        }
-                    }
-                });
+                for t in [TIMER_SON, TIMER_FICHIERS, TIMER_MONTRER] {
+                    let _ = KillTimer(Some(hwnd), t);
+                }
                 PostQuitMessage(0);
                 return LRESULT(0);
             }
@@ -1243,6 +1403,17 @@ fn config_distante(reglages: Value) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webview2_absent_dit_ou_le_trouver() {
+        let t = texte_webview2_absent();
+        assert!(t.encode_utf16().count() <= 250, "bulle tronquée : {} caractères", t.encode_utf16().count());
+        assert!(t.ends_with(ADRESSE_WEBVIEW2));
+        assert!(version_webview2_valide("131.0.2903.70\0"));
+        for v in ["", "0.0.0.0", "\0", " "] {
+            assert!(!version_webview2_valide(v), "{v:?}");
+        }
+    }
 
     #[test]
     fn base64_decode() {
@@ -1328,10 +1499,16 @@ mod tests {
     #[test]
     fn zoom_par_paliers() {
         assert_eq!(ZOOMS[ZOOM_NORMAL], 1.0);
-        assert_eq!(zoom_suivant(ZOOM_NORMAL, 1), ZOOM_NORMAL + 1);
-        assert_eq!(zoom_suivant(ZOOMS.len() - 1, 1), ZOOMS.len() - 1);
-        assert_eq!(zoom_suivant(0, -1), 0);
-        assert_eq!(zoom_suivant(7, 0), ZOOM_NORMAL);
+        assert_eq!(zoom_suivant(1.0, 1), 1.1);
+        assert_eq!(zoom_suivant(1.75, 1), 1.75);
+        assert_eq!(zoom_suivant(0.67, -1), 0.67);
+        assert_eq!(zoom_suivant(1.5, 0), 1.0);
+        // entre deux paliers (Ctrl+molette) : le premier au-delà, dans le sens voulu
+        assert_eq!(zoom_suivant(1.3, 1), 1.5);
+        assert_eq!(zoom_suivant(1.3, -1), 1.25);
+        assert_eq!(zoom_suivant(1.249_99, 1), 1.5);
+        assert_eq!(zoom_suivant(3.0, -1), 1.75);
+        assert_eq!(zoom_suivant(0.25, 1), 0.67);
         assert!(ZOOMS.windows(2).all(|z| z[0] < z[1]));
     }
 

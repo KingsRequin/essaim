@@ -79,6 +79,17 @@ fn set_color(hwnd: HWND, c: u32) -> windows::core::Result<()> {
     unsafe { DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &c as *const u32 as *const c_void, 4) }
 }
 
+/// Rend sa couleur système à la fenêtre notée dans le témoin, sans l'effacer : l'instance qui
+/// tourne peut encore la colorer, et le témoin reste son filet (`--restaurer-bordure` pendant
+/// qu'Essaim tourne).
+pub fn rendre_couleur_seule() {
+    if let Some(h) = std::fs::read_to_string(marker()).ok().and_then(|s| s.trim().parse::<isize>().ok()) {
+        if h != 0 {
+            let _ = set_color(HWND(h as *mut c_void), COLOR_DEFAULT);
+        }
+    }
+}
+
 fn marker() -> std::path::PathBuf {
     crate::config::dir().join("bordure.hwnd")
 }
