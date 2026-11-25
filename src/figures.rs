@@ -17,7 +17,7 @@ use crate::audio::AudioView;
 use crate::canvas::{Canvas, Rgb};
 use crate::config::{Allure, Config};
 use crate::layer::IRect;
-use crate::modulation::{Effet, NB_FIGURES};
+use crate::modulation::{self, Effet, NB_FIGURES};
 use crate::render::{prisme_decale, ressort, Coups};
 use std::cell::RefCell;
 use std::f32::consts::{PI, SQRT_2, TAU};
@@ -108,6 +108,11 @@ fn geometrique(i: usize) -> bool {
 /// l'essaim, 4 pour une figure) ; décalage d'une figure par « rayon » de décalage (px à 100 %).
 const FIG_VITESSE: f32 = 0.1;
 const FIG_DECALAGE: f32 = 30.0;
+/// Échelle d'une figure, modulations comprises, jamais sous celle que permet son allure seule
+/// (`echelle` 0,5) : plus petite, elle se ramasserait sur le pointeur.
+const GEO_MIN: f32 = 0.5;
+/// Trait plus fin que ça (px) : rien n'est dessiné (tiny-skia trace 1 px pour une largeur nulle).
+const TRAIT_MIN: f32 = 0.05;
 
 /// Pose d'une figure à cette image : autour de `centre`, tournée de `angle`, agrandie de `geo`
 /// (positions et rayons), traits épaissis de `traits`, déplacée de `decalage` (px écran), opacité
@@ -158,19 +163,25 @@ impl Posee<'_> {
     fn alpha(&self, a: f32) -> f32 {
         (a * self.pose.alpha).min(1.0)
     }
+
+    /// Largeur d'un trait une fois posé ; `None` s'il est trop fin pour être vu.
+    fn largeur(&self, width: f32) -> Option<f32> {
+        let w = width * self.pose.traits;
+        (w >= TRAIT_MIN).then_some(w)
+    }
 }
 
 impl Canvas for Posee<'_> {
     fn line(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
-        let al = self.alpha(alpha);
-        self.cv.line(self.pose.point(a), self.pose.point(b), width * self.pose.traits, rgb, al, smooth);
+        let (Some(w), al) = (self.largeur(width), self.alpha(alpha)) else { return };
+        self.cv.line(self.pose.point(a), self.pose.point(b), w, rgb, al, smooth);
     }
 
     fn polyline(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
-        let al = self.alpha(alpha);
+        let (Some(w), al) = (self.largeur(width), self.alpha(alpha)) else { return };
         self.pts.clear();
         self.pts.extend(pts.iter().map(|&p| self.pose.point(p)));
-        self.cv.polyline(self.pts, width * self.pose.traits, rgb, al, smooth);
+        self.cv.polyline(self.pts, w, rgb, al, smooth);
     }
 
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32) {
@@ -179,13 +190,14 @@ impl Canvas for Posee<'_> {
     }
 
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32) {
-        let ((x, y), al) = (self.pose.point((x, y)), self.alpha(alpha));
-        self.cv.ring(x, y, r * self.pose.geo, width * self.pose.traits, rgb, al);
+        let (Some(w), al) = (self.largeur(width), self.alpha(alpha)) else { return };
+        let (x, y) = self.pose.point((x, y));
+        self.cv.ring(x, y, r * self.pose.geo, w, rgb, al);
     }
 
     fn bande(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32) {
-        let al = self.alpha(alpha);
-        self.cv.bande(self.pose.point(a), self.pose.point(b), width * self.pose.traits, rgb, al);
+        let (Some(w), al) = (self.largeur(width), self.alpha(alpha)) else { return };
+        self.cv.bande(self.pose.point(a), self.pose.point(b), w, rgb, al);
     }
 
     fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32) {
@@ -571,15 +583,17 @@ impl Figures {
             }
             let geo = geometrique(i);
             if geo {
+                // rotation totale bornée comme celle du trajet de l'essaim
                 let w = ((a.rotation + m.rotation) * TAU / 60.0 + m.vitesse * FIG_VITESSE) * m.acceleration;
-                if w != 0.0 && w.is_finite() {
+                let w = modulation::borne_rotation(w * 60.0 / TAU) * TAU / 60.0;
+                if w != 0.0 {
                     self.angles[i] = (self.angles[i] + w * dt).rem_euclid(TAU);
                 }
             }
             self.poses[i] = Pose {
                 centre,
                 angle: if geo { self.angles[i] } else { 0.0 },
-                geo: if geo { a.echelle * m.rayon } else { 1.0 },
+                geo: if geo { (a.echelle * m.rayon).max(GEO_MIN) } else { 1.0 },
                 traits: m.taille,
                 decalage: if geo { ((a.decalage_x + m.decalage * FIG_DECALAGE) * scale, a.decalage_y * scale) } else { (0.0, 0.0) },
                 alpha: a.opacite * m.opacite * m.luminosite,
@@ -867,6 +881,31 @@ mod tests {
             }
             assert!(peints > 5000, "{peints} pixels peints");
         }
+    }
+
+    #[test]
+    fn figure_reduite_bornee_et_trait_nul_invisible() {
+        // échelle au plus petit et rayon modulé à 10 % : la figure garde la moitié de sa taille
+        let mut cfg = Config::default();
+        (cfg.arcs.actif, cfg.arcs.allure.echelle) = (true, 0.5);
+        let mut f = Figures::new();
+        f.moduler(&[Effet { rayon: 0.1, ..Effet::default() }; NB_FIGURES]);
+        avancer(&mut f, 0.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
+        assert_eq!(f.poses[ARCS].geo, GEO_MIN);
+        // à l'échelle 1 sans modulation, rien ne change
+        cfg.arcs.allure.echelle = 1.0;
+        f.moduler(&[Effet::default(); NB_FIGURES]);
+        avancer(&mut f, 1.0 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
+        assert_eq!(f.poses[ARCS].geo, 1.0);
+        // traits à épaisseur nulle : rien de dessiné (tiny-skia tracerait 1 px)
+        let mut pm = Pixmap::new(100, 100).unwrap();
+        let (mut pts, mut cv) = (Vec::new(), crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) });
+        let mut posee = Posee { cv: &mut cv, pose: Pose { centre: (50.0, 50.0), traits: 0.0, ..Pose::default() }, pts: &mut pts };
+        posee.line((10.0, 10.0), (90.0, 90.0), 2.0, (255, 255, 255), 1.0, true);
+        posee.polyline(&[(10.0, 50.0), (90.0, 50.0)], 2.0, (255, 255, 255), 1.0, true);
+        posee.ring(50.0, 50.0, 20.0, 2.0, (255, 255, 255), 1.0);
+        posee.bande((10.0, 20.0), (90.0, 20.0), 2.0, (255, 255, 255), 1.0);
+        assert!(pm.data().iter().all(|&b| b == 0));
     }
 
     #[test]

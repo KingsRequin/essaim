@@ -189,17 +189,19 @@ pub struct Effets {
     /// principale donne avant chaque image.
     loin: Loin,
     pub fenetre: Option<(f32, f32, f32, f32)>,
-    /// Échelle de l'écran de cette fenêtre (le halo et les équerres y sont à sa taille).
+    /// Échelle au centre de cette fenêtre : seulement si Windows ne donne pas celle de son écran
+    /// (`loin::Fenetre::lire`).
     pub echelle_fenetre: f32,
 }
 
-/// Écrans qui portent le liseré : celui du pointeur, ou tous (`[lisere] tous_ecrans`).
-fn ecrans_du_lisere(monitors: &[(isize, IRect)], cursor: (f32, f32), cfg: &Config) -> Vec<IRect> {
-    if cfg.lisere.tous_ecrans {
-        monitors.iter().map(|m| m.1).collect()
-    } else {
-        ecran_du_pointeur(monitors, cursor).into_iter().collect()
+/// Écrans qui portent le liseré : celui du pointeur, ou tous (`[lisere] tous_ecrans`), chacun
+/// avec son échelle.
+fn ecrans_du_lisere(monitors: &[(isize, IRect)], cursor: (f32, f32), cfg: &Config) -> Vec<(IRect, f32)> {
+    if !cfg.lisere.actif {
+        return Vec::new();
     }
+    let ecrans: Vec<IRect> = if cfg.lisere.tous_ecrans { monitors.iter().map(|m| m.1).collect() } else { ecran_du_pointeur(monitors, cursor).into_iter().collect() };
+    ecrans.into_iter().map(|e| (e, crate::win::scale_at((e.0 + e.2) / 2, (e.1 + e.3) / 2))).collect()
 }
 
 impl Effets {
@@ -269,7 +271,14 @@ impl Effets {
         let son = Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] };
         self.figures.avance(t, dt, cursor, scale, &son, cfg);
         // équerres et liseré : aux coins de la fenêtre au premier plan, au bord de l'écran du pointeur
-        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), &ecrans_du_lisere(monitors, cursor, cfg));
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre_loin(cfg), &ecrans_du_lisere(monitors, cursor, cfg));
+    }
+
+    /// La fenêtre au premier plan pour l'équerre et le halo (son écran n'est demandé à Windows que
+    /// s'ils sont allumés).
+    fn fenetre_loin(&self, cfg: &Config) -> Option<crate::loin::Fenetre> {
+        let voulue = cfg.equerres.actif || cfg.halo.actif;
+        self.fenetre.filter(|_| voulue).map(|f| crate::loin::Fenetre::lire(f, self.echelle_fenetre))
     }
 
     /// Effets des modulations sur chaque figure, pris par les figures à l'image suivante.
@@ -285,7 +294,7 @@ impl Effets {
         let au = shared.view();
         let coups = self.ecoute.lire(&au);
         let son = Son { au: &au, coups: &coups, bandes: &[] };
-        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre.map(|f| (f, self.echelle_fenetre)), &ecrans_du_lisere(monitors, cursor, cfg));
+        self.loin.avance(t, dt, cursor, scale, &son, cfg, self.fenetre_loin(cfg), &ecrans_du_lisere(monitors, cursor, cfg));
     }
 
     /// Rien n'est simulé à cette image (frappe, pause, plein écran) : les coups joués entre-temps

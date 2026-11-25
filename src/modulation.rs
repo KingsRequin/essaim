@@ -29,6 +29,31 @@ pub const LUMINOSITE: f32 = 2.0;
 pub const TRAINEE: f32 = 3.0;
 pub const OPACITE: f32 = 1.0;
 
+/// Bornes des totaux, réglage compris : rotation du trajet ou d'une figure (tr/min, de chaque
+/// côté), vitesse sur le trajet (radians/s). Au-delà, l'œil ne suit plus (et une somme de
+/// modulations à fond dépasserait des centaines de tours par minute).
+pub const ROTATION_MAX: f32 = 180.0;
+pub const VITESSE_MAX: f32 = 60.0;
+
+/// Cibles qui se multiplient : effet à fond (part ajoutée par quantité 1) et bornes du facteur
+/// total. `ui/app.js` (`BORNES_MOD`) en tire l'effet affiché et les bornes de la glissière.
+pub fn multipliee(c: Cible) -> Option<(f32, f32, f32)> {
+    Some(match c {
+        Cible::Acceleration => (ACCELERATION, 0.0, 5.0),
+        Cible::Rayon => (RAYON, 0.1, 5.0),
+        Cible::Taille => (TAILLE, 0.0, 4.0),
+        Cible::Luminosite => (LUMINOSITE, 0.0, 4.0),
+        Cible::Trainee => (TRAINEE, 0.1, 5.0),
+        Cible::Opacite => (OPACITE, 0.0, 1.0),
+        Cible::Rotation | Cible::Vitesse | Cible::Teinte | Cible::Decalage | Cible::Aucune => return None,
+    })
+}
+
+/// Rotation totale (tr/min) ramenée dans ±`ROTATION_MAX` (0 si elle n'est pas finie).
+pub fn borne_rotation(tours_min: f32) -> f32 {
+    if tours_min.is_finite() { tours_min.clamp(-ROTATION_MAX, ROTATION_MAX) } else { 0.0 }
+}
+
 /// Retombée des enveloppes (par seconde) : kick, caisse claire, charleston, drop, contretemps ;
 /// suivi de la montée.
 const RETOMBEE: [f32; 5] = [7.0, 8.0, 10.0, 0.9, 10.0];
@@ -148,14 +173,15 @@ pub const NB_FIGURES: usize = crate::config::FIGURES.len();
 /// rotations, vitesses, teintes et décalages s'additionnent ; rayon, taille, lueur, traînée et
 /// opacité se multiplient (chaque modulation garde sa part : deux réactions qui resserrent
 /// l'orbite de moitié la resserrent au quart), dans des bornes lisibles (le rayon ne s'annule
-/// pas). La vitesse totale est bornée par `Swarm::update` (jamais négative).
+/// pas : `multipliee`). La rotation et la vitesse totales sont bornées là où le réglage s'y
+/// ajoute (`Swarm::update`, `Swarm::vitesse`, `Figures::poser` : `ROTATION_MAX`, `VITESSE_MAX`).
 pub fn effets(liste: &[Modulation], valeurs: &[f32]) -> Effets {
     let mut r = Effets::default();
     for (m, &v) in liste.iter().zip(valeurs) {
         if !v.is_finite() {
             continue;
         }
-        let facteur = |echelle: f32| (1.0 + v * echelle).max(0.0);
+        let facteur = |c: Cible| multipliee(c).map_or(1.0, |(fond, ..)| (1.0 + v * fond).max(0.0));
         // teinte « sur tout » : celle de tout ce qu'Essaim dessine
         if m.cible == Cible::Teinte && m.sur == Groupe::Tout {
             r.teinte += v * TEINTE;
@@ -169,23 +195,28 @@ pub fn effets(liste: &[Modulation], valeurs: &[f32]) -> Effets {
                 Cible::Vitesse => e.vitesse += v * VITESSE,
                 Cible::Teinte => e.teinte += v * TEINTE,
                 Cible::Decalage => e.decalage += v * DECALAGE,
-                Cible::Acceleration => e.acceleration *= facteur(ACCELERATION),
-                Cible::Rayon => e.rayon *= facteur(RAYON),
-                Cible::Taille => e.taille *= facteur(TAILLE),
-                Cible::Luminosite => e.luminosite *= facteur(LUMINOSITE),
-                Cible::Trainee => e.trainee *= facteur(TRAINEE),
-                Cible::Opacite => e.opacite *= facteur(OPACITE),
+                Cible::Acceleration => e.acceleration *= facteur(m.cible),
+                Cible::Rayon => e.rayon *= facteur(m.cible),
+                Cible::Taille => e.taille *= facteur(m.cible),
+                Cible::Luminosite => e.luminosite *= facteur(m.cible),
+                Cible::Trainee => e.trainee *= facteur(m.cible),
+                Cible::Opacite => e.opacite *= facteur(m.cible),
                 Cible::Aucune => {}
             }
         }
     }
+    let borne = |x: &mut f32, c: Cible| {
+        if let Some((_, lo, hi)) = multipliee(c) {
+            *x = x.clamp(lo, hi);
+        }
+    };
     for e in r.groupes.iter_mut().chain(&mut r.figures) {
-        e.acceleration = e.acceleration.clamp(0.0, 5.0);
-        e.rayon = e.rayon.clamp(0.1, 5.0);
-        e.taille = e.taille.clamp(0.0, 4.0);
-        e.luminosite = e.luminosite.clamp(0.0, 4.0);
-        e.trainee = e.trainee.clamp(0.1, 5.0);
-        e.opacite = e.opacite.clamp(0.0, 1.0);
+        borne(&mut e.acceleration, Cible::Acceleration);
+        borne(&mut e.rayon, Cible::Rayon);
+        borne(&mut e.taille, Cible::Taille);
+        borne(&mut e.luminosite, Cible::Luminosite);
+        borne(&mut e.trainee, Cible::Trainee);
+        borne(&mut e.opacite, Cible::Opacite);
     }
     r
 }

@@ -1586,7 +1586,7 @@ avec_preset = true      # choisir un preset installe aussi son jeu de curseurs
 
 [automatique]
 actif = false           # choisit tout seul un preset selon les règles, l'application au premier plan ou l'heure
-regles = []             # [{ si = "artiste = Skrillex", alors = "Triangle" }] ; clés : artiste, titre, appli, bpm, heure ;
+regles = []             # [{ si = "artiste = Skrillex", alors = "Delta" }] ; clés : artiste, titre, appli, bpm, heure ;
                         # opérateurs : = != ~ (contient) < > <= >= ; plusieurs conditions : « et »
 applis = []             # [{ appli = "jeu.exe", preset = "Discret" }]
 horaires = []           # [{ debut = "22:00", fin = "07:00", preset = "Discret" }]
@@ -1614,8 +1614,37 @@ repos = 0.5             # luminosité au calme : 0 = noire, 1 = couleur pleine ;
                         # déclencheurs « bordure » (par défaut, chaque kick)
 "#;
 
+/// Dossier des réglages : `%APPDATA%\Essaim` ; sans cette variable, le dossier « AppData\Roaming »
+/// que donne Windows, et en dernier recours le dossier temporaire. Un repli est noté au journal
+/// (une fois, dès que le journal est ouvert : il est lui-même dans ce dossier).
 pub fn dir() -> PathBuf {
-    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Essaim")
+    static DOSSIER: std::sync::OnceLock<(PathBuf, Option<&'static str>)> = std::sync::OnceLock::new();
+    static SIGNALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let (d, repli) = DOSSIER.get_or_init(|| match std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+        Some(v) => (PathBuf::from(v), None),
+        None => match appdata_windows() {
+            Some(p) => (p, Some("dossier AppData\\Roaming de Windows")),
+            None => (std::env::temp_dir(), Some("dossier temporaire")),
+        },
+    });
+    if let Some(repli) = repli {
+        if log::max_level() != log::LevelFilter::Off && !SIGNALE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::warn!("config : %APPDATA% absent, réglages dans le {repli} ({})", d.display());
+        }
+    }
+    d.join("Essaim")
+}
+
+/// Dossier « AppData\Roaming » de l'utilisateur, demandé à Windows.
+fn appdata_windows() -> Option<PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_RoamingAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, None).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s.map(PathBuf::from)
+    }
 }
 
 pub fn path() -> PathBuf {
@@ -1736,8 +1765,14 @@ impl Config {
             c.truncate(2000);
         }
         self.orbite.contours.retain(|c| c.len() >= 3);
+        // ce qui tourne avec le trajet : l'essaim, les comètes ou les satellites ; un autre groupe
+        // (une figure, un nom d'une version plus récente) ne ferait rien tourner
+        if !matches!(self.orbite.rotation_sur, Groupe::Tout | Groupe::Cometes | Groupe::Satellites) {
+            log::warn!("config : [orbite] rotation_sur {:?} inconnu, « tout » utilisé", self.orbite.rotation_sur);
+            self.orbite.rotation_sur = Groupe::Tout;
+        }
         self.modulations.liste.truncate(MODULATIONS_MAX);
-        let borne = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
+        let borne =|v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
         for m in &mut self.modulations.liste {
             m.quantite = borne(m.quantite, -1.0, 1.0, 0.0);
             m.seuil = borne(m.seuil, 0.0, 0.95, 0.0);
@@ -2241,6 +2276,11 @@ mod tests {
         let texte = "[modulations]\nliste = [{ source = \"futur\", cible = \"autre\", quantite = 9 }]";
         let c = toml::from_str::<super::Config>(texte).unwrap().clamped();
         assert_eq!((c.modulations.liste[0].source, c.modulations.liste[0].cible, c.modulations.liste[0].quantite), (Source::Aucune, Cible::Aucune, 1.0));
+        // ce qui tourne avec le trajet : un groupe inconnu ou une figure valent « tout »
+        for (sur, attendu) in [("satellites", Groupe::Satellites), ("futur", Groupe::Tout), ("arcs", Groupe::Tout)] {
+            let c = toml::from_str::<super::Config>(&format!("[orbite]\nrotation_sur = \"{sur}\"")).unwrap().clamped();
+            assert_eq!(c.orbite.rotation_sur, attendu, "{sur}");
+        }
         let mut c = super::Config::default();
         c.modulations.liste = vec![super::Modulation::default(); 40];
         assert_eq!(c.clamped().modulations.liste.len(), super::MODULATIONS_MAX);
@@ -2542,7 +2582,8 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
     }
 
     /// La page des réglages (`ui/app.js`) et Rust disent la même chose : réglages hors presets,
-    /// sections des presets, bornes des glissières, nombres de modulations et de déclencheurs.
+    /// sections des presets, bornes des glissières, nombres de modulations et de déclencheurs,
+    /// bornes des modulations qui se multiplient.
     #[test]
     fn la_page_suit_les_regles_de_rust() {
         let app = include_str!("../ui/app.js");
@@ -2577,7 +2618,15 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         }
         assert!(vues >= 30, "{vues} glissières lues seulement : la forme de PANNEAUX a changé ?");
         assert!(ecarts.is_empty(), "bornes différentes :\n{}", ecarts.join("\n"));
-    }
+        // modulations : effet à fond et bornes des cibles qui se multiplient (`modulation::multipliee`)
+        let bornes = bloc(app, "const BORNES_MOD = {", "};");
+        use super::Cible;
+        for c in [Cible::Acceleration, Cible::Rayon, Cible::Taille, Cible::Luminosite, Cible::Trainee, Cible::Opacite] {
+            let nom = serde_json::to_value(c).unwrap().as_str().unwrap().to_owned();
+            let (fond, lo, hi) = crate::modulation::multipliee(c).unwrap();
+            let page = bloc(bornes, &format!("{nom}: ["), "]");
+            assert_eq!(page.replace(' ', ""), format!("{fond},{lo},{hi}"), "BORNES_MOD.{nom}");
+        }    }
 
     /// Dossier temporaire propre à un essai (jamais le vrai %APPDATA%), supprimé à la fin de
     /// l'essai, même s'il échoue.

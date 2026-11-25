@@ -32,6 +32,9 @@ pub const ANCIENNES_CLES: [(&str, &str); 21] = [
     ("musique", "stereo"),
     ("audio", "pulsation_tempo"),
 ];
+/// Anciennes clés des réactions qui deviennent la queue des modulations (`Ancien::modulations`,
+/// `reste`) : montée, contretemps, teinte qui suit la musique, décalage stéréo.
+const RESTE: [(&str, &str); 4] = [("musique", "montee"), ("musique", "contretemps"), ("couleur", "musique"), ("musique", "stereo")];
 /// Sections qui n'existent plus (retirées si elles sont vides après la conversion).
 pub const ANCIENNES_SECTIONS: [&str; 3] = ["scintillement", "clic", "musique"];
 
@@ -261,9 +264,10 @@ fn table<'a>(t: &'a mut toml::Table, section: &str) -> &'a mut toml::Table {
 /// Convertit une table TOML (fichier de réglages ou preset) d'avant les modulations ou les
 /// déclencheurs. Les anciennes clés sont retirées ; sans `[declencheurs]`, les réactions
 /// d'avant (valeurs du fichier, ou celles par défaut d'alors) deviennent les déclencheurs et
-/// s'ajoutent aux modulations ; sans `[modulations]`, ou avec les anciennes clés de la basse,
-/// les réactions à la basse passent en tête des modulations. Une modulation de même source et
-/// même cible déjà là est gardée. Renvoie vrai si la table a changé.
+/// s'ajoutent aux modulations (sauf à une liste de modulations vidée exprès, qui ne reçoit que
+/// les réactions écrites dans la table) ; sans `[modulations]`, ou avec les anciennes clés de la
+/// basse, les réactions à la basse passent en tête des modulations. Une modulation de même
+/// source, même cible et même groupe déjà là est gardée. Renvoie vrai si la table a changé.
 pub fn migrer(t: &mut toml::Table) -> bool {
     let (avait_mod, avait_decl) = (t.contains_key("modulations"), t.contains_key("declencheurs"));
     let mut vieux = toml::Table::new();
@@ -288,18 +292,27 @@ pub fn migrer(t: &mut toml::Table) -> bool {
             table(t, "particules").entry(nouvelle).or_insert(v);
         }
     }
+    // les réactions d'avant qui deviennent la queue des modulations, écrites dans le fichier
+    let reste_explicite = RESTE.iter().any(|(s, c)| vieux.get(*s).and_then(|s| s.get(*c)).is_some());
     let ancien = Ancien::deserialize(vieux).unwrap_or_default();
-    let tete = if !avait_mod || basse_explicite { ancien.modulations(true, false) } else { Vec::new() };
-    let queue = if avait_decl { Vec::new() } else { ancien.modulations(false, true) };
     let liste = match table(t, "modulations").remove("liste") {
-        Some(toml::Value::Array(a)) => a,
-        _ => Vec::new(),
+        Some(toml::Value::Array(a)) => Some(a),
+        _ => None,
     };
+    // une liste vidée exprès n'en reçoit pas par défaut : seulement les réactions écrites
+    let videe = liste.as_ref().is_some_and(Vec::is_empty);
+    let tete = if !avait_mod || basse_explicite { ancien.modulations(true, false) } else { Vec::new() };
+    let queue = if avait_decl || (videe && !reste_explicite) { Vec::new() } else { ancien.modulations(false, true) };
+    let liste = liste.unwrap_or_default();
     fn nom<T: serde::Serialize>(x: T) -> Option<String> {
         toml::Value::try_from(x).ok().and_then(|v| v.as_str().map(str::to_owned))
     }
+    // même source, même cible et même groupe (`sur` absent : « tout », sa valeur par défaut)
+    let champ = |v: &toml::Value, cle: &str, defaut: Option<String>| v.get(cle).and_then(|x| x.as_str()).map(str::to_owned).or(defaut);
     let deja = |l: &[toml::Value], r: &Modulation| {
-        l.iter().any(|v| v.get("source").and_then(|x| x.as_str()).map(str::to_owned) == nom(r.source) && v.get("cible").and_then(|x| x.as_str()).map(str::to_owned) == nom(r.cible))
+        l.iter().any(|v| {
+            champ(v, "source", None) == nom(r.source) && champ(v, "cible", None) == nom(r.cible) && champ(v, "sur", nom(Groupe::default())) == nom(r.sur)
+        })
     };
     let mut nouvelle: Vec<toml::Value> = tete.iter().filter(|r| !deja(&liste, r)).filter_map(|r| toml::Value::try_from(r).ok()).collect();
     nouvelle.extend(liste);
@@ -314,4 +327,34 @@ pub fn migrer(t: &mut toml::Table) -> bool {
         table(t, "declencheurs").insert("liste".into(), toml::Value::Array(l));
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn modulations(texte: &str) -> Vec<Modulation> {
+        let mut t: toml::Table = toml::from_str(texte).unwrap();
+        migrer(&mut t);
+        let c: crate::config::Config = toml::Value::Table(t).try_into().unwrap();
+        c.modulations.liste
+    }
+
+    #[test]
+    fn liste_videe_et_groupes_distincts() {
+        // sans [declencheurs] ni [modulations] : les réactions de toujours
+        assert_eq!(modulations("").len(), 4);
+        // liste vidée exprès : elle le reste
+        assert!(modulations("[modulations]\nliste = []").is_empty());
+        // sauf pour une réaction d'avant écrite dans le preset
+        let l = modulations("[modulations]\nliste = []\n[musique]\ncontretemps = true");
+        assert!(l.iter().any(|m| m.source == Source::Contretemps), "{l:?}");
+        // une modulation de même source et même cible, sur un autre groupe, n'en remplace pas une
+        // réaction d'avant
+        let l = modulations("[modulations]\nliste = [{ source = \"montee\", cible = \"rayon\", sur = \"satellites\", quantite = 0.5 }]");
+        assert_eq!(l.iter().filter(|m| m.source == Source::Montee && m.cible == Cible::Rayon).count(), 2, "{l:?}");
+        // même groupe (« tout » écrit ou sous-entendu) : gardée seule
+        let l = modulations("[modulations]\nliste = [{ source = \"montee\", cible = \"rayon\", quantite = 0.5 }]");
+        assert_eq!(l.iter().filter(|m| m.source == Source::Montee && m.cible == Cible::Rayon).count(), 1, "{l:?}");
+    }
 }

@@ -589,7 +589,9 @@ fn anneau(k: usize) -> (f32, f32) {
 
 pub struct Swarm {
     rng: Rng,
+    /// Sens de rotation, et instant de sa dernière inversion (une par image au plus).
     dir: f32,
+    inverse_a: f64,
     /// Vitesse du trajet des comètes et de celui des satellites (radians/s), lissée vers la
     /// vitesse de base accélérée (`acceleration` des modulations).
     spd: [f32; 2],
@@ -702,6 +704,7 @@ impl Swarm {
         Self {
             rng: Rng::seeded(),
             dir: 1.0,
+            inverse_a: f64::NEG_INFINITY,
             spd: [3.5; 2],
             angles: Vec::new(),
             rot: 0.0,
@@ -988,7 +991,7 @@ impl Swarm {
         let pose = |g: usize, rot: &mut f32, mods: &[Effet; 2], avant: &[Effet; 2]| {
             let base = if o.rotation_sur.inclut(g == 1) { o.rotation } else { 0.0 };
             let rot0 = if rot.is_finite() { *rot } else { 0.0 };
-            let drot = pas_rotation(rot0, base + mods[g].rotation, dt);
+            let drot = pas_rotation(rot0, modulation::borne_rotation(base + mods[g].rotation), dt);
             let drot = if drot.is_finite() { drot } else { 0.0 };
             *rot = (rot0 + drot).rem_euclid(TAU);
             let (dx0, dx) = (avant[g].decalage * rayon, mods[g].decalage * rayon);
@@ -1112,7 +1115,14 @@ impl Swarm {
                 let n = self.rng.range(lo as f32, hi as f32 + 0.999) as usize;
                 self.ajouter_satellites(n, t, cfg);
             }
-            Action::Inversion => self.dir = -self.dir,
+            // une seule inversion par image : deux (deux kicks, kick et caisse claire…)
+            // s'annuleraient
+            Action::Inversion => {
+                if self.inverse_a != t {
+                    self.dir = -self.dir;
+                    self.inverse_a = t;
+                }
+            }
             Action::Rebond => {
                 for r in &mut self.rebond {
                     r.1 += REBOND * force;
@@ -1232,9 +1242,11 @@ impl Swarm {
 
     /// Vitesse sur le trajet du groupe `g` (0 : comètes, 1 : satellites), en radians/s, sans le
     /// sens : celle du trajet plus celle des modulations, accélérée, et la poussée, jamais
-    /// négative ; le coup de frein en retire une part.
+    /// négative ni au-delà de `VITESSE_MAX` ; le coup de frein en retire une part.
     fn vitesse(&self, g: usize) -> f32 {
-        (self.spd[g] + self.mods[g].vitesse * self.mods[g].acceleration + self.pousse).max(0.0) * (1.0 - FREIN.0 * self.frein)
+        let v = self.spd[g] + self.mods[g].vitesse * self.mods[g].acceleration + self.pousse;
+        let v = if v.is_finite() { v.clamp(0.0, modulation::VITESSE_MAX) } else { 0.0 };
+        v * (1.0 - FREIN.0 * self.frein)
     }
 
     /// Teinte ajoutée à tout ce qu'Essaim dessine (modulations de la teinte « sur tout »), en
@@ -2035,6 +2047,38 @@ mod tests {
         s.update(0.016, 0.016, C, au, &cfg, 1.0);
         assert_eq!(s.dir, dir);
         assert!(!s.sats.is_empty(), "les satellites arrivent quand même");
+    }
+
+    #[test]
+    fn une_inversion_par_image_et_vitesses_bornees() {
+        // deux inversions à la même image (deux déclencheurs, ou deux kicks) : le sens change une fois
+        let mut cfg = Config::default();
+        cfg.declencheurs.liste = vec![Declencheur::new(Evenement::Clic, Action::Inversion); 2];
+        let mut s = Swarm::new();
+        s.update(0.0, 0.016, C, AudioView::default(), &cfg, 1.0);
+        s.evenement(Evenement::Clic, C.0, C.1, 0.016, &cfg, 1.0);
+        assert_eq!(s.dir, -1.0);
+        s.evenement(Evenement::Clic, C.0, C.1, 0.032, &cfg, 1.0);
+        assert_eq!(s.dir, 1.0, "à l'image suivante, de nouveau");
+        cfg.declencheurs.liste = vec![Declencheur::new(Evenement::Kick, Action::Inversion)];
+        s.update(0.048, 0.016, C, AudioView { kicks: 2, ..Default::default() }, &cfg, 1.0);
+        assert_eq!(s.dir, -1.0, "deux kicks dans l'image");
+        // modulations à fond qui s'empilent : vitesse et rotation bornées
+        use crate::config::{Cible, Groupe, Modulation, Source};
+        let m = Modulation { source: Source::Basse, cible: Cible::Vitesse, sur: Groupe::Tout, quantite: 1.0, lissage: 0.0, ..Default::default() };
+        cfg.modulations.liste = vec![m; 4];
+        cfg.modulations.liste.extend([Modulation { cible: Cible::Rotation, ..m }; 4]);
+        cfg.orbite.rotation = 30.0;
+        let au = AudioView { bass: 1.0, ..Default::default() };
+        for i in 0..30 {
+            s.update(0.1 + i as f64 * 0.016, 0.016, C, au, &cfg, 1.0);
+        }
+        assert!((s.vitesse(0) - modulation::VITESSE_MAX).abs() < 1e-3, "{}", s.vitesse(0));
+        // 180 tr/min : 3 tours par seconde, soit 0,30 rad par image de 16 ms
+        let avant = s.rot;
+        s.update(0.6, 0.016, C, au, &cfg, 1.0);
+        let pas = (s.rot - avant).rem_euclid(TAU);
+        assert!((pas - 180.0 / 60.0 * TAU * 0.016).abs() < 0.01, "{pas}");
     }
 
     #[test]

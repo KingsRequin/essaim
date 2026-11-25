@@ -36,6 +36,10 @@ const BANDES_MAX = 32;
 const MODULATION = {
   rotation: 90, vitesse: 40, acceleration: 2, rayon: 4, taille: 1.5, teinte: 180, decalage: 1.6, luminosite: 2, trainee: 3, opacite: 1,
 };
+// Bornes des totaux, réglage compris (comme modulation::ROTATION_MAX, VITESSE_MAX) : rotation
+// (tr/min, de chaque côté), vitesse sur le trajet (radians/s).
+const ROTATION_MAX = 180, VITESSE_MAX = 60;
+const borneRotation = (tr) => (Number.isFinite(tr) ? Math.min(ROTATION_MAX, Math.max(-ROTATION_MAX, tr)) : 0);
 // Ressorts et rubans : comme REBOND, POUSSEE, FREIN, TREMBLE, SAT_RESSORT, SAT_ENTREE_SORTIE,
 // SAT_FONTE, SAT_TRAIL_RESSORTS, ETIREMENT, ANNEAU_RESSORTS, VRILLE et RUBAN_MORCEAU de render.rs.
 const REBOND = 6.67, POUSSEE = [5, 4], FREIN = [0.8, 9], TREMBLE = [0.053, 46];
@@ -76,6 +80,8 @@ const geometrique = (i) => i !== F_TRAIT && i !== F_PENDULE;
 // Part de la vitesse des modulations prise par la rotation d'une figure, décalage d'une figure par
 // « rayon » de décalage (px à 100 %) : comme FIG_VITESSE et FIG_DECALAGE.
 const FIG_VITESSE = 0.1, FIG_DECALAGE = 30;
+// Échelle d'une figure, modulations comprises, jamais sous 0,5 (comme figures::GEO_MIN).
+const GEO_MIN = 0.5;
 // Allure d'une figure (comme config::Allure) : défaut et bornes de chaque réglage.
 const ALLURE = {
   echelle: [1, 0.5, 2], opacite: [1, 0.1, 1], teinte: [0, -180, 180], rotation: [0, -30, 30], decalage_x: [0, -80, 80], decalage_y: [0, -80, 80],
@@ -591,6 +597,7 @@ class Apercu {
     this.ctx = canvas.getContext("2d");
     this.reglages = null;
     this.dir = 1;
+    this.inverseA = -Infinity;
     // vitesse du trajet des comètes et de celui des satellites, lissée (render::Swarm::spd)
     this.spd = [3.5, 3.5];
     this.angles = [];
@@ -802,12 +809,14 @@ class Apercu {
       if (!actives[i]) { f.angles[i] = 0; f.poses[i] = null; f.teintes[i] = 0; return; }
       const a = allureDe(c[s]), m = this.modsFigures[i] || effetNeutre(), geo = geometrique(i);
       if (geo) {
-        const w = (((a.rotation + m.rotation) * TAU) / 60 + m.vitesse * FIG_VITESSE) * m.acceleration;
-        if (w !== 0 && Number.isFinite(w)) f.angles[i] = reste(f.angles[i] + w * dt, TAU);
+        // rotation totale bornée comme celle du trajet de l'essaim
+        const libre = (((a.rotation + m.rotation) * TAU) / 60 + m.vitesse * FIG_VITESSE) * m.acceleration;
+        const w = (borneRotation((libre * 60) / TAU) * TAU) / 60;
+        if (w !== 0) f.angles[i] = reste(f.angles[i] + w * dt, TAU);
       }
       f.poses[i] = {
         angle: geo ? f.angles[i] : 0,
-        geo: geo ? a.echelle * m.rayon : 1,
+        geo: geo ? Math.max(GEO_MIN, a.echelle * m.rayon) : 1,
         traits: m.taille,
         decalage: geo ? [(a.decalage_x + m.decalage * FIG_DECALAGE) * S, a.decalage_y * S] : [0, 0],
         alpha: a.opacite * m.opacite * m.luminosite,
@@ -1543,10 +1552,12 @@ class Apercu {
     // une pose par groupe (render::Pose) : rotation du trajet, rayon et décalage au début et à la
     // fin de l'image ; les points intermédiaires suivent la vraie forme, coins compris
     const rayon = o.rayon * S;
-    const sur = o.rotation_sur || "tout";
+    // ce qui tourne avec le trajet (comme Groupe::inclut ; un autre groupe vaut « tout », comme
+    // Config::clamped)
+    const sur = ["tout", "cometes", "satellites"].includes(o.rotation_sur) ? o.rotation_sur : "tout";
     const pose = (g, rot) => {
-      const base = (g === 1 ? sur !== "cometes" : sur !== "satellites") ? o.rotation || 0 : 0;
-      const drot = finiOu(pasRotation(finiOu(rot, 0), base + this.mods[g].rotation, dt), 0);
+      const base = sur === "tout" || sur === (g === 1 ? "satellites" : "cometes") ? o.rotation || 0 : 0;
+      const drot = finiOu(pasRotation(finiOu(rot, 0), borneRotation(base + this.mods[g].rotation), dt), 0);
       return {
         rot0: finiOu(rot, 0), drot, rayon0: rayon * facteursAvant[g], rayon: rayon * this.facteurs[g],
         dx0: this.modsAvant[g].decalage * rayon, dx: this.mods[g].decalage * rayon,
@@ -1615,9 +1626,10 @@ class Apercu {
   }
 
   // Vitesse sur le trajet du groupe g, sans le sens (comme Swarm::vitesse) : la poussée s'y
-  // ajoute, le coup de frein en retire une part.
+  // ajoute, jamais négative ni au-delà de VITESSE_MAX ; le coup de frein en retire une part.
   vitesse(g) {
-    return Math.max(0, this.spd[g] + this.mods[g].vitesse * this.mods[g].acceleration + this.pousse) * (1 - FREIN[0] * this.frein);
+    const v = this.spd[g] + this.mods[g].vitesse * this.mods[g].acceleration + this.pousse;
+    return (Number.isFinite(v) ? Math.min(VITESSE_MAX, Math.max(0, v)) : 0) * (1 - FREIN[0] * this.frein);
   }
 
   // Enveloppes des coups (`coups` : nouveaux kicks, caisses claires, attaques des aigus, drops,
@@ -1658,6 +1670,8 @@ class Apercu {
   // Joue un déclencheur tout de suite, au centre (bouton « Tester » des réglages).
   tester(d) {
     if (!this.reglages) return;
+    // essai à la main : une inversion à chaque clic, même aperçu figé
+    this.inverseA = -Infinity;
     this.agir(d, [this.canvas.width / 2, this.canvas.height / 2], this.t);
   }
 
@@ -1692,7 +1706,8 @@ class Apercu {
     switch (d.faire) {
       case "eclat": this.eclater(Math.min(1, force)); break;
       case "satellites": this.ajouterSatellites(Math.floor(entre(lo, hi + 0.999)), t, maximum); break;
-      case "inversion": this.dir = -this.dir; break;
+      // une seule inversion par image (comme Swarm::agir) : deux s'annuleraient
+      case "inversion": if (this.inverseA !== t) { this.dir = -this.dir; this.inverseA = t; } break;
       case "rebond": for (const r of this.rebond) r[1] += REBOND * force; break;
       case "poussee": this.pousse += POUSSEE[0] * force; break;
       case "frein": this.frein = Math.max(this.frein, Math.min(1, force)); break;

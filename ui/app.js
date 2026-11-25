@@ -324,7 +324,11 @@ function fusion(base, partiel) {
     const a = reactionsAvant(partiel);
     const deja = estObjet(partiel.modulations) && Array.isArray(partiel.modulations.liste) ? partiel.modulations.liste : null;
     const mods = deja || a.basse;
-    const plus = a.mods.filter((x) => !mods.some((y) => y.source === x.source && y.cible === x.cible));
+    // une liste vidée exprès ne reçoit que les réactions écrites dans le preset ; une modulation
+    // de même source, même cible et même groupe déjà là est gardée
+    const ecrites = [["musique", "montee"], ["musique", "contretemps"], ["couleur", "musique"], ["musique", "stereo"]].some(([s, k]) => estObjet(partiel[s]) && partiel[s][k] !== undefined);
+    const meme = (x, y) => y.source === x.source && y.cible === x.cible && (y.sur || "tout") === (x.sur || "tout");
+    const plus = deja && !deja.length && !ecrites ? [] : a.mods.filter((x) => !mods.some((y) => meme(x, y)));
     partiel = { ...partiel, modulations: { liste: mods.concat(plus) }, declencheurs: { liste: a.decl }, particules: { ...a.particules, ...(estObjet(partiel.particules) ? partiel.particules : {}) } };
   }
   const r = {};
@@ -1097,19 +1101,36 @@ const GROUPES = [
 // sur une figure, la vitesse est dix fois moindre et le décalage se compte en px (comme
 // figures::FIG_VITESSE, FIG_DECALAGE)
 const UNITES_MOD_FIGURE = { vitesse: [(4 * 60) / (2 * Math.PI), " tr/min"], decalage: [48, " px"] };
-// à fond (quantité 1) : valeur affichée et unité
-const UNITES_MOD = {
-  rotation: [90, " tr/min"], vitesse: [(40 * 60) / (2 * Math.PI), " tr/min"], acceleration: [200, " %"], rayon: [400, " %"], taille: [150, " %"],
-  teinte: [180, "°"], decalage: [160, " % du rayon"], luminosite: [200, " %"], trainee: [300, " %"], opacite: [100, " %"],
-};
+// cibles qui s'additionnent, à fond (quantité 1) : valeur affichée et unité (les autres : en %,
+// d'après BORNES_MOD)
+const UNITES_MOD = { rotation: [90, " tr/min"], vitesse: [(40 * 60) / (2 * Math.PI), " tr/min"], teinte: [180, "°"], decalage: [160, " % du rayon"] };
+// cibles qui se multiplient (comme modulation::multipliee) : part ajoutée à fond, bornes du
+// facteur total ; le facteur d'une modulation ne descend pas sous 0
+const BORNES_MOD = { acceleration: [2, 0, 5], rayon: [4, 0.1, 5], taille: [1.5, 0, 4], luminosite: [2, 0, 4], trainee: [3, 0.1, 5], opacite: [1, 0, 1] };
 const MODULATIONS_MAX = 16;
 const LISSAGE_MOD = 0.35;
+// Effet d'une modulation seule, source à fond : pour une cible qui se multiplie, 1 + q·E ramené
+// dans les bornes du moteur (le rayon ne descend pas sous 10 %, l'opacité ne monte pas au-delà
+// de 100 %).
 const affQuantite = (cible, q, sur) => {
   const figure = sur === "figures" || sur in NOMS_FIGURES;
   const [fond, unite] = (figure && UNITES_MOD_FIGURE[cible]) || UNITES_MOD[cible] || [100, " %"];
-  const v = Math.round(q * fond);
+  const b = BORNES_MOD[cible];
+  if (cible === "opacite" && q > 0) return "sans effet seule";
+  const v = b ? Math.round((Math.min(b[2], Math.max(b[1], Math.max(0, 1 + q * b[0]))) - 1) * 100) : Math.round(q * fond);
   return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v) + unite;
 };
+// Infobulle de la valeur affichée : ce que la quantité ne peut pas dire seule.
+const noteQuantite = (cible, q) =>
+  cible === "opacite" && q > 0 ? "Sans effet seule (l'opacité est déjà au plus) : compense une autre modulation de l'opacité qui la baisse"
+  : BORNES_MOD[cible] ? "Effet de cette modulation seule, source à fond, dans les bornes du moteur" : "";
+// Bornes de la glissière de quantité (en centièmes) : pour une cible qui se multiplie, rien ne
+// change plus une fois son facteur à 0 (q = −1/E) ; la stéréo agit dans les deux sens.
+function bornesQuantite(cible, source) {
+  const b = BORNES_MOD[cible];
+  const lim = b ? Math.min(100, Math.ceil(100 / b[0])) : 100;
+  return [-lim, source === "stereo" ? lim : 100];
+}
 
 // Déclencheurs : événements et actions (comme config::Evenement, Action) ; réglages de chaque
 // action (force, nombre) et ce qu'elle coûte.
@@ -1129,6 +1150,13 @@ const NOMS_ACTIONS = Object.fromEntries(ACTIONS);
 const ACTION_FORCE = {
   eclat: "pourcent", bordure: "pourcent", onde: "fois", eclats: "fois", fissure: "fois", implosion: "fois", carre: "fois", etincelles: "fois", explosion: "fois", rafale: "fois",
   rebond: "elan", poussee: "elan", frein: "pourcent",
+};
+// ce que la force règle quand ce n'est pas la taille de tout (comme Swarm::agir) : nom de la
+// glissière et infobulle
+const FORCE_NOMMEE = {
+  etincelles: ["vitesse", "Vitesse des étincelles (leur taille ne change pas)"],
+  explosion: ["taille de l'onde", "Taille de la grande onde ; l'éclat, les satellites et la gerbe d'étincelles restent les mêmes"],
+  rafale: ["taille de l'onde", "Taille de la grande onde ; l'éclat et les satellites restent les mêmes"],
 };
 const ACTION_NOMBRE = new Set(["satellites", "etincelles", "explosion", "rafale"]);
 const IMPACT_ACTION = { etincelles: 2, explosion: 2, eclats: 2, fissure: 2 };
@@ -2266,13 +2294,16 @@ function ligneModulation(m, i) {
   const cible = choixMod(ciblesPour(m.sur || "tout"), m.cible, `Modulation ${n} : paramètre`, changer("cible"), CIBLES_MOD);
   const sur = choixMod(GROUPES, m.sur || "tout", `Modulation ${n} : sur`, changer("sur"));
   const plage = el("input");
-  Object.assign(plage, { type: "range", min: -100, max: 100, step: 1, value: Math.round((m.quantite || 0) * 100) });
+  const [qmin, qmax] = bornesQuantite(m.cible, m.source);
+  Object.assign(plage, { type: "range", min: qmin, max: qmax, step: 1, value: Math.round((m.quantite || 0) * 100) });
   plage.setAttribute("aria-label", `Modulation ${n} : quantité`);
   plage.title = "Double-clic : remise à zéro. À gauche de zéro : dans l'autre sens";
   const valeur = el("span", "valeur-mod", affQuantite(m.cible, m.quantite || 0, m.sur));
+  valeur.title = noteQuantite(m.cible, m.quantite || 0);
   const quantite = (q) => {
     const x = listeMods()[i] || m;
     valeur.textContent = affQuantite(x.cible, q, x.sur);
+    valeur.title = noteQuantite(x.cible, q);
     regle("quantite")(q);
   };
   plage.addEventListener("input", () => quantite(+plage.value / 100));
@@ -2291,7 +2322,7 @@ function ligneModulation(m, i) {
   );
   const inverser = el("button", "puce", "À l'envers");
   inverser.setAttribute("aria-pressed", !!m.inverser);
-  inverser.title = "La source à l'envers : forte quand elle est faible (stéréo : l'autre côté)";
+  inverser.title = "La source à l'envers : forte quand elle est faible (stéréo : l'autre côté). En silence, une source nulle agit donc à fond";
   inverser.addEventListener("click", () => ecrireModulations(autres("inverser", !m.inverser)));
   options.append(inverser);
   const plus = boutonOptions(options, modUI.ouvertes, i, `Modulation ${n} : seuil, lissage, à l'envers`);
@@ -2335,7 +2366,10 @@ function ligneDeclencheur(d, i) {
     // bornes de `Action::bornes_force` (config.rs) : une taille part de × 0,2, un élan (rebond,
     // poussée) de 0
     const min = genre === "elan" ? 0 : 20;
-    reglages.append(plageMini(`Déclencheur ${n} : ${genre === "elan" ? "force" : "taille"}`, min, 300, 5, d.force ?? 1, (v) => "× " + virgule(v, 2), regle("force"), (x) => x / 100, (v) => v * 100).l);
+    const [nom, note] = FORCE_NOMMEE[d.faire] || [genre === "elan" ? "force" : "taille", ""];
+    const p = plageMini(`Déclencheur ${n} : ${nom}`, min, 300, 5, d.force ?? 1, (v) => "× " + virgule(v, 2), regle("force"), (x) => x / 100, (v) => v * 100);
+    if (note) p.l.title = note;
+    reglages.append(p.l);
   }
   if (ACTION_NOMBRE.has(d.faire)) {
     // champ absent : 3, comme la valeur par défaut de config.rs
@@ -2396,6 +2430,7 @@ function majModulations() {
     if (d && document.activeElement !== d.plage) {
       d.plage.value = Math.round((m.quantite || 0) * 100);
       d.valeur.textContent = affQuantite(m.cible, m.quantite || 0, m.sur);
+      d.valeur.title = noteQuantite(m.cible, m.quantite || 0);
     }
   });
   const ld = listeDecl();
@@ -2618,9 +2653,13 @@ function majReglages() {
     }
   }
   const c = etat.reglages.couleur;
-  // sans Prisme, sa synchro ne change rien à la teinte
+  // sans Prisme, sa synchro ne change rien à la teinte ; cochée, elle reste montrée pour pouvoir
+  // la décocher
   const prisme = etat.prisme === true;
-  if (boutonPrisme) boutonPrisme.hidden = !prisme;
+  if (boutonPrisme) {
+    boutonPrisme.hidden = !prisme && !c.synchro_prisme;
+    boutonPrisme.title = prisme ? "Prend la teinte de l'éclairage RGB de Prisme quand il tourne" : "Prisme ne répond pas : sans effet tant qu'il ne tourne pas";
+  }
   for (const t of teintes) {
     t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.pochette && !(prisme && c.synchro_prisme) && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
   }

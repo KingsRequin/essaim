@@ -69,11 +69,52 @@ fn proches(a: Rgb, b: Rgb) -> bool {
     [(a.0, b.0), (a.1, b.1), (a.2, b.2)].iter().all(|&(x, y)| x.abs_diff(y) < EQUERRE_NUANCE)
 }
 
-/// Ce qui est dessiné des équerres : cadre de la fenêtre, écart et bras (px écran), opacité des
-/// deux diagonales, couleur. Deux images au même dessin ne redemandent pas leurs zones.
+/// Fenêtre au premier plan telle que l'habillage la voit : son cadre (gauche, haut, droite, bas,
+/// px écran), l'échelle de son écran, la zone de travail de cet écran (sans la barre des tâches)
+/// et un numéro qui change avec la fenêtre.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Fenetre {
+    pub cadre: (f32, f32, f32, f32),
+    pub echelle: f32,
+    pub travail: IRect,
+    pub id: isize,
+}
+
+impl Fenetre {
+    /// La fenêtre au premier plan de cadre `cadre` (`win::cadre_premier_plan`), sur l'écran que
+    /// Windows lui attribue (celui qui en porte la plus grande part) : son échelle (DPI de cet
+    /// écran ; `echelle` s'il ne répond pas) et sa zone de travail. L'échelle de l'écran, et non
+    /// `GetDpiForWindow` : une fenêtre qui ne gère pas le DPI y répond toujours 96, alors que son
+    /// cadre est en pixels réels.
+    pub fn lire(cadre: (f32, f32, f32, f32), echelle: f32) -> Fenetre {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let r = RECT { left: cadre.0.round() as i32, top: cadre.1.round() as i32, right: cadre.2.round() as i32, bottom: cadre.3.round() as i32 };
+        // sans réponse de Windows : aucune limite (l'équerre reste dehors, comme avant)
+        let partout = (i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4);
+        unsafe {
+            let mon = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
+            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let travail = if GetMonitorInfoW(mon, &mut mi).as_bool() { (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom) } else { partout };
+            let (mut dx, mut dy) = (96u32, 96u32);
+            let echelle = if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() { dx as f32 / 96.0 } else { echelle };
+            Fenetre { cadre, echelle, travail, id: GetForegroundWindow().0 as isize }
+        }
+    }
+}
+
+/// Point ou direction (px écran).
+type Point = (f32, f32);
+
+/// Ce qui est dessiné des équerres : cadre de la fenêtre et zone de travail de son écran, écart
+/// et bras (px écran), opacité des deux diagonales, couleur. Deux images au même dessin ne
+/// redemandent pas leurs zones.
 #[derive(Clone, Copy, PartialEq)]
 struct Equerres {
     cadre: (i32, i32, i32, i32),
+    travail: IRect,
     ecart: f32,
     bras: f32,
     opacites: [f32; 2],
@@ -82,22 +123,43 @@ struct Equerres {
 }
 
 impl Equerres {
-    /// Les quatre coins : point du cadre, sens vers l'extérieur, diagonale (0 ou 1).
-    fn coins(&self) -> [(f32, f32, f32, f32, usize); 4] {
+    /// Les quatre coins : sommet de l'équerre, sens de ses bras (vers l'intérieur du cadre),
+    /// diagonale (0 ou 1). L'équerre est dehors, écartée du coin ; s'il n'y a pas la place dans la
+    /// zone de travail (fenêtre agrandie, ancrée au bord, sous la barre des tâches), elle est
+    /// retournée dans le cadre, et son sommet ne sort jamais de cette zone (ni sur l'écran voisin,
+    /// ni sur la barre des tâches).
+    fn coins(&self) -> [(Point, Point, usize); 4] {
         let (l, t, r, b) = (self.cadre.0 as f32, self.cadre.1 as f32, self.cadre.2 as f32, self.cadre.3 as f32);
-        [(l, t, -1.0, -1.0, 0), (r, t, 1.0, -1.0, 1), (r, b, 1.0, 1.0, 0), (l, b, -1.0, 1.0, 1)]
+        let (wl, wt, wr, wb) = (self.travail.0 as f32, self.travail.1 as f32, self.travail.2 as f32, self.travail.3 as f32);
+        let marge = self.epaisseur / 2.0 + 1.0;
+        let dans = |v: f32, lo: f32, hi: f32| v.min(hi - marge).max(lo + marge);
+        [(l, t, -1.0, -1.0, 0), (r, t, 1.0, -1.0, 1), (r, b, 1.0, 1.0, 0), (l, b, -1.0, 1.0, 1)].map(|(x, y, sx, sy, diag)| {
+            let (ox, oy) = (x + sx * (self.ecart + marge), y + sy * (self.ecart + marge));
+            let place = (wl..=wr).contains(&ox) && (wt..=wb).contains(&oy);
+            let s = if place { 1.0 } else { -1.0 };
+            ((dans(x + s * sx * self.ecart, wl, wr), dans(y + s * sy * self.ecart, wt, wb)), (-sx, -sy), diag)
+        })
     }
 
-    /// Zone d'un coin : l'équerre, écartée du cadre, et ses deux bras le long du cadre.
+    /// Les trois points d'une équerre : bout du bras horizontal, sommet, bout du bras vertical.
+    fn points(&self, (px, py): Point, (ax, ay): Point) -> [Point; 3] {
+        [(px + ax * self.bras, py), (px, py), (px, py + ay * self.bras)]
+    }
+
+    /// Zone d'un coin : l'équerre et ses deux bras, trait compris.
     fn zones(&self) -> [IRect; 4] {
-        let e = self.ecart.max(self.bras) + self.epaisseur + 2.0;
-        self.coins().map(|(x, y, ..)| ((x - e).floor() as i32, (y - e).floor() as i32, (x + e).ceil() as i32, (y + e).ceil() as i32))
+        let e = self.epaisseur + 2.0;
+        self.coins().map(|(p, a, _)| {
+            let [h, s, v] = self.points(p, a);
+            let (x0, x1) = (h.0.min(s.0), h.0.max(s.0));
+            let (y0, y1) = (v.1.min(s.1), v.1.max(s.1));
+            ((x0 - e).floor() as i32, (y0 - e).floor() as i32, (x1 + e).ceil() as i32, (y1 + e).ceil() as i32)
+        })
     }
 
     fn dessiner(&self, cv: &mut dyn Canvas) {
-        for (x, y, sx, sy, diag) in self.coins() {
-            let (px, py) = (x + sx * self.ecart, y + sy * self.ecart);
-            cv.polyline(&[(px - sx * self.bras, py), (px, py), (px, py - sy * self.bras)], self.epaisseur, self.rgb, self.opacites[diag], true);
+        for (p, a, diag) in self.coins() {
+            cv.polyline(&self.points(p, a), self.epaisseur, self.rgb, self.opacites[diag], true);
         }
     }
 }
@@ -225,14 +287,16 @@ pub struct Loin {
     equerres: Option<Equerres>,
     /// Temps depuis la dernière demande des zones des équerres.
     rappel: f32,
-    // halo : sa lumière, le frisson d'une caisse claire, ce qui est affiché
+    // halo : sa lumière, le frisson d'une caisse claire, ce qui est affiché, la fenêtre qu'il
+    // habille (une autre fenêtre ne reçoit pas les éclats de la précédente)
     halo: Filet,
     frisson: f32,
     halo_affiche: Option<Halo>,
-    // liseré : sa lumière ; bandes (une par écran où il est dessiné, aucune s'il n'y a rien à
-    // dessiner) et abscisse du pointeur, d'où partent ses éclats
+    halo_fenetre: Option<isize>,
+    // liseré : sa lumière ; bandes (une par écran où il est dessiné, avec l'échelle de cet écran ;
+    // aucune s'il n'y a rien à dessiner) et abscisse du pointeur, d'où partent ses éclats
     lisere: Filet,
-    bandes: Vec<IRect>,
+    bandes: Vec<(IRect, f32)>,
     px: f32,
     /// Zones à redessiner à cette image.
     zones: Vec<IRect>,
@@ -253,6 +317,7 @@ impl Loin {
             halo: Filet::new(),
             frisson: 0.0,
             halo_affiche: None,
+            halo_fenetre: None,
             lisere: Filet::new(),
             bandes: Vec::new(),
             px: 0.0,
@@ -276,11 +341,11 @@ impl Loin {
         self.bandes.clear();
     }
 
-    /// Avance d'une image. `fenetre` : cadre de la fenêtre au premier plan (gauche, haut, droite,
-    /// bas) et échelle de son écran ; `ecrans` : ceux qui portent le liseré (celui du pointeur, ou
-    /// tous : `[lisere] tous_ecrans`).
+    /// Avance d'une image. `fenetre` : la fenêtre au premier plan (`Fenetre::lire`) ; `ecrans` :
+    /// ceux qui portent le liseré (celui du pointeur, ou tous : `[lisere] tous_ecrans`), chacun
+    /// avec son échelle.
     #[allow(clippy::too_many_arguments)]
-    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config, fenetre: Option<((f32, f32, f32, f32), f32)>, ecrans: &[IRect]) {
+    pub fn avance(&mut self, t: f64, dt: f32, cursor: (f32, f32), scale: f32, son: &Son, cfg: &Config, fenetre: Option<Fenetre>, ecrans: &[(IRect, f32)]) {
         self.zones.clear();
         let (kicks, caisse, drop) = (son.coups.kicks, son.coups.caisses > 0, son.coups.drops > 0);
         self.kick = if kicks > 0 { 1.0 } else { self.kick * (-dt * 7.0).exp() };
@@ -307,7 +372,7 @@ impl Loin {
             let tremble = (t * 44.0).sin() as f32 * 0.9 * self.montee;
             self.ecart.vers(EQUERRE_ECART * (1.0 - 0.75 * self.montee) + tremble, (17.0, 0.3), dt, EQUERRE_BORNES.0);
             self.bras.vers(1.0 + EQUERRE_BASSE * self.basse, (14.0, 0.4), dt, EQUERRE_BORNES.1);
-            if let Some(((l, h, r, b), scale)) = fenetre {
+            if let Some(Fenetre { cadre: (l, h, r, b), echelle: scale, travail, .. }) = fenetre {
                 // quantifiés : un dessin qui ne change pas à l'œil ne redemande pas ses zones
                 let q = |v: f32, pas: f32| (v / pas).round() * pas;
                 let opacite = |d: f32| q((0.5 + 0.5 * d.max(self.kick)).clamp(0.0, 1.0), 1.0 / 32.0);
@@ -316,6 +381,7 @@ impl Loin {
                 let rgb = avant.map(|a| a.rgb).filter(|&a| proches(a, rgb)).unwrap_or(rgb);
                 self.equerres = Some(Equerres {
                     cadre: (l.round() as i32, h.round() as i32, r.round() as i32, b.round() as i32),
+                    travail,
                     ecart: q(self.ecart.x * scale, 0.25),
                     bras: q(c.bras * self.bras.x * scale, 0.25),
                     opacites: self.diagonales.map(opacite),
@@ -341,9 +407,15 @@ impl Loin {
         // quatre bandes sont redonnées à chaque image, et les anciennes quand la fenêtre change
         let avant = self.halo_affiche.take();
         if cfg.halo.actif {
-            let cadre = fenetre.map(|((l, h, r, b), _)| Cadre(l.round(), h.round(), r.round(), b.round()));
-            let sf = fenetre.map_or(scale, |f| f.1);
+            let cadre = fenetre.map(|Fenetre { cadre: (l, h, r, b), .. }| Cadre(l.round(), h.round(), r.round(), b.round()));
+            let sf = fenetre.map_or(scale, |f| f.echelle);
             let u = cadre.map_or(0.0, |c| c.proche(cursor));
+            // autre fenêtre : les éclats couraient sur le cadre de l'ancienne
+            let id = fenetre.map(|f| f.id);
+            if id.is_some() && id != self.halo_fenetre {
+                self.halo.eclats.clear();
+            }
+            self.halo_fenetre = id.or(self.halo_fenetre);
             self.frisson = if caisse { 1.0 } else { self.frisson * (-dt * 12.0).exp() };
             self.halo.avance(t, dt, u, kicks > 0, drop, son_la || self.frisson > 0.02);
             if let (Some(cadre), true) = (cadre, self.halo.presence > 0.0) {
@@ -351,7 +423,7 @@ impl Loin {
                 self.halo_affiche = Some(Halo { cadre, u, echelle: sf, zones: cadre.bandes((c.profondeur * (1.0 + 1.0 / HALO_NAPPES as f32) + 2.0 * c.epaisseur) * sf) });
             }
         } else {
-            (self.halo, self.frisson) = (Filet::new(), 0.0);
+            (self.halo, self.frisson, self.halo_fenetre) = (Filet::new(), 0.0, None);
         }
         self.zones.extend(self.halo_affiche.iter().flat_map(|h| h.zones));
         if let Some(a) = avant {
@@ -367,8 +439,11 @@ impl Loin {
         if cfg.lisere.actif {
             self.lisere.avance(t, dt, cursor.0, kicks > 0, drop, son_la);
             if self.lisere.presence > 0.0 {
-                let haut = (cfg.lisere.epaisseur * scale).ceil() as i32 + 2;
-                self.bandes.extend(ecrans.iter().map(|e| (e.0, e.3 - haut, e.2, e.3)));
+                // chaque bande à l'échelle de son écran
+                self.bandes.extend(ecrans.iter().map(|&(e, s)| {
+                    let haut = (cfg.lisere.epaisseur * s).ceil() as i32 + 2;
+                    ((e.0, e.3 - haut, e.2, e.3), s)
+                }));
                 self.px = cursor.0;
             }
         } else {
@@ -376,8 +451,8 @@ impl Loin {
         }
         // les bandes changent à chaque image tant qu'elles sont là ; celles qui disparaissent
         // (plus de son, autre écran) sont effacées une dernière fois
-        self.zones.extend(self.bandes.iter().copied());
-        self.zones.extend(avant.into_iter().filter(|z| !self.bandes.contains(z)));
+        self.zones.extend(self.bandes.iter().map(|b| b.0));
+        self.zones.extend(avant.into_iter().map(|b| b.0).filter(|z| !self.bandes.iter().any(|b| b.0 == *z)));
     }
 
     /// Zones à redessiner à cette image : vides tant que le dessin ne change pas.
@@ -386,7 +461,7 @@ impl Loin {
     }
 
     /// Dessine les équerres, le halo et le liseré (à chaque image : ce qui tombe hors des zones
-    /// redessinées est rogné par le moteur).
+    /// redessinées est rogné par le moteur). `scale` : échelle de l'écran du pointeur.
     pub fn dessiner(&self, cv: &mut dyn Canvas, t: f64, cfg: &Config, scale: f32) {
         if let Some(e) = &self.equerres {
             e.dessiner(cv);
@@ -399,7 +474,7 @@ impl Loin {
         // phase repliée en f64 avant la conversion : en f32, après des jours, elle avancerait par crans
         let phase = (t * 0.5).rem_euclid(std::f64::consts::TAU) as f32;
         let teinte = |part: f32| 0.5 + 0.5 * (part * TAU + phase).sin();
-        let (son, pas) = ((self.basse, self.montee), FILET_PAS * scale);
+        let son = (self.basse, self.montee);
         if let Some(Halo { cadre, u, echelle: scale, .. }) = self.halo_affiche {
             let c = &cfg.halo;
             let (ep, tour, pas) = (c.epaisseur * scale, cadre.tour(), FILET_PAS * scale);
@@ -429,8 +504,10 @@ impl Loin {
                 });
             }
         }
-        for &(x0, _, x1, bas) in &self.bandes {
-            let (ep, px) = (cfg.lisere.epaisseur * scale, self.px);
+        // liseré : chaque bande à l'épaisseur de son écran (`echelle`) ; ce qui part du pointeur
+        // (lueur, éclats qui passent d'un écran à l'autre) à l'échelle de l'écran du pointeur
+        for &((x0, _, x1, bas), echelle) in &self.bandes {
+            let (ep, pas, px) = (cfg.lisere.epaisseur * echelle, FILET_PAS * echelle, self.px);
             let (gauche, largeur, y) = (x0 as f32, (x1 - x0) as f32, bas as f32 - ep / 2.0);
             let lueur = LISERE_LUEUR.0 * scale + LISERE_LUEUR.1 * largeur * self.basse;
             let niveau = |s: f32| {
@@ -479,9 +556,18 @@ mod tests {
     const FENETRE: (f32, f32, f32, f32) = (200.0, 150.0, 1000.0, 700.0);
     const ECRAN: IRect = (0, 0, 1200, 800);
 
-    fn avancer(l: &mut Loin, t: f64, bass: f32, coups: Coups, cfg: &Config, fenetre: Option<(f32, f32, f32, f32)>) {
+    /// Fenêtre de cadre `cadre` sur l'écran d'essai, à 100 %.
+    fn fenetre(cadre: (f32, f32, f32, f32), id: isize) -> Fenetre {
+        Fenetre { cadre, echelle: 1.0, travail: ECRAN, id }
+    }
+
+    fn avancer(l: &mut Loin, t: f64, bass: f32, coups: Coups, cfg: &Config, cadre: Option<(f32, f32, f32, f32)>) {
+        avancer_dans(l, t, bass, coups, cfg, cadre.map(|c| fenetre(c, 1)));
+    }
+
+    fn avancer_dans(l: &mut Loin, t: f64, bass: f32, coups: Coups, cfg: &Config, f: Option<Fenetre>) {
         let au = AudioView { bass, ..Default::default() };
-        l.avance(t, 1.0 / 120.0, (600.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, cfg, fenetre.map(|f| (f, 1.0)), &[ECRAN]);
+        l.avance(t, 1.0 / 120.0, (600.0, 400.0), 1.0, &Son { au: &au, coups: &coups, bandes: &[] }, cfg, f, &[(ECRAN, 1.0)]);
     }
 
     fn image(l: &Loin, t: f64, cfg: &Config) -> Pixmap {
@@ -696,7 +782,7 @@ mod tests {
     fn lisere_sur_deux_ecrans_l_eclat_passe_de_l_un_a_l_autre() {
         let mut cfg = Config::default();
         (cfg.lisere.actif, cfg.lisere.tous_ecrans) = (true, true);
-        let ecrans = [(0, 0, 1200, 800), (1200, 0, 2400, 800)];
+        let ecrans = [((0, 0, 1200, 800), 1.0), ((1200, 0, 2400, 800), 1.0)];
         let mut l = Loin::new();
         let dt = 1.0f32 / 120.0;
         // pointeur sur le premier écran, près de son bord droit ; un kick, puis l'éclat court
@@ -722,6 +808,63 @@ mod tests {
             l.avance(i as f64 * dt as f64, dt, (1100.0, 400.0), 1.0, &Son { au: &au, coups: &Coups::default(), bandes: &[] }, &cfg, None, &ecrans[..1]);
         }
         assert_eq!(l.zones(), [(0, 795, 1200, 800)]);
+        // écrans d'échelles différentes : chaque bande à l'épaisseur de son écran
+        cfg.lisere.tous_ecrans = true;
+        let mut l = Loin::new();
+        let ecrans = [((0, 0, 1200, 800), 1.0), ((1200, 0, 3000, 1200), 2.0)];
+        for i in 0..30 {
+            let au = AudioView { bass: 0.3, ..Default::default() };
+            l.avance(i as f64 * dt as f64, dt, (1190.0, 400.0), 1.0, &Son { au: &au, coups: &Coups::default(), bandes: &[] }, &cfg, None, &ecrans);
+        }
+        assert_eq!(l.zones(), [(0, 795, 1200, 800), (1200, 1192, 3000, 1200)]);
+        let mut pm = Pixmap::new(3000, 1200).unwrap();
+        l.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 29.0 * dt as f64, &cfg, 1.0);
+        let haut = |x: u32, bas: u32| (0..12).filter(|d| pm.pixel(x, bas - 1 - d).unwrap().alpha() > 0).count();
+        assert!(haut(1150, 800) == 3 && haut(1230, 1200) == 6, "{} / {}", haut(1150, 800), haut(1230, 1200));
+    }
+
+    #[test]
+    fn equerres_dans_la_zone_de_travail() {
+        let mut cfg = Config::default();
+        (cfg.equerres.actif, cfg.equerres.bras) = (true, 30.0);
+        // fenêtre agrandie : son cadre est la zone de travail (barre des tâches dessous, de 760 à
+        // 800) ; ancrée au bord gauche : la moitié gauche ; à moitié sous la barre des tâches
+        let travail = (0, 0, 1200, 760);
+        for cadre in [(0.0, 0.0, 1200.0, 760.0), (0.0, 0.0, 600.0, 760.0), (300.0, 500.0, 900.0, 900.0)] {
+            let mut l = Loin::new();
+            avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre, echelle: 1.0, travail, id: 1 }));
+            let zones = l.zones().to_vec();
+            let pm = image(&l, 0.0, &cfg);
+            let mut peints = 0;
+            for (j, p) in pm.data().chunks_exact(4).enumerate() {
+                if p[3] > 0 {
+                    let (x, y) = ((j % 1200) as i32, (j / 1200) as i32);
+                    peints += 1;
+                    assert!(x >= travail.0 && x < travail.2 && y >= travail.1 && y < travail.3, "{cadre:?} : pixel ({x}, {y}) hors de la zone de travail");
+                    assert!(dans(&zones, x, y), "{cadre:?} : pixel ({x}, {y}) hors des zones");
+                }
+            }
+            // les quatre équerres sont là, retournées dans le cadre s'il le faut
+            assert!(peints > 4 * 40, "{cadre:?} : {peints} pixels");
+        }
+        // fenêtre au milieu : les équerres restent dehors, écartées du cadre
+        let mut l = Loin::new();
+        avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre: FENETRE, echelle: 1.0, travail, id: 1 }));
+        let pm = image(&l, 0.0, &cfg);
+        assert!(pm.pixel(FENETRE.0 as u32 - 4, FENETRE.1 as u32 + 10).unwrap().alpha() > 0);
+        assert_eq!(pm.pixel(FENETRE.0 as u32 + 4, FENETRE.1 as u32 + 10).unwrap().alpha(), 0);
+    }
+
+    #[test]
+    fn halo_une_autre_fenetre_ne_garde_pas_les_eclats() {
+        let mut cfg = Config::default();
+        cfg.halo.actif = true;
+        let mut l = Loin::new();
+        avancer_dans(&mut l, 0.0, 0.8, Coups { kicks: 1, ..Default::default() }, &cfg, Some(fenetre(FENETRE, 1)));
+        avancer_dans(&mut l, 0.01, 0.8, Coups::default(), &cfg, Some(fenetre((210.0, 150.0, 1000.0, 700.0), 1)));
+        assert_eq!(l.halo.eclats.len(), 1, "même fenêtre déplacée : l'éclat continue");
+        avancer_dans(&mut l, 0.02, 0.8, Coups::default(), &cfg, Some(fenetre((100.0, 100.0, 500.0, 400.0), 2)));
+        assert!(l.halo.eclats.is_empty());
     }
 
     #[test]
