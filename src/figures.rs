@@ -224,8 +224,16 @@ const RETARD_MAX: f32 = 40.0;
 const RETOMBEE: (f32, f32, f32) = (10.0, 8.0, 6.0);
 /// Présence du tempo : durée de son arrivée et de son effacement (s).
 const TEMPO_FONDU: (f32, f32) = (0.15, 0.8);
-/// Place des figures posées sous le pointeur (quatre temps), depuis la pointe de la flèche (px à 100 %).
+/// Place des figures posées sous le pointeur (quatre temps, voix), depuis la pointe de la flèche
+/// (px à 100 %, pointeur de taille normale).
 const SOUS_LE_POINTEUR: (f32, f32) = (7.0, 27.0);
+
+/// `SOUS_LE_POINTEUR`, écarté d'autant que Windows agrandit le pointeur (Accessibilité :
+/// `souris::echelle_pointeur`) : la figure reste sous la flèche, pas dessus.
+pub(crate) fn sous_le_pointeur() -> (f32, f32) {
+    let k = crate::souris::echelle_pointeur();
+    (SOUS_LE_POINTEUR.0 * k, SOUS_LE_POINTEUR.1 * k)
+}
 
 /// Arcs : cran dont le grand arc avance à chaque kick (rad), élan que le kick donne à son rayon
 /// (px/s), recul du petit arc sur la caisse claire (rad/s), bornes du bond (px).
@@ -634,8 +642,9 @@ impl Figures {
             QUATRE_TEMPS => {
                 let q = &cfg.quatre_temps;
                 let r = q.taille * TAILLE_BORNES.1 * POINT_ACTIF;
-                let large = SOUS_LE_POINTEUR.0 + 1.5 * q.ecart + TIRET_BORNES.1 * 1.1 + r + 1.0;
-                let haut = SOUS_LE_POINTEUR.1 + SAUT_BORNES.1.max(-SAUT_BORNES.0) + r;
+                let sous = sous_le_pointeur();
+                let large = sous.0 + 1.5 * q.ecart + TIRET_BORNES.1 * 1.1 + r + 1.0;
+                let haut = sous.1 + SAUT_BORNES.1.max(-SAUT_BORNES.0) + r;
                 large.max(haut)
             }
             ANNEAU => cfg.anneau.rayon * ANNEAU_BORNES.1 * (1.0 + ANNEAU_ECHO.1) + 4.0 * cfg.anneau.epaisseur + 4.0,
@@ -723,7 +732,8 @@ impl Figures {
                 // l'échelle `traits` : le tiret, un point allongé, garde l'échelle du point
                 let pose = &self.poses[QUATRE_TEMPS];
                 let tiret = if pose.traits > 1e-3 { pose.geo / pose.traits } else { 0.0 };
-                let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + SOUS_LE_POINTEUR.1 * scale);
+                let sous = sous_le_pointeur();
+                let (ax, ay) = (cx + sous.0 * scale, cy + sous.1 * scale);
                 let ecart = c.ecart * scale * (1.0 - 0.35 * p.montee);
                 for (i, pt) in q.pts.iter().enumerate() {
                     let actif = q.actif == Some(i);

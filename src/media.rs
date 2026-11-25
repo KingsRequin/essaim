@@ -42,7 +42,8 @@ const APAISEMENT: Duration = Duration::from_millis(150);
 /// lecture n'arrivent pas toujours dans le même ordre).
 const DELAI_LECTURE: Duration = Duration::from_secs(3);
 /// Pochette absente au changement de morceau (elle arrive souvent après le titre) : relue aux
-/// interrogations suivantes, ce nombre de fois au plus.
+/// interrogations suivantes, ce nombre de fois au plus ; la teinte de la précédente reste en
+/// attendant (pas de passage par la teinte propre).
 const ESSAIS_POCHETTE: u8 = 3;
 /// Côté de la miniature décodée pour la teinte (pixels).
 const COTE_MINIATURE: u32 = 48;
@@ -393,7 +394,7 @@ fn fil() {
     loop {
         lecteur.tour(&gestionnaire, &tx);
         // attente : un événement (puis la fin de sa rafale), ou l'interrogation de secours
-        let attendu = (lecteur.essais > 0 && etat().pochette.is_none()) || lecteur.suivi.differe.is_some();
+        let attendu = lecteur.essais > 0 || lecteur.suivi.differe.is_some();
         let mut premier = match rx.recv_timeout(if attendu { INTERROGATION_PROCHE } else { INTERROGATION }) {
             Ok(s) => Some(s),
             Err(RecvTimeoutError::Timeout) => None,
@@ -454,7 +455,7 @@ impl Lecteur {
             (self.pochette_de, self.essais, self.relire_pochette) = (morceau.clone(), ESSAIS_POCHETTE, true);
         }
         let mut pochette = etat().pochette;
-        if self.relire_pochette || (pochette.is_none() && self.essais > 0) {
+        if self.relire_pochette || self.essais > 0 {
             self.relire_pochette = false;
             self.essais = self.essais.saturating_sub(1);
             pochette = match props.as_ref().filter(|_| morceau.is_some()).map(teinte_miniature) {
@@ -462,8 +463,12 @@ impl Lecteur {
                     self.essais = 0;
                     h
                 }
+                // nouvelle pochette pas encore lisible (le lecteur la donne souvent après le
+                // titre) : la précédente reste tant que des essais restent, sinon la teinte
+                // passerait un instant par la teinte propre avant d'aller à la nouvelle
+                Some(Err(_)) if self.essais > 0 => pochette,
                 Some(Err(e)) => {
-                    if self.essais == 0 && !std::mem::replace(&mut self.miniature_illisible, true) {
+                    if !std::mem::replace(&mut self.miniature_illisible, true) {
                         log::info!("média : pochette illisible ({e})");
                     }
                     None

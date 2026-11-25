@@ -171,7 +171,8 @@ installer, pas de droits administrateur. Au premier lancement, la fenêtre des r
 - Le curseur **Dotter** est à côté : `curseur-Dotter.zip` (voir l'étape 3 plus bas).
 - Essaim se met ensuite à jour tout seul : une notification prévient du téléchargement, puis
   propose de redémarrer. Pour ne pas attendre : *Chercher une mise à jour* dans la vue *Application*.
-- Relancer `essaim.exe` pendant qu'il tourne ouvre sa fenêtre des réglages.
+- Relancer `essaim.exe` pendant qu'il tourne ouvre sa fenêtre des réglages (pas dans les 30 s qui
+  suivent son démarrage : c'est alors un second lancement automatique).
 
 **Depuis les sources :** Essaim se compile en une commande.
 
@@ -249,7 +250,8 @@ est dans le journal (`%APPDATA%\Essaim\essaim.log`).
 <summary><b>Les éclats me gênent (photosensibilité).</b></summary>
 
 *Réglages › Cet ordinateur › Sans flashs* : *Toujours*. Les éclats du kick sont adoucis et limités à trois
-par seconde, sans halo blanc, et la bordure de la fenêtre ne clignote plus. Par défaut (*Comme
+par seconde, sans halo blanc, et la bordure de la fenêtre ne clignote plus ; le halo du cadre de la
+fenêtre et le liseré du bas de l'écran ne s'embrasent plus au drop. Par défaut (*Comme
 Windows*), ce mode s'active tout seul quand les effets d'animation sont coupés dans Windows
 (*Accessibilité › Effets visuels*).
 </details>

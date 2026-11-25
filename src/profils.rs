@@ -486,8 +486,24 @@ pub fn apply(p: &Profile) -> Result<(), String> {
     apply_sauf(p, |_| false)
 }
 
+/// Presets appliqués (ou réglages remis d'un coup : « Annuler », fin d'une règle automatique)
+/// depuis le lancement. Compté avant l'écriture de `config.toml` : la boucle, qui le compare à
+/// chaque relecture des réglages, le voit au plus tard avec les nouveaux réglages et vide alors
+/// les traînées (`Swarm::vider_trainees`).
+static APPLICATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Nombre de presets appliqués depuis le lancement (voir `APPLICATIONS`).
+pub fn applications() -> u64 {
+    APPLICATIONS.load(Ordering::Relaxed)
+}
+
+fn compter_application() {
+    APPLICATIONS.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Comme `apply`, sans les sections pour lesquelles `ecartee` est vrai.
 fn apply_sauf(p: &Profile, ecartee: impl Fn(&str) -> bool) -> Result<(), String> {
+    compter_application();
     let sans_jeu = p.cfg.souris.jeu.is_empty();
     config::apply_keys(&p.cfg, |s, k| in_profile(s, k) && !ecartee(s) && !(sans_jeu && (s, k) == ("souris", "jeu")))
 }
@@ -616,6 +632,7 @@ pub fn capturer() -> Option<Avant> {
 pub fn remettre(avant: &Avant) -> Result<(), String> {
     let mut cfg = avant.cfg.clone();
     cfg.souris.jeu.clone_from(&avant.jeu);
+    compter_application();
     config::apply_keys(&cfg, in_profile)?;
     config::request_reload();
     match &avant.curseurs {
@@ -631,6 +648,7 @@ pub fn remettre_partiel(avant: &Avant, apres: &Avant) -> Result<(), String> {
     let actuel = Config::read(&config::path()).map_err(|e| format!("réglages illisibles ({e})"))?;
     let cles = cles_a_remettre(&avant.cfg, &apres.cfg, &actuel);
     if !cles.is_empty() {
+        compter_application();
         config::apply_keys(&avant.cfg, |s, k| cles.iter().any(|(a, b)| a == s && b == k))?;
         config::request_reload();
     }

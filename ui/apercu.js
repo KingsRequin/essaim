@@ -58,6 +58,8 @@ const borneRotation = (tr) => (Number.isFinite(tr) ? Math.min(ROTATION_MAX, Math
 const REBOND = 6.67, REBOND_MAX = 3 * REBOND, POUSSEE = [5, 4], FREIN = [0.8, 9], TREMBLE = [0.053, 46];
 const SAT_RESSORT = [10, 16, 0.3], SAT_ENTREE_SORTIE = [0.3, 0.35], SAT_FONTE = 0.6, SAT_TRAIL_RESSORTS = 0.68;
 const ETIREMENT = [0.02, 8.7], ANNEAU_RESSORTS = [5, 4.5], VRILLE = [0.58, 2.4, 1.4], RUBAN_MORCEAU = 2;
+// Halo blanc de l'éclat du kick : rayon du vide laissé sous la pointe (render::HALO_VIDE).
+const HALO_VIDE = 6;
 // Petites figures (arcs, quatre temps, anneau) : comme les constantes de src/figures.rs.
 const FIG_RETOMBEE = [10, 8, 6], TEMPO_FONDU = [0.15, 0.8], SOUS_LE_POINTEUR = [7, 27];
 // Centre des figures : au bout d'un ressort accroché au pointeur (pulsation, amortissement),
@@ -265,11 +267,29 @@ function bande(g, a, b, largeur, couleur) {
 const ETIQUETTE_DECALAGE = [16, 24], ETIQUETTE_ENTREE = 0.3, ETIQUETTE_SORTIE = 0.4, ETIQUETTE_GLISSE = 6, ETIQUETTE_CERNE = 2, ETIQUETTE_CERNE_OPACITE = 0.6;
 const ETIQUETTE_ARTISTE = [0.85, 0.9], ETIQUETTE_FILET = [1.4, 1.6], ETIQUETTE_FILET_ECART = 2;
 
+// Mode sans flashs (comme render::ECART_FLASH, win::sans_flashs) : au plus un éclat tous les
+// ECART_FLASH secondes, à moitié de force. « auto » suit Windows (animations réduites), que la
+// page voit par prefers-reduced-motion.
+const ECART_FLASH = 1 / 3;
+function sansFlashs(c) {
+  const mode = (c.rendu || {}).sans_flashs;
+  if (mode === "oui") return true;
+  if (mode === "non") return false;
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 // Filet de lumière du liseré et du halo (comme loin::Filet) : état, avance, force en un point.
-const nouveauFilet = () => ({ eclats: [], embrase: 0, silence: FILET_ATTENTE, presence: 0 });
-function avancerFilet(fl, t, dt, u, kick, drop, son) {
-  if (kick) fl.eclats.push({ u, ne: t, force: FILET_KICK[0], vie: FILET_KICK[1], vitesse: FILET_KICK[2] });
-  if (drop) { fl.eclats.push({ u, ne: t, force: FILET_DROP[0], vie: FILET_DROP[1], vitesse: FILET_DROP[2] }); fl.embrase = 1; }
+// `doux` : ni embrasement ni pleine force, un éclat tous les ECART_FLASH secondes au plus.
+const nouveauFilet = () => ({ eclats: [], embrase: 0, silence: FILET_ATTENTE, presence: 0, dernierEclat: -Infinity });
+function avancerFilet(fl, t, dt, u, kick, drop, son, doux) {
+  const eclat = (e, k) => ({ u, ne: t, force: e[0] * k, vie: e[1], vitesse: e[2] });
+  if (!doux) {
+    if (kick) fl.eclats.push(eclat(FILET_KICK, 1));
+    if (drop) { fl.eclats.push(eclat(FILET_DROP, 1)); fl.embrase = 1; }
+  } else if ((kick || drop) && t - fl.dernierEclat >= ECART_FLASH) {
+    fl.dernierEclat = t;
+    fl.eclats.push(eclat(drop ? FILET_DROP : FILET_KICK, 0.5));
+  }
   fl.eclats = fl.eclats.filter((e) => t - e.ne < e.vie).slice(-FILET_ECLATS_MAX);
   fl.embrase *= Math.exp(-dt * 1.5);
   fl.silence = son || fl.eclats.length > 0 || fl.embrase > 0.02 ? 0 : fl.silence + dt;
@@ -638,6 +658,29 @@ function sousPas(da, r, [angle, ecart]) {
   return Math.min(24, Math.max(1, Math.ceil(Math.max(Math.abs(da) / angle, (Math.abs(da) * r) / ecart))));
 }
 
+// Une traînée repart de zéro.
+function viderTrainee(tr) {
+  tr.length = 0;
+  tr.espace = 1;
+}
+
+// Nombre de valeurs (section.clé) qui diffèrent entre deux jeux de réglages, compté jusqu'à
+// `jusqua` (inutile d'aller plus loin). Une section partagée telle quelle est passée sans la lire.
+function changementsReglages(a, b, jusqua) {
+  let n = 0;
+  for (const s of new Set(Object.keys(a).concat(Object.keys(b)))) {
+    const sa = a[s], sb = b[s];
+    if (sa === sb) continue;
+    const objets = sa && sb && typeof sa === "object" && typeof sb === "object" && !Array.isArray(sa) && !Array.isArray(sb);
+    const cles = objets ? new Set(Object.keys(sa).concat(Object.keys(sb))) : [null];
+    for (const k of cles) {
+      const va = k === null ? sa : sa[k], vb = k === null ? sb : sb[k];
+      if (va !== vb && JSON.stringify(va) !== JSON.stringify(vb) && ++n >= jusqua) return n;
+    }
+  }
+  return n;
+}
+
 class Apercu {
   constructor(canvas) {
     this.canvas = canvas;
@@ -682,6 +725,9 @@ class Apercu {
     this.presence = 0;
     this.hauteur = 50;
     this.env = 0;
+    // mode sans flashs (Swarm::doux, relu à chaque image : sansFlashs) et instant du dernier éclat
+    this.doux = false;
+    this.dernierFlash = -Infinity;
     this.trainees = [];
     // plafonds de points des traînées (fixés par dimensionner)
     this.pointsTrainee = TRAINEE_POINTS_MAX;
@@ -714,8 +760,18 @@ class Apercu {
     this.aigusSpectre = null;
   }
 
+  // Réglages changés d'un coup (preset appliqué, « Annuler », vignette qui montre un autre
+  // preset) : toutes les traînées repartent de zéro, sinon un trait relierait l'ancien trajet au
+  // nouveau (comme render::Swarm::vider_trainees). Une glissière ne change qu'une valeur à la
+  // fois : le trajet y glisse.
   regler(reglages) {
+    if (this.reglages && reglages !== this.reglages && changementsReglages(this.reglages, reglages, 2) >= 2) this.viderTrainees();
     this.reglages = reglages;
+  }
+
+  viderTrainees() {
+    this.trainees.forEach(viderTrainee);
+    for (const q of this.sats.concat(this.fixes)) viderTrainee(q.trainee);
   }
 
   // Taille du canevas en pixels physiques, et échelle pour que l'orbite la plus large tienne.
@@ -773,6 +829,7 @@ class Apercu {
   // changent pas d'un pas à l'autre : les événements ne comptent qu'une fois.
   avancer(dt, son) {
     if (!this.reglages) return;
+    this.doux = sansFlashs(this.reglages);
     this.sillage(dt);
     this.coupsImage = { kicks: 0, caisses: 0, aigus: 0, drops: 0, temps: false };
     const n = Math.max(1, Math.ceil(dt / PAS_TRAINEE));
@@ -1252,12 +1309,12 @@ class Apercu {
       // le pointeur de l'aperçu est au centre : au plus près du haut de la fenêtre, en son milieu
       const [x0, , x1] = this.fenetreApercu();
       l.frisson = caisse ? 1 : l.frisson * Math.exp(-dt * 12);
-      avancerFilet(l.halo, t, dt, (x1 - x0) / 2, kicks > 0, drop, sonLa || l.frisson > 0.02);
+      avancerFilet(l.halo, t, dt, (x1 - x0) / 2, kicks > 0, drop, sonLa || l.frisson > 0.02, this.doux);
     } else {
       l.halo = nouveauFilet();
       l.frisson = 0;
     }
-    if (lisere.actif) avancerFilet(l.lisere, t, dt, this.canvas.width / 2, kicks > 0, drop, sonLa);
+    if (lisere.actif) avancerFilet(l.lisere, t, dt, this.canvas.width / 2, kicks > 0, drop, sonLa, this.doux);
     else l.lisere = nouveauFilet();
   }
 
@@ -1279,7 +1336,7 @@ class Apercu {
       g.lineJoin = "round";
       [[x0, y0, -1, -1, 0], [x1, y0, 1, -1, 1], [x1, y1, 1, 1, 0], [x0, y1, -1, 1, 1]].forEach(([x, y, sx, sy, diag]) => {
         const px = x + sx * e, py = y + sy * e;
-        g.strokeStyle = plein(tete, 0.5 + 0.5 * Math.max(l.diagonales[diag], l.kick));
+        g.strokeStyle = plein(tete, 0.5 + (this.doux ? 0.25 : 0.5) * Math.max(l.diagonales[diag], l.kick));
         g.beginPath();
         g.moveTo(px - sx * bras, py);
         g.lineTo(px, py);
@@ -1577,10 +1634,9 @@ class Apercu {
     // forme d'un trajet changée : les traînées de ce groupe repartent de zéro ; un rayon qu'on
     // glisse, une modulation ajoutée les laissent (comme render::Swarm::formes)
     const formeSats = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
-    const vider = (tr) => { tr.length = 0; tr.espace = 1; };
     const formesAvant = this.formes || [];
-    if (formesAvant[0] !== o.forme) this.trainees.forEach(vider);
-    if (formesAvant[1] !== formeSats) for (const q of this.sats.concat(this.fixes)) vider(q.trainee);
+    if (formesAvant[0] !== o.forme) this.trainees.forEach(viderTrainee);
+    if (formesAvant[1] !== formeSats) for (const q of this.sats.concat(this.fixes)) viderTrainee(q.trainee);
     this.formes = [o.forme, formeSats];
     // modulation ajoutée, retirée ou déplacée : les valeurs lissées repartent de zéro (comme
     // render::Swarm::cles_modulations), comparées sur place
@@ -1896,9 +1952,15 @@ class Apercu {
     }
   }
 
-  // Éclat de force `force` (comme Swarm::eclater ; l'aperçu n'a pas le mode sans flashs).
+  // Éclat de force `force` (comme Swarm::eclater) : plein, ou en mode sans flashs, à moitié et au
+  // plus trois fois par seconde.
   eclater(force) {
-    if (force > 0) this.env = Math.max(this.env, force);
+    if (force <= 0) return;
+    if (!this.doux) this.env = Math.max(this.env, force);
+    else if (this.t - this.dernierFlash >= ECART_FLASH) {
+      this.dernierFlash = this.t;
+      this.env = Math.max(this.env, 0.5 * force);
+    }
   }
 
   // Dessin, dans l'ordre de l'écran (main.rs, puis Swarm::draw pour l'essaim) ; le pointeur (absent
@@ -2087,19 +2149,29 @@ class Apercu {
     };
     for (const h of tetes) if (!h.devant) dessinerTete(h);
     const eclat = c.eclat.taille * S;
+    // mode sans flashs : ni halo blanc, ni anneau ou carré trop vifs (comme Swarm::draw)
+    const vif = this.doux ? 0.45 : 1;
     if (this.env > 0.02 && c.eclat.taille > 0) {
       if (ressorts.actif) {
         // mode ressorts : un anneau épais qui sort en dépassant puis s'affine, sans halo blanc
         const k = Math.min(1, Math.max(0, -Math.log(Math.min(1, this.env)) / 3.78));
-        g.strokeStyle = rgba(tete, 0.9 * (1 - k));
+        g.strokeStyle = rgba(tete, 0.9 * (1 - k) * vif);
         g.lineWidth = (ANNEAU_RESSORTS[1] * (1 - k) ** 2 + 0.6) * S;
         g.beginPath();
         g.arc(cx, cy, Math.max(1, eclat * ANNEAU_RESSORTS[0] * depasse(k)), 0, TAU);
         g.stroke();
       } else {
-        // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
-        disque(cx, cy, eclat * (2 + 2.5 * this.env), [255, 255, 255], 0.35 * this.env);
-        g.strokeStyle = rgba(tete, 0.8 * this.env);
+        // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur ; le halo
+        // laisse un vide sous la pointe (render::HALO_VIDE)
+        const dehors = eclat * (2 + 2.5 * this.env), vide = HALO_VIDE * S;
+        if (!this.doux && dehors > vide) {
+          g.strokeStyle = rgba([255, 255, 255], 0.35 * this.env);
+          g.lineWidth = dehors - vide;
+          g.beginPath();
+          g.arc(cx, cy, (dehors + vide) / 2, 0, TAU);
+          g.stroke();
+        }
+        g.strokeStyle = rgba(tete, 0.8 * this.env * vif);
         g.lineWidth = 1.5 * S;
         g.beginPath();
         g.arc(cx, cy, eclat * (2.5 + 5 * (1 - this.env)), 0, TAU);
@@ -2111,7 +2183,7 @@ class Apercu {
     for (const q of this.particules) {
       const k = Math.min(1, Math.max(0, (t - q.ne) / q.vie));
       if (q.genre === "onde") {
-        g.strokeStyle = rgba(tete, 0.85 * (1 - k));
+        g.strokeStyle = rgba(tete, 0.85 * (1 - k) * vif);
         g.lineWidth = (2.5 * (1 - k) + 0.6) * S;
         g.beginPath();
         g.arc(q.x, q.y, Math.max(1, q.taille * (1 - (1 - k) ** 3)), 0, TAU);
@@ -2121,7 +2193,7 @@ class Apercu {
       } else if (q.genre === "carre") {
         // carré posé sur la pointe, qui s'ouvre vite puis s'efface
         const r = q.taille * (0.35 + 0.65 * (1 - (1 - k) ** 2));
-        g.strokeStyle = rgba(tete, 0.8 * (1 - k));
+        g.strokeStyle = rgba(tete, 0.8 * (1 - k) * vif);
         g.lineWidth = (2.2 * (1 - k) + 0.8) * S;
         g.beginPath();
         g.moveTo(q.x, q.y - r);
@@ -2132,14 +2204,14 @@ class Apercu {
         g.stroke();
       } else if (q.genre === "implosion") {
         // anneau qui se referme
-        g.strokeStyle = rgba(tete, 0.8 * (1 - k * k));
+        g.strokeStyle = rgba(tete, 0.8 * (1 - k * k) * vif);
         g.lineWidth = (0.8 + 1.8 * k) * S;
         g.beginPath();
         g.arc(q.x, q.y, Math.max(1, q.taille * (1 - k) ** 2), 0, TAU);
         g.stroke();
       } else {
         disque(q.x, q.y, q.taille * 2.2, tete, 0.25 * (1 - k));
-        disque(q.x, q.y, q.taille * (1 - 0.5 * k), [255, 255, 255], 1 - k);
+        disque(q.x, q.y, q.taille * (1 - 0.5 * k), [255, 255, 255], (1 - k) * vif);
       }
     }
     for (const h of tetes) if (h.devant) dessinerTete(h);

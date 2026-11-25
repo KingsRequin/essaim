@@ -618,7 +618,7 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
             swarm.evenement(crate::config::Evenement::Piste, 0.0, 0.0, t, cfg, 1.0);
         }
         pistes = p;
-        swarm.doux = doux;
+        (swarm.doux, effets.doux) = (doux, doux);
         swarm.avance(t, dt, (0.0, 0.0), au, cfg, 1.0);
         // pas de fissures dans la fenêtre pour le stream
         swarm.fissures.clear();

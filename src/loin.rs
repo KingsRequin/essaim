@@ -17,7 +17,7 @@ use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
 use crate::figures::{gauss, melange, Ressort, Son};
 use crate::layer::IRect;
-use crate::render::prisme;
+use crate::render::{prisme, ECART_FLASH};
 use std::f32::consts::TAU;
 
 /// Équerres : écart au cadre au repos (px à 100 %), élan que lui donnent le kick et le drop
@@ -224,24 +224,35 @@ struct Filet {
     embrase: f32,
     silence: f32,
     presence: f32,
+    /// Naissance du dernier éclat (mode sans flashs : trois par seconde au plus).
+    dernier_eclat: f64,
 }
 
 impl Filet {
     /// Silencieux au départ : le filet n'apparaît qu'avec le son.
     fn new() -> Self {
-        Self { eclats: Vec::new(), embrase: 0.0, silence: FILET_ATTENTE, presence: 0.0 }
+        Self { eclats: Vec::new(), embrase: 0.0, silence: FILET_ATTENTE, presence: 0.0, dernier_eclat: f64::NEG_INFINITY }
     }
 
     /// Avance d'une image. `u` : abscisse du pointeur sur le filet, d'où partent les éclats ;
-    /// `son` : quelque chose s'entend (basse, montée).
-    fn avance(&mut self, t: f64, dt: f32, u: f32, kick: bool, drop: bool, son: bool) {
-        let eclat = |(force, vie, vitesse): (f32, f32, f32)| Eclat { u, ne: t, force, vie, vitesse };
-        if kick {
-            self.eclats.push(eclat(FILET_KICK));
-        }
-        if drop {
-            self.eclats.push(eclat(FILET_DROP));
-            self.embrase = 1.0;
+    /// `son` : quelque chose s'entend (basse, montée). `doux` (mode sans flashs, comme
+    /// `Swarm::eclater`) : pas d'embrasement au drop, éclats à moitié de force et au plus un tous
+    /// les `ECART_FLASH` secondes.
+    #[allow(clippy::too_many_arguments)]
+    fn avance(&mut self, t: f64, dt: f32, u: f32, kick: bool, drop: bool, son: bool, doux: bool) {
+        let eclat = |(force, vie, vitesse): (f32, f32, f32), k: f32| Eclat { u, ne: t, force: force * k, vie, vitesse };
+        if !doux {
+            if kick {
+                self.eclats.push(eclat(FILET_KICK, 1.0));
+            }
+            if drop {
+                self.eclats.push(eclat(FILET_DROP, 1.0));
+                self.embrase = 1.0;
+            }
+        } else if (kick || drop) && t - self.dernier_eclat >= ECART_FLASH {
+            // un seul éclat (celui du drop l'emporte), à moitié de force
+            self.dernier_eclat = t;
+            self.eclats.push(eclat(if drop { FILET_DROP } else { FILET_KICK }, 0.5));
         }
         self.eclats.retain(|e| t - e.ne < e.vie as f64);
         let trop = self.eclats.len().saturating_sub(FILET_ECLATS_MAX);
@@ -343,6 +354,9 @@ pub struct Loin {
     px: f32,
     /// Zones à redessiner à cette image.
     zones: Vec<IRect>,
+    /// Mode sans flashs, donné par `Effets` avant chaque image : filets sans embrasement, éclats
+    /// à moitié de force et trois par seconde au plus, équerres qui s'allument moitié moins.
+    pub doux: bool,
 }
 
 impl Loin {
@@ -365,6 +379,7 @@ impl Loin {
             bandes: Vec::new(),
             px: 0.0,
             zones: Vec::new(),
+            doux: false,
         }
     }
 
@@ -418,7 +433,8 @@ impl Loin {
             if let Some(Fenetre { cadre: (l, h, r, b), echelle: scale, travail, .. }) = fenetre {
                 // quantifiés : un dessin qui ne change pas à l'œil ne redemande pas ses zones
                 let q = |v: f32, pas: f32| (v / pas).round() * pas;
-                let opacite = |d: f32| q((0.5 + 0.5 * d.max(self.kick)).clamp(0.0, 1.0), 1.0 / 32.0);
+                let allumage = if self.doux { 0.25 } else { 0.5 };
+                let opacite = |d: f32| q((0.5 + allumage * d.max(self.kick)).clamp(0.0, 1.0), 1.0 / 32.0);
                 // la couleur dessinée est gardée tant que celle de l'essaim en reste proche
                 let rgb = prisme(cfg, t, 1.0);
                 let rgb = avant.map(|a| a.rgb).filter(|&a| proches(a, rgb)).unwrap_or(rgb);
@@ -460,7 +476,7 @@ impl Loin {
             }
             self.halo_fenetre = id.or(self.halo_fenetre);
             self.frisson = if caisse { 1.0 } else { self.frisson * (-dt * 12.0).exp() };
-            self.halo.avance(t, dt, u, kicks > 0, drop, son_la || self.frisson > 0.02);
+            self.halo.avance(t, dt, u, kicks > 0, drop, son_la || self.frisson > 0.02, self.doux);
             if let (Some(cadre), true) = (cadre, self.halo.presence > 0.0) {
                 let c = &cfg.halo;
                 self.halo_affiche = Some(Halo { cadre, u, echelle: sf, zones: cadre.bandes((c.profondeur * (1.0 + 1.0 / HALO_NAPPES as f32) + 2.0 * c.epaisseur) * sf) });
@@ -480,7 +496,7 @@ impl Loin {
         // abscisse d'écran, commune à tous)
         let avant = std::mem::take(&mut self.bandes);
         if cfg.lisere.actif {
-            self.lisere.avance(t, dt, cursor.0, kicks > 0, drop, son_la);
+            self.lisere.avance(t, dt, cursor.0, kicks > 0, drop, son_la, self.doux);
             if self.lisere.presence > 0.0 {
                 // chaque bande à l'échelle de son écran
                 self.bandes.extend(ecrans.iter().map(|&(e, s)| {
@@ -755,6 +771,29 @@ mod tests {
         vues.clear();
         suites(4.0, 6.0, |_| (0.5, 1.0), |a, b, f, k| vues.push((a, b, f, k)));
         assert_eq!(vues, [(0.0, 4.0, 0.5, 1.0)]);
+    }
+
+    #[test]
+    fn filet_sans_flashs() {
+        // drop : plein et embrasé ; sans flashs, ni embrasement ni pleine force
+        let mut f = Filet::new();
+        f.avance(0.0, 0.01, 0.0, true, true, true, false);
+        assert_eq!(f.eclats.len(), 2);
+        assert!(f.embrase > 0.9);
+        let mut d = Filet::new();
+        d.avance(0.0, 0.01, 0.0, true, true, true, true);
+        assert_eq!(d.eclats.len(), 1, "un seul éclat");
+        assert_eq!(d.embrase, 0.0, "pas d'embrasement");
+        assert!((d.eclats[0].force - 0.5 * FILET_DROP.0).abs() < 1e-6, "à moitié de force");
+        // kicks rapprochés (8 par seconde) : trois éclats par seconde au plus
+        let mut d = Filet::new();
+        let mut nes = 0;
+        for i in 0..8 {
+            let avant = d.eclats.len();
+            d.avance(i as f64 / 8.0, 0.125, 0.0, true, false, true, true);
+            nes += usize::from(d.eclats.len() > avant);
+        }
+        assert!(nes <= 3, "{nes} éclats en une seconde");
     }
 
     #[test]

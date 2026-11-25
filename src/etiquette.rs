@@ -26,7 +26,8 @@ use windows::Win32::Graphics::Gdi::{
     OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 
-/// Place du texte par rapport au pointeur (px à 100 %) : à droite et dessous, hors de la flèche.
+/// Place du texte par rapport au pointeur (px à 100 %, pointeur de taille normale ; agrandi, le
+/// décalage l'est autant : `souris::echelle_pointeur`) : à droite et dessous, hors de la flèche.
 const DECALAGE: (f32, f32) = (16.0, 24.0);
 /// Durée de l'entrée et de la sortie (s), et glissement du texte pendant l'entrée (px à 100 %).
 const ENTREE: f32 = 0.3;
@@ -375,6 +376,15 @@ impl Etiquette {
         self.placer(cursor, scale, ecran);
     }
 
+    /// Rien n'est dessiné à cette image (frappe, pause, veille profonde) : un changement de piste
+    /// survenu pendant ce temps est vu et oublié, sans que le morceau s'affiche en retard à la
+    /// reprise (parfois des minutes après).
+    pub fn oublier_pistes(&mut self) {
+        if self.pistes.is_some() {
+            self.pistes = Some(crate::media::pistes());
+        }
+    }
+
     /// Écrit le morceau à montrer ; sans titre ni artiste, rien n'est montré.
     fn ecrire(&mut self, titre: &str, artiste: &str, taille: f32, scale: f32) {
         (self.texte, self.echelle) = (ecrire(titre, artiste, taille * scale, LARGEUR_MAX * scale), scale);
@@ -387,7 +397,9 @@ impl Etiquette {
     /// par défaut, à gauche ou au-dessus faute de place. Le côté choisi est gardé tant qu'il
     /// tient ; il ne revient à droite ou dessous qu'avec `HYSTERESE` de marge.
     fn placer(&mut self, cursor: (f32, f32), scale: f32, ecran: Option<IRect>) {
-        let (dx, dy) = (DECALAGE.0 * scale, DECALAGE.1 * scale);
+        // pointeur agrandi par Windows (Accessibilité) : le texte s'écarte d'autant, hors de la flèche
+        let k = scale * crate::souris::echelle_pointeur();
+        let (dx, dy) = (DECALAGE.0 * k, DECALAGE.1 * k);
         self.coin = (cursor.0 + dx, cursor.1 + dy);
         if let (Some(e), Some(tx)) = (ecran, &self.texte) {
             let (l, h) = (tx.image.width() as f32, tx.image.height() as f32 + (FILET_ECART + FILET.0 + FILET.1) * scale);
@@ -592,7 +604,7 @@ mod tests {
             let zone = e.rect().unwrap();
             let avant = capture(zone);
             for _ in 0..20 {
-                backend.frame(&monitors, zone, &[], &|cv, _| e.dessiner(cv, 1.0, &cfg, 1.0));
+                backend.frame(&monitors, zone, &[], (centre.0 as i32, centre.1 as i32), &|cv, _| e.dessiner(cv, 1.0, &cfg, 1.0));
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             let apres = capture(zone);

@@ -929,23 +929,41 @@ impl Demarrage {
 }
 
 /// Chemin de l'exécutable dans une valeur de la clé Run : entre guillemets (suivi d'éventuels
-/// arguments), ou toute la valeur.
+/// arguments) ; sans guillemets, jusqu'à `.exe` compris (les arguments qui suivent sont laissés),
+/// ou toute la valeur s'il n'y en a pas.
 fn exe_de_la_commande(valeur: &str) -> &str {
     let v = valeur.trim();
     match v.strip_prefix('"') {
         Some(reste) => reste.split('"').next().unwrap_or(reste).trim(),
-        None => v,
+        // premier `.exe` en fin de valeur ou suivi d'un espace (pas un dossier « x.exes »)
+        None => v
+            .to_ascii_lowercase()
+            .match_indices(".exe")
+            .map(|(i, _)| i + 4)
+            .find(|&f| v[f..].is_empty() || v[f..].starts_with(char::is_whitespace))
+            .map_or(v, |f| &v[..f]),
+    }
+}
+
+/// Même fichier : chemins égaux sans guillemets ni casse, ou mêmes chemins canoniques (nom court
+/// `ESSAIM~1`, lien, `..` : `std::fs::canonicalize`, qui demande que le fichier existe).
+fn meme_exe(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let texte = |p: &std::path::Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
+    if texte(a) == texte(b) {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => texte(&ca) == texte(&cb),
+        _ => false,
     }
 }
 
 /// État du démarrage d'après la valeur `Essaim` de la clé Run (`valeur`), sa permission dans le
-/// Gestionnaire des tâches (`permis`) et l'exécutable en cours (`exe`) : chemins comparés sans
-/// guillemets ni casse.
+/// Gestionnaire des tâches (`permis`) et l'exécutable en cours (`exe`) : `meme_exe`.
 fn etat_demarrage(valeur: Option<&str>, permis: bool, exe: &std::path::Path) -> Demarrage {
     let Some(valeur) = valeur.filter(|_| permis) else { return Demarrage::Inactif };
     let inscrit = exe_de_la_commande(valeur);
-    let meme = |a: &str, b: &str| a.replace('/', "\\").to_lowercase() == b.replace('/', "\\").to_lowercase();
-    if meme(inscrit, &exe.to_string_lossy()) {
+    if meme_exe(std::path::Path::new(inscrit), exe) {
         Demarrage::Actif
     } else {
         Demarrage::Ailleurs(inscrit.to_owned())
@@ -1831,6 +1849,21 @@ mod tests {
         assert_eq!(etat_demarrage(None, true, exe), Demarrage::Inactif);
         assert_eq!(etat_demarrage(Some(r#""C:\Outils\Essaim\essaim.exe""#), false, exe), Demarrage::Inactif);
         assert_eq!(Demarrage::Actif.json(), (true, None));
+        // sans guillemets, avec un argument : coupé après `.exe`
+        assert_eq!(exe_de_la_commande(r"C:\Outils\Essaim\essaim.exe --reglages"), r"C:\Outils\Essaim\essaim.exe");
+        assert_eq!(etat_demarrage(Some(r"C:\Outils\Essaim\ESSAIM.exe --reglages"), true, exe), Demarrage::Actif);
+        assert_eq!(exe_de_la_commande(r"C:\x.exes\essaim.exe /b"), r"C:\x.exes\essaim.exe");
+        // même fichier par un autre chemin (`..`) : chemins canoniques égaux
+        let d = std::env::temp_dir().join(format!("essaim-demarrage-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("sous")).unwrap();
+        let vrai = d.join("essaim.exe");
+        std::fs::write(&vrai, b"").unwrap();
+        let detour = d.join("sous").join("..").join("essaim.exe");
+        assert_eq!(etat_demarrage(Some(&format!("\"{}\"", detour.display())), true, &vrai), Demarrage::Actif);
+        let autre = d.join("sous").join("essaim.exe");
+        std::fs::write(&autre, b"").unwrap();
+        assert!(matches!(etat_demarrage(Some(&autre.to_string_lossy()), true, &vrai), Demarrage::Ailleurs(_)));
+        let _ = std::fs::remove_dir_all(&d);
         // dossier provisoire : le message prévient
         let provisoires = [PathBuf::from(r"C:\Users\a\Downloads"), PathBuf::from(r"C:\Users\a\AppData\Local\Temp\")];
         assert!(dans_un_dossier_provisoire(Path::new(r"c:\users\A\downloads\essaim.exe"), &provisoires));

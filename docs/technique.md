@@ -44,10 +44,14 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   (`render::borne_etendue`, rayon et décalage réduits ensemble) : au-delà, les points sont
   retirés (traînée laissée derrière par un saut du pointeur). Le point le plus loin de chaque
   forme vient de `render::etendue_forme` (cercle 1, hexagone 1,05… ellipse et astroïde 1,3 ;
-  contours 1,2), pas d'un pire cas commun. Une forme de trajet changée (un preset appliqué) vide
-  les traînées de son groupe (comètes ou satellites) ; une modulation ajoutée, retirée ou déplacée
-  remet à zéro les valeurs lissées sans toucher aux traînées ; un rayon glissé ne vide rien (le
-  trajet glisse). Cadence calée sur le
+  contours 1,2), pas d'un pire cas commun. Une forme de trajet changée, ou ses contours (autre
+  icône au premier plan, autre image : `render::version_contours`, comptée seulement quand les
+  contours changent vraiment), vide les traînées de son groupe (comètes ou satellites). Un preset
+  appliqué (ou « Annuler », fin d'une règle automatique) les vide toutes : `profils::applications`
+  est compté avant l'écriture de `config.toml`, la boucle le compare à chaque relecture et appelle
+  `Swarm::vider_trainees` (l'aperçu fait de même quand au moins deux valeurs changent d'un coup :
+  `changementsReglages`). Une modulation ajoutée, retirée ou déplacée remet à zéro les valeurs
+  lissées sans toucher aux traînées ; une glissière déplacée ne vide rien (le trajet glisse). Cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Un `DwmFlush` rendu en moins de
   2 ms, moins d'une demi-période après le précédent, n'a rien composé (écran éteint, pas de
   rafraîchissement) : la boucle attend alors elle-même la période de l'écran le plus rapide (le
@@ -108,7 +112,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   En pause et en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
   Le calque de l'écran reste en place, vide (aucune fenêtre ne disparaît sous la souris) : un
   calque vide reste ainsi au-dessus d'un jeu en plein écran sans bordure ; son effet sur la
-  présentation du jeu n'est pas mesuré.
+  présentation du jeu n'est pas mesuré. Un calque vide depuis 10 s n'est retiré qu'à une image
+  qui ne touche pas son écran et dont le pointeur est sur un autre écran (`backend::Image::garder`) :
+  à la reprise, celui de l'écran du pointeur n'est jamais retiré puis recréé sous la souris.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global), bouton principal et
   bouton secondaire (clic droit) ; boutons inversés (`SM_SWAPBUTTON`) : le principal est le droit.
   En plus du bit fort (enfoncé), le bit faible (appuyé depuis la dernière lecture) compte un
@@ -148,8 +154,15 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Sans flashs** (`[rendu] sans_flashs`) : `auto` lit `SPI_GETCLIENTAREAANIMATION` chaque seconde
   (`win::sans_flashs`). L'éclat ne remonte qu'à 0,5 et au plus toutes les 1/3 s (`Swarm::eclater`),
   sans halo blanc, quel que soit le déclencheur (toutes les actions `eclat`, `explosion`,
-  `rafale` passent par là) ; ondes, carrés et implosions à 45 % ; bordure sans illumination (ses
-  déclencheurs ne font rien).
+  `rafale` passent par là) ; ondes, carrés, implosions et cœur blanc des étincelles à 45 % ;
+  bordure sans illumination (ses déclencheurs ne font rien). L'habillage le suit (`Effets::doux`,
+  donné par la boucle à chaque tour, `Loin::doux`) : filets (halo, liseré) sans embrasement au
+  drop, un éclat à moitié de force toutes les 1/3 s au plus (`loin::Filet::avance`), équerres
+  allumées à +25 % au lieu de +50 %. La fenêtre pour le stream fait de même. L'aperçu
+  (`ui/apercu.js`, `sansFlashs`) suit `[rendu] sans_flashs`, et pour `auto`
+  `prefers-reduced-motion`, que WebView2 tire du même réglage de Windows.
+- **Éclat du kick** : le halo blanc est un anneau qui laisse un vide de 6 px (× échelle,
+  `render::HALO_VIDE`) sous la pointe : le texte visé n'est pas voilé à chaque kick.
 - **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
   (sinon elle resterait figée sur l'écran quitté). Quand la configuration des écrans change
@@ -157,13 +170,17 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   bouger), seuls les calques des écrans disparus, déplacés ou redimensionnés sont refaits
   (`Backend::ecrans_changes`) : un calque détruit sous la souris lui ferait perdre son curseur.
   Pour la même raison, un calque n'est jamais caché : effacé, il reçoit une image transparente.
+  Écrans d'échelles différentes : l'échelle de l'essaim (simulation et dessin autour du
+  pointeur) rejoint celle du nouvel écran en ~0,15 s (`main::lisser_echelle`) au lieu de sauter
+  de taille ; après une pause ou la frappe, elle repart de celle de l'écran.
 - **Kick** : un seul par coup, même long et ondulant (type 808) : un kick est une attaque, et deux
   attaques doivent être séparées d'au moins `[audio] delai_kick` (0,1 s ; la double pédale du metal
   descend vers 0,08 s).
 - **Repos** : souris immobile et pas de musique depuis 2 s → `[rendu] cadence_repos` (30 i/s).
   **Veille** : rien de neuf depuis `[rendu] veille_apres` (60 s) → fondu de 1 s, puis plus aucun
   dessin ; souris, son et clics restent lus toutes les 40 ms (réveil en 0,25 s au plus), le plein
-  écran une fois par seconde (relu dès le réveil, avant la première image).
+  écran une fois par seconde (relu dès le réveil, avant la première image). Les coups entendus
+  pendant la veille profonde sont lus et jetés (`oublier_coups`) : pas de salve au réveil.
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur ; nouvel essai 10 s plus tard,
   puis attente triplée à chaque échec (10 min au plus, remise à 10 s après 5 min sans erreur).
   Les calques processeur ne sont remplacés qu'après une image carte graphique réussie ; un calque
@@ -273,7 +290,17 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   pointeur, à gauche ou au-dessus faute de place dans l'écran ; le côté pris est gardé et n'est
   quitté pour la droite ou le dessous que s'il y tient avec 48 px de marge en plus
   (`etiquette::HYSTERESE`) : un pointeur qui hésite au bord ne la fait pas sauter. Sa zone
-  s'ajoute à celle de l'essaim. Hors des presets, comme l'habillage.
+  s'ajoute à celle de l'essaim. Hors des presets, comme l'habillage. Un changement de piste
+  survenu pendant que rien n'est dessiné (frappe, pause, veille profonde) est oublié
+  (`Etiquette::oublier_pistes`) : jamais d'étiquette en retard à la reprise. Elle prend
+  l'échelle de l'écran telle quelle (pas l'échelle lissée de l'essaim : son texte serait réécrit à
+  chaque image du glissement).
+- **Pointeur agrandi** (Accessibilité, « Taille du pointeur ») : `souris::relire_taille_pointeur`
+  lit chaque seconde `HKCU\Control Panel\Cursors\CursorBaseSize` (lecture seule, 32 par défaut) ;
+  le décalage de l'étiquette (`etiquette::DECALAGE`) et la place des figures sous le pointeur
+  (`figures::sous_le_pointeur` : quatre temps, ligne de voix) sont multipliés par taille / 32
+  (`souris::echelle_pointeur`), pour rester hors de la flèche. L'aperçu, qui dessine le pointeur
+  du jeu à sa taille normale, n'en tient pas compte.
 - **Morceau en cours** (`media.rs`) : `GlobalSystemMediaTransportControlsSessionManager` sur le
   fil « essaim-media » (MTA ; chaque appel asynchrone attendu 2 s au plus, puis annulé et le tour
   sauté : un lecteur figé ne bloque pas le fil), réveillé par
@@ -281,8 +308,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   toutes les 5 s (chaque seconde tant qu'une pochette ou une reprise de lecture est attendue). Pochette ignorée au-delà de 16 Mo ou de
   4096 px de côté (vu dans l'en-tête, avant le décodage) ; miniature décodée en 48 × 48
   (`BitmapDecoder`) puis
-  `appli::teinte_dominante`. Priorité des teintes : pochette (pendant la lecture) > application
-  ou site > Prisme. Sans l'API (Windows N), une ligne au journal et rien ne change. Message
+  `appli::teinte_dominante`. Nouvelle pochette pas encore lisible : relue jusqu'à 3 fois, la
+  teinte de la précédente restant en attendant. Priorité des teintes : pochette (pendant la
+  lecture) > application ou site > Prisme. Teinte imposée suivie en douceur
+  (`main::glisser_teinte`) : elle part de la teinte propre quand elle apparaît et y revient en
+  glissant quand elle disparaît. Sans l'API (Windows N), une ligne au journal et rien ne change. Message
   `charge` : `morceau`, `lecture`, `pistes`.
 
 ## Interface locale (widget Horizon)
@@ -566,7 +596,8 @@ du sens par image) et la teinte
   et dessine ; il n'est jamais estompé avec l'essaim (dessiné hors du fondu de veille). Pause et
   plein écran effacent tout : la boucle le dit à `Loin` (`Effets::oublier_loin`, aussi quand les
   calques sont refaits), qui redonne alors toutes ses zones ; en filet, les équerres au repos
-  les redonnent toutes les 3 s (un calque sans zone depuis 10 s est retiré). `Effets` possède
+  les redonnent toutes les 3 s (un calque sans zone depuis 10 s est retiré, sauf celui de l'écran
+  du pointeur). `Effets` possède
   `Loin`, lui passe le son, le cadre de la fenêtre au premier plan (`win::cadre_premier_plan`,
   relu à chaque image dessinée par `main::lire_fenetre`, aussi pour les rebonds) et l'écran du
   pointeur. `loin::FenetreLue` y ajoute l'écran de la fenêtre (son DPI : halo et équerres y
@@ -634,12 +665,15 @@ antivirus qui tient le fichier) ; à défaut, le nouveau est copié, sinon l'anc
 reste toujours un `essaim.exe`. Le déplacement de l'exécutable en cours attend que `.nouveau`
 puisse s'ouvrir en exclusif (antivirus fini) ; la sortie d'Essaim attend un remplacement en
 cours (`maj::attendre_remplacement`, au plus `maj::duree_remplacement_max` : quatre séries
-d'attentes complètes, ~15,4 s, plus 5 s de marge) et aucun ne commence pendant la fermeture.
+d'attentes complètes, ~15,4 s, plus 5 s de marge) et aucun ne commence pendant la fermeture
+(remplacement refusé pour cette raison : `maj::Fermeture`, ni bulle ni état « impossible », la
+version est reprise au lancement suivant).
 Avant tout téléchargement, le dossier de l'exécutable doit accepter un nouveau fichier
-(`maj::inscriptible`, un `essaim.exe.essai` créé puis effacé) : sinon (Program Files…), rien
-n'est téléchargé et l'état le dit. Un échec après la bulle « Téléchargement… » (réseau coupé,
-empreinte ou signature refusée, exécutable tenu) en ouvre une seconde avec la cause, une fois
-par version (`BULLES_ECHEC`). Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
+(`maj::inscriptible`, un `essaim.exe.essai-<numéro du processus>` créé puis effacé ; un reste de
+ce nom déjà là ne compte pas comme un refus, un effacement raté est noté au journal) : sinon
+(Program Files…), rien n'est téléchargé et l'état le dit. Un échec après la bulle
+« Téléchargement… » (réseau coupé, empreinte ou signature refusée, exécutable tenu) en ouvre une
+seconde avec la cause, une fois par version (`BULLES_ECHEC`). Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
 d'instance unique est fermé, puis le même chemin est relancé, avec `--reglages` si la fenêtre
 des réglages était ouverte au moment de la demande. Au lancement, `.ancien` est effacé, et
 réessayé sur le fil de mise à jour 2, 7 puis 17 s plus tard (l'instance d'avant le tient le temps

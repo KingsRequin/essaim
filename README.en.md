@@ -168,7 +168,8 @@ question « The settings window doesn't open »).
 - The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
 - Essaim then updates itself: a notification tells you about the download, then offers to
   restart. To skip the wait: *Chercher une mise à jour* in the *Application* view.
-- Running `essaim.exe` again while it is running opens its settings window.
+- Running `essaim.exe` again while it is running opens its settings window (not within 30 s
+  of its start: that is a second automatic launch).
 
 **From source:** Essaim builds with one command.
 
@@ -242,7 +243,8 @@ in *Réglages › Écoute › Avancé › Sortie son écoutée*. To make it list
 <summary><b>The flashes bother me (photosensitivity).</b></summary>
 
 *Réglages › Cet ordinateur › Sans flashs*: *Toujours*. Kick flashes are softened and limited to three per
-second, with no white halo, and the window border no longer blinks. By default (*Comme Windows*),
+second, with no white halo, and the window border no longer blinks; the halo along the window frame
+and the line along the bottom of the screen no longer flare up on drops. By default (*Comme Windows*),
 this mode turns on by itself when animation effects are off in Windows (*Accessibility › Visual
 effects*).
 </details>

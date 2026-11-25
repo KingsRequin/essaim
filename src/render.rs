@@ -16,6 +16,7 @@ use crate::config::{Action, Config, Declencheur, Evenement, Forme};
 use crate::modulation::{self, Effet, Sources};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
+use std::sync::atomic::{AtomicU32, Ordering};
 use crate::canvas::Canvas;
 
 /// Marge autour de tout ce qui est dessiné, décalage maximal du centre lissé, et étendue
@@ -209,17 +210,41 @@ impl Contour {
     }
 }
 
+/// Version des contours du trajet « image » et de ceux de l'icône : comptée à chaque vrai
+/// changement. Le trajet change alors de forme : les traînées qui le suivent repartent de zéro
+/// (`Swarm::update`), sinon elles relieraient l'ancien contour au nouveau.
+static VERSION_TRACES: AtomicU32 = AtomicU32::new(0);
+static VERSION_ICONE: AtomicU32 = AtomicU32::new(0);
+
+/// Remplace les contours de `cible` ; sa version n'avance que s'ils ont vraiment changé (les
+/// contours de l'image sont redonnés à chaque relecture des réglages).
+fn remplacer_contours(cible: &Contours, version: &AtomicU32, contours: &[Vec<[f32; 2]>]) {
+    let neufs = mettre_a_l_echelle(contours);
+    if let Ok(mut t) = cible.write() {
+        let pareils = t.len() == neufs.len() && t.iter().zip(&neufs).all(|(a, b)| a.points == b.points);
+        if !pareils {
+            *t = neufs;
+            version.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Remplace les contours du trajet « image » (`Orbite::chemins`).
 pub fn set_traces(contours: &[Vec<[f32; 2]>]) {
-    if let Ok(mut t) = TRACES.write() {
-        *t = mettre_a_l_echelle(contours);
-    }
+    remplacer_contours(&TRACES, &VERSION_TRACES, contours);
 }
 
 /// Remplace les contours de l'icône de l'application au premier plan.
 pub fn set_icone(contours: &[Vec<[f32; 2]>]) {
-    if let Ok(mut t) = ICONE.write() {
-        *t = mettre_a_l_echelle(contours);
+    remplacer_contours(&ICONE, &VERSION_ICONE, contours);
+}
+
+/// Version des contours que suit la forme (0 pour une forme calculée).
+fn version_contours(forme: Forme) -> u32 {
+    match forme {
+        Forme::Trace => VERSION_TRACES.load(Ordering::Relaxed),
+        Forme::Icone => VERSION_ICONE.load(Ordering::Relaxed),
+        _ => 0,
     }
 }
 
@@ -292,6 +317,13 @@ pub fn set_sync_hue(h: Option<f32>) {
     SYNC_HUE.store(h.unwrap_or(f32::NAN).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Teinte propre de l'essaim à l'instant `t` (sans teinte imposée), en degrés : `teinte` qui
+/// tourne avec le temps (fixe à vitesse nulle). Calculée et repliée en f64 (en f32, après des
+/// jours, elle irait par crans).
+pub fn teinte_propre(cfg: &Config, t: f64) -> f32 {
+    (cfg.couleur.teinte as f64 + t * cfg.couleur.vitesse_teinte as f64).rem_euclid(360.0) as f32
+}
+
 /// Teinte « Prisme » : `k` = 0 en queue de traînée, 1 en tête. Base : celle de l'éclairage si
 /// la synchro en fournit une, sinon `teinte` qui tourne avec le temps (fixe à vitesse nulle).
 pub fn prisme(cfg: &Config, t: f64, k: f32) -> (u8, u8, u8) {
@@ -308,9 +340,7 @@ fn prisme_palette(cfg: &Config, t: f64, k: f32, j: usize, decale: f32) -> (u8, u
 
 /// Couleur de l'essaim (comme `prisme`), décalée de `decale` degrés.
 pub(crate) fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u8, u8) {
-    let synced = f32::from_bits(SYNC_HUE.load(std::sync::atomic::Ordering::Relaxed));
-    // teinte qui tourne : calculée et repliée en f64 (en f32, après des jours, elle irait par crans)
-    let base = if synced.is_finite() { synced } else { (cfg.couleur.teinte as f64 + t * cfg.couleur.vitesse_teinte as f64).rem_euclid(360.0) as f32 };
+    let base = sync_hue().unwrap_or_else(|| teinte_propre(cfg, t));
     let base = base + decalage();
     let base = base + if decale.is_finite() { decale } else { 0.0 };
     let tail = base + cfg.couleur.ecart_teinte;
@@ -498,8 +528,10 @@ const CARRE_CAISSE: (f32, f32) = (30.0, 0.32);
 const ONDE_DROP: (f32, f32) = (130.0, 0.9);
 const ETINCELLES_DROP: usize = 28;
 /// Mode sans flashs : au plus un éclat tous les `ECART_FLASH` secondes (trois par seconde), à
-/// la moitié de sa force.
-const ECART_FLASH: f64 = 1.0 / 3.0;
+/// la moitié de sa force (aussi pour les éclats de l'habillage : `loin.rs`).
+pub const ECART_FLASH: f64 = 1.0 / 3.0;
+/// Halo blanc de l'éclat du kick : rayon du vide laissé sous la pointe (px à 100 %).
+const HALO_VIDE: f32 = 6.0;
 
 /// Particules vivantes au plus (au-delà, les plus vieilles s'en vont).
 const MAX_PARTICULES: usize = 400;
@@ -720,10 +752,11 @@ pub struct Swarm {
     w_lisse: [f32; 2],
     /// Vie utile des traînées des comètes, anneau par anneau (s).
     vies: Vec<f64>,
-    /// Forme du trajet des comètes et de celui des satellites à l'image d'avant : changée, les
+    /// Forme du trajet des comètes et de celui des satellites à l'image d'avant, avec la version
+    /// de leurs contours (image, icône de l'application : `version_contours`) : changée, les
     /// traînées du groupe repartent de zéro (elles suivraient l'ancien trajet jusqu'à leur fin).
     /// Un rayon, une quantité, une couleur changés n'en font pas partie : le trajet glisse.
-    formes: Option<(Forme, Forme)>,
+    formes: Option<[(Forme, u32); 2]>,
     /// Modulations (source, cible, groupe), dans l'ordre : la liste changée (ajout, retrait,
     /// déplacement), chaque valeur lissée appartiendrait à une autre ; elles repartent de zéro.
     cles_modulations: Vec<(crate::config::Source, crate::config::Cible, crate::config::Groupe)>,
@@ -828,6 +861,14 @@ impl Swarm {
     pub fn oublier_coups(&mut self, au: &AudioView) {
         self.ecoute.lire(au);
         self.dernier_curseur = None;
+    }
+
+    /// Preset appliqué : toutes les traînées repartent de zéro. Sans cela, celles qui suivaient
+    /// l'ancien trajet (autre rayon, autre décalage, autres anneaux) seraient reliées au nouveau
+    /// par un trait. Une glissière qu'on déplace n'y passe pas : le trajet y glisse.
+    pub fn vider_trainees(&mut self) {
+        self.trails.iter_mut().for_each(Trail::clear);
+        self.sats.iter_mut().chain(self.fixes.iter_mut()).for_each(|s| s.trail.clear());
     }
 
     /// Effets des modulations sur chaque figure, dans l'ordre de `config::FIGURES`.
@@ -997,15 +1038,16 @@ impl Swarm {
         if !self.pitch.is_finite() {
             self.pitch = 50.0;
         }
-        // forme d'un trajet changée (preset appliqué, autre forme) : les traînées de ce groupe
-        // suivraient l'ancien trajet jusqu'à leur fin ; elles repartent de zéro. Un rayon qu'on
-        // glisse, une modulation ajoutée (teinte, opacité…) les laissent : le trajet glisse.
-        let formes = (o.forme, cfg.essaim.forme.suivie(o.forme));
+        // forme d'un trajet changée (autre forme, autre icône au premier plan, autre image) : les
+        // traînées de ce groupe suivraient l'ancien trajet jusqu'à leur fin ; elles repartent de
+        // zéro. Un rayon qu'on glisse, une modulation ajoutée (teinte, opacité…) les laissent : le
+        // trajet glisse. Un preset appliqué les vide aussi (`vider_trainees`, appelé par la boucle).
+        let formes = [o.forme, cfg.essaim.forme.suivie(o.forme)].map(|f| (f, version_contours(f)));
         let avant = self.formes.replace(formes);
-        if avant.map(|f| f.0) != Some(formes.0) {
+        if avant.map(|f| f[0]) != Some(formes[0]) {
             self.trails.iter_mut().for_each(Trail::clear);
         }
-        if avant.map(|f| f.1) != Some(formes.1) {
+        if avant.map(|f| f[1]) != Some(formes[1]) {
             self.sats.iter_mut().chain(self.fixes.iter_mut()).for_each(|s| s.trail.clear());
         }
         // modulation ajoutée, retirée ou déplacée : chaque valeur lissée appartiendrait à une
@@ -1489,9 +1531,13 @@ impl Swarm {
                 let epais = (ANNEAU_RESSORTS.1 * (1.0 - k).powi(2) + 0.6) * scale;
                 cv.ring(px, py, (r * ANNEAU_RESSORTS.0 * depasse(k)).max(1.0), epais, head_rgb, 0.9 * (1.0 - k) * vif);
             } else {
-                // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur
+                // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur ; le
+                // halo laisse un vide sous la pointe (le texte qu'elle vise n'est pas voilé)
                 if !self.doux {
-                    cv.circle(px, py, r * (2.0 + 2.5 * self.env), (255, 255, 255), 0.35 * self.env);
+                    let (dehors, vide) = (r * (2.0 + 2.5 * self.env), HALO_VIDE * scale);
+                    if dehors > vide {
+                        cv.ring(px, py, (dehors + vide) / 2.0, dehors - vide, (255, 255, 255), 0.35 * self.env);
+                    }
                 }
                 cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env * vif);
             }
@@ -1502,7 +1548,8 @@ impl Swarm {
             match p.genre {
                 Genre::Etincelle => {
                     cv.circle(p.x, p.y, p.taille * 2.2, head_rgb, 0.25 * (1.0 - k));
-                    cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), (255, 255, 255), 1.0 - k);
+                    // cœur blanc, atténué en mode sans flashs (une salve d'aigus en ferait des éclairs)
+                    cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), (255, 255, 255), (1.0 - k) * vif);
                 }
                 Genre::Onde => {
                     let r = p.taille * (1.0 - (1.0 - k).powi(3));
@@ -2438,6 +2485,22 @@ mod tests {
     }
 
     #[test]
+    fn eclat_du_kick_laisse_la_pointe_libre() {
+        // juste après un kick : le halo blanc entoure la pointe sans la voiler
+        let mut cfg = Config::default();
+        cfg.eclat.taille = 4.0;
+        let mut s = Swarm::new();
+        s.update(0.0, 1.0 / 60.0, C, AudioView::default(), &cfg, 1.0);
+        s.env = 1.0;
+        let (pm, o) = render(&s, C, 0.0, &cfg, 1.0);
+        let alpha = |x: f32, y: f32| pm.pixel((x - o.0) as u32, (y - o.1) as u32).unwrap().alpha();
+        assert_eq!(alpha(C.0, C.1), 0, "rien sous la pointe");
+        assert_eq!(alpha(C.0 + 3.0, C.1 + 3.0), 0);
+        // halo jusqu'à 4,5 fois la taille de l'éclat (18 px) : lumière entre le vide et ce bord
+        assert!(alpha(C.0 + (HALO_VIDE + 18.0) / 2.0, C.1) > 0, "même lumière autour");
+    }
+
+    #[test]
     fn la_trainee_s_etire_derriere_la_souris() {
         // la souris traverse 500 px en 0,15 s : les traînées restent en arrière, la fenêtre
         // s'agrandit pour les contenir, et de la couleur est dessinée loin derrière le pointeur
@@ -2516,7 +2579,7 @@ mod tests {
             let _ = render(&s, c, t, &cfg, 1.5);
             let t2 = std::time::Instant::now();
             let (x0, y0, x1, y1) = s.bounds(c, 1.5, cfg.eclat.taille);
-            b.frame(&mons, (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1), &[], &|cv, _| s.draw(cv, t, &cfg, 1.5, c));
+            b.frame(&mons, (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1), &[], (c.0 as i32, c.1 as i32), &|cv, _| s.draw(cv, t, &cfg, 1.5, c));
             simu += (t1 - t0).as_secs_f64();
             cpu += (t2 - t1).as_secs_f64();
             gpu += t2.elapsed().as_secs_f64();
@@ -2918,6 +2981,35 @@ mod tests {
         let deux = mettre_a_l_echelle(&[carre(0.0), carre(40.0)]);
         let milieu = |c: &Contour| c.points.iter().map(|p| p.0).sum::<f32>() / c.points.len() as f32;
         assert!(milieu(&deux[0]) < -0.5 && milieu(&deux[1]) > 0.5, "{} {}", milieu(&deux[0]), milieu(&deux[1]));
+    }
+
+    #[test]
+    fn version_des_contours_seulement_quand_ils_changent() {
+        // contours à part (ceux de l'icône sont partagés avec les autres essais, Caméléon compris)
+        let (cible, version): (Contours, AtomicU32) = (std::sync::RwLock::new(Vec::new()), AtomicU32::new(0));
+        let carre = |c: f32| vec![vec![[0.0, 0.0], [c, 0.0], [c, c], [0.0, c]]];
+        remplacer_contours(&cible, &version, &carre(10.0));
+        assert_eq!(version.load(Ordering::Relaxed), 1);
+        // les mêmes (relecture des réglages, même icône) : rien ne change, les traînées restent
+        remplacer_contours(&cible, &version, &carre(10.0));
+        assert_eq!(version.load(Ordering::Relaxed), 1);
+        // un autre contour (Alt+Tab vers une autre application) : nouvelle version
+        remplacer_contours(&cible, &version, &[vec![[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]]);
+        assert_eq!(version.load(Ordering::Relaxed), 2);
+        assert_eq!(version_contours(Forme::Cercle), 0, "une forme calculée n'a pas de version");
+    }
+
+    #[test]
+    fn preset_applique_vide_les_trainees() {
+        let cfg = Config::default();
+        let mut s = Swarm::avec_graine(3);
+        for i in 0..30 {
+            s.update(i as f64 / 60.0, 1.0 / 60.0, C, AudioView::default(), &cfg, 1.0);
+        }
+        assert!(s.trails.iter().any(|t| !t.is_empty()));
+        s.vider_trainees();
+        assert!(s.trails.iter().all(VecDeque::is_empty));
+        assert!(s.sats.iter().chain(&s.fixes).all(|q| q.trail.is_empty()));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //!
 //! `ui/apercu.js` les reproduit (mêmes formules) : les modifier ici oblige à les reporter là.
 
-use super::{autour, gauss, melange, Elan, Partage, Ressort, Son, ANNEAU_ETIRE, ORBE, PENDULE, SOUS_LE_POINTEUR, TRAIT, TRAME, VOIX};
+use super::{autour, gauss, melange, Elan, Partage, Ressort, Son, ANNEAU_ETIRE, ORBE, PENDULE, sous_le_pointeur, TRAIT, TRAME, VOIX};
 use crate::modulation::NB_FIGURES;
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
@@ -411,8 +411,9 @@ impl Plus {
             }
             VOIX => {
                 let c = &cfg.voix;
-                let large = SOUS_LE_POINTEUR.0 + c.largeur * VOIX_LARGE.1 / 2.0;
-                let haut = SOUS_LE_POINTEUR.1 + c.hauteur * (1.4 + 1.0 + VOIX_ONDES.0 + VOIX_ONDES.1);
+                let sous = sous_le_pointeur();
+                let large = sous.0 + c.largeur * VOIX_LARGE.1 / 2.0;
+                let haut = sous.1 + c.hauteur * (1.4 + 1.0 + VOIX_ONDES.0 + VOIX_ONDES.1);
                 large.max(haut) + c.epaisseur + 1.0
             }
             _ => {
@@ -543,7 +544,8 @@ impl Plus {
         }
         let ((cx, cy), v, c) = (p.centre, &self.voix, &cfg.voix);
         let (w, h) = (c.largeur * scale * v.large.x, c.hauteur * scale);
-        let (ax, ay) = (cx + SOUS_LE_POINTEUR.0 * scale, cy + (SOUS_LE_POINTEUR.1 + 1.4 * c.hauteur) * scale);
+        let sous = sous_le_pointeur();
+        let (ax, ay) = (cx + sous.0 * scale, cy + (sous.1 + 1.4 * c.hauteur) * scale);
         let [grave, medium, aigu] = v.niveaux;
         let point = |i: usize| {
             let u = i as f32 / VOIX_POINTS as f32;

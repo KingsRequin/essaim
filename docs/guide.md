@@ -51,7 +51,8 @@ l'ordre de la liste.
 - `quand` : `kick`, `caisse`, `charleston`, `drop`, `temps`, `break`, `contretemps`, `piste`,
   `clic`, `clic_droit` (au point du clic ; c'est le bouton principal qui compte, même quand les
   boutons sont inversés).
-- `faire` : `eclat` (halo blanc et anneau sous le pointeur, qui font briller les têtes),
+- `faire` : `eclat` (halo blanc, qui laisse libre la pointe, et anneau sous le pointeur, qui font
+  briller les têtes),
   `satellites` (de `nombre` à `nombre_max`, dans la limite de `[essaim] maximum`), `inversion` (du
   sens de rotation ; une seule par image : deux kicks ou un kick et une caisse claire arrivés
   ensemble ne s'annulent pas), `bordure` (la bordure de la fenêtre au premier plan s'illumine), `onde` (de
@@ -142,7 +143,7 @@ garde son allure (essai
   vitesse constante, coins compris ; plusieurs contours : un anneau de comètes chacun, quel que
   soit `anneaux` ; un ancien trajet dessiné à la main, dans `trace`,
   marche toujours), ou ceux de l'icône de l'application au premier plan (`forme = "icone"`, qui
-  change avec elle ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; quand sa rotation, modulations comprises, retombe sous 2 tours/min, il se redresse en douceur ; `rotation_sur` : `"tout"`,
+  change avec elle, les traînées repartant de zéro sur la nouvelle forme ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; quand sa rotation, modulations comprises, retombe sous 2 tours/min, il se redresse en douceur ; `rotation_sur` : `"tout"`,
   `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet ; une autre valeur vaut
   `"tout"`) ; les satellites suivent le
   même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des satellites permanents,
@@ -158,7 +159,9 @@ garde son allure (essai
   tant qu'elle est cochée, pour pouvoir la décocher). Avec `[couleur] pochette`, la
   teinte dominante de la pochette du morceau qui joue (Spotify, navigateur… : tout ce que montre
   le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
-  sans morceau, on retombe sur eux, dans cet ordre. Pour que la teinte glisse avec la musique :
+  sans morceau, on retombe sur eux, dans cet ordre. Le passage de l'une à l'autre, et vers ou
+  depuis la teinte propre de l'essaim, se fait toujours en glissant, sans saut ; au changement de
+  morceau, la teinte de l'ancienne pochette reste le temps que la nouvelle soit lisible. Pour que la teinte glisse avec la musique :
   une modulation de la teinte « sur tout » (idée *La teinte suit la musique*).
 - **Palette** (`[couleur] palette`, 1 à 3 teintes) : les comètes et les satellites se partagent
   plusieurs teintes, chacune décalée de `ecart_palette` degrés (120 : trois teintes à égale
@@ -315,7 +318,10 @@ garde son allure (essai
   8, 3 par défaut) puis s'effacent ; le reste du temps, rien. `taille` règle le texte (9 à 20).
   Une ligne plus large que 480 px (à 100 %) est coupée, avec « … ». C'est une information, pas une allure de l'essaim :
   comme l'habillage, l'étiquette ne fait pas partie des presets. Il faut que le lecteur annonce
-  son morceau à Windows (comme pour l'infobulle).
+  son morceau à Windows (comme pour l'infobulle). Un morceau changé pendant que l'essaim n'est pas
+  dessiné (frappe, pause, veille) n'est pas montré après coup. Pointeur agrandi dans Windows
+  (*Accessibilité › Pointeur de la souris*) : l'étiquette, comme les quatre temps et la ligne de
+  voix sous le pointeur, s'en écarte d'autant.
 - **Bordure** (`[bordure] active`, `repos`) : la bordure de la fenêtre au premier plan prend la
   couleur de l'essaim (Windows 11) et s'illumine sur ses déclencheurs (`bordure`, au kick par
   défaut), même pendant la frappe ; pas en mode sans flashs. La fenêtre des réglages d'Essaim
@@ -395,9 +401,11 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   colorée.
 - **Sans flashs** (`[rendu] sans_flashs`, propre à la machine) : pour les personnes sensibles aux
   flashs. Tout éclat (kick, rafale, drop, et tout déclencheur `eclat`, quels que soient sa force et
-  son événement) est à moitié de sa force et au plus trois par seconde, sans halo blanc ; les ondes
-  et les carrés sont plus pâles ; la bordure garde sa luminosité de repos (ses déclencheurs ne font
-  rien). `"auto"` (par défaut, *Comme Windows* dans les réglages) : seulement quand
+  son événement) est à moitié de sa force et au plus trois par seconde, sans halo blanc ; les ondes,
+  les carrés et le cœur blanc des étincelles sont plus pâles ; la bordure garde sa luminosité de
+  repos (ses déclencheurs ne font rien). L'habillage aussi : le halo et le liseré ne s'embrasent
+  plus au drop, leurs éclats sont à moitié de force et trois par seconde au plus, les équerres
+  s'allument moitié moins au kick. `"auto"` (par défaut, *Comme Windows* dans les réglages) : seulement quand
   les effets d'animation de Windows sont coupés (*Accessibilité › Effets visuels*), relu chaque
   seconde ; `"oui"` : toujours ; `"non"` : jamais.
 - **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton de
@@ -528,7 +536,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application* (une entrée coupée
     dans le Gestionnaire des tâches est montrée inactive ; la réactiver ici lève la coupure). Une
     entrée qui lance un autre `essaim.exe` (copie déplacée, autre dossier) est montrée non cochée,
-    avec une note « pointe vers … » : un clic y met l'exécutable en cours. Activé depuis
+    avec une note « pointe vers … » : un clic y met l'exécutable en cours (le même fichier écrit
+    autrement, nom court ou chemin sans guillemets suivi d'options, compte comme le même). Activé depuis
     Téléchargements ou le dossier temporaire, le message demande de ranger d'abord `essaim.exe`
     dans un dossier où il restera.
   - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 5 ou flèches
@@ -574,7 +583,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   au-delà de 1 Mo, l'ancien devient `essaim.old.log`).
 - `essaim.exe --quitter` ferme l'instance en cours ; `essaim.exe --stream` ouvre la fenêtre pour
   le stream (celle de l'instance en cours s'il y en a une). Relancer `essaim.exe` sans option
-  pendant qu'il tourne (double-clic) ouvre les réglages de l'instance en cours.
+  pendant qu'il tourne (double-clic) ouvre les réglages de l'instance en cours, sauf si elle a
+  démarré il y a moins de 30 s (second lancement automatique à l'ouverture de session : rien ne
+  s'ouvre).
 - `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été
   tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
   lancement suivant aussi).

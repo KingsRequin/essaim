@@ -192,6 +192,9 @@ pub struct Effets {
     /// Bouton de la souris enfoncé à cette image, que la boucle principale donne avant chaque
     /// image : un glissement (sélection, fenêtre déplacée) n'est pas une secousse.
     pub bouton: bool,
+    /// Mode sans flashs, que la boucle principale donne avant chaque image : l'habillage
+    /// (`Loin`) s'y plie aussi.
+    pub doux: bool,
     /// Écrans de cette fenêtre (échelle, zones de travail), relus seulement quand elle change.
     fenetre_lue: crate::loin::FenetreLue,
 }
@@ -208,7 +211,7 @@ fn ecrans_du_lisere(monitors: &[(isize, IRect)], cursor: (f32, f32), cfg: &Confi
 
 impl Effets {
     pub fn new() -> Self {
-        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None, bouton: false, fenetre_lue: Default::default() }
+        Self { secousse: Secousse::default(), demande: false, projecteur: None, voile: None, lues: [0.0; BANDES_MAX], bandes: [0.0; BANDES_MAX], silence: 0.0, visible: 1.0, env: 0.0, figures: Figures::new(), ecoute: Ecoute::default(), loin: Loin::new(), fenetre: None, bouton: false, doux: false, fenetre_lue: Default::default() }
     }
 
     /// Raccourci du projecteur (Ctrl+Alt+F).
@@ -275,6 +278,7 @@ impl Effets {
         let son = Son { au: &au, coups: &coups, bandes: &self.bandes[..lues] };
         self.figures.avance(t, dt, cursor, scale, &son, cfg);
         // équerres et liseré : aux coins de la fenêtre au premier plan, au bord de l'écran du pointeur
+        self.loin.doux = self.doux;
         self.loin.avance(t, dt, cursor, scale, &son, cfg, fenetre, &ecrans_du_lisere(monitors, cursor, cfg));
     }
 
@@ -299,6 +303,7 @@ impl Effets {
         let coups = self.ecoute.lire(&au);
         let son = Son { au: &au, coups: &coups, bandes: &[] };
         let fenetre = self.fenetre_loin(cfg);
+        self.loin.doux = self.doux;
         self.loin.avance(t, dt, cursor, scale, &son, cfg, fenetre, &ecrans_du_lisere(monitors, cursor, cfg));
     }
 
@@ -751,7 +756,7 @@ mod tests {
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
                 let rect = crate::layer::union(Some(rect), e.rect_pointeur(cursor, 1.0, cfg)).unwrap();
                 let items: Vec<IRect> = e.rect_ecran().into_iter().collect();
-                b.frame(&mons, rect, &items, &|cv, _| {
+                b.frame(&mons, rect, &items, (cursor.0 as i32, cursor.1 as i32), &|cv, _| {
                     e.dessiner_voile(cv, cfg, t, 1.0);
                     e.dessiner(cv, t, cfg, 1.0, cursor);
                     s.draw(cv, t, cfg, 1.0, cursor);

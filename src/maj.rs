@@ -295,7 +295,22 @@ fn texte_bulle_echec(version: &str, cause: &str) -> String {
 enum Rate {
     Recherche(anyhow::Error),
     MiseEnPlace { version: String, erreur: anyhow::Error, apres_bulle: bool },
+    /// Essaim se ferme : le remplacement n'a pas commencé (`Fermeture`). Ce n'est pas un échec :
+    /// ni bulle, ni état « impossible » ; la version sera reprise au prochain lancement.
+    Fermeture(String),
 }
+
+/// Erreur du remplacement refusé parce qu'Essaim se ferme (`FERMETURE`).
+#[derive(Debug)]
+struct Fermeture;
+
+impl std::fmt::Display for Fermeture {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("Essaim se ferme : remplacement remis au prochain lancement")
+    }
+}
+
+impl std::error::Error for Fermeture {}
 
 /// La recherche, une fois réservée (`reserver`) : son résultat reste dans `ETAT`.
 fn recherche(exe: &Path) {
@@ -320,22 +335,35 @@ fn recherche(exe: &Path) {
             }
             Etat::Impossible { version, texte }
         }
+        Err(Rate::Fermeture(version)) => {
+            log::info!("mise à jour vers {version} remise au prochain lancement : Essaim se ferme");
+            Etat::Jamais
+        }
     });
     EN_COURS.store(false, Ordering::SeqCst);
 }
 
 /// Le dossier de `exe` accepte-t-il un nouveau fichier ? (La mise en place y écrit la nouvelle
-/// version, puis renomme l'exécutable.) Essayé avec un fichier jetable, effacé aussitôt.
+/// version, puis renomme l'exécutable.) Essayé avec un fichier jetable au nom propre à ce
+/// processus (deux instances ou un reste d'essai ne se gênent pas), effacé aussitôt. Un fichier
+/// de ce nom déjà là n'est pas pris pour un dossier en lecture seule.
 fn inscriptible(exe: &Path) -> anyhow::Result<()> {
-    let essai = exe.with_extension("exe.essai");
-    let _ = std::fs::remove_file(&essai);
+    let essai = exe.with_extension(format!("exe.essai-{}", std::process::id()));
     let dossier = exe.parent().unwrap_or(exe);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&essai)
-        .with_context(|| format!("le dossier {} n'accepte pas de nouveau fichier : range essaim.exe dans un dossier à toi (Documents, par exemple)", dossier.display()))?;
-    let _ = std::fs::remove_file(&essai);
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&essai) {
+        Ok(f) => drop(f),
+        // reste d'un essai d'avant (même numéro de processus) : le dossier a accepté ce fichier
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            log::info!("mise à jour : {} déjà là, reste d'un essai d'avant", essai.display());
+        }
+        Err(e) => {
+            return Err(anyhow::Error::new(e))
+                .with_context(|| format!("le dossier {} n'accepte pas de nouveau fichier : range essaim.exe dans un dossier à toi (Documents, par exemple)", dossier.display()))
+        }
+    }
+    if let Err(e) = std::fs::remove_file(&essai) {
+        log::warn!("mise à jour : fichier d'essai {} non effacé ({e})", essai.display());
+    }
     Ok(())
 }
 
@@ -365,7 +393,7 @@ fn verifier(exe: &Path) -> Result<Option<String>, Rate> {
     inscriptible(exe).map_err(|e| rate(e, false))?;
     log::info!("mise à jour : téléchargement de la version {}", v.version);
     crate::win::bulle(&format!("Téléchargement de la mise à jour (version {})…", v.version));
-    installer(exe, &v).map_err(|e| rate(e, true))?;
+    installer(exe, &v).map_err(|e| if e.is::<Fermeture>() { Rate::Fermeture(v.version.clone()) } else { rate(e, true) })?;
     Ok(Some(v.version))
 }
 
@@ -466,7 +494,7 @@ fn deplacer(de: &Path, vers: &Path, attentes: &[Duration]) -> std::io::Result<()
 fn remplacer(exe: &Path, octets: &[u8]) -> anyhow::Result<()> {
     let _verrou = REMPLACEMENT.lock().unwrap_or_else(|e| e.into_inner());
     if FERMETURE.load(Ordering::SeqCst) {
-        bail!("Essaim se ferme : remplacement remis au prochain lancement");
+        return Err(Fermeture.into());
     }
     remplacer_avec(exe, octets, &ATTENTES_DEPLACEMENT)
 }

@@ -8,7 +8,8 @@
 //! une) ; `--stream` ouvre la fenêtre pour le stream ; `--quitter` ferme l'instance en cours ;
 //! `--restaurer-bordure` rend sa couleur à la fenêtre restée colorée (fermeture, plantage, pause
 //! et plein écran le font tout seuls). Lancé sans option pendant qu'une instance tourne, il lui
-//! fait ouvrir ses réglages et s'arrête.
+//! fait ouvrir ses réglages et s'arrête (rien ne s'ouvre si elle a démarré il y a moins de 30 s :
+//! second lancement automatique).
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
@@ -194,6 +195,34 @@ fn fenetre_instance() -> Option<HWND> {
     None
 }
 
+/// Instance en cours plus jeune que cela : un lancement sans option est un second lancement
+/// automatique (démarrage de la session, installation), il n'ouvre pas ses réglages.
+const INSTANCE_RECENTE: Duration = Duration::from_secs(30);
+
+/// Âge du processus qui possède la fenêtre `h` (heure de création de son processus) ; `None` s'il
+/// est illisible.
+fn age_instance(h: HWND) -> Option<Duration> {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+    use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    let en_100ns = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let (mut creation, mut fin, mut noyau, mut utilisateur) = Default::default();
+        let lu = GetProcessTimes(p, &mut creation, &mut fin, &mut noyau, &mut utilisateur);
+        let _ = CloseHandle(p);
+        lu.ok()?;
+        let ecart = en_100ns(GetSystemTimeAsFileTime()).checked_sub(en_100ns(creation))?;
+        Some(Duration::from_nanos(ecart.saturating_mul(100)))
+    }
+}
+
 fn main() {
     // COM en appartement monothread pour le fil principal (DirectComposition, ShellExecute)
     unsafe {
@@ -245,12 +274,20 @@ fn main() {
         // relancé à la main (double-clic sur essaim.exe) pendant qu'il tourne : sans rien faire,
         // on croirait que rien ne se passe ; la première instance ouvre ses réglages
         if args.is_empty() {
-            if let Some(h) = fenetre_instance() {
-                unsafe {
-                    let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(win::CMD_CONFIG), LPARAM(0));
+            match fenetre_instance() {
+                // instance lancée il y a un instant : c'est un second lancement automatique
+                // (démarrage de la session, installation), pas un double-clic ; rien ne s'ouvre
+                Some(h) if age_instance(h).is_some_and(|a| a < INSTANCE_RECENTE) => {
+                    log::info!("déjà lancé il y a moins de {} s : second lancement automatique, sortie", INSTANCE_RECENTE.as_secs());
                 }
+                Some(h) => {
+                    unsafe {
+                        let _ = PostMessageW(Some(h), WM_COMMAND, WPARAM(win::CMD_CONFIG), LPARAM(0));
+                    }
+                    log::info!("déjà lancé : réglages de l'instance en cours ouverts, sortie");
+                }
+                None => log::info!("déjà lancé, fenêtre de l'instance introuvable, sortie"),
             }
-            log::info!("déjà lancé : réglages de l'instance en cours ouverts, sortie");
         } else {
             log::info!("déjà lancé, sortie");
         }
@@ -321,7 +358,7 @@ fn habillage_seul(
     let scale = win::scale_at(pos.0, pos.1);
     effets.avance_habillage(t, dt, (pos.0 as f32, pos.1 as f32), scale, shared, cfg, monitors);
     let zones: Vec<layer::IRect> = effets.zones_loin().collect();
-    backend.frame(monitors, layer::AUCUNE, &zones, &|cv, _| effets.dessiner_loin(cv, cfg, t, scale));
+    backend.frame(monitors, layer::AUCUNE, &zones, pos, &|cv, _| effets.dessiner_loin(cv, cfg, t, scale));
 }
 
 /// Relit le cadre de la fenêtre au premier plan (s'il sert : rebonds, équerres, halo) ; renvoie
@@ -359,6 +396,40 @@ fn nouveau_clic(enfonce: bool, appuye: bool, avant: bool) -> bool {
     (enfonce && !avant) || (appuye && !enfonce)
 }
 
+
+/// Constante de temps du lissage de l'échelle d'un écran à l'autre (s).
+const ECHELLE_LISSAGE: f32 = 0.15;
+
+/// Échelle de l'essaim à cette image : `echelle` (celle de l'image d'avant, `None` au départ ou à
+/// la reprise : la cible tout de suite) rejoint `cible` (échelle de l'écran du pointeur) en
+/// ~`ECHELLE_LISSAGE` s. Tout près de la cible, elle la prend telle quelle (pas de reste qui
+/// traîne).
+fn lisser_echelle(echelle: &mut Option<f32>, cible: f32, dt: f32) -> f32 {
+    let avant = echelle.filter(|e| e.is_finite() && *e > 0.0).unwrap_or(cible);
+    let s = avant + (cible - avant) * (1.0 - (-dt / ECHELLE_LISSAGE).exp());
+    let s = if (s - cible).abs() < 1e-3 { cible } else { s };
+    *echelle = Some(s);
+    s
+}
+
+/// Écart sous lequel la teinte imposée qui s'en va a rejoint la teinte propre (degrés).
+const TEINTE_REJOINTE: f32 = 0.5;
+
+/// Teinte imposée suivie en douceur (~250 ms), par le plus court : `cible` = teinte imposée
+/// (pochette, application, Prisme) ou `None`, `h` = teinte suivie à l'image d'avant, `propre` =
+/// teinte propre de l'essaim en ce moment. Une teinte imposée qui apparaît part de la teinte
+/// propre ; qui disparaît, la suivie glisse vers la teinte propre et ne la lâche (`None`) qu'une
+/// fois rejointe : jamais de saut de couleur.
+fn glisser_teinte(cible: Option<f32>, h: Option<f32>, propre: f32, dt: f32) -> Option<f32> {
+    let depart = h.unwrap_or(propre);
+    let vers = cible.unwrap_or(propre);
+    let d = (vers - depart + 540.0).rem_euclid(360.0) - 180.0;
+    if cible.is_none() && (h.is_none() || d.abs() < TEINTE_REJOINTE) {
+        return None;
+    }
+    let suivie = (depart + d * (dt * 4.0).min(1.0)).rem_euclid(360.0);
+    suivie.is_finite().then_some(suivie)
+}
 
 /// Fenêtre des réglages ouverte (elle montre le son en direct : la capture doit continuer).
 fn reglages_ouverts() -> bool {
@@ -519,6 +590,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
     let mut plein_ecran: Option<isize> = None;
     let mut ecran_pointeur: Option<isize> = None;
     let mut conf_gen = 0u32;
+    // presets appliqués déjà vus (`profils::applications`)
+    let mut presets_vus = profils::applications();
+    // échelle de l'essaim, lissée d'un écran à l'autre (`lisser_echelle`) ; aucune : pas encore dessiné
+    let mut echelle: Option<f32> = None;
     let mut was_down = false;
     let mut droit_avant = false;
     // appuis notés par Windows avant le lancement : lus et oubliés (pas de clic fantôme au départ)
@@ -530,6 +605,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
     // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) ; le cadre de la
     // fenêtre au premier plan est relu à chaque image (`lire_fenetre`)
     let mut doux = win::sans_flashs(conf.cfg.rendu.sans_flashs);
+    souris::relire_taille_pointeur();
     let mut last_state = "";
     let mut cleared = false;
     let mut backend_gen = 0u32;
@@ -682,9 +758,20 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
             // fréquence de l'écran du pointeur : dit si le plafond adaptatif change quelque chose
             frequence = win::frequence_ecran(last_pos.0, last_pos.1);
             frequence_composition = win::frequence_max(&monitors);
+            // taille du pointeur (Accessibilité) : ce qui est posé à côté de la pointe s'en écarte
+            souris::relire_taille_pointeur();
         }
+        // l'habillage suit le mode sans flashs, même dessiné seul (frappe, veille profonde)
+        effets.doux = doux;
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
+            // preset appliqué : ses réglages arrivent d'un coup, les traînées repartent de zéro
+            // (une glissière, elle, laisse glisser le trajet)
+            let presets = profils::applications();
+            if presets != presets_vus {
+                presets_vus = presets;
+                swarm.vider_trainees();
+            }
             render::set_traces(&conf.cfg.orbite.chemins());
             if conf.cfg.raccourcis.actif != raccourcis {
                 raccourcis = conf.cfg.raccourcis.actif;
@@ -807,6 +894,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
             // reprise part d'ici
             swarm.oublier_coups(&au);
             effets.oublier_coups(&shared);
+            etiquette.oublier_pistes();
+            // l'essaim reprendra à l'échelle de l'écran où il réapparaît, sans glisser depuis l'ancienne
+            echelle = None;
             // un projecteur demandé pendant la frappe part au retour du pointeur ; en pause ou en
             // plein écran, il est jeté
             if !active {
@@ -835,7 +925,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
         };
         cleared = false;
         let busy_start = Instant::now();
-        let scale = win::scale_at(cur.pos.0, cur.pos.1);
+        // échelle de l'écran du pointeur, rejointe en douceur (`lisser_echelle`) ; les clics de ce
+        // tour prennent celle de l'image d'avant
+        let scale_ecran = win::scale_at(cur.pos.0, cur.pos.1);
+        let scale = echelle.unwrap_or(scale_ecran);
         let cursor = (cur.pos.0 as f32, cur.pos.1 as f32);
 
         // clic, clic droit, changement de piste : leurs déclencheurs (lus à chaque tour, même
@@ -874,6 +967,11 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
                 lire_fenetre(&mut effets, cfg);
                 habillage_seul(&mut effets, &mut backend, &monitors, &shared, cfg, t, dt, cur.pos);
             }
+            // les coups joués pendant la veille ne partent pas en salve au réveil (l'habillage,
+            // lui, vient de lire les siens)
+            swarm.oublier_coups(&au);
+            effets.oublier_coups(&shared);
+            etiquette.oublier_pistes();
             win::attendre(VEILLE_LECTURE);
             continue;
         }
@@ -910,6 +1008,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
         // écart réel depuis l'image précédente : la simulation le découpe en pas courts
         let dt = (now - last).as_secs_f32().clamp(0.0005, 0.25);
         last = now;
+        // pointeur passé sur un écran d'une autre échelle : l'essaim y grandit ou rapetisse en
+        // ~0,15 s au lieu de sauter de taille (simulation et dessin autour du pointeur)
+        let scale = lisser_echelle(&mut echelle, scale_ecran, dt);
         // cadre de la fenêtre au premier plan, relu à chaque image : le halo et les équerres
         // suivent une fenêtre qu'on déplace ou redimensionne
         let murs = lire_fenetre(&mut effets, cfg);
@@ -923,7 +1024,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
         effets.moduler_figures(swarm.effets_figures());
         effets.bouton = down || droit;
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
-        etiquette.avance(t, dt, cursor, scale, &au, cfg, layer::ecran_du_pointeur(&monitors, cursor));
+        // l'étiquette, écrite pour une échelle, prend celle de l'écran sans glisser (un texte
+        // réécrit à chaque image du glissement coûterait pour rien)
+        etiquette.avance(t, dt, cursor, scale_ecran, &au, cfg, layer::ecran_du_pointeur(&monitors, cursor));
         // fissures demandées par les déclencheurs (clic, drop…) ; teinte de tout ce qu'Essaim
         // dessine (modulations « sur tout »)
         for (x, y, force) in swarm.fissures.drain(..) {
@@ -944,15 +1047,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
             || if c.application || c.site { appli.courante(c.application, c.site, now) } else { None },
             || if c.synchro_prisme { prisme.current() } else { None },
         );
-        let cible = imposee.map(|(h, _)| h);
-        sync_hue = match (cible, sync_hue) {
-            (Some(target), Some(h)) => {
-                let d = (target - h + 540.0).rem_euclid(360.0) - 180.0;
-                Some((h + d * (dt * 4.0).min(1.0)).rem_euclid(360.0))
-            }
-            (Some(target), None) => Some(target),
-            _ => None,
-        };
+        sync_hue = glisser_teinte(imposee.map(|(h, _)| h), sync_hue, render::teinte_propre(cfg, t), dt);
         render::set_sync_hue(sync_hue);
         let source = imposee.map(|(_, s)| s);
         if source != source_teinte {
@@ -992,7 +1087,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
             if here {
                 effets.dessiner(cv, t, cfg, scale, cursor);
                 swarm.draw(cv, t, cfg, scale, cursor);
-                etiquette.dessiner(cv, t, cfg, scale);
+                etiquette.dessiner(cv, t, cfg, scale_ecran);
             }
         };
         let draw = |cv: &mut dyn canvas::Canvas, here: bool| {
@@ -1011,7 +1106,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
                 dessiner(cv, here);
             }
         };
-        stat_send += backend.frame(&monitors, swarm_rect, &crack_rects, &draw);
+        stat_send += backend.frame(&monitors, swarm_rect, &crack_rects, cur.pos, &draw);
 
         let busy = busy_start.elapsed();
         (charge_busy, charge_frames) = (charge_busy + busy, charge_frames + 1);
@@ -1070,6 +1165,52 @@ mod tests {
         assert!(nouveau_clic(false, true, true));
         // ni enfoncé ni appuyé (relâché, ou bit lu par une autre appli) : rien
         assert!(!nouveau_clic(false, false, true) && !nouveau_clic(false, false, false));
+    }
+
+    #[test]
+    fn echelle_lissee_d_un_ecran_a_l_autre() {
+        let mut e = None;
+        // départ : la cible tout de suite
+        assert_eq!(lisser_echelle(&mut e, 1.0, 1.0 / 60.0), 1.0);
+        // écran à 150 % : pas de saut, rejointe en quelques dixièmes de seconde
+        let premiere = lisser_echelle(&mut e, 1.5, 1.0 / 60.0);
+        assert!(premiere > 1.0 && premiere < 1.1, "{premiere}");
+        let mut s = premiere;
+        for _ in 0..30 {
+            s = lisser_echelle(&mut e, 1.5, 1.0 / 60.0);
+        }
+        assert!((s - 1.5).abs() < 0.02, "{s} après 0,5 s");
+        for _ in 0..60 {
+            s = lisser_echelle(&mut e, 1.5, 1.0 / 60.0);
+        }
+        assert_eq!(s, 1.5);
+    }
+
+    #[test]
+    fn teinte_imposee_sans_saut() {
+        let dt = 1.0 / 60.0;
+        // apparaît : part de la teinte propre (100°), pas directement de la pochette (200°)
+        let h = glisser_teinte(Some(200.0), None, 100.0, dt).unwrap();
+        assert!(h > 100.0 && h < 110.0, "{h}");
+        // disparaît : glisse vers la teinte propre, sans sauter
+        let mut h = Some(200.0);
+        let mut avant = 200.0f32;
+        for _ in 0..600 {
+            h = glisser_teinte(None, h, 100.0, dt);
+            match h {
+                Some(v) => {
+                    assert!((v - avant).abs() < 10.0, "saut de {avant} à {v}");
+                    avant = v;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(h, None, "lâchée une fois la teinte propre rejointe");
+        assert!((avant - 100.0).abs() < 1.0, "{avant}");
+        // par le plus court, en passant par 0°
+        let v = glisser_teinte(Some(350.0), Some(10.0), 0.0, dt).unwrap();
+        assert!(v < 10.0, "{v}");
+        assert_eq!(glisser_teinte(None, None, 42.0, dt), None);
     }
 
     #[test]

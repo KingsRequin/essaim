@@ -85,6 +85,38 @@ fn lire_texte(racine: HKEY, chemin: &str, nom: &str) -> Option<String> {
     None
 }
 
+/// Taille de base du pointeur de Windows (px), celle d'un pointeur non agrandi.
+const TAILLE_POINTEUR_BASE: u32 = 32;
+
+/// Rapport de la taille du pointeur à sa taille de base (1 = normale), en bits de `f32` ; relu par
+/// `relire_taille_pointeur`.
+static ECHELLE_POINTEUR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// Pointeur agrandi par Windows (Accessibilité, « Taille du pointeur ») : ce qui est posé à côté
+/// de la pointe (étiquette du morceau, figures sous le pointeur) s'écarte d'autant. Rapport de la
+/// taille du pointeur à 32 px.
+pub fn echelle_pointeur() -> f32 {
+    f32::from_bits(ECHELLE_POINTEUR.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Rapport d'une taille de base lue (`CursorBaseSize`) à la taille normale, borné ; 1 sans valeur.
+fn echelle_de_taille(taille: Option<u32>) -> f32 {
+    taille.filter(|&t| t > 0).map_or(1.0, |t| (t as f32 / TAILLE_POINTEUR_BASE as f32).clamp(1.0, 8.0))
+}
+
+/// Relit la taille du pointeur (`HKCU\Control Panel\Cursors\CursorBaseSize`, 32 par défaut),
+/// en lecture seule ; la boucle principale l'appelle chaque seconde.
+pub fn relire_taille_pointeur() {
+    use windows::Win32::System::Registry::RRF_RT_REG_DWORD;
+    let mut v = 0u32;
+    let mut n = std::mem::size_of::<u32>() as u32;
+    let lu = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, &HSTRING::from(CURSEURS), w!("CursorBaseSize"), RRF_RT_REG_DWORD, None, Some(&mut v as *mut u32 as *mut c_void), Some(&mut n))
+    } == ERROR_SUCCESS;
+    let e = echelle_de_taille(lu.then_some(v));
+    ECHELLE_POINTEUR.store(e.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Longueur maximale d'un nom de valeur du registre (caractères, sans le zéro final).
 const NOM_DE_VALEUR_MAX: usize = 16_383;
 
@@ -541,6 +573,17 @@ fn base64(octets: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointeur_agrandi_ecarte_ce_qui_l_entoure() {
+        assert_eq!(echelle_de_taille(None), 1.0);
+        assert_eq!(echelle_de_taille(Some(32)), 1.0);
+        assert_eq!(echelle_de_taille(Some(64)), 2.0);
+        assert_eq!(echelle_de_taille(Some(256)), 8.0);
+        // valeur nulle ou plus petite que la normale : la taille normale
+        assert_eq!(echelle_de_taille(Some(0)), 1.0);
+        assert_eq!(echelle_de_taille(Some(16)), 1.0);
+    }
 
     #[test]
     fn base64_et_chemins() {

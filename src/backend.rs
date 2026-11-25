@@ -12,7 +12,8 @@
 //!
 //! Dans les deux cas : un calque immobile par écran touché (par l'essaim, qui peut déborder sur
 //! l'écran voisin, ou par une fissure), refait seulement si son écran change de place ou de
-//! taille, libéré 10 s après être devenu vide.
+//! taille, libéré 10 s après être devenu vide, sauf s'il est touché à cette image ou que le
+//! pointeur est sur son écran (il serait retiré puis recréé sous la souris à la reprise).
 
 use crate::canvas::Canvas;
 use crate::gpu::{Gpu, GpuLayer};
@@ -67,23 +68,37 @@ fn zone_a_dessiner(rect: IRect, swarm: IRect, items: &[IRect]) -> Option<IRect> 
     d
 }
 
-/// Le calque de l'écran `mon` au rectangle `rect` reste : son écran est toujours là, au même
-/// endroit, et il n'est pas vide depuis trop longtemps.
-fn garder(monitors: &[(isize, IRect)], mon: isize, rect: IRect, empty_since: Option<Instant>, now: Instant) -> bool {
-    monitors.iter().any(|&(m, r)| m == mon && r == rect) && empty_since.is_none_or(|s| now - s < KEEP_EMPTY)
+/// Le point `p` est-il dans le rectangle `r` ?
+fn contient(r: IRect, p: (i32, i32)) -> bool {
+    p.0 >= r.0 && p.0 < r.2 && p.1 >= r.1 && p.1 < r.3
+}
+
+/// Ce qui décide du sort des calques à une image : les écrans, ce qui est dessiné (essaim,
+/// fissures, habillage) et la position du pointeur.
+struct Image<'a> {
+    monitors: &'a [(isize, IRect)],
+    swarm: IRect,
+    items: &'a [IRect],
+    pointeur: (i32, i32),
+    now: Instant,
+}
+
+impl Image<'_> {
+    /// Le calque de l'écran `mon` au rectangle `rect` reste : son écran est toujours là, au même
+    /// endroit, et il n'est pas vide depuis trop longtemps. Un calque touché à cette image ou sur
+    /// l'écran du pointeur reste toujours, même vide depuis longtemps : le retirer pour le
+    /// recréer aussitôt (reprise après une pause) ferait disparaître puis apparaître une
+    /// fenêtre sous la souris.
+    fn garder(&self, mon: isize, rect: IRect, empty_since: Option<Instant>) -> bool {
+        self.monitors.iter().any(|&(m, r)| m == mon && r == rect)
+            && (empty_since.is_none_or(|s| self.now - s < KEEP_EMPTY) || touche(rect, self.swarm, self.items) || contient(rect, self.pointeur))
+    }
 }
 
 /// Une image sur la carte graphique (calques créés au besoin, puis remise au compositeur).
-fn frame_gpu(
-    gpu: &Gpu,
-    layers: &mut Vec<GpuLayer>,
-    monitors: &[(isize, IRect)],
-    swarm: IRect,
-    items: &[IRect],
-    draw: &dyn Fn(&mut dyn Canvas, bool),
-    now: Instant,
-) -> windows::core::Result<Duration> {
-    layers.retain(|l| garder(monitors, l.mon, l.rect, l.empty_since, now));
+fn frame_gpu(gpu: &Gpu, layers: &mut Vec<GpuLayer>, im: &Image, draw: &dyn Fn(&mut dyn Canvas, bool)) -> windows::core::Result<Duration> {
+    let &Image { monitors, swarm, items, .. } = im;
+    layers.retain(|l| im.garder(l.mon, l.rect, l.empty_since));
     for &(mon, rect) in monitors.iter().filter(|m| touche(m.1, swarm, items)) {
         if !layers.iter().any(|l| l.mon == mon) {
             layers.push(gpu.layer(mon, rect)?);
@@ -112,15 +127,9 @@ fn clear_gpu(gpu: &Gpu, layers: &mut [GpuLayer]) -> windows::core::Result<Durati
 }
 
 /// Une image sur le processeur (calques créés au besoin).
-fn frame_cpu(
-    layers: &mut Vec<Layer>,
-    monitors: &[(isize, IRect)],
-    swarm: IRect,
-    items: &[IRect],
-    draw: &dyn Fn(&mut dyn Canvas, bool),
-    now: Instant,
-) -> Duration {
-    layers.retain(|l| garder(monitors, l.mon, l.rect, l.empty_since, now));
+fn frame_cpu(layers: &mut Vec<Layer>, im: &Image, draw: &dyn Fn(&mut dyn Canvas, bool)) -> Duration {
+    let &Image { monitors, swarm, items, .. } = im;
+    layers.retain(|l| im.garder(l.mon, l.rect, l.empty_since));
     for &(mon, rect) in monitors.iter().filter(|m| touche(m.1, swarm, items)) {
         if !layers.iter().any(|l| l.mon == mon) {
             match Layer::new(mon, rect) {
@@ -203,10 +212,12 @@ impl Backend {
     }
 
     /// Dessine une image. `monitors` = écrans (identifiant, rectangle) ; `swarm` = zone de
-    /// l'essaim, dessiné sur chaque écran qu'il touche ; `items` = zones des fissures.
+    /// l'essaim, dessiné sur chaque écran qu'il touche ; `items` = zones des fissures ;
+    /// `pointeur` = position du pointeur (le calque de son écran n'est jamais retiré).
     /// `draw(canvas, essaim_ici)` dessine tout. Renvoie le temps de remise au compositeur.
-    pub fn frame(&mut self, monitors: &[(isize, IRect)], swarm: IRect, items: &[IRect], draw: &dyn Fn(&mut dyn Canvas, bool)) -> Duration {
+    pub fn frame(&mut self, monitors: &[(isize, IRect)], swarm: IRect, items: &[IRect], pointeur: (i32, i32), draw: &dyn Fn(&mut dyn Canvas, bool)) -> Duration {
         let now = Instant::now();
+        let im = Image { monitors, swarm, items, pointeur, now };
         // Nouvel essai de la carte graphique, seulement sur une image qui a quelque chose à
         // montrer : il doit réussir une vraie image pour remplacer les calques processeur.
         let essai = matches!(self.kind, Kind::Cpu(_))
@@ -216,7 +227,7 @@ impl Backend {
             match Gpu::new() {
                 Ok(gpu) => {
                     let mut layers = Vec::new();
-                    match frame_gpu(&gpu, &mut layers, monitors, swarm, items, draw, now) {
+                    match frame_gpu(&gpu, &mut layers, &im, draw) {
                         Ok(sent) => {
                             log::info!("dessin : de nouveau sur la carte graphique");
                             // les calques processeur (et leurs fenêtres) partent ici
@@ -239,10 +250,10 @@ impl Backend {
             }
         }
         let resultat = match &mut self.kind {
-            Kind::Gpu(gpu, layers) => frame_gpu(gpu, layers, monitors, swarm, items, draw, now),
-            Kind::Cpu(layers) => Ok(frame_cpu(layers, monitors, swarm, items, draw, now)),
+            Kind::Gpu(gpu, layers) => frame_gpu(gpu, layers, &im, draw),
+            Kind::Cpu(layers) => Ok(frame_cpu(layers, &im, draw)),
         };
-        resultat.unwrap_or_else(|e| self.erreur_gpu(e, now, |gpu, layers| frame_gpu(gpu, layers, monitors, swarm, items, draw, now)))
+        resultat.unwrap_or_else(|e| self.erreur_gpu(e, now, |gpu, layers| frame_gpu(gpu, layers, &im, draw)))
     }
 
     /// Efface tout (pause, curseur masqué).
@@ -335,7 +346,7 @@ mod tests {
                 s.update(t, dt, cursor, au, cfg, 1.0);
                 let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
-                b.frame(&mons, rect, &[], &|cv, _| s.draw(cv, t, cfg, 1.0, cursor));
+                b.frame(&mons, rect, &[], (cursor.0 as i32, cursor.1 as i32), &|cv, _| s.draw(cv, t, cfg, 1.0, cursor));
                 if i >= chauffe {
                     durees.push(t0.elapsed().as_secs_f64() * 1000.0);
                 }
@@ -410,6 +421,33 @@ mod tests {
     }
 
     #[test]
+    fn calque_vide_retire_seulement_loin_du_pointeur() {
+        let t0 = Instant::now();
+        let now = t0 + KEEP_EMPTY + Duration::from_secs(5);
+        let (gauche, droite) = ((0, 0, 1920, 1080), (1920, 0, 3840, 1080));
+        let mons = [(1isize, gauche), (2isize, droite)];
+        let vide_longtemps = Some(t0);
+        let image = |swarm: IRect, items: &'static [IRect], pointeur: (i32, i32)| Image { monitors: &mons, swarm, items, pointeur, now };
+        // pause, puis reprise sur l'écran de gauche : son calque, vide depuis plus de 10 s, reste
+        // (l'essaim le touche à cette image et le pointeur y est)
+        let reprise = image((900, 500, 1000, 600), &[], (950, 550));
+        assert!(reprise.garder(1, gauche, vide_longtemps));
+        // l'autre écran, vide depuis longtemps, sans pointeur ni dessin : retiré
+        assert!(!reprise.garder(2, droite, vide_longtemps));
+        // habillage seul (aucun essaim, rien ne touche l'écran) : le calque de l'écran du pointeur reste
+        let habillage = image(crate::layer::AUCUNE, &[], (2500, 300));
+        assert!(habillage.garder(2, droite, vide_longtemps));
+        assert!(!habillage.garder(1, gauche, vide_longtemps));
+        // une fissure sur l'écran de gauche le garde, pointeur ailleurs
+        let fissure = image(crate::layer::AUCUNE, &[(100, 100, 200, 200)], (2500, 300));
+        assert!(fissure.garder(1, gauche, vide_longtemps));
+        // vide depuis peu : gardé partout ; écran disparu ou déplacé : retiré même sous le pointeur
+        assert!(habillage.garder(1, gauche, Some(now - Duration::from_secs(1))));
+        assert!(!reprise.garder(1, (0, 0, 1280, 720), None));
+        assert!(!reprise.garder(3, gauche, None));
+    }
+
+    #[test]
     #[ignore]
     fn mesure_moteurs() {
         let cfg = Config::default();
@@ -431,7 +469,7 @@ mod tests {
                 s.update(t, dt, cursor, au, &cfg, 1.0);
                 let (x0, y0, x1, y1) = s.bounds(cursor, 1.0, cfg.eclat.taille);
                 let rect = (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1);
-                let d = b.frame(&mons, rect, &[], &|cv, _| s.draw(cv, t, &cfg, 1.0, cursor));
+                let d = b.frame(&mons, rect, &[], (cursor.0 as i32, cursor.1 as i32), &|cv, _| s.draw(cv, t, &cfg, 1.0, cursor));
                 if i >= 200 {
                     sent += d;
                 }
