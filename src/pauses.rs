@@ -55,7 +55,11 @@ pub fn effet_batterie(mode: ModeBatterie, sur_batterie: bool, economiseur: bool)
 pub fn appli_en_pause<'a>(liste: &'a [String], exe: &str) -> Option<&'a str> {
     let sans_ext = |s: &str| {
         let s = s.trim();
-        if s.len() > 4 && s[s.len() - 4..].eq_ignore_ascii_case(".exe") { s[..s.len() - 4].to_owned() } else { s.to_owned() }
+        // découpe par `get` : un nom non latin (« 微信 ») ne tombe pas au milieu d'un caractère
+        match s.len().checked_sub(4).and_then(|i| Some((s.get(..i)?, s.get(i..)?))) {
+            Some((nom, ext)) if !nom.is_empty() && ext.eq_ignore_ascii_case(".exe") => nom.to_owned(),
+            _ => s.to_owned(),
+        }
     };
     let exe = sans_ext(exe);
     liste.iter().map(|a| a.as_str()).find(|a| !a.trim().is_empty() && sans_ext(a).eq_ignore_ascii_case(&exe))
@@ -73,7 +77,20 @@ pub fn plafonner(cadence: u32, plafond: u32) -> u32 {
 
 /// Raison lisible (courte, pour la ligne d'état de la fenêtre des réglages) de ce qui retient
 /// l'essaim ; vide si rien. La pause demandée par l'utilisateur se lit déjà sur le bouton Pause.
+/// La cadence mesurée (`charge`) dit si le plafond de la qualité adaptative joue vraiment.
 pub fn raison(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str>, batterie: u32, adaptatif: u32) -> String {
+    raison_mesuree(pause_utilisateur, plein_ecran, pause, batterie, adaptatif, crate::charge::lire().1)
+}
+
+/// Part de son plafond que doit atteindre la cadence mesurée pour que la qualité adaptative soit
+/// dite en cause : au plafond, la mesure tombe un peu en dessous (59,6 pour 60).
+const PLAFOND_ATTEINT: f32 = 0.9;
+
+/// Comme `raison`, avec les images par seconde mesurées (`ips`, 0 = pas encore de mesure). Le
+/// plafond adaptatif n'est pas affiché quand la cadence reste nettement en dessous : autre chose
+/// la limite (écran à 60 Hz sous un plafond de 120, cadence choisie, repos) et il ne change rien.
+fn raison_mesuree(pause_utilisateur: bool, plein_ecran: bool, pause: Option<&str>, batterie: u32, adaptatif: u32, ips: f32) -> String {
+    let adaptatif = if ips >= 1.0 && ips < adaptatif as f32 * PLAFOND_ATTEINT { 0 } else { adaptatif };
     if pause_utilisateur {
         String::new()
     } else if plein_ecran {
@@ -214,6 +231,11 @@ mod tests {
         assert_eq!(appli_en_pause(&liste, "obs.exe"), None);
         assert_eq!(appli_en_pause(&liste, ".exe"), None);
         assert_eq!(appli_en_pause(&[], "obs64.exe"), None);
+        // noms non latins écrits à la main : pas de découpe au milieu d'un caractère
+        let liste: Vec<String> = ["微信", "Zoé VR", "é"].map(String::from).to_vec();
+        assert_eq!(appli_en_pause(&liste, "微信.exe"), Some("微信"));
+        assert_eq!(appli_en_pause(&liste, "zoé vr.EXE"), Some("Zoé VR"));
+        assert_eq!(appli_en_pause(&liste, "é.exe"), Some("é"));
     }
 
     #[test]
@@ -237,6 +259,7 @@ mod tests {
 
     #[test]
     fn raisons_lisibles() {
+        let raison = |u, f, p, b, a| raison_mesuree(u, f, p, b, a, 0.0);
         assert_eq!(raison(true, true, Some("Ne pas déranger"), 30, 60), "");
         assert_eq!(raison(false, true, Some("Ne pas déranger"), 0, 0), "Plein écran");
         assert_eq!(raison(false, false, Some("Appli : obs64.exe"), 30, 0), "Appli : obs64.exe");
@@ -244,5 +267,16 @@ mod tests {
         assert_eq!(raison(false, false, None, 30, 30), "Batterie : 30 i/s");
         assert_eq!(raison(false, false, None, 0, 60), "Allégé : 60 i/s");
         assert_eq!(raison(false, false, None, 0, 0), "");
+    }
+
+    #[test]
+    fn plafond_adaptatif_sans_effet_non_affiche() {
+        // plafond atteint (la mesure tombe juste en dessous) : affiché
+        assert_eq!(raison_mesuree(false, false, None, 0, 60, 59.6), "Allégé : 60 i/s");
+        assert_eq!(raison_mesuree(false, false, None, 0, 30, 30.0), "Allégé : 30 i/s");
+        // écran à 60 Hz sous un plafond de 120 : il ne change rien
+        assert_eq!(raison_mesuree(false, false, None, 0, 120, 60.0), "");
+        // la batterie limite plus bas : c'est elle qui est dite
+        assert_eq!(raison_mesuree(false, false, None, 30, 60, 29.8), "Batterie : 30 i/s");
     }
 }

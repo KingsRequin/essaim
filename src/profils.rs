@@ -876,6 +876,8 @@ mod tests {
             assert!(same(&p.cfg, &p.cfg.clone().clamped()), "{} hors bornes", p.name);
             for q in &b[i + 1..] {
                 assert!(!same(&p.cfg, &q.cfg), "{} = {}", p.name, q.name);
+                // même fichier pour Windows (casse, espaces autour) : l'un cacherait l'autre
+                assert!(!meme_nom(&p.name, &q.name), "deux presets fournis nommés « {} » et « {} »", p.name, q.name);
             }
         }
     }

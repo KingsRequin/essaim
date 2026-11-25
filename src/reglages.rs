@@ -53,21 +53,31 @@ const WM_DEVANT: u32 = WM_APP + 1;
 /// lancer le fil (`compare_exchange`) : deux demandes rapprochées n'ouvrent qu'une fenêtre.
 /// Appelée par le fil de rendu : rien ici n'attend le fil de la fenêtre.
 pub fn open(son: Arc<AudioShared>) {
-    match WINDOW.compare_exchange(0, OUVERTURE, Ordering::AcqRel, Ordering::Acquire) {
-        Ok(_) => {}
-        // déjà en cours d'ouverture : la fenêtre arrive
-        Err(OUVERTURE) => return,
-        // ouverte : ramenée devant par son propre fil (si elle se ferme à l'instant, le message
-        // se perd et son fil libère la place)
-        Err(h) => {
-            let hwnd = HWND(h as *mut _);
-            unsafe {
-                if IsIconic(hwnd).as_bool() {
-                    let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+    loop {
+        match WINDOW.compare_exchange(0, OUVERTURE, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => break,
+            // déjà en cours d'ouverture : la fenêtre arrive
+            Err(OUVERTURE) => return,
+            // ouverte : ramenée devant par son propre fil (si elle se ferme à l'instant, le
+            // message se perd et son fil libère la place)
+            Err(h) if unsafe { IsWindow(Some(HWND(h as *mut _))) }.as_bool() => {
+                let hwnd = HWND(h as *mut _);
+                unsafe {
+                    if IsIconic(hwnd).as_bool() {
+                        let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+                    }
+                    let _ = PostMessageW(Some(hwnd), WM_DEVANT, WPARAM(0), LPARAM(0));
                 }
-                let _ = PostMessageW(Some(hwnd), WM_DEVANT, WPARAM(0), LPARAM(0));
+                return;
             }
-            return;
+            // fenêtre détruite, son fil pas encore fini (il n'a pas rendu la place) : reprise,
+            // comme pour la fenêtre du stream ; le fil d'avant ne la rendra plus, elle n'est
+            // plus la sienne (si elle vient de changer, nouvel essai)
+            Err(h) => {
+                if WINDOW.compare_exchange(h, OUVERTURE, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                    break;
+                }
+            }
         }
     }
     let lance = std::thread::Builder::new().name("essaim-reglages".into()).spawn(move || {
@@ -232,7 +242,10 @@ struct Fenetre {
     /// Aperçus des jeux de curseurs déjà dessinés (clé → images).
     apercus: std::collections::HashMap<String, Value>,
     /// Réglages et curseurs d'avant le dernier preset appliqué (pour « Annuler »).
-    avant: Option<profils::Avant>,
+    avant: Option<Retour>,
+    /// La page a demandé son état : elle est chargée et sait recevoir. Le son, la charge et la
+    /// mise à jour ne lui sont envoyés qu'ensuite (avant, ils seraient perdus).
+    ecoute: bool,
     /// Jeux de curseurs de Windows, lus une fois par ouverture (relus à chaque liste demandée).
     jeux: Option<Vec<crate::souris::Jeu>>,
     /// Fenêtre réduite : la vue est cachée et le son n'est plus envoyé.
@@ -253,6 +266,47 @@ thread_local! {
     static FERMER: Cell<bool> = const { Cell::new(false) };
 }
 
+/// De quoi revenir en arrière après un preset appliqué par la fenêtre (« Annuler »).
+struct Retour {
+    /// Réglages et curseurs d'avant.
+    avant: profils::Avant,
+    /// Réglages écrits par la fenêtre depuis (le preset, puis ses retouches dans la page) ;
+    /// `None` s'ils n'ont pas pu être relus. Si `config.toml` ne les a plus (preset changé par
+    /// l'icône, Horizon, une règle), « Annuler » déferait ce changement-là : il est oublié.
+    apres: Option<Config>,
+}
+
+/// Minuteries de la fenêtre (identifiant, période en ms) : aucune avant que la page ait demandé
+/// son état (`ecoute`), elle ne recevrait rien ; pas le son quand la fenêtre est réduite.
+fn minuteries(ecoute: bool, reduite: bool) -> Vec<(usize, u32)> {
+    [(TIMER_SON, 33), (TIMER_FICHIERS, 700)].into_iter().filter(|&(t, _)| ecoute && !(reduite && t == TIMER_SON)).collect()
+}
+
+/// Lit une demande de la page ; sinon, la réponse d'erreur à lui envoyer (la cause va au journal).
+fn lire_demande(texte: &str) -> Result<Demande, Value> {
+    serde_json::from_str::<Demande>(texte).map_err(|e| {
+        log::warn!("réglages : message de la page illisible ({e})");
+        json!({ "type": "erreur", "texte": "Demande non comprise." })
+    })
+}
+
+/// Réponses à un preset de la bibliothèque installé : le message, puis, s'il devait être
+/// appliqué, `applique` (dernier : son bandeau propose « Annuler ») ou l'erreur.
+fn reponses_installation(nom: &str, application: Option<Result<(), String>>) -> Vec<Value> {
+    let mut r = vec![json!({ "type": "message", "texte": format!("Preset « {nom} » installé dans Mes presets.") })];
+    match application {
+        Some(Ok(())) => r.push(json!({ "type": "applique", "nom": nom })),
+        Some(Err(e)) => r.push(json!({ "type": "erreur", "texte": format!("Preset « {nom} » installé mais non appliqué : {e}.") })),
+        None => {}
+    }
+    r
+}
+
+/// Réponse `contours` à une image illisible : liste vide, la page n'attend plus son analyse.
+fn contours_vides(seuil: Option<u8>) -> Value {
+    json!({ "type": "contours", "liste": [], "seuil": seuil.unwrap_or(128), "transparence": false })
+}
+
 fn dates() -> (Option<SystemTime>, Option<SystemTime>) {
     let date = |p: std::path::PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     (date(config::path()), date(profils::dir()))
@@ -271,6 +325,12 @@ impl Fenetre {
         // d'enregistrer des réglages par défaut sans rapport avec ce qui tourne
         let lu = Config::read(&config::path());
         let illisible = lu.as_ref().err().map(|e| e.to_string());
+        // réglages changés hors de la fenêtre depuis son dernier preset : plus rien à annuler
+        if let (Ok(cfg), Some(Retour { apres: Some(apres), .. })) = (&lu, &self.avant) {
+            if !profils::same(apres, cfg) {
+                self.avant = None;
+            }
+        }
         let cfg = lu.unwrap_or_default();
         let liste = profils::list();
         let actif = liste.iter().find(|p| profils::same(&p.cfg, &cfg)).map(|p| p.name.clone());
@@ -328,14 +388,28 @@ impl Fenetre {
         if let Err(e) = self.vue.set_visible(!reduite) {
             log::warn!("réglages : vue non {} ({e})", if reduite { "cachée" } else { "montrée" });
         }
-        unsafe {
-            if reduite {
+        if reduite {
+            unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_SON);
-            } else {
-                SetTimer(Some(self.hwnd), TIMER_SON, 33, None);
-                self.son_envoye = (u32::MAX, 0);
+            }
+        } else {
+            self.son_envoye = (u32::MAX, 0);
+            self.armer();
+        }
+    }
+
+    /// Arme les minuteries que demandent l'état de la page et de la fenêtre (`minuteries`).
+    fn armer(&self) {
+        for (t, ms) in minuteries(self.ecoute, self.reduite) {
+            unsafe {
+                SetTimer(Some(self.hwnd), t, ms, None);
             }
         }
+    }
+
+    /// Note les réglages d'avant un preset que la fenêtre vient d'appliquer, et ceux d'après.
+    fn noter_avant(&mut self, avant: Option<profils::Avant>) {
+        self.avant = avant.map(|avant| Retour { avant, apres: Config::read(&config::path()).ok() });
     }
 
     fn message(&self, texte: &str) {
@@ -347,17 +421,45 @@ impl Fenetre {
     }
 
     fn traiter(&mut self, texte: &str) {
-        let demande = match serde_json::from_str::<Demande>(texte) {
+        let demande = match lire_demande(texte) {
             Ok(d) => d,
-            Err(e) => return log::warn!("réglages : message de la page illisible ({e})"),
+            Err(reponse) => return self.envoyer(&reponse),
         };
         match demande {
-            Demande::Etat => self.etat(),
+            Demande::Etat => {
+                // première demande : la page est chargée, les envois réguliers commencent
+                if !self.ecoute {
+                    self.ecoute = true;
+                    self.armer();
+                }
+                self.etat();
+                // la page (re)chargée n'a pas l'état de la mise à jour : renvoyé
+                self.maj = None;
+                self.maj();
+            }
             Demande::Prete => self.montrer(),
-            Demande::Regler { section, cle, valeur } => match config::set_value(&section, &cle, &valeur) {
-                Ok(()) => config::request_reload(),
-                Err(e) => self.erreur(&format!("Réglage refusé : {e}.")),
-            },
+            Demande::Regler { section, cle, valeur } => {
+                // changement venu d'ailleurs pas encore vu (`tick`) : il n'est pas adopté ci-dessous
+                if let Some(Retour { apres: Some(apres), .. }) = &self.avant {
+                    if Config::read(&config::path()).is_ok_and(|cfg| !profils::same(apres, &cfg)) {
+                        self.avant = None;
+                    }
+                }
+                match config::set_value(&section, &cle, &valeur) {
+                    Ok(()) => {
+                        config::request_reload();
+                        // retouche faite dans la fenêtre : « Annuler » revient toujours d'avant le preset
+                        if let Some(r) = self.avant.as_mut() {
+                            r.apres = Config::read(&config::path()).ok();
+                        }
+                    }
+                    Err(e) => {
+                        self.erreur(&format!("Réglage refusé : {e}."));
+                        // la page revient à la vraie valeur
+                        self.etat();
+                    }
+                }
+            }
             Demande::Appliquer { nom } => {
                 let liste = profils::list();
                 let avant = profils::capturer();
@@ -365,7 +467,7 @@ impl Fenetre {
                     Some((p, Ok(()))) => {
                         config::request_reload();
                         self.curseurs_du_preset(&p.cfg);
-                        self.avant = avant;
+                        self.noter_avant(avant);
                         self.envoyer(&json!({ "type": "applique", "nom": nom }));
                     }
                     Some((_, Err(e))) => self.erreur(&format!("Preset « {nom} » non appliqué : {e}.")),
@@ -377,8 +479,10 @@ impl Fenetre {
                 let mut cfg = match Config::read(&config::path()) {
                     Ok(c) => c,
                     Err(e) => {
-                        self.erreur(&format!("Preset non enregistré : config.toml est illisible ({e}). Corrige le fichier d'abord."));
-                        return;
+                        let texte = format!("Preset non enregistré : config.toml est illisible ({e}). Corrige le fichier d'abord.");
+                        self.erreur(&texte);
+                        // réponse propre à l'enregistrement : la page libère son bouton
+                        return self.envoyer(&json!({ "type": "refus", "texte": texte }));
                     }
                 };
                 // un autre preset de ce nom : la page demande d'abord s'il faut le remplacer (le
@@ -421,18 +525,25 @@ impl Fenetre {
                 // un preset de l'utilisateur du même nom (à la casse près) n'est pas écrasé
                 match cfg.and_then(|cfg| profils::ajouter(&nom, &cfg).map(|n| (n, cfg))) {
                     Ok((nom, cfg)) => {
-                        if appliquer {
-                            self.avant = profils::capturer();
+                        let mut curseurs = Ok(());
+                        let application = appliquer.then(|| {
+                            let avant = profils::capturer();
                             let p = profils::list().into_iter().find(|p| profils::meme_nom(&p.name, &nom));
-                            match p.as_ref().map(profils::apply) {
-                                Some(Ok(())) => self.curseurs_du_preset(&cfg),
-                                Some(Err(e)) => self.erreur(&format!("Preset « {nom} » installé mais non appliqué : {e}.")),
-                                None => {}
+                            let r = p.as_ref().map_or_else(|| Err("preset introuvable après l'installation".to_owned()), profils::apply);
+                            if r.is_ok() {
+                                config::request_reload();
+                                self.noter_avant(avant);
+                                curseurs = profils::curseurs_du_preset(&cfg);
                             }
-                            config::request_reload();
-                        }
+                            r
+                        });
                         self.etat();
-                        self.message(&format!("Preset « {nom} » installé dans Mes presets."));
+                        for m in reponses_installation(&nom, application) {
+                            self.envoyer(&m);
+                        }
+                        if let Err(e) = curseurs {
+                            self.erreur(&format!("Preset appliqué, mais curseurs non installés : {e}."));
+                        }
                     }
                     Err(e) => self.erreur(&format!("Installation impossible : {e}.")),
                 }
@@ -443,6 +554,8 @@ impl Fenetre {
                 let jeux = crate::souris::jeux();
                 let liste: Vec<Value> = jeux.iter().map(|j| json!({ "cle": j.cle, "nom": j.nom, "systeme": j.systeme })).collect();
                 self.jeux = Some(jeux);
+                // un jeu réinstallé sous le même nom a pu changer : aperçus redessinés
+                self.apercus.clear();
                 self.envoyer(&json!({ "type": "jeux", "jeux": liste }));
             }
             Demande::ApercuJeu { cle } => {
@@ -473,6 +586,9 @@ impl Fenetre {
                     }
                     Err(e) => self.erreur(&format!("Curseurs non installés : {e}.")),
                 }
+                // Ctrl+Z ne défait pas un choix de curseurs (il remettrait aussi ceux d'avant le
+                // dernier preset)
+                self.avant = None;
                 self.etat();
             }
             Demande::Renommer { ancien, nouveau } => match profils::rename(&ancien, &nouveau) {
@@ -532,11 +648,14 @@ impl Fenetre {
                         let r = crate::contours::contours(&px, largeur, hauteur, &crate::contours::Options { seuil, inverser, tous });
                         self.envoyer(&json!({ "type": "contours", "liste": r.contours, "seuil": r.seuil, "transparence": r.transparence }));
                     }
-                    None => self.erreur("Image illisible."),
+                    None => {
+                        self.erreur("Image illisible.");
+                        self.envoyer(&contours_vides(seuil));
+                    }
                 }
             }
             Demande::Annuler => match self.avant.take() {
-                Some(avant) => {
+                Some(Retour { avant, .. }) => {
                     match profils::remettre(&avant) {
                         Ok(()) => self.message("Réglages d'avant remis."),
                         Err(e) => self.erreur(&format!("Retour impossible : {e}.")),
@@ -548,10 +667,11 @@ impl Fenetre {
             // comme un preset installé : réglages d'avant convertis, puis bornés
             Demande::AppliquerReglages { nom, reglages } => match config_distante(reglages) {
                 Ok(cfg) => {
-                    self.avant = profils::capturer();
+                    let avant = profils::capturer();
                     match config::apply_keys(&cfg, |s, k| profils::in_profile(s, k) && (s, k) != ("souris", "jeu")) {
                         Ok(()) => {
                             config::request_reload();
+                            self.noter_avant(avant);
                             self.envoyer(&json!({ "type": "applique", "nom": nom }));
                         }
                         Err(e) => self.erreur(&format!("Réglages refusés : {e}.")),
@@ -599,8 +719,7 @@ impl Fenetre {
             },
             Demande::Sorties => {
                 let liste: Vec<Value> = audio_commun::capture::sorties().into_iter().map(|(id, nom)| json!({ "id": id, "nom": nom })).collect();
-                let actuelle = Config::read(&config::path()).unwrap_or_default().audio.sortie;
-                self.envoyer(&json!({ "type": "sorties", "liste": liste, "actuelle": actuelle }));
+                self.envoyer(&json!({ "type": "sorties", "liste": liste }));
             }
             Demande::ApplisSonores => {
                 let liste: Vec<Value> = audio_commun::capture::applis_sonores_detail().into_iter().map(|a| json!({ "exe": a.exe, "nom": a.nom, "joue": a.joue })).collect();
@@ -678,7 +797,6 @@ impl Fenetre {
         ));
     }
 
-    /// Son et fichiers : envoyés à la page quand ils changent.
     /// Montre la fenêtre, une fois : quand la page se dit prête, ou au bout de l'attente.
     fn montrer(&mut self) {
         if self.montree {
@@ -695,6 +813,7 @@ impl Fenetre {
         let _ = self.vue.focus();
     }
 
+    /// Son et fichiers : envoyés à la page quand ils changent.
     fn tick(&mut self, quoi: usize) {
         if quoi == TIMER_MONTRER {
             log::warn!("réglages : la page ne s'est pas dite prête, fenêtre montrée quand même");
@@ -1170,6 +1289,7 @@ fn run(son: Arc<AudioShared>, place: &Place) -> anyhow::Result<()> {
         dates: (None, None),
         apercus: Default::default(),
         avant: None,
+        ecoute: false,
         jeux: None,
         reduite: false,
         montree: false,
@@ -1177,8 +1297,8 @@ fn run(son: Arc<AudioShared>, place: &Place) -> anyhow::Result<()> {
     };
     FENETRE.with(|f| *f.borrow_mut() = Some(fenetre));
     unsafe {
-        SetTimer(Some(hwnd), TIMER_SON, 33, None);
-        SetTimer(Some(hwnd), TIMER_FICHIERS, 700, None);
+        // Le son et la charge attendent la première demande `etat` (`minuteries`) : avant, la
+        // page n'est pas chargée et les perdrait.
         // La fenêtre reste cachée tant que la page n'est pas dessinée (message `prete`) : montrée
         // tout de suite, elle serait blanche le temps que WebView2 rende sa première image.
         SetTimer(Some(hwnd), TIMER_MONTRER, ATTENTE_PAGE_MS, None);
@@ -1486,6 +1606,46 @@ mod tests {
         let d: Demande = serde_json::from_str(r#"{"cmd":"enregistrer","nom":"Nuit","publier":false,"remplacer":true}"#).unwrap();
         assert!(matches!(d, Demande::Enregistrer { remplacer: true, .. }));
         assert!(matches!(serde_json::from_str::<Demande>(r#"{"cmd":"zoom","pas":-1}"#).unwrap(), Demande::Zoom { pas: -1 }));
+    }
+
+    #[test]
+    fn rien_n_est_envoye_avant_la_demande_d_etat() {
+        // page pas encore chargée : aucune minuterie, donc ni son, ni charge, ni mise à jour
+        assert!(minuteries(false, false).is_empty());
+        assert!(minuteries(false, true).is_empty());
+        let ids = |v: Vec<(usize, u32)>| v.into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+        assert_eq!(ids(minuteries(true, false)), [TIMER_SON, TIMER_FICHIERS]);
+        // réduite : la charge et la mise à jour continuent, pas le son
+        assert_eq!(ids(minuteries(true, true)), [TIMER_FICHIERS]);
+        // l'attente de la page ne dépend pas d'elle
+        assert!(!minuteries(true, false).iter().any(|&(t, _)| t == TIMER_MONTRER));
+    }
+
+    #[test]
+    fn preset_installe_et_applique_annonce() {
+        let r = reponses_installation("Nuit", Some(Ok(())));
+        assert_eq!(r.last().unwrap(), &json!({ "type": "applique", "nom": "Nuit" }), "le bandeau « Annuler » reste affiché");
+        assert!(r.iter().any(|m| m["type"] == "message"));
+        let r = reponses_installation("Nuit", Some(Err("verrouillé".into())));
+        assert!(r.iter().all(|m| m["type"] != "applique"));
+        assert_eq!(r.last().unwrap()["type"], "erreur");
+        assert_eq!(reponses_installation("Nuit", None).len(), 1, "installé seulement");
+    }
+
+    #[test]
+    fn demande_incomprise_repond_une_erreur() {
+        for texte in [r#"{"cmd":"formater_disque"}"#, r#"{"cmd":"regler","section":"orbite"}"#, "pas du JSON", ""] {
+            let r = lire_demande(texte).err().unwrap_or_else(|| panic!("{texte} accepté"));
+            assert_eq!(r, json!({ "type": "erreur", "texte": "Demande non comprise." }));
+        }
+        assert!(matches!(lire_demande(r#"{"cmd":"etat"}"#), Ok(Demande::Etat)));
+    }
+
+    #[test]
+    fn image_illisible_repond_des_contours_vides() {
+        // même forme que la réponse normale : la page cesse d'attendre l'analyse
+        assert_eq!(contours_vides(Some(40)), json!({ "type": "contours", "liste": [], "seuil": 40, "transparence": false }));
+        assert_eq!(contours_vides(None)["seuil"], 128);
     }
 
     #[test]

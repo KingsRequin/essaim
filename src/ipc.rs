@@ -14,7 +14,10 @@
 //!   `config.toml` en gardant ses commentaires ; Essaim la recharge dans la seconde ;
 //! - `list_presets` : presets fournis puis ceux de l'utilisateur,
 //!   `[{"name": "Discret", "builtin": true, "active": false}]` (relus à chaque demande) ;
-//! - `apply_preset` `{"name": "Discret"}` : applique le preset, comme le menu de l'icône ;
+//! - `apply_preset` `{"name": "Discret"}` : applique le preset, comme le menu de l'icône. Si
+//!   les réglages sont appliqués mais pas le jeu de curseurs du preset, la réponse reste
+//!   `{"id": 1, "ok": true, "data": null, "warning": "…"}` (raison de l'échec des curseurs) ;
+//!   `ok: false` seulement si les réglages n'ont pas été appliqués ;
 //! - `open_settings` : ouvre la fenêtre des réglages (ou la ramène devant) ;
 //! - `open_config` : ouvre `config.toml` dans l'éditeur.
 //!
@@ -33,7 +36,7 @@
 
 use crate::config::{Action, Cible, Config, Declencheur, Evenement, Groupe, Modulation, Source};
 use crate::modulation;
-use crate::profils::{self, Profile};
+use crate::profils::{self, Echec, Profile};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -70,18 +73,18 @@ const ATTENTE_MAX: Duration = Duration::from_secs(2);
 pub struct Contexte {
     config: PathBuf,
     lister: fn() -> Vec<Profile>,
-    appliquer: fn(&str) -> Result<(), String>,
+    appliquer: fn(&str) -> Result<(), Echec>,
     debit: Mutex<Debit>,
 }
 
 impl Contexte {
-    fn new(config: PathBuf, lister: fn() -> Vec<Profile>, appliquer: fn(&str) -> Result<(), String>) -> Self {
+    fn new(config: PathBuf, lister: fn() -> Vec<Profile>, appliquer: fn(&str) -> Result<(), Echec>) -> Self {
         Self { config, lister, appliquer, debit: Mutex::new(Debit::new(Instant::now())) }
     }
 
     /// Les vrais réglages et presets de l'utilisateur.
     fn reel() -> Self {
-        Self::new(crate::config::path(), profils::list, profils::appliquer)
+        Self::new(crate::config::path(), profils::list, |nom| profils::appliquer_detaille(nom, false))
     }
 
     fn debit(&self) -> std::sync::MutexGuard<'_, Debit> {
@@ -347,6 +350,8 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>, ctx: &Contexte) -> Valu
     let raw: Value = serde_json::from_str(text).unwrap_or(Value::Null);
     let id = raw.get("id").cloned().unwrap_or(Value::Null);
     let envoyer = |cmd: Cmd| tx.send(cmd).map(|_| Value::Null).map_err(|e| e.to_string());
+    // réussite partielle : la réponse reste `ok`, avec la raison de ce qui a manqué
+    let mut avertissement = None;
     let result = serde_json::from_value::<Request>(raw).map_err(|e| e.to_string()).and_then(|r| match r {
         Request::GetState => Ok(shared.snapshot().1),
         Request::SetPaused { paused } => envoyer(Cmd::SetPaused(paused)),
@@ -358,7 +363,15 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>, ctx: &Contexte) -> Valu
                 return Err(format!("aucun preset « {name} »"));
             }
             ctx.tour_d_ecriture()?;
-            (ctx.appliquer)(&name).map(|_| Value::Null)
+            match (ctx.appliquer)(&name) {
+                Ok(()) => Ok(Value::Null),
+                // réglages appliqués, curseurs non : le preset est bien en place
+                Err(Echec::Curseurs(e)) => {
+                    avertissement = Some(format!("preset appliqué, mais curseurs non installés : {e}"));
+                    Ok(Value::Null)
+                }
+                Err(e) => Err(e.to_string()),
+            }
         }
         Request::SetConfig { section, key, .. } if SECTIONS_PROTEGEES.contains(&section.as_str()) => {
             Err(format!("[{section}] {key} : la section [{section}] ne se change pas par l'interface locale"))
@@ -373,9 +386,10 @@ fn handle(text: &str, shared: &Shared, tx: &Sender<Cmd>, ctx: &Contexte) -> Valu
             .map(|_| Value::Null)
         }
     });
-    match result {
-        Ok(data) => json!({ "id": id, "ok": true, "data": data }),
-        Err(e) => json!({ "id": id, "ok": false, "error": e }),
+    match (result, avertissement) {
+        (Ok(data), None) => json!({ "id": id, "ok": true, "data": data }),
+        (Ok(data), Some(w)) => json!({ "id": id, "ok": true, "data": data, "warning": w }),
+        (Err(e), _) => json!({ "id": id, "ok": false, "error": e }),
     }
 }
 
@@ -491,7 +505,7 @@ mod tests {
     fn aucun_preset() -> Vec<Profile> {
         Vec::new()
     }
-    fn jamais_applique(nom: &str) -> Result<(), String> {
+    fn jamais_applique(nom: &str) -> Result<(), Echec> {
         panic!("preset « {nom} » appliqué pendant un essai")
     }
 
@@ -568,6 +582,30 @@ mod tests {
         assert!(r["error"].as_str().unwrap().contains("aucun preset"));
         // sans nom : requête refusée, rien n'est appliqué
         assert_eq!(handle(&json!({ "id": 3, "cmd": "apply_preset" }).to_string(), &shared, &tx, &ctx)["ok"], false);
+    }
+
+    #[test]
+    fn preset_applique_sans_ses_curseurs_reste_ok() {
+        fn un_preset() -> Vec<Profile> {
+            vec![Profile { name: "Nuit".into(), builtin: false, cfg: Config::default(), date: None }]
+        }
+        fn curseurs_refuses(_: &str) -> Result<(), Echec> {
+            Err(Echec::Curseurs("jeu introuvable".into()))
+        }
+        fn reglages_refuses(_: &str) -> Result<(), Echec> {
+            Err(Echec::Reglages("config.toml verrouillé".into()))
+        }
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let shared = Shared::default();
+        let d = dossier("curseurs");
+        let demande = json!({ "id": 4, "cmd": "apply_preset", "name": "nuit" }).to_string();
+        let r = handle(&demande, &shared, &tx, &Contexte::new(d.0.join("config.toml"), un_preset, curseurs_refuses));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["data"], Value::Null);
+        assert!(r["warning"].as_str().unwrap().contains("jeu introuvable"), "{r}");
+        // réglages non écrits : échec, sans avertissement
+        let r = handle(&demande, &shared, &tx, &Contexte::new(d.0.join("config.toml"), un_preset, reglages_refuses));
+        assert_eq!(r, json!({ "id": 4, "ok": false, "error": "config.toml verrouillé" }));
     }
 
     #[test]

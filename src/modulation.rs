@@ -36,7 +36,8 @@ pub const ROTATION_MAX: f32 = 180.0;
 pub const VITESSE_MAX: f32 = 60.0;
 
 /// Cibles qui se multiplient : effet à fond (part ajoutée par quantité 1) et bornes du facteur
-/// total. `ui/app.js` (`BORNES_MOD`) en tire l'effet affiché et les bornes de la glissière.
+/// total. `ui/app.js` (`BORNES_MOD`) en tire l'effet affiché, borné, et la quantité au-delà de laquelle
+/// la source à fond ne change plus rien (dite dans l'infobulle ; la glissière va de −100 à 100 %).
 pub fn multipliee(c: Cible) -> Option<(f32, f32, f32)> {
     Some(match c {
         Cible::Acceleration => (ACCELERATION, 0.0, 5.0),

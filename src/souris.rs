@@ -6,7 +6,7 @@
 
 use std::ffi::c_void;
 use windows::core::{w, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HANDLE};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     DIB_RGB_COLORS,
@@ -55,34 +55,68 @@ fn ouvrir(racine: HKEY, chemin: &str, ecriture: bool) -> Option<Cle> {
     (unsafe { RegOpenKeyExW(racine, &HSTRING::from(chemin), None, droits, &mut k) } == ERROR_SUCCESS).then_some(Cle(k))
 }
 
+/// Texte d'une valeur ; le tampon est agrandi si elle est longue (un jeu aux chemins longs).
 fn lire_texte(racine: HKEY, chemin: &str, nom: &str) -> Option<String> {
+    let (chemin, nom) = (HSTRING::from(chemin), HSTRING::from(nom));
     let mut buf = vec![0u16; 4096];
-    let mut n = (buf.len() * 2) as u32;
-    let ok = unsafe {
-        RegGetValueW(
-            racine,
-            &HSTRING::from(chemin),
-            &HSTRING::from(nom),
-            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
-            None,
-            Some(buf.as_mut_ptr() as *mut c_void),
-            Some(&mut n),
-        )
-    } == ERROR_SUCCESS;
-    ok.then(|| String::from_utf16_lossy(&buf[..(n as usize / 2)]).trim_end_matches('\0').to_owned())
+    // trois essais au plus : la taille donnée par un refus, au cas où la valeur change entre-temps
+    for _ in 0..3 {
+        let mut n = (buf.len() * 2) as u32;
+        let r = unsafe {
+            RegGetValueW(
+                racine,
+                &chemin,
+                &nom,
+                RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                None,
+                Some(buf.as_mut_ptr() as *mut c_void),
+                Some(&mut n),
+            )
+        };
+        match r {
+            ERROR_SUCCESS => {
+                let n = (n as usize / 2).min(buf.len());
+                return Some(String::from_utf16_lossy(&buf[..n]).trim_end_matches('\0').to_owned());
+            }
+            ERROR_MORE_DATA => buf.resize((n as usize / 2 + 1).max(buf.len() * 2), 0),
+            _ => return None,
+        }
+    }
+    None
 }
 
+/// Longueur maximale d'un nom de valeur du registre (caractères, sans le zéro final).
+const NOM_DE_VALEUR_MAX: usize = 16_383;
+
+/// Noms des valeurs de `cle`. Un nom plus long que le tampon le fait agrandir ; une valeur
+/// illisible est passée sans arrêter l'énumération.
 fn noms_de_valeurs(cle: &Cle) -> Vec<String> {
     let mut noms = Vec::new();
-    for i in 0.. {
-        let mut buf = [0u16; 512];
+    let mut buf = vec![0u16; 512];
+    let mut i = 0;
+    loop {
         let mut n = buf.len() as u32;
-        if unsafe { RegEnumValueW(cle.0, i, Some(PWSTR(buf.as_mut_ptr())), &mut n, None, None, None, None) } != ERROR_SUCCESS {
-            break;
+        match unsafe { RegEnumValueW(cle.0, i, Some(PWSTR(buf.as_mut_ptr())), &mut n, None, None, None, None) } {
+            ERROR_SUCCESS => noms.push(String::from_utf16_lossy(&buf[..(n as usize).min(buf.len())])),
+            // nom trop long pour le tampon : agrandi à la taille maximale, même valeur relue
+            ERROR_MORE_DATA if buf.len() <= NOM_DE_VALEUR_MAX => {
+                buf.resize(NOM_DE_VALEUR_MAX + 1, 0);
+                continue;
+            }
+            // toujours trop long (ne devrait pas arriver) : valeur passée
+            ERROR_MORE_DATA => {}
+            ERROR_NO_MORE_ITEMS => break,
+            // clé supprimée ou inaccessible : la suite ne se lira pas mieux
+            _ => break,
         }
-        noms.push(String::from_utf16_lossy(&buf[..n as usize]));
+        i += 1;
     }
     noms
+}
+
+/// Texte d'un tampon terminé par un zéro (tout le tampon s'il n'en a pas).
+fn jusqu_au_zero(buf: &[u16]) -> String {
+    String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(buf.len())])
 }
 
 fn nom_affiche(cle: &str) -> String {
@@ -91,7 +125,7 @@ fn nom_affiche(cle: &str) -> String {
     }
     let mut buf = [0u16; 256];
     match unsafe { SHLoadIndirectString(&HSTRING::from(cle), &mut buf, None) } {
-        Ok(()) => String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)]),
+        Ok(()) => jusqu_au_zero(&buf),
         Err(_) => cle.to_owned(),
     }
 }
@@ -403,7 +437,8 @@ fn animation(octets: &[u8]) -> Option<Vec<(u32, u32)>> {
             .map(|k| {
                 let image = seq.as_ref().and_then(|s| s.get(k as usize).copied()).unwrap_or(k % images).min(images - 1);
                 let jiffies = rate.as_ref().and_then(|r| r.get(k as usize).copied()).unwrap_or(cadence).max(1);
-                (image, jiffies * 1000 / 60)
+                // un fichier abîmé peut annoncer une durée énorme : pas de débordement
+                (image, jiffies.saturating_mul(1000) / 60)
             })
             .collect(),
     )
@@ -470,6 +505,11 @@ unsafe fn dessiner(curseur: HICON, pas: &[(u32, u32)], cote: i32, fond: u8) -> O
         let _ = DeleteDC(dc);
         return None;
     };
+    if bits.is_null() {
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(dc);
+        return None;
+    }
     let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
     pixels.fill(fond);
     let ancien = SelectObject(dc, bmp.into());
@@ -510,6 +550,58 @@ mod tests {
         std::env::set_var("ESSAIM_TEST_RACINE", "C:\\Windows");
         assert_eq!(developper("%ESSAIM_TEST_RACINE%\\cursors\\a.cur"), "C:\\Windows\\cursors\\a.cur");
         assert_eq!(developper("100%"), "100%");
+    }
+
+    #[test]
+    fn texte_sans_zero_final_garde_en_entier() {
+        let t: Vec<u16> = "Aero".encode_utf16().collect();
+        assert_eq!(jusqu_au_zero(&t), "Aero");
+        let t: Vec<u16> = "Aero\0reste".encode_utf16().collect();
+        assert_eq!(jusqu_au_zero(&t), "Aero");
+        assert_eq!(jusqu_au_zero(&[]), "");
+    }
+
+    #[test]
+    fn duree_enorme_d_un_curseur_anime_sans_debordement() {
+        let morceau = |id: &[u8], data: &[u8]| [id, &(data.len() as u32).to_le_bytes(), data].concat();
+        let mut anih = vec![0u8; 36];
+        anih[4..8].copy_from_slice(&2u32.to_le_bytes()); // images
+        anih[8..12].copy_from_slice(&2u32.to_le_bytes()); // pas
+        anih[28..32].copy_from_slice(&6u32.to_le_bytes()); // cadence : 6 jiffies
+        let rate = [u32::MAX.to_le_bytes(), 3u32.to_le_bytes()].concat();
+        let corps = [&b"ACON"[..], &morceau(b"anih", &anih), &morceau(b"rate", &rate)].concat();
+        let fichier = [&b"RIFF"[..], &(corps.len() as u32).to_le_bytes(), &corps].concat();
+        assert_eq!(animation(&fichier), Some(vec![(0, u32::MAX / 60), (1, 50)]));
+    }
+
+    /// Un nom de valeur plus long que le premier tampon n'arrête pas l'énumération (clé
+    /// temporaire de `HKCU\Software`, supprimée à la fin).
+    #[test]
+    fn nom_de_valeur_long_lu_sans_arreter_la_liste() {
+        use windows::Win32::System::Registry::{RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, KEY_ALL_ACCESS, REG_OPTION_VOLATILE};
+        let chemin = format!("Software\\Essaim-essai-souris-{}", std::process::id());
+        let mut k = HKEY::default();
+        let r = unsafe {
+            RegCreateKeyExW(HKEY_CURRENT_USER, &HSTRING::from(chemin.as_str()), None, PCWSTR::null(), REG_OPTION_VOLATILE, KEY_ALL_ACCESS, None, &mut k, None)
+        };
+        assert_eq!(r, ERROR_SUCCESS);
+        let cle = Cle(k);
+        let long = "L".repeat(2000);
+        let noms = ["Avant".to_owned(), long.clone(), "Après".to_owned()];
+        for nom in &noms {
+            let r = unsafe { RegSetValueExW(cle.0, &HSTRING::from(nom.as_str()), None, REG_SZ, Some(&[0, 0])) };
+            assert_eq!(r, ERROR_SUCCESS);
+        }
+        let mut lus = noms_de_valeurs(&cle);
+        drop(cle);
+        unsafe {
+            let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(chemin.as_str()));
+            let _ = RegDeleteKeyW(HKEY_CURRENT_USER, &HSTRING::from(chemin.as_str()));
+        }
+        lus.sort();
+        let mut attendus = noms.to_vec();
+        attendus.sort();
+        assert_eq!(lus, attendus);
     }
 
     #[test]

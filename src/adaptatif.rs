@@ -9,8 +9,11 @@ pub const PALIERS: [u32; 3] = [120, 60, 30];
 const LOURD_MS: f32 = 4.0;
 /// Secondes lourdes de suite avant de descendre d'un palier.
 const SECONDES_LOURDES: u32 = 2;
-/// Calcul moyen en deçà duquel une seconde compte comme légère.
-const LEGER_MS: f32 = 1.5;
+/// Calcul moyen en deçà duquel une seconde compte comme légère. La mesure est un temps par image,
+/// qui ne baisse pas quand la cadence est plafonnée : un seuil trop bas (1,5 ms) laissait un
+/// preset ordinaire (2,5 ms) bloqué à 30 images/s après une pointe de charge. Sous les trois
+/// quarts du seuil lourd, l'image redevient légère.
+const LEGER_MS: f32 = LOURD_MS * 0.75;
 /// Secondes légères de suite avant de remonter d'un palier.
 const SECONDES_LEGERES: u32 = 10;
 
@@ -110,11 +113,21 @@ mod tests {
         assert_eq!(a.plafond(), 60);
         // une seconde moyenne remet le compte à zéro
         secondes(&mut a, 9, 1.0, 60.0);
-        assert!(!a.mesure(2.5, 60.0));
+        assert!(!a.mesure(3.5, 60.0));
         assert!(secondes(&mut a, 9, 1.0, 60.0).is_empty());
         assert_eq!(secondes(&mut a, 1, 1.0, 60.0), [120]);
         assert_eq!(secondes(&mut a, 10, 1.0, 120.0), [0]);
         assert!(secondes(&mut a, 30, 1.0, 144.0).is_empty());
+    }
+
+    #[test]
+    fn remonte_apres_une_pointe_pour_un_preset_ordinaire() {
+        // 2,5 ms par image d'habitude, une pointe de charge le fait descendre à 30 : il remonte
+        let mut a = Adaptatif::default();
+        secondes(&mut a, 6, 6.0, 144.0);
+        assert_eq!(a.plafond(), 30);
+        secondes(&mut a, 40, 2.5, 30.0);
+        assert_eq!(a.plafond(), 0, "un calcul ordinaire relâche tous les paliers");
     }
 
     #[test]
