@@ -201,8 +201,9 @@ the `%APPDATA%\Essaim` folder.
 <details>
 <summary><b>Does it slow down my PC or my games?</b></summary>
 
-With the GPU, a frame costs 0.31 ms on the benchmark; in use, about 3% of one CPU core. When a
-window goes fullscreen (game, video), everything stops; at rest (mouse still, no music), the
+With the GPU, a frame costs 0.31 ms on the benchmark; in use, about 3% of one CPU core. When the
+window under the pointer goes fullscreen (game, video), everything stops and Essaim steps off that
+screen; at rest (mouse still, no music), the
 frame rate drops. The settings window shows the power in use, measured live.
 </details>
 

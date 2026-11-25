@@ -20,8 +20,9 @@ const INTERVALLE_BATTERIE: Duration = Duration::from_secs(5);
 
 /// Windows demande-t-il de ne pas déranger ? Oui pour une appli en plein écran (`QUNS_BUSY`,
 /// confirmé par `plein_ecran` : Windows le dit aussi pour un calque transparent de la taille d'un
-/// écran, celui d'une autre surcouche), un jeu Direct3D en plein écran exclusif et le mode
-/// présentation. Pas pour `QUNS_QUIET_TIME` :
+/// écran, celui d'une autre surcouche, et quel que soit l'écran ; la boucle ne le confirme que sur
+/// l'écran du pointeur), un jeu Direct3D en plein écran exclusif et le mode présentation (ces deux
+/// derniers valent pour tous les écrans). Pas pour `QUNS_QUIET_TIME` :
 /// documenté comme la première heure après la première ouverture de session d'un nouveau compte,
 /// il mettrait en pause un Essaim fraîchement installé sans raison visible ; et le « Ne pas
 /// déranger » manuel de Windows 11 n'est pas exposé par une API documentée.
@@ -73,6 +74,14 @@ pub fn plafonner(cadence: u32, plafond: u32) -> u32 {
         (0, p) => p,
         (c, p) => c.min(p),
     }
+}
+
+/// Cadence à tenir pour `cadence` (0 = celle de l'écran, réglée par `DwmFlush`) quand l'écran du
+/// pointeur est à `frequence` Hz et le plus rapide des écrans à `frequence_max` (0 = inconnue).
+/// Écrans à fréquences mélangées et pointeur sur un plus lent : `DwmFlush` suivrait le
+/// compositeur, calé sur le plus rapide ; la cadence devient celle de l'écran du pointeur.
+pub fn cadence_ecran(cadence: u32, frequence: u32, frequence_max: u32) -> u32 {
+    if cadence == 0 && frequence > 0 && frequence_max > frequence { frequence } else { cadence }
 }
 
 /// Raison lisible (courte, pour la ligne d'état de la fenêtre des réglages) de ce qui retient
@@ -153,24 +162,27 @@ pub struct Pauses {
     /// Sur batterie, économiseur actif.
     alimentation: (bool, bool),
     prochain_batterie: Option<Instant>,
-    /// Exécutable au premier plan (minuscules) ; gardé quand c'est une fenêtre d'Essaim.
-    premier_plan: Option<String>,
+    /// Application au premier plan ; gardée quand c'est une fenêtre d'Essaim.
+    premier_plan: Option<crate::appli::AppliVue>,
     /// Raison de pause et plafond notés au journal.
     note: (Option<String>, u32),
 }
 
 impl Pauses {
-    /// À appeler à chaque tour de boucle ; n'interroge Windows qu'aux intervalles.
-    pub fn tick(&mut self, cfg: &Pause, now: Instant) -> Etat {
+    /// À appeler à chaque tour de boucle ; n'interroge Windows qu'aux intervalles. `pointeur` :
+    /// position du pointeur (`None` : illisible), pour ne confirmer un « occupé » de Windows que
+    /// par une fenêtre en plein écran sur son écran.
+    pub fn tick(&mut self, cfg: &Pause, now: Instant, pointeur: Option<(i32, i32)>) -> Etat {
         if self.prochain.is_none_or(|p| now >= p) {
             self.prochain = Some(now + INTERVALLE);
-            self.derange = cfg.ne_pas_deranger && unsafe { SHQueryUserNotificationState() }.is_ok_and(|e| derange(e, crate::win::plein_ecran_quelque_part));
+            self.derange = cfg.ne_pas_deranger
+                && unsafe { SHQueryUserNotificationState() }.is_ok_and(|e| derange(e, || crate::win::plein_ecran_sur_ecran_du(pointeur)));
             // fenêtre d'Essaim ou exécutable illisible : l'état précédent est gardé
-            if let Some(exe) = crate::appli::nom_premier_plan() {
+            if let Some(appli) = crate::appli::premier_plan() {
                 if let Ok(mut r) = RECENTE.lock() {
-                    r.clone_from(&exe);
+                    r.clone_from(&appli.nom);
                 }
-                self.premier_plan = Some(exe);
+                self.premier_plan = Some(appli);
             }
         }
         if cfg.batterie == ModeBatterie::Rien {
@@ -181,7 +193,8 @@ impl Pauses {
             self.alimentation = alimentation();
         }
         let batterie = effet_batterie(cfg.batterie, self.alimentation.0, self.alimentation.1);
-        let appli = self.premier_plan.as_deref().and_then(|exe| appli_en_pause(&cfg.applis, exe));
+        // une appli du Store compte aussi sous le nom de l'hôte (règles écrites avant)
+        let appli = self.premier_plan.as_ref().and_then(|a| a.noms().find_map(|exe| appli_en_pause(&cfg.applis, exe)));
         // session verrouillée, déconnectée ou à distance : toujours, quel que soit `[pause]`
         let pause = if let Some(s) = crate::win::session_retenue() {
             Some(s.to_owned())
@@ -280,6 +293,18 @@ mod tests {
         assert_eq!(plafonner(144, 0), 144);
         assert_eq!(plafonner(144, 60), 60);
         assert_eq!(plafonner(20, 30), 20);
+    }
+
+    #[test]
+    fn cadence_des_ecrans_melanges() {
+        // pointeur sur l'écran à 60 Hz, voisin à 144 : 60 images/s, plus `DwmFlush`
+        assert_eq!(cadence_ecran(0, 60, 144), 60);
+        // écrans pareils, ou pointeur sur le plus rapide : `DwmFlush` règle (0)
+        assert_eq!(cadence_ecran(0, 144, 144), 0);
+        assert_eq!(cadence_ecran(0, 60, 60), 0);
+        // fréquence inconnue : rien ne change ; cadence choisie : elle reste
+        assert_eq!(cadence_ecran(0, 0, 144), 0);
+        assert_eq!(cadence_ecran(30, 60, 144), 30);
     }
 
     #[test]

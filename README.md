@@ -206,7 +206,8 @@ Désinstaller (`essaim.exe` téléchargé) : décoche *Démarrer Essaim avec Win
 <summary><b>Est-ce que ça ralentit mon PC ou mes jeux ?</b></summary>
 
 Avec la carte graphique, une image coûte 0,31 ms de calcul au banc d'essai ; en usage, environ
-3 % d'un cœur du processeur. Quand une fenêtre passe en plein écran (jeu, vidéo), tout s'arrête ; au repos (souris
+3 % d'un cœur du processeur. Quand la fenêtre sous le pointeur passe en plein écran (jeu, vidéo), tout s'arrête et
+Essaim se retire de cet écran ; au repos (souris
 immobile, pas de musique), la cadence baisse. La fenêtre des réglages affiche la puissance
 utilisée, mesurée en direct.
 </details>

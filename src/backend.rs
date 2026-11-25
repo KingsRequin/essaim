@@ -202,6 +202,28 @@ impl Backend {
         }
     }
 
+    /// Détruit le calque de l'écran `mon` (pause plein écran prolongée : il ne reste pas
+    /// au-dessus du jeu). Refait à la première image qui touche de nouveau cet écran. Vrai s'il y
+    /// en avait un.
+    pub fn liberer_ecran(&mut self, mon: isize) -> bool {
+        match &mut self.kind {
+            Kind::Gpu(gpu, layers) => {
+                let n = layers.len();
+                layers.retain(|l| l.mon != mon);
+                let detruit = layers.len() < n;
+                if detruit {
+                    let _ = gpu.commit();
+                }
+                detruit
+            }
+            Kind::Cpu(layers) => {
+                let n = layers.len();
+                layers.retain(|l| l.mon != mon);
+                layers.len() < n
+            }
+        }
+    }
+
     /// Dessine une image. `monitors` = écrans (identifiant, rectangle) ; `swarm` = zone de
     /// l'essaim, dessiné sur chaque écran qu'il touche ; `items` = zones des fissures.
     /// `draw(canvas, essaim_ici)` dessine tout. Renvoie le temps de remise au compositeur.

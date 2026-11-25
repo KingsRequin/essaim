@@ -378,10 +378,11 @@ impl Rendu {
     }
 
     /// Dessine une image de `l` × `h` sur `fond` : `draw` dessine en px à 100 % autour de
-    /// (0, 0), agrandi `z` fois et centré. Sans `presenter`, l'image reste dans le tampon (essais).
+    /// (0, 0), agrandi `z` fois et centré, puis présentée avec l'intervalle de synchronisation
+    /// `presenter` (`intervalle_synchro`). Sans `presenter`, l'image reste dans le tampon (essais).
     /// `Ok(true)` : la fenêtre n'est pas visible (`DXGI_STATUS_OCCLUDED` : recouverte, écran
     /// éteint…).
-    fn image(&mut self, l: u32, h: u32, fond: D2D1_COLOR_F, z: f32, presenter: bool, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<bool> {
+    fn image(&mut self, l: u32, h: u32, fond: D2D1_COLOR_F, z: f32, presenter: Option<u32>, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<bool> {
         self.cible(l, h)?;
         unsafe {
             self.dc.BeginDraw();
@@ -391,10 +392,10 @@ impl Rendu {
             let peint = self.pinceau.peindre(&self.dc, &self.planche, draw);
             self.dc.EndDraw(None, None)?;
             peint?;
-            if presenter {
-                // une image par rafraîchissement de l'écran ; cachée, Present ne freine plus la
-                // boucle (pas de synchronisation) : c'est à elle d'attendre
-                let r = self.chaine.Present(1, DXGI_PRESENT(0));
+            if let Some(intervalle) = presenter {
+                // une image tous les `intervalle` rafraîchissements de l'écran ; cachée, Present
+                // ne freine plus la boucle (pas de synchronisation) : c'est à elle d'attendre
+                let r = self.chaine.Present(intervalle, DXGI_PRESENT(0));
                 r.ok()?;
                 return Ok(r == DXGI_STATUS_OCCLUDED);
             }
@@ -511,6 +512,28 @@ impl Panne {
     }
 }
 
+/// Cadence de la fenêtre quand `[rendu] cadence` n'est pas fixée : celle d'une capture de stream.
+const CADENCE_STREAM: f32 = 60.0;
+
+/// Intervalle de synchronisation de `Present` sur un écran à `frequence` Hz (0 = inconnue) : une
+/// image tous les `n` rafraîchissements, pour rester près de 60 images/s sur un écran rapide
+/// (144 Hz : 72 i/s, 240 Hz : 60 i/s) au lieu d'en calculer autant que l'écran en affiche. Avec
+/// `[rendu] cadence` fixée (`cadence` > 0), l'intervalle la respecte. DXGI accepte 1 à 4.
+fn intervalle_synchro(frequence: u32, cadence: u32) -> u32 {
+    let n = match (frequence, cadence) {
+        (0, _) => 1,
+        (f, 0) => (f as f32 / CADENCE_STREAM).round() as u32,
+        (f, c) => f.div_ceil(c),
+    };
+    n.clamp(1, 4)
+}
+
+/// Écart minimal entre deux images pour `[rendu] cadence` (0 : aucun), quand l'intervalle de
+/// synchronisation, plafonné à 4, ne suffit pas à la tenir.
+fn periode_min(cadence: u32) -> Duration {
+    if cadence == 0 { Duration::ZERO } else { Duration::from_secs_f64(1.0 / f64::from(cadence)) }
+}
+
 fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let mut rendu = Some(Rendu::new(hwnd)?);
     log::info!("stream : fenêtre ouverte");
@@ -524,6 +547,9 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let mut doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
     let mut panne = Panne::default();
     let mut cachee = false;
+    // une image tous les `intervalle` rafraîchissements de l'écran de la fenêtre (relu chaque
+    // seconde : la fenêtre peut changer d'écran)
+    let mut intervalle = intervalle_synchro(crate::win::frequence_fenetre(hwnd), conf.cfg.rendu.cadence);
     loop {
         unsafe {
             let mut msg = MSG::default();
@@ -545,8 +571,10 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
                 calibree = portee(&conf.cfg);
             }
             doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
+            intervalle = intervalle_synchro(crate::win::frequence_fenetre(hwnd), conf.cfg.rendu.cadence);
         }
         let cfg = &conf.cfg;
+        let periode = periode_min(cfg.rendu.cadence);
         let mut zone = RECT::default();
         let _ = unsafe { GetClientRect(hwnd, &mut zone) };
         let (l, h) = (zone.right - zone.left, zone.bottom - zone.top);
@@ -598,7 +626,7 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
             std::thread::sleep(Duration::from_millis(50));
             continue;
         };
-        match r.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, true, |cv| dessiner(cv, &swarm, &effets, t, cfg)) {
+        match r.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, Some(intervalle), |cv| dessiner(cv, &swarm, &effets, t, cfg)) {
             Err(e) => {
                 // pilote réinitialisé, sortie de veille… : l'ancien affichage est libéré (la
                 // fenêtre n'accepte qu'une chaîne d'échange), puis refait à l'essai suivant
@@ -614,9 +642,12 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
                         cachee = true;
                     } else {
                         // seulement recouverte : toujours présentée (OBS la capture), au rythme
-                        // de l'écran que `Present` ne donne plus
-                        std::thread::sleep(RECOUVERTE.saturating_sub(now.elapsed()));
+                        // que `Present` ne donne plus
+                        std::thread::sleep(RECOUVERTE.max(periode).saturating_sub(now.elapsed()));
                     }
+                } else {
+                    // cadence fixée plus basse que ce que l'intervalle (4 au plus) retient
+                    std::thread::sleep(periode.saturating_sub(now.elapsed()));
                 }
             }
         }
@@ -747,7 +778,7 @@ mod tests {
         // `image` centre (0, 0) : (x, y) de la fenêtre = (x − 32, y − 32) du dessin
         let c = (l as f32 / 2.0, h as f32 / 2.0);
         let mut relu = |draw: &dyn Fn(&mut dyn Canvas)| {
-            r.image(l, h, couleur_fond(Fond::Transparent), 1.0, false, |cv| draw(cv)).unwrap();
+            r.image(l, h, couleur_fond(Fond::Transparent), 1.0, None, |cv| draw(cv)).unwrap();
             relire(&r)
         };
         for y in [10.0f32, 10.5] {
@@ -771,6 +802,20 @@ mod tests {
         eprintln!("petite pastille selon sa position : {lumieres:?}");
         let (min, max) = (*lumieres.iter().min().unwrap(), *lumieres.iter().max().unwrap());
         assert!(min > 0 && min as f32 >= 0.8 * max as f32, "pastille qui clignote : {lumieres:?}");
+    }
+
+    #[test]
+    fn synchro_a_la_frequence_de_l_ecran() {
+        assert_eq!([60, 75, 120, 144, 165, 240, 360].map(|f| intervalle_synchro(f, 0)), [1, 1, 2, 2, 3, 4, 4]);
+        // fréquence inconnue : chaque rafraîchissement
+        assert_eq!(intervalle_synchro(0, 0), 1);
+        // cadence fixée : jamais au-dessus
+        assert_eq!(intervalle_synchro(144, 30), 4);
+        assert_eq!(intervalle_synchro(144, 144), 1);
+        assert_eq!(intervalle_synchro(60, 144), 1);
+        assert_eq!(intervalle_synchro(240, 100), 3);
+        assert_eq!(periode_min(0), Duration::ZERO);
+        assert_eq!(periode_min(50), Duration::from_millis(20));
     }
 
     #[test]
@@ -850,7 +895,7 @@ mod tests {
         let (l, h) = (256u32, 256u32);
         let mut r = Rendu::new(hwnd).unwrap();
         let z = zoom(l as i32, h as i32, portee(&cfg));
-        r.image(l, h, couleur_fond(Fond::Transparent), z, false, |cv| s.draw(cv, 2.0, &cfg, 1.0, (0.0, 0.0))).unwrap();
+        r.image(l, h, couleur_fond(Fond::Transparent), z, None, |cv| s.draw(cv, 2.0, &cfg, 1.0, (0.0, 0.0))).unwrap();
         let px = relire(&r);
         let _ = unsafe { DestroyWindow(hwnd) };
         let at = |x: u32, y: u32| px[(y * l + x) as usize];
@@ -888,7 +933,7 @@ mod tests {
         let hwnd = fenetre_essai();
         let mut r = Rendu::new(hwnd).unwrap();
         let n = TAILLE as u32;
-        r.image(n, n, couleur_fond(Fond::Transparent), zoom(TAILLE, TAILLE, portee(&cfg)), false, |cv| dessiner(cv, &s, &e, t, &cfg)).unwrap();
+        r.image(n, n, couleur_fond(Fond::Transparent), zoom(TAILLE, TAILLE, portee(&cfg)), None, |cv| dessiner(cv, &s, &e, t, &cfg)).unwrap();
         let px = relire(&r);
         let _ = unsafe { DestroyWindow(hwnd) };
         // tiny-skia garde du RGBA prémultiplié et l'écrit en PNG à opacité ordinaire

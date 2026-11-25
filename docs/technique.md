@@ -30,7 +30,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
     modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié ;
     directement dans le calque, effacé, quand la zone le couvre entier : projecteur). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
   Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
-  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Avec une cadence plafonnée, la
+  compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Écrans à fréquences mélangées
+  (`win::frequence_max`, relue au changement d'écran) et pointeur sur un plus lent : le
+  compositeur suit le plus rapide, la cadence est alors plafonnée à la fréquence de l'écran du
+  pointeur (`pauses::cadence_ecran`, attente sur minuterie, sans synchronisation sur son
+  balayage). Avec une cadence plafonnée, la
   boucle attend l'image suivante sur une minuterie haute résolution
   (`CreateWaitableTimerExW` + `MsgWaitForMultipleObjects`, réveil au moins toutes les 30 ms pour
   lire les clics) au lieu de se réveiller à chaque rafraîchissement. Au-delà de 0,05 s entre
@@ -59,11 +63,24 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   quantifiée, envoyée seulement si elle change (60 fois par seconde au plus) ; une fenêtre qui
   refuse (appli administrateur) est notée une fois au journal. Essai réel :
   `cargo test --release bordure_reelle -- --ignored --nocapture` avec un Bloc-notes ouvert.
-- **Plein écran** (jeu, vidéo) sur l'écran de la souris : tout se met en veille et la flèche
-  d'origine revient. Compte comme plein écran une fenêtre qui couvre l'écran (cadre lu par
-  `DWMWA_EXTENDED_FRAME_BOUNDS`) sans être agrandie ni avoir de barre de titre ou de bord de
-  redimensionnement : une fenêtre agrandie, barre des tâches masquée, ne compte pas. En pause et
-  en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
+- **Plein écran** (jeu, vidéo) sous le pointeur : tout se met en veille et la flèche d'origine
+  revient. C'est la fenêtre survolée qui compte, pas celle qui a le clavier
+  (`win::plein_ecran_sous`, toutes les 250 ms) : `EnumWindows` dans l'ordre Z, première fenêtre
+  visible, non réduite, non masquée par DWM (`DWMWA_CLOAKED`), qui n'est ni un calque traversé par
+  la souris (d'Essaim ou d'une autre surcouche), ni le bureau (`Progman`, `WorkerW`), ni une
+  barre des tâches, ni une infobulle, et dont le cadre contient le point. Un jeu en plein écran
+  sur un écran et le pointeur sur l'autre : l'essaim continue ; une vidéo en plein écran survolée
+  pendant qu'on tape ailleurs : veille. Compte comme plein écran une fenêtre qui couvre son écran
+  (cadre lu par `DWMWA_EXTENDED_FRAME_BOUNDS`) sans être agrandie ni avoir de barre de titre ou
+  de bord de redimensionnement : une fenêtre agrandie, barre des tâches masquée, ne compte pas.
+  En pause et en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
+  Plein écran qui dure plus de 10 s : le calque de l'écran couvert est détruit
+  (`Backend::liberer_ecran`), les autres écrans gardent les leurs. Un calque vide resterait
+  sinon au-dessus d'un jeu en plein écran sans bordure (une fenêtre superposée posée sur lui
+  peut le faire sortir de la présentation directe). C'est la seule exception à la règle des
+  fenêtres qui ne disparaissent ni n'apparaissent sous la souris : pendant le jeu, le pointeur
+  lui appartient ; le calque est recréé une fois, à la première image qui retouche cet écran
+  après la sortie du plein écran.
 - **Clics** : lus par `GetAsyncKeyState` à chaque image (pas de hook global), bouton principal et
   bouton secondaire (clic droit) ; boutons inversés (`SM_SWAPBUTTON`) : le principal est le droit.
 - **Rebonds** : cadre affiché de la fenêtre au premier plan (`DWMWA_EXTENDED_FRAME_BOUNDS`, relu
@@ -122,12 +139,18 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Pauses automatiques** (`pauses.rs`) : `SHQueryUserNotificationState` chaque seconde (pause
   sur `QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`, `QUNS_PRESENTATION_MODE` ; pas
   `QUNS_QUIET_TIME`, première heure d'un nouveau compte ; `QUNS_BUSY` seulement si une vraie
-  fenêtre couvre un écran, `win::plein_ecran_quelque_part` : Windows le renvoie aussi pour le
-  calque transparent d'une autre surcouche), `GetSystemPowerStatus` toutes les 5 s
+  fenêtre couvre l'écran du pointeur, `win::plein_ecran_sur_ecran_du` : Windows le renvoie aussi
+  pour le calque transparent d'une autre surcouche, et pour un plein écran sur n'importe quel
+  écran ; `QUNS_RUNNING_D3D_FULL_SCREEN` et `QUNS_PRESENTATION_MODE` valent pour tous les
+  écrans), `GetSystemPowerStatus` toutes les 5 s
   ou sur `WM_POWERBROADCAST` (la sortie de veille, `PBT_APMRESUMEAUTOMATIC`, relit aussi les
   écrans), exécutable au premier plan chaque seconde (une appli du Store, hébergée par
   `ApplicationFrameHost.exe`, est lue dans sa fenêtre enfant `Windows.UI.Core.CoreWindow` ;
-  `appli::executable`, aussi pour le preset automatique et la teinte de l'appli) ; session verrouillée, déconnectée ou à
+  `appli::premier_plan`, aussi pour le preset automatique ; une règle écrite sur
+  `applicationframehost.exe`, du temps où l'hôte était donné, vaut encore pour toute appli du
+  Store, `AppliVue::noms`). La teinte et l'icône de l'appli suivent la même lecture ; tant que
+  l'exécutable lu est l'hôte (au lancement, le contenu n'est pas encore attaché au cadre), il est
+  relu toutes les 500 ms (`appli::Suivie`) ; session verrouillée, déconnectée ou à
   distance (`WTSRegisterSessionNotification` → `WM_WTSSESSION_CHANGE`, `SM_REMOTESESSION`),
   prioritaire sur les autres. Traitées comme le plein
   écran (bordure rendue, son coupé), notées au journal ; raison publiée (`charge::publier_raison`).
@@ -140,22 +163,28 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   image ; > 4 ms deux secondes de suite → palier suivant (120, 60, 30 ; ceux qui ne réduiraient
   rien sont sautés), < 3 ms dix secondes, ou vingt secondes sans seconde > 4 ms (calcul entre
   3 et 4 ms : remontée à l'essai, qui redescend en 2 s s'il redevient lourd) → palier précédent.
+  Chaque essai raté double l'attente avant le suivant (20, 40, 80… 600 s au plus) ; elle revient
+  à 20 s après un essai tenu 20 s ou une remontée par un calcul vraiment léger (< 3 ms).
 - **Raccourcis globaux** (`win::raccourcis`) : `RegisterHotKey` (Ctrl+Alt+touche), sans hook.
   AltGr vaut Ctrl+Alt pour Windows : avant chaque enregistrement, Ctrl+Alt+touche est traduit
   sur chaque disposition installée (`GetKeyboardLayoutList`, `ToUnicodeEx` avec VK_CONTROL et
   VK_MENU enfoncés, drapeau 4 : l'état des touches mortes n'est pas touché) ; s'il écrit un
   caractère (AltGr+F = « [ » en tchèque), le raccourci n'est pas enregistré, sinon il volerait ce
   caractère dans toutes les applications (`win::caractere_vole`). La liste des dispositions est
-  relue chaque seconde (`WM_INPUTLANGCHANGE` ne vient qu'à la fenêtre active) et les raccourcis
-  réévalués si elle change. Message `etat` de la page : `raccourcis_refuses` (libellés) et
+  relue chaque seconde (`WM_INPUTLANGCHANGE` ne vient qu'à la fenêtre active), triée (Windows
+  la rend dans un autre ordre quand la disposition active change), et les raccourcis réévalués
+  si elle change. Message `etat` de la page : `raccourcis_refuses` (libellés) et
   `raccourcis_raisons` (`raccourci`, `raison` : pris par une autre application, ou produit un
   caractère sur ce clavier).
 - **Masquer des captures** : `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` sur chaque
   calque (`win::masquer_captures`). Les essais par capture `BitBlt` ne voient alors plus l'essaim.
 - **Fenêtre pour le stream** (`stream.rs`) : fenêtre ordinaire (classe `EssaimStream`), son
   propre fil, son propre `Swarm` et ses `Effets`. Affichage : périphérique Direct3D 11 (carte
-  graphique, sinon WARP), chaîne d'échange DXGI à retournement (`FLIP_DISCARD`, présentée à chaque
-  rafraîchissement), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
+  graphique, sinon WARP), chaîne d'échange DXGI à retournement (`FLIP_DISCARD`), présentée tous
+  les `n` rafraîchissements de l'écran de la fenêtre (`stream::intervalle_synchro` :
+  `n = max(1, round(fréquence / 60))`, 4 au plus ; 144 Hz → 72 i/s, 240 Hz → 60 i/s ; avec
+  `[rendu] cadence` fixée, jamais au-dessus, une attente complète ce que 4 ne suffit pas à
+  tenir ; fréquence relue chaque seconde, la fenêtre peut changer d'écran), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
   sprites). Le tampon garde la transparence, prémultipliée (fond `"transparent"`, effacé à 0) : la
   *Capture de jeu* d'OBS le reprend sur la carte graphique (*Autoriser la transparence*, *Valeurs
   alpha prémultipliées*) ; DWM l'affiche sans transparence, sur noir. Essai réel relu sur la carte
@@ -181,7 +210,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   le processeur). Secousse : trois changements de sens horizontaux francs (allers ≥ 60 px,
   < 0,35 s, plutôt horizontaux) en moins de 0,6 s, lus sur les positions de chaque image ; un
   bouton de la souris enfoncé (glissement : sélection, fenêtre traînée) efface le geste en cours
-  (`Effets::bouton`). Un Ctrl+Alt+F reçu en pause est oublié (`Effets::oublier_coups`). Ces
+  (`Effets::bouton`). Un Ctrl+Alt+F reçu en pause, en plein écran ou en pause automatique est
+  oublié (`Effets::oublier_demande`) ; reçu pendant que Windows masque le pointeur (frappe), il
+  attend son retour. Ces
   seuils sont ceux de `[projecteur] sensibilite = 5` (`effets::secousse_exigence`) : la course
   minimale double tous les 5 crans en moins (104 px à 1, 30 px à 10), les deux durées
   s'allongent comme l'inverse de sa racine (0,49 s et 0,85 s à 10). `secousse` et `sensibilite`
@@ -224,7 +255,7 @@ ouverte par la boucle principale), `open_config` ; événement `state` (`{"event
 "data": …}`, sans `id`) à chaque changement et au moins toutes les 2 s. Ses champs, les mêmes
 que la réponse à `get_state` (`main.rs`, publiés par `ipc::Shared::publish`) :
 - `paused` : pause demandée par l'utilisateur (icône, raccourci, `set_paused`) ;
-- `fullscreen` : en veille pour un plein écran sur l'écran de la souris ;
+- `fullscreen` : en veille pour une fenêtre en plein écran sous la souris ;
 - `active` : l'essaim est affiché (ni en pause, ni en plein écran, ni en pause automatique) ;
 - `gpu` : vrai avec le moteur carte graphique, faux avec le moteur processeur (secours) ;
 - `prisme` : connecté à Prisme ;

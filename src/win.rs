@@ -390,49 +390,135 @@ thread_local! {
     static FREQUENCE: Cell<Option<(isize, u32)>> = const { Cell::new(None) };
 }
 
-/// Fréquence de rafraîchissement de l'écran sous le point (Hz) ; 0 si Windows ne la donne pas.
-/// Relue seulement quand le point change d'écran ou que les écrans changent.
-pub fn frequence_ecran(x: i32, y: i32) -> u32 {
+/// Fréquence de rafraîchissement de l'écran `mon` (Hz) ; 0 si Windows ne la donne pas.
+fn frequence_moniteur(mon: HMONITOR) -> u32 {
     use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS, MONITORINFOEXW};
-    let mon = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
-    if let Some((m, f)) = FREQUENCE.get() {
-        if m == mon.0 as isize {
-            return f;
-        }
-    }
     let mut mi = MONITORINFOEXW::default();
     mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
     let mut dm = DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
-    let f = unsafe {
+    unsafe {
         if GetMonitorInfoW(mon, &mut mi.monitorInfo).as_bool() && EnumDisplaySettingsW(PCWSTR(mi.szDevice.as_ptr()), ENUM_CURRENT_SETTINGS, &mut dm).as_bool() {
             // 0 et 1 : « fréquence par défaut du matériel », inconnue
             if dm.dmDisplayFrequency > 1 { dm.dmDisplayFrequency } else { 0 }
         } else {
             0
         }
-    };
+    }
+}
+
+/// Fréquence de rafraîchissement de l'écran sous le point (Hz) ; 0 si Windows ne la donne pas.
+/// Relue seulement quand le point change d'écran ou que les écrans changent.
+pub fn frequence_ecran(x: i32, y: i32) -> u32 {
+    let mon = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+    if let Some((m, f)) = FREQUENCE.get() {
+        if m == mon.0 as isize {
+            return f;
+        }
+    }
+    let f = frequence_moniteur(mon);
     FREQUENCE.set(Some((mon.0 as isize, f)));
     f
 }
 
-/// Une fenêtre en plein écran occupe l'écran où se trouve le point (jeu, vidéo…).
-pub fn fullscreen_under(x: i32, y: i32) -> bool {
+/// Fréquence de l'écran qui porte la fenêtre `hwnd` (Hz, 0 = inconnue). Sans cache : sert à un
+/// autre fil que la boucle principale (fenêtre pour le stream), qui la relit de lui-même.
+pub fn frequence_fenetre(hwnd: HWND) -> u32 {
+    frequence_moniteur(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) })
+}
+
+/// Plus haute fréquence parmi les écrans `monitors` (identifiants de `monitors()`), 0 = inconnue.
+pub fn frequence_max(monitors: &[(isize, crate::layer::IRect)]) -> u32 {
+    monitors.iter().map(|m| frequence_moniteur(HMONITOR(m.0 as *mut c_void))).max().unwrap_or(0)
+}
+
+/// Ce qu'il faut savoir d'une fenêtre pour chercher celle qui est sous le pointeur.
+#[derive(Clone, Debug)]
+pub struct VueFenetre {
+    /// Visible et non réduite.
+    pub visible: bool,
+    /// Masquée par DWM (`DWMWA_CLOAKED` : bureau virtuel caché, appli du Store suspendue…).
+    pub masquee: bool,
+    pub style_etendu: u32,
+    pub classe: String,
+    /// Cadre affiché, sans la marge invisible de redimensionnement.
+    pub cadre: RECT,
+}
+
+/// Classes jamais prises pour la fenêtre sous le pointeur : bureau (et fond animé de Wallpaper
+/// Engine), barres des tâches, calques d'Essaim, infobulles (elles passent sous le pointeur sans
+/// être ce qu'on regarde).
+const CLASSES_PAS_SOUS_POINTEUR: [&str; 6] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "EssaimOverlay", "tooltips_class32"];
+
+/// La fenêtre `v` est-elle celle que le pointeur survole en (`x`, `y`), si rien n'est au-dessus ?
+/// Un calque traversé par la souris (d'Essaim ou d'une autre surcouche) n'en est pas une.
+pub fn retenue_sous_point(v: &VueFenetre, x: i32, y: i32) -> bool {
+    let r = v.cadre;
+    v.visible
+        && !v.masquee
+        && !calque(v.style_etendu)
+        && !CLASSES_PAS_SOUS_POINTEUR.contains(&v.classe.as_str())
+        && (r.left..r.right).contains(&x)
+        && (r.top..r.bottom).contains(&y)
+}
+
+/// Première fenêtre retenue (`retenue_sous_point`) parmi `fenetres`, données dans l'ordre Z (du
+/// dessus vers le dessous) : celle sous le pointeur.
+pub fn premiere_sous_point<T>(fenetres: impl IntoIterator<Item = (T, VueFenetre)>, x: i32, y: i32) -> Option<T> {
+    fenetres.into_iter().find(|(_, v)| retenue_sous_point(v, x, y)).map(|(h, _)| h)
+}
+
+/// Vue de `hwnd` pour `retenue_sous_point`, ou `None` si elle ne peut pas contenir le point (lue
+/// d'abord : visibilité et rectangle, deux appels peu coûteux ; le reste seulement ensuite).
+fn vue_fenetre(hwnd: HWND, x: i32, y: i32) -> Option<VueFenetre> {
     unsafe {
-        let fg = GetForegroundWindow();
-        if fg.is_invalid() {
-            return false;
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return None;
         }
-        let mut class = [0u16; 64];
-        let n = GetClassNameW(fg, &mut class) as usize;
-        let class = String::from_utf16_lossy(&class[..n]);
-        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "EssaimOverlay") {
-            return false; // bureau (Wallpaper Engine), barre des tâches
+        let mut r = RECT::default();
+        GetWindowRect(hwnd, &mut r).ok()?;
+        if !(r.left..r.right).contains(&x) || !(r.top..r.bottom).contains(&y) {
+            return None;
         }
-        if MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) {
-            return false;
+        let mut cadre = RECT::default();
+        if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut cadre as *mut RECT as *mut c_void, std::mem::size_of::<RECT>() as u32).is_err() {
+            cadre = r;
         }
-        covers_monitor(fg)
+        let mut masquee = 0u32;
+        let lu = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut masquee as *mut u32 as *mut c_void, 4);
+        let mut classe = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut classe) as usize;
+        Some(VueFenetre {
+            visible: true,
+            masquee: lu.is_ok() && masquee != 0,
+            style_etendu: GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
+            classe: String::from_utf16_lossy(&classe[..n]),
+            cadre,
+        })
     }
+}
+
+/// Fenêtres de premier niveau, du dessus vers le dessous (ordre Z).
+fn fenetres_ordre_z() -> Vec<HWND> {
+    unsafe extern "system" fn chaque(hwnd: HWND, liste: LPARAM) -> windows::core::BOOL {
+        unsafe { &mut *(liste.0 as *mut Vec<HWND>) }.push(hwnd);
+        true.into()
+    }
+    let mut liste: Vec<HWND> = Vec::with_capacity(256);
+    let _ = unsafe { EnumWindows(Some(chaque), LPARAM(&mut liste as *mut Vec<HWND> as isize)) };
+    liste
+}
+
+/// Écran (identifiant de `monitors()`) que la fenêtre sous le point occupe en plein écran (jeu,
+/// vidéo F11…), ou `None`. C'est la fenêtre survolée qui compte, pas celle qui a le clavier : un
+/// jeu en plein écran sur un écran et le pointeur sur l'autre, rien n'est retenu ; une vidéo en
+/// plein écran survolée pendant qu'on tape ailleurs, si. Une énumération des fenêtres par appel
+/// (la boucle l'appelle toutes les 250 ms).
+pub fn plein_ecran_sous(x: i32, y: i32) -> Option<isize> {
+    let fenetres = fenetres_ordre_z().into_iter().filter_map(|h| vue_fenetre(h, x, y).map(|v| (h, v)));
+    let h = premiere_sous_point(fenetres, x, y)?;
+    let mon = unsafe { MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) };
+    let ici = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+    (mon == ici && covers_monitor(h)).then_some(mon.0 as isize)
 }
 
 /// Cadre affiché (gauche, haut, droite, bas, en pixels de l'écran) de la fenêtre au premier
@@ -507,18 +593,12 @@ pub fn calque(style_etendu: u32) -> bool {
 }
 
 /// Une vraie fenêtre (visible, ni masquée par DWM, ni calque, ni bureau, ni d'Essaim) est-elle en
-/// plein écran sur l'un des écrans ? Confirme le « occupé » (`QUNS_BUSY`) de Windows, qui prend
-/// aussi les calques transparents de la taille d'un écran (une autre surcouche) pour une appli
-/// en plein écran.
-pub fn plein_ecran_quelque_part() -> bool {
-    unsafe extern "system" fn chaque(hwnd: HWND, trouve: LPARAM) -> windows::core::BOOL {
-        let trouve = unsafe { &mut *(trouve.0 as *mut bool) };
-        if unsafe { fenetre_plein_ecran(hwnd) } {
-            *trouve = true;
-            return false.into();
-        }
-        true.into()
-    }
+/// plein écran sur l'écran du point `pointeur` (sur l'un des écrans si `None` : position
+/// illisible) ? Confirme le « occupé » (`QUNS_BUSY`) de Windows, qui prend aussi les calques
+/// transparents de la taille d'un écran (une autre surcouche) pour une appli en plein écran, et
+/// le dit pour tous les écrans : une vidéo en plein écran sur l'écran voisin ne met pas l'essaim
+/// en pause.
+pub fn plein_ecran_sur_ecran_du(pointeur: Option<(i32, i32)>) -> bool {
     unsafe fn fenetre_plein_ecran(hwnd: HWND) -> bool {
         unsafe {
             if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() || calque(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32) {
@@ -542,10 +622,9 @@ pub fn plein_ecran_quelque_part() -> bool {
             covers_monitor(hwnd)
         }
     }
-    let mut trouve = false;
-    // `EnumWindows` renvoie une erreur quand le rappel l'arrête : seul `trouve` compte
-    let _ = unsafe { EnumWindows(Some(chaque), LPARAM(&mut trouve as *mut bool as isize)) };
-    trouve
+    let ecran = pointeur.map(|(x, y)| unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) });
+    let sur_l_ecran = |h: HWND| ecran.is_none_or(|e| unsafe { MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) } == e);
+    fenetres_ordre_z().into_iter().any(|h| unsafe { fenetre_plein_ecran(h) } && sur_l_ecran(h))
 }
 
 /// Décision du plein écran : ni agrandie, ni barre de titre, ni bord de redimensionnement (les
@@ -735,7 +814,7 @@ pub struct Refus {
 /// Raison d'un raccourci que Windows a refusé.
 pub const PRIS_AILLEURS: &str = "pris par une autre application";
 /// Raison d'un raccourci écarté parce que Ctrl+Alt+touche (AltGr+touche) écrit un caractère.
-pub const ECRIT_UN_CARACTERE: &str = "produit un caractère sur ce clavier";
+pub const ECRIT_UN_CARACTERE: &str = "AltGr y écrit un caractère sur un des claviers installés";
 
 /// Raccourcis non enregistrés au dernier passage ; dispositions de clavier installées alors.
 static REFUSES: std::sync::Mutex<Vec<Refus>> = std::sync::Mutex::new(Vec::new());
@@ -764,7 +843,12 @@ fn dispositions() -> Vec<isize> {
         let mut liste = vec![HKL::default(); n as usize];
         let n = GetKeyboardLayoutList(Some(&mut liste)).max(0) as usize;
         liste.truncate(n);
-        liste.into_iter().map(|h| h.0 as isize).collect()
+        // triée : Windows peut rendre la même liste dans un autre ordre (disposition active en
+        // tête), ce qui n'est pas un changement
+        let mut liste: Vec<isize> = liste.into_iter().map(|h| h.0 as isize).collect();
+        liste.sort_unstable();
+        liste.dedup();
+        liste
     }
 }
 
@@ -1333,6 +1417,42 @@ mod tests {
         assert!(calque(0x0828_00a8) && calque((WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST).0));
         // fenêtre superposée qui prend les clics (fondu, jeu), fenêtre ordinaire
         assert!(!calque(WS_EX_LAYERED.0) && !calque(WS_EX_TRANSPARENT.0) && !calque(0x0020_0000));
+    }
+
+    #[test]
+    fn fenetre_sous_le_pointeur() {
+        let vue = |classe: &str, cadre: (i32, i32, i32, i32)| VueFenetre {
+            visible: true,
+            masquee: false,
+            style_etendu: 0,
+            classe: classe.to_owned(),
+            cadre: RECT { left: cadre.0, top: cadre.1, right: cadre.2, bottom: cadre.3 },
+        };
+        let ecran_gauche = (0, 0, 1920, 1080);
+        let jeu = vue("UnityWndClass", ecran_gauche);
+        let editeur = vue("Notepad", (1920, 0, 3000, 800));
+        // calques (Essaim, autre surcouche), infobulle, barre des tâches, fenêtre masquée par DWM
+        // ou cachée : au-dessus dans l'ordre Z, ils ne comptent pas
+        let calque_essaim = VueFenetre { style_etendu: (WS_EX_LAYERED | WS_EX_TRANSPARENT).0, ..vue("EssaimOverlay", ecran_gauche) };
+        let surcouche = VueFenetre { style_etendu: 0x0828_00a8, ..vue("Autre", ecran_gauche) };
+        let infobulle = vue("tooltips_class32", (500, 500, 700, 530));
+        let barre = vue("Shell_TrayWnd", (0, 1032, 1920, 1080));
+        let masquee = VueFenetre { masquee: true, ..vue("ApplicationFrameWindow", ecran_gauche) };
+        let cachee = VueFenetre { visible: false, ..vue("Notepad", ecran_gauche) };
+        let z = || {
+            [("calque", &calque_essaim), ("surcouche", &surcouche), ("infobulle", &infobulle), ("barre", &barre), ("masquee", &masquee), ("cachee", &cachee), ("editeur", &editeur), ("jeu", &jeu)]
+                .map(|(n, v)| (n, v.clone()))
+        };
+        // pointeur sur l'écran du jeu : le jeu, même sous l'infobulle et la barre
+        assert_eq!(premiere_sous_point(z(), 510, 510), Some("jeu"));
+        assert_eq!(premiere_sous_point(z(), 10, 1050), Some("jeu"));
+        // pointeur sur l'éditeur de l'autre écran : l'éditeur (le jeu, ailleurs, ne compte pas)
+        assert_eq!(premiere_sous_point(z(), 2000, 100), Some("editeur"));
+        // sous l'éditeur, rien : ni bureau ni fenêtre
+        assert_eq!(premiere_sous_point(z(), 3500, 100), None);
+        // bord droit et bas exclus
+        assert!(!retenue_sous_point(&jeu, 1920, 10) && !retenue_sous_point(&jeu, 10, 1080));
+        assert!(!retenue_sous_point(&vue("WorkerW", ecran_gauche), 10, 10) && !retenue_sous_point(&vue("Progman", ecran_gauche), 10, 10));
     }
 
     #[test]

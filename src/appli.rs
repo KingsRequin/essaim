@@ -143,9 +143,48 @@ fn nom_exe(exe: &str) -> String {
     exe.rsplit('\\').next().unwrap_or(exe).to_lowercase()
 }
 
+/// Fenêtre au premier plan relue tant que son exécutable est l'hôte du Store : au lancement d'une
+/// appli du Store, son contenu n'est pas encore attaché au cadre (l'hôte est donné), il le sera
+/// quelques instants plus tard.
+const RELIRE_HOTE: Duration = Duration::from_millis(500);
+
+/// Fenêtre au premier plan suivie et son exécutable : relu quand elle change, et toutes les
+/// `RELIRE_HOTE` tant que c'est l'hôte du Store.
+#[derive(Default)]
+struct Suivie {
+    fenetre: isize,
+    exe: Option<String>,
+    relue: Option<Instant>,
+}
+
+/// Faut-il relire l'exécutable de la fenêtre ? Oui si elle a changé, ou si l'exécutable lu était
+/// l'hôte du Store et que la dernière lecture date de `RELIRE_HOTE`.
+fn a_relire(changee: bool, hote: bool, relue: Option<Instant>, now: Instant) -> bool {
+    changee || (hote && relue.is_none_or(|t| now.duration_since(t) >= RELIRE_HOTE))
+}
+
+impl Suivie {
+    /// Nouvel exécutable (`Some(None)` : illisible, fenêtre d'Essaim) quand la fenêtre au premier
+    /// plan `fg` a changé, ou que son exécutable relu a changé ; `None` sinon.
+    fn suivre(&mut self, fg: HWND, now: Instant) -> Option<Option<String>> {
+        let changee = fg.0 as isize != self.fenetre;
+        if !a_relire(changee, self.exe.as_deref().is_some_and(hote_du_store), self.relue, now) {
+            return None;
+        }
+        self.fenetre = fg.0 as isize;
+        self.relue = Some(now);
+        let exe = executable(fg);
+        if !changee && exe == self.exe {
+            return None;
+        }
+        self.exe.clone_from(&exe);
+        Some(exe)
+    }
+}
+
 #[derive(Default)]
 pub struct TeinteAppli {
-    fenetre: isize,
+    suivie: Suivie,
     /// Exécutable de la fenêtre au premier plan.
     exe: String,
     /// Teinte de l'icône de l'application au premier plan (aucune : grise, ou pas encore connue).
@@ -173,9 +212,8 @@ impl TeinteAppli {
     /// s'applique, aucune.
     pub fn courante(&mut self, appli: bool, site: bool, now: Instant) -> Option<f32> {
         let fg = unsafe { GetForegroundWindow() };
-        if fg.0 as isize != self.fenetre {
-            self.fenetre = fg.0 as isize;
-            match executable(fg) {
+        if let Some(lu) = self.suivie.suivre(fg, now) {
+            match lu {
                 Some(exe) => {
                     self.navigateur = NAVIGATEURS.contains(&nom_exe(&exe).as_str());
                     self.icone = self.cache.get(&exe).copied().flatten();
@@ -203,7 +241,7 @@ impl TeinteAppli {
                 }
                 Resultat::Page(h, t) => {
                     self.page_en_cours = false;
-                    if h == self.fenetre {
+                    if h == self.suivie.fenetre {
                         page = Some(t);
                     }
                 }
@@ -223,7 +261,7 @@ impl TeinteAppli {
             if self.mesure.is_some_and(|m| now >= m) && !self.page_en_cours {
                 self.mesure = Some(now + Duration::from_secs(3));
                 // sans fil : pas de mesure en cours (la suivante réessaie dans 3 s)
-                self.page_en_cours = self.boite.demander(Travail::Page(self.fenetre));
+                self.page_en_cours = self.boite.demander(Travail::Page(self.suivie.fenetre));
             }
             if let Some(page) = page {
                 if let Some(t) = page.filter(|h| self.teinte.is_none_or(|t| ((h - t + 540.0) % 360.0 - 180.0).abs() > 10.0)) {
@@ -312,7 +350,7 @@ fn teinte_page(hwnd: HWND) -> Option<f32> {
 /// icône sans forme nette gardent les contours précédents.
 #[derive(Default)]
 pub struct IconeAppli {
-    fenetre: isize,
+    suivie: Suivie,
     /// Dernière application au premier plan (hors Essaim), et celle dont les contours sont suivis.
     derniere: String,
     exe: String,
@@ -329,11 +367,8 @@ impl IconeAppli {
     /// tard, les précédents restent en attendant.
     pub fn suivre(&mut self, actif: bool) -> Option<Vec<Vec<[f32; 2]>>> {
         let fg = unsafe { GetForegroundWindow() };
-        if fg.0 as isize != self.fenetre {
-            self.fenetre = fg.0 as isize;
-            if let Some(exe) = executable(fg) {
-                self.derniere = exe;
-            }
+        if let Some(Some(exe)) = self.suivie.suivre(fg, Instant::now()) {
+            self.derniere = exe;
         }
         for r in self.boite.recues() {
             if let Resultat::Contours(exe, c) = r {
@@ -356,9 +391,34 @@ impl IconeAppli {
     }
 }
 
-/// Nom (en minuscules) de l'exécutable de la fenêtre au premier plan ; aucun pour Essaim.
-pub fn nom_premier_plan() -> Option<String> {
-    executable(unsafe { GetForegroundWindow() }).map(|exe| nom_exe(&exe))
+/// Nom de l'hôte des fenêtres du Store, en minuscules.
+pub const HOTE_DU_STORE: &str = "applicationframehost.exe";
+
+/// Application au premier plan, vue par les règles (pauses, presets automatiques).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliVue {
+    /// Nom de l'exécutable, en minuscules (celui du contenu pour une appli du Store).
+    pub nom: String,
+    /// Fenêtre hébergée par l'hôte du Store (`ApplicationFrameHost.exe`).
+    pub du_store: bool,
+}
+
+impl AppliVue {
+    /// Noms par lesquels une règle la désigne : le sien et, pour une appli du Store, celui de
+    /// l'hôte. Une règle écrite sur `applicationframehost.exe` (quand Essaim donnait l'hôte pour
+    /// toute appli du Store) vaut ainsi encore pour toutes.
+    pub fn noms(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.nom.as_str()).chain(self.du_store.then_some(HOTE_DU_STORE))
+    }
+}
+
+/// Application de la fenêtre au premier plan ; aucune pour Essaim.
+pub fn premier_plan() -> Option<AppliVue> {
+    let fg = unsafe { GetForegroundWindow() };
+    let exe = executable_du_processus(fg)?;
+    let du_store = hote_du_store(&exe);
+    let exe = if du_store { contenu_du_store(fg).unwrap_or(exe) } else { exe };
+    Some(AppliVue { nom: nom_exe(&exe), du_store })
 }
 
 /// Exécutables des fenêtres visibles (pour proposer des règles automatiques).
@@ -397,13 +457,18 @@ fn executable(hwnd: HWND) -> Option<String> {
     if !hote_du_store(&exe) {
         return Some(exe);
     }
-    let contenu = unsafe { FindWindowExW(Some(hwnd), None, w!("Windows.UI.Core.CoreWindow"), PCWSTR::null()) }.ok();
-    Some(contenu.and_then(executable_du_processus).unwrap_or(exe))
+    Some(contenu_du_store(hwnd).unwrap_or(exe))
+}
+
+/// Exécutable du contenu d'un cadre de l'hôte du Store (sa fenêtre enfant de classe
+/// `Windows.UI.Core.CoreWindow`), s'il y est attaché.
+fn contenu_du_store(cadre: HWND) -> Option<String> {
+    unsafe { FindWindowExW(Some(cadre), None, w!("Windows.UI.Core.CoreWindow"), PCWSTR::null()) }.ok().and_then(executable_du_processus)
 }
 
 /// Le chemin désigne-t-il l'hôte des fenêtres du Store (`ApplicationFrameHost.exe`) ?
 fn hote_du_store(exe: &str) -> bool {
-    nom_exe(exe) == "applicationframehost.exe"
+    nom_exe(exe) == HOTE_DU_STORE
 }
 
 /// Chemin de l'exécutable du processus de la fenêtre (aucun pour Essaim lui-même).
@@ -543,13 +608,34 @@ pub fn teinte_dominante(bgra: &[u8]) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{hote_du_store, teinte_dominante};
+    use super::{a_relire, hote_du_store, teinte_dominante, AppliVue, RELIRE_HOTE};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn hote_des_applis_du_store_reconnu() {
         assert!(hote_du_store(r"C:\Windows\System32\ApplicationFrameHost.exe"));
         assert!(hote_du_store("applicationframehost.exe"));
         assert!(!hote_du_store(r"C:\Program Files\WindowsApps\Microsoft.WindowsCalculator\CalculatorApp.exe"));
+    }
+
+    #[test]
+    fn appli_du_store_designee_aussi_par_l_hote() {
+        let calc = AppliVue { nom: "calculatorapp.exe".into(), du_store: true };
+        assert_eq!(calc.noms().collect::<Vec<_>>(), ["calculatorapp.exe", "applicationframehost.exe"]);
+        let obs = AppliVue { nom: "obs64.exe".into(), du_store: false };
+        assert_eq!(obs.noms().collect::<Vec<_>>(), ["obs64.exe"]);
+    }
+
+    #[test]
+    fn hote_relu_jusqu_au_contenu() {
+        let t0 = Instant::now();
+        // fenêtre changée : toujours relue
+        assert!(a_relire(true, false, Some(t0), t0));
+        // même fenêtre, exécutable ordinaire : jamais relue
+        assert!(!a_relire(false, false, Some(t0), t0 + Duration::from_secs(60)));
+        // même fenêtre, hôte du Store (contenu pas encore attaché) : relue toutes les 500 ms
+        assert!(!a_relire(false, true, Some(t0), t0 + RELIRE_HOTE / 2));
+        assert!(a_relire(false, true, Some(t0), t0 + RELIRE_HOTE));
     }
 
     fn image(pixels: &[([u8; 3], usize)]) -> Vec<u8> {

@@ -303,10 +303,16 @@ impl Effets {
     }
 
     /// Rien n'est simulé à cette image (frappe, pause, plein écran) : les coups joués entre-temps
-    /// sont lus et jetés, sinon les figures les recevraient tous à la reprise ; un projecteur
-    /// demandé pendant ce temps (Ctrl+Alt+F en pause) ne part pas à la reprise.
+    /// sont lus et jetés, sinon les figures les recevraient tous à la reprise. Un projecteur
+    /// demandé reste en attente (pointeur seulement masqué par la frappe : il part quand il
+    /// revient) ; `oublier_demande` le jette quand l'essaim est arrêté.
     pub fn oublier_coups(&mut self, shared: &AudioShared) {
         self.ecoute.lire(&shared.view());
+    }
+
+    /// L'essaim n'est pas actif (pause, plein écran, pause automatique) : un projecteur demandé
+    /// pendant ce temps (Ctrl+Alt+F en pause) ne part pas à la reprise.
+    pub fn oublier_demande(&mut self) {
         self.demande = false;
     }
 
@@ -606,9 +612,28 @@ mod tests {
         let mut e = Effets::new();
         e.demander_projecteur();
         e.oublier_coups(&shared);
+        e.oublier_demande();
         e.avance(0.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
         e.avance(0.2, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
         assert_eq!(e.rect_ecran(), None);
+    }
+
+    #[test]
+    fn demande_pendant_la_frappe_puis_reprise() {
+        // Ctrl+Alt+F pendant que Windows masque le pointeur (frappe) : le projecteur part quand
+        // il revient
+        let mut cfg = Config::default();
+        cfg.projecteur.duree = 1.0;
+        let shared = AudioShared::default();
+        let dt = 1.0 / 60.0;
+        let mut e = Effets::new();
+        e.demander_projecteur();
+        for _ in 0..10 {
+            e.oublier_coups(&shared);
+        }
+        e.avance(0.0, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
+        e.avance(0.2, dt, (500.0, 400.0), 1.0, 0.0, &shared, &cfg, &ecran());
+        assert_eq!(e.rect_ecran(), Some((0, 0, 1920, 1080)));
     }
 
     #[test]

@@ -148,17 +148,18 @@ impl Auto {
         let a = &cfg.automatique;
         let (cible, musicale, tempo) = if a.actif {
             // fenêtre d'Essaim ou sans exécutable lisible : rien ne change
-            let Some(exe) = crate::appli::nom_premier_plan() else { return };
+            let Some(appli) = crate::appli::premier_plan() else { return };
             self.signaler_illisibles(&a.regles);
             let minutes = heure_locale();
             let morceau = if crate::media::en_lecture() == Some(true) { crate::media::morceau() } else { None };
-            let ctx = Contexte { appli: Some(exe.clone()), morceau: morceau.map(|m| (m.titre, m.artiste)), bpm: self.bpm, minutes };
+            let ctx = Contexte { appli: Some(appli.nom.clone()), du_store: appli.du_store, morceau: morceau.map(|m| (m.titre, m.artiste)), bpm: self.bpm, minutes };
             match regle_vraie(&a.regles, &ctx) {
                 Some(c) => (Some(c.preset.to_owned()), c.musicale, c.tempo),
                 None => (
+                    // une appli du Store compte aussi sous le nom de l'hôte (règles écrites avant)
                     a.applis
                         .iter()
-                        .find(|r| r.appli.trim().eq_ignore_ascii_case(&exe))
+                        .find(|r| appli.noms().any(|exe| r.appli.trim().eq_ignore_ascii_case(exe)))
                         .map(|r| r.preset.clone())
                         .or_else(|| horaire(&a.horaires, minutes).map(str::to_owned)),
                     false,
@@ -319,6 +320,9 @@ pub struct Condition {
 #[derive(Clone, Debug, Default)]
 pub struct Contexte {
     pub appli: Option<String>,
+    /// L'application est hébergée par l'hôte du Store : `appli = applicationframehost` la désigne
+    /// aussi (règles écrites quand Essaim donnait l'hôte pour toute appli du Store).
+    pub du_store: bool,
     /// Morceau en cours de lecture (titre, artiste) ; `None` en pause ou sans morceau.
     pub morceau: Option<(String, String)>,
     pub bpm: Option<f32>,
@@ -431,6 +435,12 @@ impl Condition {
         match self.cle {
             Cle::Artiste => texte(c.morceau.as_ref().map(|m| m.1.as_str())),
             Cle::Titre => texte(c.morceau.as_ref().map(|m| m.0.as_str())),
+            // appli du Store : vue aussi sous le nom de l'hôte (« != » est faux si l'un des deux
+            // noms est le bon)
+            Cle::Appli if c.du_store && c.appli.is_some() => {
+                let hote = Some(crate::appli::HOTE_DU_STORE);
+                if self.op == Op::Different { texte(c.appli.as_deref()) && texte(hote) } else { texte(c.appli.as_deref()) || texte(hote) }
+            }
             Cle::Appli => texte(c.appli.as_deref()),
             // à 2 BPM près pour « = » (le tempo mesuré varie un peu)
             Cle::Bpm => nombre(c.bpm, 2.0),
@@ -473,7 +483,23 @@ mod tests {
     use super::*;
 
     fn ctx(appli: &str, morceau: Option<(&str, &str)>, bpm: Option<f32>, minutes: u32) -> Contexte {
-        Contexte { appli: Some(appli.into()), morceau: morceau.map(|(t, a)| (t.into(), a.into())), bpm, minutes }
+        Contexte { appli: Some(appli.into()), du_store: false, morceau: morceau.map(|(t, a)| (t.into(), a.into())), bpm, minutes }
+    }
+
+    #[test]
+    fn regle_sur_l_hote_du_store_vaut_pour_toute_appli_du_store() {
+        let calc = Contexte { du_store: true, ..ctx("calculatorapp.exe", None, None, 0) };
+        let vrai = |si: &str, c: &Contexte| analyser(si).unwrap().iter().all(|x| x.vraie(c));
+        assert!(vrai("appli = applicationframehost", &calc));
+        assert!(vrai("appli = calculatorapp", &calc));
+        assert!(vrai("appli ~ framehost", &calc));
+        assert!(!vrai("appli != applicationframehost", &calc));
+        assert!(!vrai("appli != calculatorapp", &calc));
+        assert!(vrai("appli != spotify", &calc));
+        // hors du Store, l'hôte ne désigne rien
+        let spotify = ctx("spotify.exe", None, None, 0);
+        assert!(!vrai("appli = applicationframehost", &spotify));
+        assert!(vrai("appli != applicationframehost", &spotify));
     }
 
     #[test]

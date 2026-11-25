@@ -290,27 +290,33 @@ fn lire_demande(texte: &str) -> Result<Demande, Value> {
     })
 }
 
+/// Réponse `applique` à un preset appliqué (son bandeau propose « Annuler ») ; des curseurs non
+/// installés n'y font pas un message à part (qui effacerait le bandeau ou serait effacé par lui) :
+/// la page montre `avertissement` dans le bandeau.
+fn applique(nom: &str, curseurs: Result<(), String>) -> Value {
+    match curseurs {
+        Ok(()) => json!({ "type": "applique", "nom": nom }),
+        Err(e) => json!({ "type": "applique", "nom": nom, "avertissement": format!("Preset appliqué, mais curseurs non installés : {e}.") }),
+    }
+}
+
 /// Réponses à un preset de la bibliothèque installé : le message, puis, s'il devait être
-/// appliqué, l'erreur des curseurs s'il y en a une et `applique` (dernier, comme pour
-/// `Appliquer` : son bandeau propose « Annuler »), ou l'erreur d'application.
+/// appliqué, `applique` (dernier, comme pour `Appliquer`, avec l'avertissement des curseurs s'il
+/// y en a un), ou l'erreur d'application.
 fn reponses_installation(nom: &str, application: Option<Result<(), String>>, curseurs: Result<(), String>) -> Vec<Value> {
     let mut r = vec![json!({ "type": "message", "texte": format!("Preset « {nom} » installé dans Mes presets.") })];
     match application {
-        Some(Ok(())) => {
-            if let Err(e) = curseurs {
-                r.push(json!({ "type": "erreur", "texte": format!("Preset appliqué, mais curseurs non installés : {e}.") }));
-            }
-            r.push(json!({ "type": "applique", "nom": nom }));
-        }
+        Some(Ok(())) => r.push(applique(nom, curseurs)),
         Some(Err(e)) => r.push(json!({ "type": "erreur", "texte": format!("Preset « {nom} » installé mais non appliqué : {e}.") })),
         None => {}
     }
     r
 }
 
-/// Réglage que `config.toml` n'a pas pris : la page retire la valeur qu'elle tenait en attente.
-fn reglage_refuse(section: &str, cle: &str) -> Value {
-    json!({ "type": "reglage_refuse", "section": section, "cle": cle })
+/// Réglage que `config.toml` n'a pas pris : la page retire la valeur qu'elle tenait en attente
+/// (seulement si c'est encore celle-là : `valeur`, la valeur refusée, est jointe).
+fn reglage_refuse(section: &str, cle: &str, valeur: &Value) -> Value {
+    json!({ "type": "reglage_refuse", "section": section, "cle": cle, "valeur": valeur })
 }
 
 /// Réponse `contours` à une image illisible : liste vide, la page n'attend plus son analyse.
@@ -469,7 +475,7 @@ impl Fenetre {
                     Err(e) => {
                         self.erreur(&format!("Réglage refusé : {e}."));
                         // la page retire la valeur en attente, puis revient à la vraie valeur
-                        self.envoyer(&reglage_refuse(&section, &cle));
+                        self.envoyer(&reglage_refuse(&section, &cle, &valeur));
                         self.etat();
                     }
                 }
@@ -480,9 +486,9 @@ impl Fenetre {
                 match liste.iter().find(|p| profils::meme_nom(&p.name, &nom)).map(|p| (p, profils::apply(p))) {
                     Some((p, Ok(()))) => {
                         config::request_reload();
-                        self.curseurs_du_preset(&p.cfg);
+                        let curseurs = profils::curseurs_du_preset(&p.cfg);
                         self.noter_avant(avant);
-                        self.envoyer(&json!({ "type": "applique", "nom": nom }));
+                        self.envoyer(&applique(&nom, curseurs));
                     }
                     Some((_, Err(e))) => self.erreur(&format!("Preset « {nom} » non appliqué : {e}.")),
                     None => self.erreur(&format!("Preset « {nom} » introuvable.")),
@@ -770,14 +776,6 @@ impl Fenetre {
         }
         if !erreurs.is_empty() {
             self.erreur(&format!("{}.", majuscule(&erreurs.join(" ; "))));
-        }
-    }
-
-    /// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée
-    /// et qu'il en précise un autre que celui en place.
-    fn curseurs_du_preset(&self, preset: &Config) {
-        if let Err(e) = profils::curseurs_du_preset(preset) {
-            self.erreur(&format!("Preset appliqué, mais curseurs non installés : {e}."));
         }
     }
 
@@ -1637,10 +1635,13 @@ mod tests {
         let r = reponses_installation("Nuit", Some(Ok(())), Ok(()));
         assert_eq!(r.last().unwrap(), &json!({ "type": "applique", "nom": "Nuit" }), "le bandeau « Annuler » reste affiché");
         assert!(r.iter().any(|m| m["type"] == "message"));
-        // curseurs refusés : l'erreur vient avant `applique`, qui garde son bandeau « Annuler »
+        // curseurs refusés : pas d'erreur à part, l'avertissement va dans `applique`, qui garde
+        // son bandeau « Annuler »
         let r = reponses_installation("Nuit", Some(Ok(())), Err("registre verrouillé".into()));
-        assert_eq!(r.last().unwrap(), &json!({ "type": "applique", "nom": "Nuit" }));
-        assert!(r[r.len() - 2]["type"] == "erreur" && r[r.len() - 2]["texte"].as_str().unwrap().contains("curseurs"), "{r:?}");
+        let dernier = r.last().unwrap();
+        assert_eq!((&dernier["type"], &dernier["nom"]), (&json!("applique"), &json!("Nuit")));
+        assert!(dernier["avertissement"].as_str().unwrap().contains("curseurs non installés : registre verrouillé"), "{r:?}");
+        assert!(r.iter().all(|m| m["type"] != "erreur"), "{r:?}");
         let r = reponses_installation("Nuit", Some(Err("verrouillé".into())), Ok(()));
         assert!(r.iter().all(|m| m["type"] != "applique"));
         assert_eq!(r.last().unwrap()["type"], "erreur");
@@ -1648,8 +1649,19 @@ mod tests {
     }
 
     #[test]
-    fn reglage_refuse_nomme_sa_cle() {
-        assert_eq!(reglage_refuse("orbite", "rayon"), json!({ "type": "reglage_refuse", "section": "orbite", "cle": "rayon" }));
+    fn preset_applique_avec_avertissement_des_curseurs() {
+        // `Appliquer` : la même réponse que l'installation
+        assert_eq!(applique("Nuit", Ok(())), json!({ "type": "applique", "nom": "Nuit" }));
+        let r = applique("Nuit", Err("jeu introuvable".into()));
+        assert_eq!(r["avertissement"], "Preset appliqué, mais curseurs non installés : jeu introuvable.");
+    }
+
+    #[test]
+    fn reglage_refuse_nomme_sa_cle_et_sa_valeur() {
+        assert_eq!(
+            reglage_refuse("orbite", "rayon", &json!(999)),
+            json!({ "type": "reglage_refuse", "section": "orbite", "cle": "rayon", "valeur": 999 })
+        );
     }
 
     #[test]

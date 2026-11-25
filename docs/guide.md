@@ -352,19 +352,26 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   0 = jamais) : l'essaim s'efface, puis plus rien n'est dessiné jusqu'au prochain mouvement, son
   ou clic. En pause et en plein écran, la capture du son s'arrête aussi (sauf si la fenêtre des
   réglages est ouverte).
+- **Plein écran** : l'essaim se met en veille quand la fenêtre **sous le pointeur** est en plein
+  écran (jeu, vidéo), qu'elle ait le clavier ou non ; avec un jeu en plein écran sur un écran et
+  le pointeur sur l'autre, il continue. Après 10 s de plein écran, Essaim retire sa fenêtre
+  transparente de cet écran (elle ne reste pas au-dessus du jeu) et la remet à la sortie.
 - **Pauses automatiques** (`[pause]`, propres à la machine, hors presets) :
-  - `ne_pas_deranger` (oui par défaut) : pause quand Windows ne veut pas être dérangé (appli ou
-    jeu en plein écran au premier plan, mode présentation), reprise ensuite ; le calque
-    transparent d'une autre surcouche, même de la taille d'un écran, ne compte pas ;
+  - `ne_pas_deranger` (oui par défaut) : pause quand Windows ne veut pas être dérangé (appli en
+    plein écran sur l'écran du pointeur, jeu Direct3D en plein écran exclusif, mode
+    présentation), reprise ensuite ; le calque transparent d'une autre surcouche, même de la
+    taille d'un écran, ne compte pas ;
   - `batterie` : sur batterie ou avec l'économiseur de batterie, `"rien"`, `"reduire"` (par
     défaut : 30 images/s au plus) ou `"pause"` ;
   - `applis` : pause tant que l'une de ces applications est au premier plan (onglet *04 Auto*,
-    avec la dernière application utilisée à ajouter d'un clic).
+    avec la dernière application utilisée à ajouter d'un clic). Une appli du Store compte sous
+    son propre exécutable ; `ApplicationFrameHost.exe`, qui les héberge, les désigne toutes.
   Toujours, en plus : session verrouillée, déconnectée de la console ou ouverte à distance.
   La raison s'affiche sous le bouton Pause.
 - **Qualité adaptative** (`[rendu] adaptatif`, oui par défaut) : si une image demande plus de
   4 ms de calcul, la cadence baisse par paliers (120, 60, 30 images/s au plus) et remonte quand
-  le calcul redevient léger, ou à l'essai après 20 s sans image lourde. *Allégé* ne s'affiche
+  le calcul redevient léger, ou à l'essai après 20 s sans image lourde ; un essai qui redevient
+  lourd double l'attente du suivant (40 s, 80 s… 10 min au plus). *Allégé* ne s'affiche
   sous le bouton Pause que si ce plafond limite vraiment (pas sur un écran à 60 Hz plafonné à
   120, par exemple).
 - **Masquer des captures** (`[rendu] masquer_captures`) : l'essaim reste à l'écran mais
@@ -387,7 +394,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   réglages, pas le pointeur, et continue quand l'essaim du pointeur est en pause, en plein écran ou
   masqué par la frappe (le son reste écouté tant qu'elle est ouverte). Elle reste capturable même
   avec *Masquer des captures*. L'essaim y grandit avec la fenêtre et y tient toujours entier, éclats
-  et ondes compris, quelle que soit sa forme.
+  et ondes compris, quelle que soit sa forme. Elle tourne à environ 60 images/s même sur un écran
+  plus rapide (72 à 144 Hz, 60 à 240 Hz), et jamais au-dessus de `[rendu] cadence` si elle est
+  fixée.
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier. Pour Windows, AltGr vaut
@@ -404,7 +413,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   Renommer ou supprimer un preset met à jour ou retire les règles qui le citent ; renommer le
   preset qu'une règle a mis en place ne le réapplique pas (tes retouches restent). Les fenêtres
   d'Essaim ne comptent pas. Une application du Store compte sous son propre exécutable
-  (`CalculatorApp.exe`), pas sous `ApplicationFrameHost.exe` qui l'héberge.
+  (`CalculatorApp.exe`) ; une règle écrite sur `ApplicationFrameHost.exe`, qui les héberge, vaut
+  pour toutes.
   - Une règle : `{ si = "artiste = Skrillex", alors = "Delta" }`. Clés : `artiste` et `titre` (du
     morceau qui joue, pas en pause), `appli` (exécutable au premier plan, `.exe` facultatif), `bpm`
     (tempo des kicks, quand il est stable), `heure` (« HH:MM »). Opérateurs : `=`, `!=`, `~`

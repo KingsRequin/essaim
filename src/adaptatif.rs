@@ -19,9 +19,18 @@ const LEGER_MS: f32 = LOURD_MS * 0.75;
 const SECONDES_LEGERES: u32 = 10;
 /// Secondes de suite sans seconde lourde (entre les deux seuils, 3 à 4 ms) avant de remonter d'un
 /// palier à l'essai : sans elles, un calcul moyen restait plafonné pour toujours. Si l'essai
-/// redevient lourd, il redescend deux secondes plus tard, et ne réessaie qu'après autant : pas
-/// d'oscillation rapide.
+/// redevient lourd, il redescend deux secondes plus tard, et l'attente avant l'essai suivant
+/// double (40, 80, 160 s… jusqu'à `ESSAI_MAX`) : une machine qui tient tout juste le palier du
+/// dessous n'oscille pas toutes les 20 s. Elle revient à 20 s après un essai tenu
+/// (`SECONDES_SANS_LOURDE` sans seconde lourde au nouveau palier) ou une remontée par un calcul
+/// vraiment léger.
 const SECONDES_SANS_LOURDE: u32 = 20;
+const ESSAI_MAX: u32 = 600;
+
+/// Secondes calmes à attendre avant l'essai qui suit `rates` essais ratés d'affilée.
+fn attente_essai(rates: u32) -> u32 {
+    SECONDES_SANS_LOURDE.saturating_mul(1u32 << rates.min(16)).min(ESSAI_MAX)
+}
 
 #[derive(Default)]
 pub struct Adaptatif {
@@ -31,6 +40,9 @@ pub struct Adaptatif {
     legeres: u32,
     /// Secondes de suite qui ne sont pas lourdes (légères comprises).
     calmes: u32,
+    /// Remontée à l'essai en cours (pas encore tenue), et essais ratés d'affilée.
+    essai: bool,
+    rates: u32,
 }
 
 impl Adaptatif {
@@ -51,12 +63,28 @@ impl Adaptatif {
             _ => (0, 0, self.calmes + 1),
         };
         if self.lourdes >= SECONDES_LOURDES && self.niveau < PALIERS.len() {
+            // essai qui redevient lourd : raté, le suivant attendra deux fois plus
+            if std::mem::take(&mut self.essai) {
+                self.rates = self.rates.saturating_add(1);
+            }
             // premier palier qui réduit vraiment : sous la cadence mesurée (un écran à 60 Hz
             // passe directement à 30)
             let n = (self.niveau + 1..=PALIERS.len()).find(|&n| (PALIERS[n - 1] as f32) < ips * 0.95).unwrap_or(PALIERS.len());
             return self.changer(n);
         }
-        if (self.legeres >= SECONDES_LEGERES || self.calmes >= SECONDES_SANS_LOURDE) && self.niveau > 0 {
+        // essai tenu : l'attente revient à 20 s
+        if self.essai && self.calmes >= SECONDES_SANS_LOURDE {
+            (self.essai, self.rates) = (false, 0);
+        }
+        if self.niveau == 0 {
+            return false;
+        }
+        if self.legeres >= SECONDES_LEGERES {
+            (self.essai, self.rates) = (false, 0);
+            return self.changer(self.niveau - 1);
+        }
+        if self.calmes >= attente_essai(self.rates) {
+            self.essai = true;
             return self.changer(self.niveau - 1);
         }
         false
@@ -64,6 +92,7 @@ impl Adaptatif {
 
     /// Plus de plafond (réglage coupé). Renvoie vrai s'il y en avait un.
     pub fn lever(&mut self) -> bool {
+        (self.essai, self.rates) = (false, 0);
         self.changer(0)
     }
 
@@ -146,15 +175,36 @@ mod tests {
         assert_eq!(a.plafond(), 30);
         assert!(secondes(&mut a, 19, 3.5, 30.0).is_empty());
         assert_eq!(secondes(&mut a, 1, 3.5, 30.0), [60]);
-        // l'essai redevient lourd : il redescend, et ne réessaie que 20 s plus tard
+        // l'essai redevient lourd : il redescend, et ne réessaie que 40 s plus tard
         assert_eq!(secondes(&mut a, 2, 5.0, 60.0), [30]);
-        assert!(secondes(&mut a, 19, 3.5, 30.0).is_empty());
+        assert!(secondes(&mut a, 39, 3.5, 30.0).is_empty());
         assert_eq!(secondes(&mut a, 1, 3.5, 30.0), [60]);
-        // une seconde lourde isolée remet le compte à zéro
+        // une seconde lourde isolée remet le compte à zéro ; l'essai tenu 20 s ramène l'attente
+        // à 20 s
         secondes(&mut a, 10, 3.5, 60.0);
         assert!(!a.mesure(5.0, 60.0));
         assert!(secondes(&mut a, 19, 3.5, 60.0).is_empty());
         assert_eq!(secondes(&mut a, 1, 3.5, 60.0), [120]);
+    }
+
+    #[test]
+    fn essais_rates_de_plus_en_plus_espaces() {
+        assert_eq!((0..7).map(attente_essai).collect::<Vec<_>>(), [20, 40, 80, 160, 320, 600, 600]);
+        assert_eq!(attente_essai(u32::MAX), ESSAI_MAX);
+        // machine qui tient 30 mais pas 60 : chaque essai rate, l'attente double
+        let mut a = Adaptatif::default();
+        secondes(&mut a, 6, 5.0, 144.0);
+        assert_eq!(a.plafond(), 30);
+        for attente in [20, 40, 80, 160, 320, 600, 600] {
+            assert!(secondes(&mut a, attente - 1, 3.5, 30.0).is_empty(), "attente {attente}");
+            assert_eq!(secondes(&mut a, 1, 3.5, 30.0), [60]);
+            assert_eq!(secondes(&mut a, 2, 5.0, 60.0), [30]);
+        }
+        // calcul redevenu vraiment léger : remontée, et l'attente repart de 20 s
+        assert_eq!(secondes(&mut a, 10, 1.0, 30.0), [60]);
+        assert_eq!(secondes(&mut a, 2, 5.0, 60.0), [30]);
+        assert!(secondes(&mut a, 19, 3.5, 30.0).is_empty());
+        assert_eq!(secondes(&mut a, 1, 3.5, 30.0), [60]);
     }
 
     #[test]

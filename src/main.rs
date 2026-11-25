@@ -72,6 +72,9 @@ const VEILLE_LECTURE: Duration = Duration::from_millis(40);
 const LECTURE_CLICS: Duration = Duration::from_millis(30);
 /// Capture du son impossible à lancer : nouvel essai après ce délai.
 const SON_REESSAI: Duration = Duration::from_secs(30);
+/// Pause plein écran plus longue : le calque de l'écran couvert est détruit (une fenêtre
+/// superposée vide resterait au-dessus d'un jeu en plein écran sans bordure).
+const LIBERER_PLEIN_ECRAN: Duration = Duration::from_secs(10);
 
 fn start_instant() -> Instant {
     Instant::now()
@@ -463,11 +466,15 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     // pointeur (0 = inconnue) : la raison « Allégé » n'est dite que si ce plafond joue
     let mut cadence_visee = conf.cfg.rendu.cadence;
     let mut frequence = 0u32;
+    // plus haute fréquence des écrans : au-dessus de celle de l'écran du pointeur, `DwmFlush`
+    // (qui suit le compositeur, calé sur l'écran le plus rapide) ne règle plus la cadence
+    let mut frequence_max = win::frequence_max(&monitors);
 
     let start = Instant::now();
     let mut last = start;
     let mut user_paused = false;
-    let mut fs_paused = false;
+    // plein écran sous le pointeur : son écran, depuis quand, calque de cet écran déjà libéré
+    let mut plein_ecran: Option<(isize, Instant, bool)> = None;
     let mut conf_gen = 0u32;
     let mut was_down = false;
     let mut droit_avant = false;
@@ -553,6 +560,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
         if win::take_display_changed() {
             monitors = win::monitors();
+            frequence_max = win::frequence_max(&monitors);
             // seuls les calques des écrans disparus ou déplacés sont refaits : un calque refait
             // sous la souris lui ferait perdre son curseur
             let refaits = backend.ecrans_changes(&monitors);
@@ -579,10 +587,27 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         let cur = win::cursor_state();
         if now >= next_fs {
             next_fs = now + Duration::from_millis(250);
-            let fs = cur.as_ref().is_some_and(|c| win::fullscreen_under(c.pos.0, c.pos.1));
-            if fs != fs_paused {
-                fs_paused = fs;
-                log::info!("{}", if fs { "plein écran : en veille" } else { "fin du plein écran" });
+            // la fenêtre sous le pointeur, pas celle qui a le clavier
+            let ecran = cur.as_ref().and_then(|c| win::plein_ecran_sous(c.pos.0, c.pos.1));
+            if ecran != plein_ecran.map(|p| p.0) {
+                match (ecran, plein_ecran) {
+                    (Some(_), None) => log::info!("plein écran : en veille"),
+                    (None, _) => log::info!("fin du plein écran"),
+                    (Some(_), Some(_)) => log::info!("plein écran sur un autre écran"),
+                }
+                plein_ecran = ecran.map(|e| (e, now, false));
+            }
+        }
+        let fs_paused = plein_ecran.is_some();
+        // plein écran qui dure : le calque de son écran est détruit (il resterait au-dessus du
+        // jeu) ; refait à la sortie, à la première image qui touche cet écran
+        if let Some((ecran, depuis, libere @ false)) = plein_ecran.as_mut() {
+            if now - *depuis >= LIBERER_PLEIN_ECRAN {
+                *libere = true;
+                if backend.liberer_ecran(*ecran) {
+                    effets.oublier_loin();
+                    log::info!("plein écran prolongé : calque de son écran libéré");
+                }
             }
         }
         // réglages : relus toutes les secondes, ou tout de suite s'ils viennent de la fenêtre
@@ -614,7 +639,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             win::masquer_captures(conf.cfg.rendu.masquer_captures);
         }
         // pause automatique : traitée comme le plein écran (rien dessiné, son coupé, bordure rendue)
-        let retenue = pauses.tick(&conf.cfg.pause, now);
+        let retenue = pauses.tick(&conf.cfg.pause, now, cur.as_ref().map(|c| c.pos));
         let retrait = fs_paused || retenue.pause.is_some();
         // ce qui limite la cadence hors qualité adaptative : cadence choisie (ou de repos),
         // batterie, fréquence de l'écran
@@ -720,6 +745,11 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             // reprise part d'ici
             swarm.oublier_coups(&au);
             effets.oublier_coups(&shared);
+            // un projecteur demandé pendant la frappe part au retour du pointeur ; en pause ou en
+            // plein écran, il est jeté
+            if !active {
+                effets.oublier_demande();
+            }
             last = now;
             // à la reprise, un bouton tenu pendant la pause ne compte pas comme un clic, et le
             // compte à rebours de la veille profonde repart de zéro
@@ -794,6 +824,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         };
         cadence_visee = pauses::plafonner(cadence, retenue.plafond);
         let cadence = pauses::plafonner(cadence_visee, adaptatif.plafond());
+        // cadence de l'écran avec des écrans à fréquences mélangées : le compositeur suit le plus
+        // rapide, `DwmFlush` donnerait sa cadence ; l'attente se cale alors sur la fréquence de
+        // l'écran du pointeur (sans synchronisation sur son balayage)
+        let cadence = pauses::cadence_ecran(cadence, frequence, frequence_max);
         // cadence choisie : attente jusqu'à l'image suivante, par tranches courtes pour que les
         // clics restent lus (un clic de 60 ms doit être vu)
         if cadence > 0 {

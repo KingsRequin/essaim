@@ -428,9 +428,18 @@ function installe(p) {
   const local = presetAMoi(p.nom);
   return local && memesReglagesPreset(local.reglages, p.reglages) ? local.nom : null;
 }
+// Les éléments des listes de modulations et de déclencheurs sont complétés de leurs valeurs par
+// défaut avant la comparaison : un index écrit à la main en omet, la copie installée (écrite par
+// l'appli) les a tous.
+function sectionComplete(r, s) {
+  const sec = estObjet(r[s]) ? r[s] : {};
+  const d = s === "modulations" ? MODULATION_DEFAUT : s === "declencheurs" ? DECLENCHEUR_DEFAUT : null;
+  if (!d || !Array.isArray(sec.liste)) return sec;
+  return { ...sec, liste: sec.liste.map((e) => (estObjet(e) ? { ...d, ...e } : e)) };
+}
 function memesReglagesPreset(a, b) {
   return SECTIONS_PRESET.every((s) => {
-    const x = a[s] || {}, y = b[s] || {};
+    const x = sectionComplete(a, s), y = sectionComplete(b, s);
     return [...new Set([...Object.keys(x), ...Object.keys(y)])].every((k) => HORS_PRESET.has(s + "." + k) || memeValeur(x[k], y[k]));
   });
 }
@@ -1018,14 +1027,15 @@ function reglagesRecus(recus) {
 }
 const enCours = () => [...attente.values()].some((a) => !a.envoyee);
 
-// Valeur envoyée que l'appli a refusée (`reglage_refuse`, avec l'erreur) : elle n'est plus posée
-// sur l'état, la vraie valeur revient tout de suite. Une valeur plus récente qui attend encore son
-// envoi reste (elle sera jugée à son tour). Sans ce message (appli plus ancienne), la valeur est
-// oubliée une seconde après l'envoi.
-function reglageRefuse(section, cle) {
+// Valeur envoyée que l'appli a refusée (`reglage_refuse`, avec l'erreur et la valeur refusée) :
+// elle n'est plus posée sur l'état, la vraie valeur revient tout de suite. Une valeur plus récente
+// (qui attend encore son envoi, ou partie depuis : autre que la valeur refusée) reste, elle sera
+// jugée à son tour ; sans la valeur refusée (appli plus ancienne), seule celle qui attend son envoi
+// reste. Sans ce message, la valeur est oubliée une seconde après l'envoi.
+function reglageRefuse(section, cle, refusee) {
   const k = section + "." + cle;
   const a = attente.get(k);
-  if (!a || !a.envoyee) return;
+  if (!a || !a.envoyee || (refusee && !memeValeur(a.valeur, refusee.valeur))) return;
   attente.delete(k);
   const sec = derniersRecus && derniersRecus[section];
   if (!estObjet(sec) || !(cle in sec)) return;
@@ -1186,6 +1196,10 @@ const UNITES_MOD = { rotation: [90, " tr/min"], vitesse: [(40 * 60) / (2 * Math.
 const BORNES_MOD = { acceleration: [2, 0, 5], rayon: [4, 0.1, 5], taille: [1.5, 0, 4], luminosite: [2, 0, 4], trainee: [3, 0.1, 5], opacite: [1, 0, 1] };
 const MODULATIONS_MAX = 16;
 const LISSAGE_MOD = 0.35;
+// Modulation et déclencheur par défaut, champ par champ (comme Modulation::default et
+// Declencheur::default de config.rs) : un champ omis prend cette valeur.
+const MODULATION_DEFAUT = { source: "basse", cible: "rotation", sur: "tout", quantite: 0.5, seuil: 0, lissage: LISSAGE_MOD, inverser: false };
+const DECLENCHEUR_DEFAUT = { quand: "kick", faire: "onde", force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1 };
 // Bornes du facteur d'une cible qui se multiplie, sur le groupe `sur` : celles du moteur, et
 // pour le rayon d'une figure, son échelle qui ne descend pas sous GEO_MIN (comme
 // figures::poser : échelle × facteur, au moins 0,5). Sur « Figures », l'échelle de chacune
@@ -1276,8 +1290,8 @@ const IDEES_DECLENCHEURS = [
 function reactionsAvant(p) {
   const v = (s, k, d) => (p[s] && p[s][k] !== undefined ? p[s][k] : d);
   const q = (x) => Math.round(Math.max(-1, Math.min(1, x)) * 1e4) / 1e4;
-  const m = (source, cible, quantite, lissage = LISSAGE_MOD) => ({ source, cible, sur: "tout", quantite: q(quantite), seuil: 0, lissage, inverser: false });
-  const d = (quand, faire, plus = {}) => ({ quand, faire, force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1, ...plus });
+  const m = (source, cible, quantite, lissage = LISSAGE_MOD) => ({ ...MODULATION_DEFAUT, source, cible, quantite: q(quantite), lissage });
+  const d = (quand, faire, plus = {}) => ({ ...DECLENCHEUR_DEFAUT, quand, faire, ...plus });
   // la basse (déjà en modulations depuis Essaim 0.4), puis le reste
   const basse = [], mods = [];
   if (v("orbite", "vitesse_basse", 11)) basse.push(m("basse", "vitesse", v("orbite", "vitesse_basse", 11) / 40));
@@ -1349,13 +1363,14 @@ let annulationLocale = null;
 function copierAllure(source) {
   const r = etat.reglages;
   if (!r || !r[source]) return;
-  const avant = [];
+  const avant = [], copie = [];
   for (const [s] of FIGURES_REGLAGES) {
     if (s === source || !r[s]) continue;
     for (const cle of ALLURE_COPIEE) {
       const v = r[source][cle], ancien = r[s][cle];
       if (v === undefined || ancien === undefined || memeValeur(ancien, v)) continue;
       avant.push([s, cle, ancien]);
+      copie.push([s, cle, v]);
       regler(s, cle, v);
     }
   }
@@ -1370,8 +1385,24 @@ function copierAllure(source) {
     bandeau("Allure des figures d'avant remise.");
   };
   defaire.actif = etat.actif; // preset en place quand l'allure a été copiée
+  defaire.copie = copie; // valeurs posées par la copie
   annulationLocale = defaire;
   bandeau(`Teinte, opacité et réactions de « ${nom} » copiées sur les autres figures.`, { libelle: "Annuler (Ctrl+Z)", faire: defaire });
+}
+
+// La copie d'allure est-elle dépassée par un preset mis en place d'ailleurs (icône, Horizon, une
+// règle) ? Ctrl+Z défait alors ce preset, plus la copie (elle remettrait des valeurs sur un preset
+// qui n'est plus celui d'où elles venaient). Seules les clés copiées comptent : tant que l'une
+// attend encore (l'état reçu ne les montre pas encore), rien n'est jugé ; ensuite, un preset en
+// place et des clés copiées qui n'ont plus leur valeur copiée (preset appliqué, même celui d'avant
+// la copie), ou un passage à un autre preset que celui d'avant la copie, la dépassent. Un preset
+// appliqué depuis la page l'efface aussi (`applique`).
+function copieDepassee(m) {
+  const d = annulationLocale;
+  if (!d || !d.copie || !m.actif || !estObjet(m.reglages)) return false;
+  if (d.copie.some(([s, cle]) => attente.has(s + "." + cle))) return false;
+  const tenue = d.copie.every(([s, cle, v]) => estObjet(m.reglages[s]) && memeValeur(m.reglages[s][cle], v));
+  return !tenue || (m.actif !== etat.actif && m.actif !== d.actif);
 }
 
 // Panneaux de l'onglet Réglages, un par effet, rangés par familles (`famille`). `actif` :
@@ -2314,13 +2345,13 @@ function ecrireDeclencheurs(liste) {
 function ajouterModulation(m) {
   const l = listeMods();
   if (l.length >= MODULATIONS_MAX) { bandeau(`${MODULATIONS_MAX} modulations au plus : retires-en une pour en ajouter.`); return; }
-  ecrireModulations(l.concat([{ seuil: 0, lissage: LISSAGE_MOD, inverser: false, ...m }]));
+  ecrireModulations(l.concat([{ ...MODULATION_DEFAUT, ...m }]));
   requestAnimationFrame(() => { const d = modUI.lignes[modUI.lignes.length - 1]; if (d) d.premier.focus(); });
 }
 function ajouterDeclencheur(d) {
   const l = listeDecl();
   if (l.length >= DECLENCHEURS_MAX) { bandeau(`${DECLENCHEURS_MAX} déclencheurs au plus : retires-en un pour en ajouter.`); return; }
-  ecrireDeclencheurs(l.concat([{ force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1, ...d }]));
+  ecrireDeclencheurs(l.concat([{ ...DECLENCHEUR_DEFAUT, ...d }]));
   requestAnimationFrame(() => { const x = declUI.lignes[declUI.lignes.length - 1]; if (x) x.premier.focus(); });
 }
 
@@ -2800,8 +2831,8 @@ function surprise() {
   // réactions de toujours, plus ou moins fortes, et une fois sur trois une idée en plus pour les
   // modulations et pour les déclencheurs
   const avant = reactionsAvant({ orbite: { vitesse_basse: +r(4, 20).toFixed(1), eloignement_grave: +r(0.4, 2).toFixed(1) }, musique: { contretemps: Math.random() < 0.25 } });
-  const idee = (l) => (Math.random() < 0.35 ? [{ seuil: 0, lissage: LISSAGE_MOD, inverser: false, force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1, ...parmi(l)[1] }] : []);
-  c.modulations = { liste: avant.basse.concat(avant.mods, idee(SUGGESTIONS_MOD.slice(3))).map(({ force, nombre, nombre_max, delai, probabilite, ...m }) => m) };
+  const idee = (l, defaut) => (Math.random() < 0.35 ? [{ ...defaut, ...parmi(l)[1] }] : []);
+  c.modulations = { liste: avant.basse.concat(avant.mods, idee(SUGGESTIONS_MOD.slice(3), MODULATION_DEFAUT)) };
   // une fois sur trois, une ou deux figures (jamais plus : l'essaim reste discret), d'allure tirée
   // dans des bornes sages, et parfois une modulation sur l'une d'elles ; les autres sont coupées
   const figures = FIGURES_REGLAGES.map(([s]) => s).filter((s) => c[s]);
@@ -2825,10 +2856,10 @@ function surprise() {
     if (Math.random() < 0.4 && c.modulations.liste.length < MODULATIONS_MAX) {
       const sur = parmi(tirees), geo = sur !== "pinceau" && sur !== "pendule";
       const [cible, q] = parmi([["taille", [0.2, 0.5]], ["teinte", [0.2, 0.5]], ...(geo ? [["rayon", [0.05, 0.12]], ["rotation", [0.05, 0.12]]] : [])]);
-      c.modulations.liste.push({ source: parmi(["basse", "kick", "caisse", "charleston", "montee"]), cible, sur, quantite: +r(q[0], q[1]).toFixed(2), seuil: 0, lissage: LISSAGE_MOD, inverser: false });
+      c.modulations.liste.push({ ...MODULATION_DEFAUT, source: parmi(["basse", "kick", "caisse", "charleston", "montee"]), cible, sur, quantite: +r(q[0], q[1]).toFixed(2) });
     }
   }
-  c.declencheurs = { liste: avant.decl.concat(idee(IDEES_DECLENCHEURS).map(({ seuil, lissage, inverser, ...d }) => d)) };
+  c.declencheurs = { liste: avant.decl.concat(idee(IDEES_DECLENCHEURS, DECLENCHEUR_DEFAUT)) };
   envoyer({ cmd: "appliquer_reglages", nom: "Surprise", reglages: c });
 }
 
@@ -3129,15 +3160,20 @@ function dessinerAuto() {
 function dessinerRaccourcisRefuses() {
   const refuses = etat.reglages.raccourcis.actif ? etat.raccourcisRefuses : [];
   // raison de chaque refus (`raccourcis_raisons`) : une autre application le garde, ou la touche
-  // écrit un caractère avec AltGr (= Ctrl+Alt) sur un clavier installé ; sans raison connue : la
-  // première
-  const raison = (r) => etat.raccourcisRaisons[r] || "pris par une autre application";
+  // écrit un caractère avec AltGr (= Ctrl+Alt) sur une des dispositions de clavier installées
+  // (texte de l'appli : win::ECRIT_UN_CARACTERE, dit ici en une seule formulation) ; une autre
+  // raison est reprise telle quelle ; sans raison connue : la première
+  const PRIS = "pris par une autre application";
+  const raison = (r) => {
+    const t = etat.raccourcisRaisons[r];
+    return !t ? PRIS : /caract[eè]re/i.test(t) ? "AltGr y écrit un caractère sur un des claviers installés" : t;
+  };
   const groupes = new Map();
   for (const r of refuses) groupes.set(raison(r), [...(groupes.get(raison(r)) || []), r]);
-  const phrase = ([texte, liste]) => texte === "pris par une autre application"
+  const phrase = ([texte, liste]) => texte === PRIS
     ? (liste.length === 1 ? `${liste[0]} : pris par une autre application, il ne marche pas tant qu'elle le garde.`
       : `${liste.join(", ")} : pris par d'autres applications, ils ne marchent pas tant qu'elles les gardent.`)
-    : `${liste.join(", ")} : ${texte} (AltGr y écrit un caractère), ${liste.length === 1 ? "il n'est pas enregistré pour ne pas le voler" : "ils ne sont pas enregistrés pour ne pas le voler"}.`;
+    : `${liste.join(", ")} : ${texte}, ${liste.length === 1 ? "il n'est pas enregistré pour ne pas le voler" : "ils ne sont pas enregistrés pour ne pas le voler"}.`;
   texteSi($("raccourcis-refuses"), [...groupes].map(phrase).join(" "));
 }
 
@@ -3973,12 +4009,8 @@ window.essaim = {
         break;
       case "etat": {
         const premier = !etat.reglages;
-        // un autre preset mis en place d'ailleurs (icône, Horizon, une règle) : Ctrl+Z défait
-        // maintenant ce preset, plus la dernière action de la page (sinon elle remettrait des
-        // valeurs sur un preset qui n'est plus celui d'où elles venaient). Pas tant qu'une valeur
-        // de la page attend (le preset reconnu change alors à cause d'elle), ni pour un retour au
-        // preset en place quand l'action a été faite.
-        if (annulationLocale && !attente.size && m.actif && m.actif !== etat.actif && m.actif !== annulationLocale.actif) annulationLocale = null;
+        // un preset mis en place d'ailleurs : Ctrl+Z défait maintenant ce preset (copieDepassee)
+        if (copieDepassee(m)) annulationLocale = null;
         etat.reglages = reglagesRecus(m.reglages);
         etat.defauts = m.defauts;
         etat.presets = m.presets;
@@ -4064,10 +4096,14 @@ window.essaim = {
       case "apercu_jeu":
         recevoirApercuJeu(m);
         break;
-      case "applique":
+      case "applique": {
         annulationLocale = null; // Ctrl+Z défait maintenant ce preset
-        bandeau(`« ${m.nom} » appliqué.`, { libelle: "Annuler (Ctrl+Z)", faire: annuler });
+        // `avertissement` : ce qui n'a pas pu suivre (jeu de curseurs), dit dans le même bandeau,
+        // en erreur, sans perdre « Annuler »
+        const avert = typeof m.avertissement === "string" ? m.avertissement.trim() : "";
+        bandeau(avert ? `« ${m.nom} » appliqué. ${avert}` : `« ${m.nom} » appliqué.`, { libelle: "Annuler (Ctrl+Z)", faire: annuler }, !!avert);
         break;
+      }
       // réponses à « enregistrer » : elles libèrent le bouton du panneau si un envoi l'attend
       case "enregistre":
         if (panneauUI.envoi) finEnvoiPanneau();
@@ -4095,7 +4131,8 @@ window.essaim = {
         bandeau(m.texte);
         break;
       case "reglage_refuse":
-        if (typeof m.section === "string" && typeof m.cle === "string") reglageRefuse(m.section, m.cle);
+        // `valeur` : absente d'une appli plus ancienne
+        if (typeof m.section === "string" && typeof m.cle === "string") reglageRefuse(m.section, m.cle, Object.hasOwn(m, "valeur") ? { valeur: m.valeur } : null);
         break;
       case "erreur":
         // une erreur ne libère pas le bouton d'enregistrement (elle peut venir d'un réglage ou
