@@ -8,6 +8,10 @@
 //! Seulement si un effet les demande (`set_musique`) : caisses claires (reconnues par
 //! l'analyse du kick d'`audio-commun`, sur les mêmes attaques), montée et drops (`Montee`). Les niveaux des deux canaux donnent l'équilibre
 //! gauche-droite (`balance`).
+//!
+//! Le kick reçoit le son à sa fréquence d'origine ; aigus, bandes du spectre et montée le
+//! reçoivent ramené à 48 kHz au plus (`Reduction`) : à 96 ou 192 kHz, ils coûteraient deux à
+//! quatre fois plus pour des fréquences que personne n'entend.
 
 use audio_commun::capture::{self, Capture, Ecoute, Sink};
 use audio_commun::kick::Analyzer;
@@ -30,8 +34,10 @@ pub struct AudioShared {
     phase: AtomicU32,
     /// La musique joue sans kick depuis 2 s alors qu'un tempo stable était connu.
     relais: AtomicBool,
-    /// Flux perdu (erreur, sortie changée) et pas encore rouvert.
+    /// Flux perdu (erreur) et pas encore rouvert.
     perdu: AtomicBool,
+    /// Écoute par application refusée par Windows : toute la sortie par défaut est écoutée.
+    repli: AtomicBool,
     /// Bandes voulues pour l'anneau de spectre (0 = aucune : rien n'est calculé).
     bandes_voulues: AtomicU32,
     /// Niveau de chaque bande, 0 à 1 (bits d'un f32), pour l'anneau de spectre.
@@ -108,6 +114,7 @@ impl AudioShared {
         self.relais.store(false, Ordering::Relaxed);
         self.effacer_bandes();
         self.perdu.store(false, Ordering::Relaxed);
+        self.repli.store(false, Ordering::Relaxed);
     }
     /// Analyse musicale voulue (un effet lit les caisses claires, la montée ou les drops).
     pub fn set_musique(&self, voulue: bool) {
@@ -143,6 +150,12 @@ impl AudioShared {
     pub fn perdu(&self) -> bool {
         self.perdu.load(Ordering::Relaxed)
     }
+    /// Seules certaines applis devaient être écoutées, mais Windows refuse la capture par
+    /// application : toute la sortie par défaut est écoutée à la place (réessayé toutes les 30 s,
+    /// sauf si cette version de Windows ne la connaît pas).
+    pub fn repli_applis(&self) -> bool {
+        self.repli.load(Ordering::Relaxed)
+    }
 }
 
 fn fini(v: f32) -> f32 {
@@ -174,7 +187,11 @@ struct Kick {
     bandes: Option<Bandes>,
     /// Analyse musicale (caisse claire, montée, drop), seulement si un effet la demande.
     musique: Option<Musique>,
+    /// Fréquence du flux (celle que voit le kick).
     fs: u32,
+    /// Son ramené à 48 kHz au plus pour les aigus, les bandes et la montée, et son tampon.
+    reduction: Reduction,
+    reduit: Vec<f32>,
     /// Équilibre gauche-droite, et durée du dernier paquet (s) pour le lissage.
     balance: Balance,
     duree_paquet: f32,
@@ -196,6 +213,8 @@ impl Kick {
             bandes: None,
             musique: None,
             fs: 48000,
+            reduction: Reduction::new(48000),
+            reduit: Vec::new(),
             balance: Balance::default(),
             duree_paquet: 0.01,
             base: (0, 0),
@@ -372,6 +391,103 @@ impl PasseBande {
     }
 }
 
+/// Fréquence la plus haute que voient les aigus, les bandes et la montée.
+const FS_ANALYSE_MAX: u32 = 48_000;
+/// Facteurs de qualité des trois cellules d'un passe-bas de Butterworth d'ordre 6.
+const Q_BUTTERWORTH_6: [f32; 3] = [0.517_638_1, std::f32::consts::FRAC_1_SQRT_2, 1.931_851_7];
+/// Coupure du passe-bas avant la réduction, en part de la fréquence d'arrivée (19,2 kHz à 48 kHz).
+const REDUCTION_COUPURE: f32 = 0.4;
+
+/// Passe-bas du second ordre (RBJ), forme transposée II en f32.
+#[derive(Clone, Copy)]
+struct PasseBas {
+    b0: f32,
+    b1: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl PasseBas {
+    fn new(fs: f32, f0: f32, q: f32) -> Self {
+        let w0 = std::f32::consts::TAU * f0 / fs;
+        let (c, alpha) = (w0.cos(), w0.sin() / (2.0 * q));
+        let a0 = 1.0 + alpha;
+        Self { b0: (1.0 - c) / 2.0 / a0, b1: (1.0 - c) / a0, a1: -2.0 * c / a0, a2: (1.0 - alpha) / a0, z1: 0.0, z2: 0.0 }
+    }
+
+    #[inline]
+    fn step(&mut self, x: f32) -> f32 {
+        // b2 = b0
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b0 * x - self.a2 * y;
+        y
+    }
+}
+
+/// Son ramené à 48 kHz au plus : au-dessus (88,2, 96, 192 kHz…), passe-bas de Butterworth
+/// d'ordre 6 à 0,4 × la fréquence d'arrivée (contre le repliement), puis un échantillon gardé
+/// sur `facteur` (le plus petit entier qui ramène sous 48 kHz). Jusqu'à 48 kHz, le son passe tel
+/// quel (aucun calcul).
+struct Reduction {
+    facteur: usize,
+    fs_sortie: u32,
+    filtres: [PasseBas; 3],
+    /// Échantillons reçus depuis le dernier gardé.
+    phase: usize,
+}
+
+impl Reduction {
+    fn new(fs: u32) -> Self {
+        let fs = fs.max(1);
+        let facteur = fs.div_ceil(FS_ANALYSE_MAX).max(1) as usize;
+        let fs_sortie = fs / facteur as u32;
+        let coupure = REDUCTION_COUPURE * fs_sortie as f32;
+        Self { facteur, fs_sortie, filtres: Q_BUTTERWORTH_6.map(|q| PasseBas::new(fs as f32, coupure, q)), phase: 0 }
+    }
+
+    /// Fréquence du son rendu.
+    fn fs_sortie(&self) -> u32 {
+        self.fs_sortie
+    }
+
+    /// `mono` ramené à `fs_sortie` : tel quel jusqu'à 48 kHz, sinon filtré et réduit dans `tampon`.
+    fn reduire<'a>(&mut self, mono: &'a [f32], tampon: &'a mut Vec<f32>) -> &'a [f32] {
+        if self.facteur == 1 {
+            return mono;
+        }
+        tampon.clear();
+        let [mut f1, mut f2, mut f3] = self.filtres;
+        for &x in mono {
+            let y = f3.step(f2.step(f1.step(x)));
+            self.phase += 1;
+            if self.phase >= self.facteur {
+                self.phase = 0;
+                tampon.push(y);
+            }
+        }
+        self.filtres = [f1, f2, f3];
+        tampon
+    }
+
+    /// `n` échantillons de silence à l'arrivée : combien à la sortie. Les filtres repartent de zéro.
+    fn silence(&mut self, n: usize) -> usize {
+        if self.facteur == 1 {
+            return n;
+        }
+        if n > 0 {
+            for f in &mut self.filtres {
+                (f.z1, f.z2) = (0.0, 0.0);
+            }
+        }
+        let total = self.phase + n;
+        self.phase = total % self.facteur;
+        total / self.facteur
+    }
+}
+
 /// Énergie par bande de fréquences pour l'anneau de spectre, sans FFT : `n` passe-bande (8 à
 /// 32) à centres répartis en échelle logarithmique de 40 Hz à 12 kHz, chacun aussi large que
 /// l'écart entre deux centres (bandes jointives) et fait de deux biquads en série (12 dB par
@@ -476,11 +592,14 @@ impl Sink for Kick {
     fn open(&mut self, sample_rate: u32) {
         // flux rouvert : les compteurs publiés continuent depuis leur valeur actuelle
         self.base = (self.shared.kicks.load(Ordering::Relaxed), self.shared.aigus.load(Ordering::Relaxed));
+        // le kick à la fréquence du flux, le reste à 48 kHz au plus
         self.an = Some(Analyzer::new(sample_rate));
-        self.aigus = Some(Aigus::new(sample_rate));
+        self.reduction = Reduction::new(sample_rate);
+        let fs_analyse = self.reduction.fs_sortie();
+        self.aigus = Some(Aigus::new(fs_analyse));
         // nouvelle horloge (l'analyse repart de 0) : tempo à retrouver
         self.tempo = Pulsation::new();
-        self.bandes = Some(Bandes::new(sample_rate));
+        self.bandes = Some(Bandes::new(fs_analyse));
         // analyse musicale refaite à la nouvelle fréquence ; ses compteurs publiés continuent
         self.fs = sample_rate;
         self.musique = None;
@@ -503,13 +622,16 @@ impl Sink for Kick {
             }
         }
         let audible = mono.iter().any(|x| x.abs() > AUDIBLE);
-        if let Some(a) = &mut self.aigus {
-            a.push(mono);
-        }
         self.duree_paquet = mono.len() as f32 / self.fs.max(1) as f32;
-        // champ par champ : `mono` emprunte encore `self.propre`
+        // aigus, montée et bandes : son ramené à 48 kHz au plus (tel quel jusque-là)
+        let fs_analyse = self.reduction.fs_sortie();
+        let bas = self.reduction.reduire(mono, &mut self.reduit);
+        if let Some(a) = &mut self.aigus {
+            a.push(bas);
+        }
+        // champ par champ : `mono` et `bas` empruntent encore `self.propre` et `self.reduit`
         let coups = self.an.as_ref().map(Coups::de);
-        ecouter_musique(&self.shared, &mut self.musique, self.fs, Some(mono), mono.len(), coups);
+        ecouter_musique(&self.shared, &mut self.musique, fs_analyse, Some(bas), bas.len(), coups);
         // bandes du spectre : seulement si l'effet est voulu (sinon aucun filtre, coût nul)
         let voulues = self.shared.bandes_voulues.load(Ordering::Relaxed) as usize;
         let (mut publier, mut effacer) = (false, false);
@@ -517,13 +639,13 @@ impl Sink for Kick {
             let avant = b.actives();
             b.regler(voulues);
             if b.actives() {
-                b.push(mono);
+                b.push(bas);
                 publier = true;
             } else {
                 effacer = avant;
             }
         }
-        // après le dernier usage de `mono` (il emprunte le tampon `propre`)
+        // après le dernier usage de `mono` et `bas` (ils empruntent les tampons)
         self.suivre_tempo(audible);
         self.publier_aigus();
         if publier {
@@ -538,17 +660,19 @@ impl Sink for Kick {
         if let Some(an) = &mut self.an {
             an.push_silence(frames);
         }
+        // même silence, compté à la fréquence des aigus, de la montée et des bandes
+        let reduits = self.reduction.silence(frames);
         if let Some(a) = &mut self.aigus {
-            a.push_silence(frames);
+            a.push_silence(reduits);
         }
         self.suivre_tempo(false);
         self.publier_aigus();
         let coups = self.coups();
-        ecouter_musique(&self.shared, &mut self.musique, self.fs, None, frames, coups);
+        ecouter_musique(&self.shared, &mut self.musique, self.reduction.fs_sortie(), None, reduits, coups);
         self.balance.silence(frames as f32 / self.fs.max(1) as f32);
         self.shared.balance.store(self.balance.valeur.to_bits(), Ordering::Relaxed);
         if let Some(b) = self.bandes.as_mut().filter(|b| b.actives()) {
-            b.push_silence(frames);
+            b.push_silence(reduits);
             self.publier_bandes();
         }
     }
@@ -573,6 +697,10 @@ impl Sink for Kick {
     fn stereo(&mut self, gauche: f32, droite: f32) {
         self.balance.paquet(gauche, droite, self.duree_paquet);
         self.shared.balance.store(self.balance.valeur.to_bits(), Ordering::Relaxed);
+    }
+
+    fn repli(&mut self, actif: bool) {
+        self.shared.repli.store(actif, Ordering::Relaxed);
     }
 }
 
@@ -665,6 +793,11 @@ impl Musique {
     /// `n` échantillons (`mono`, ou du silence). `coups` : compteurs de l'analyse du kick après
     /// ce paquet ; kicks et caisses claires reconnus dans le paquet sont notés à sa fin.
     fn ecouter(&mut self, mono: Option<&[f32]>, n: usize, coups: Option<Coups>) {
+        // paquet vide (moins d'un échantillon après réduction) : aucune durée, rien à juger (la
+        // moyenne du niveau diviserait 0 par 0)
+        if n == 0 {
+            return;
+        }
         let mut carres = 0f64;
         for i in 0..n {
             let x = mono.map_or(0.0, |m| m[i]);
@@ -883,7 +1016,7 @@ impl Montee {
 
 #[cfg(test)]
 mod tests {
-    use super::{assainir, Aigus, AudioShared, Balance, Bandes, Kick, BANDES_MAX};
+    use super::{assainir, Aigus, AudioShared, Balance, Bandes, Kick, Musique, Reduction, BANDES_MAX};
     use audio_commun::capture::Sink;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -1298,6 +1431,113 @@ mod tests {
         shared.set_bandes(12);
         shared.bandes(&mut sortie);
         assert!(sortie[..12].iter().all(|&v| v == 0.0), "{sortie:?}");
+    }
+
+    #[test]
+    fn son_tel_quel_jusqu_a_48_khz() {
+        for fs in [44_100, 48_000, 32_000] {
+            let mut r = Reduction::new(fs);
+            assert_eq!(r.fs_sortie(), fs);
+            let son = sinus(1000.0, 480);
+            let mut tampon = Vec::new();
+            // aucun calcul : la même tranche revient
+            assert_eq!(r.reduire(&son, &mut tampon).as_ptr(), son.as_ptr());
+            assert_eq!(r.silence(37), 37);
+        }
+    }
+
+    /// Amplitude crête de la seconde moitié de `x` (filtres établis).
+    fn crete(x: &[f32]) -> f32 {
+        x[x.len() / 2..].iter().fold(0.0, |c, v| c.max(v.abs()))
+    }
+
+    #[test]
+    fn son_ramene_a_48_khz_au_dessus() {
+        for (fs, sortie) in [(96_000u32, 48_000u32), (88_200, 44_100), (192_000, 48_000), (176_400, 44_100)] {
+            let sin = |f: f32| -> Vec<f32> {
+                (0..fs as usize / 5).map(|i| 0.5 * (std::f32::consts::TAU * f * i as f32 / fs as f32).sin()).collect()
+            };
+            let mut r = Reduction::new(fs);
+            assert_eq!(r.fs_sortie(), sortie);
+            let mut tampon = Vec::new();
+            // 1 kHz passe intact, un échantillon gardé sur fs / sortie
+            let bas = r.reduire(&sin(1000.0), &mut tampon).to_vec();
+            assert_eq!(bas.len(), sortie as usize / 5);
+            assert!((crete(&bas) - 0.5).abs() < 0.01, "{fs} Hz : 1 kHz à {}", crete(&bas));
+            // au-delà de la moitié de la sortie : coupé, ne revient pas replié dans les aigus
+            let mut r = Reduction::new(fs);
+            let haut = r.reduire(&sin(0.85 * sortie as f32), &mut tampon).to_vec();
+            assert!(crete(&haut) < 0.02, "{fs} Hz : {} Hz replié à {}", 0.85 * sortie as f32, crete(&haut));
+        }
+        // silence : compté à la fréquence de sortie, sans perdre les restes d'un paquet à l'autre
+        let mut r = Reduction::new(96_000);
+        let mut tampon = Vec::new();
+        assert_eq!(r.reduire(&[0.1; 3], &mut tampon).len(), 1);
+        assert_eq!(r.silence(3), 2);
+        assert_eq!(r.silence(1), 0);
+        assert_eq!(r.silence(1), 1);
+    }
+
+    #[test]
+    fn charleston_et_bandes_a_96_khz_comme_a_48() {
+        // la même batterie à 48 et 96 kHz : autant d'attaques d'aigus, la même bande la plus forte
+        let mut resultats = Vec::new();
+        for fs in [48_000u32, 96_000] {
+            let mut g = 0x9e37_79b9_7f4a_7c15u64;
+            let n = fs as usize * 4;
+            let son: Vec<f32> = (0..n)
+                .map(|i| {
+                    let basse = 0.6 * (std::f32::consts::TAU * 55.0 * i as f32 / fs as f32).sin();
+                    basse + if i % (fs as usize / 4) < fs as usize * 3 / 100 { 0.25 * bruit(&mut g) } else { 0.0 }
+                })
+                .collect();
+            let shared = Arc::new(AudioShared::default());
+            shared.set_musique(true);
+            shared.set_bandes(16);
+            let mut k = Kick::new(shared.clone());
+            k.open(fs);
+            for paquet in son.chunks(fs as usize / 100 + 1) {
+                k.samples(paquet);
+                k.tick(std::time::Instant::now());
+            }
+            k.silence(7);
+            let mut sortie = [0f32; BANDES_MAX];
+            shared.bandes(&mut sortie);
+            let forte = (0..16).max_by(|&i, &j| sortie[i].total_cmp(&sortie[j])).unwrap();
+            let v = shared.view();
+            assert!(v.tension.is_finite() && v.brillance.is_finite());
+            resultats.push((v.aigus, forte));
+        }
+        let [(a48, b48), (a96, b96)] = resultats[..] else { unreachable!() };
+        assert!((14..=17).contains(&a48) && (14..=17).contains(&a96), "{a48} et {a96} attaques");
+        assert_eq!(b48, b96, "bande la plus forte");
+    }
+
+    #[test]
+    fn paquet_vide_sans_division_par_zero() {
+        let mut m = Musique::new(FS, 0, 0);
+        m.ecouter(Some(&[]), 0, None);
+        m.ecouter(None, 0, None);
+        assert!(m.montee.niveau_long.is_finite() && m.montee.niveau_court.is_finite());
+        assert_eq!(m.t, 0.0);
+        // la suite reste juste
+        m.ecouter(Some(&sinus(1000.0, 480)), 480, None);
+        assert!(m.montee.niveau_long.is_finite() && m.montee.niveau_long > -70.0);
+    }
+
+    #[test]
+    fn repli_des_applis_publie_puis_efface() {
+        let shared = Arc::new(AudioShared::default());
+        let mut k = Kick::new(shared.clone());
+        assert!(!shared.repli_applis());
+        k.repli(true);
+        assert!(shared.repli_applis());
+        k.repli(false);
+        assert!(!shared.repli_applis());
+        // capture arrêtée : plus de repli annoncé
+        k.repli(true);
+        shared.reset();
+        assert!(!shared.repli_applis());
     }
 
     fn bruit(graine: &mut u64) -> f32 {
