@@ -329,6 +329,8 @@ pub struct CursorState {
     pub pos: (i32, i32),
     /// Le curseur est affiché (les jeux et lecteurs vidéo le cachent).
     pub showing: bool,
+    /// C'est le curseur de texte de Windows (zone de saisie, texte d'une page) : `[pause] texte`.
+    pub texte: bool,
 }
 
 pub fn cursor_state() -> Option<CursorState> {
@@ -338,7 +340,23 @@ pub fn cursor_state() -> Option<CursorState> {
         Some(CursorState {
             pos: (ci.ptScreenPos.x, ci.ptScreenPos.y),
             showing: ci.flags.0 & CURSOR_SHOWING.0 != 0,
+            texte: !ci.hCursor.is_invalid() && ci.hCursor.0 as isize == curseur_texte(),
         })
+    }
+}
+
+/// Poignée du curseur de texte partagé (`IDC_IBEAM`), celle que les applications (navigateurs,
+/// Bloc-notes, Office…) posent sur une zone de texte. Un autre jeu de curseurs en change l'image,
+/// pas la poignée : lue une fois.
+fn curseur_texte() -> isize {
+    static TEXTE: AtomicIsize = AtomicIsize::new(0);
+    match TEXTE.load(Ordering::Relaxed) {
+        0 => {
+            let h = unsafe { LoadCursorW(None, IDC_IBEAM) }.map_or(-1, |h| h.0 as isize);
+            TEXTE.store(h, Ordering::Relaxed);
+            h
+        }
+        h => h,
     }
 }
 

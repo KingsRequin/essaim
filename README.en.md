@@ -109,7 +109,7 @@ OBS (or a solid one); it follows your music like the swarm around the pointer.</
 | | |
 |---|---|
 | 🤖 **If … then …** | Rules pick the preset: `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*…; or by foreground app, or time of day |
-| 🌙 **Stays out of the way** | Pauses for full-screen apps, presentations, a locked session, a screen turned off, on battery or in front of chosen apps; lowers its frame rate when the PC struggles; can be hidden from screenshots and streams (the colored border is then turned off) |
+| 🌙 **Stays out of the way** | Pauses for full-screen apps, presentations, a locked session, a screen turned off, on battery or in front of chosen apps; steps aside over a text field; lowers its frame rate when the PC struggles; can be hidden from screenshots and streams (the colored border is then turned off) |
 | 🫶 **No flashes** | For people sensitive to flashing: softer flashes, three per second at most, a border that no longer blinks (automatic when Windows reduces animations) |
 | 📺 **Stream window** | The swarm in the middle of a window with a transparent background, to add in OBS as a *Game Capture* |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | A Horizon plugin pauses Essaim, switches presets and opens its settings from the bar |

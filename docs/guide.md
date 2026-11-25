@@ -404,6 +404,11 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     plein écran sur l'écran du pointeur, jeu Direct3D en plein écran exclusif, mode
     présentation), reprise ensuite ; le calque transparent d'une autre surcouche, même de la
     taille d'un écran, ne compte pas ;
+  - `texte` (oui par défaut) : l'essaim s'efface tant que le pointeur est le curseur de texte de
+    Windows (zone de saisie, mais aussi texte d'une page web), pour voir ce qu'on écrit même
+    quand l'option de Windows « Masquer le pointeur pendant la frappe » est coupée ; la bordure et
+    l'habillage restent, comme pendant la frappe. Une appli qui dessine son propre curseur de
+    texte n'est pas reconnue ;
   - `batterie` : sur batterie ou avec l'économiseur de batterie, `"rien"`, `"reduire"` (par
     défaut : 30 images/s au plus) ou `"pause"` ;
   - `applis` : pause tant que l'une de ces applications est au premier plan (onglet *04 Auto*,

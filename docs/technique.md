@@ -607,7 +607,8 @@ du sens par image) et la teinte
 - **Équerres, halo et liseré** (`loin.rs`) : habillage de la fenêtre et de l'écran, hors des
   presets (`profils::SECTIONS` ne contient ni `equerres`, ni `halo`, ni `lisere` : appliquer un
   preset n'y touche pas, et aucun preset fourni ne les allume). Comme la bordure, il reste quand l'essaim n'est
-  pas dessiné : pointeur masqué par la frappe et veille profonde passent par
+  pas dessiné : pointeur masqué par la frappe ou curseur de texte (`[pause] texte`,
+  `win::CursorState::texte`) et veille profonde passent par
   `main::habillage_seul`, une image sans zone d'essaim (`layer::AUCUNE`) où seul `Loin` avance
   et dessine ; il n'est jamais estompé avec l'essaim (dessiné hors du fondu de veille). Pause et
   plein écran effacent tout : la boucle le dit à `Loin` (`Effets::oublier_loin`, aussi quand les

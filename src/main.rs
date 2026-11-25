@@ -886,9 +886,11 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
         for ev in ecoute_bordure.lire(&au).evenements().chain(souris.into_iter().filter(|e| e.1).map(|e| e.0)) {
             border.reagir(ev, declencheurs, doux, now);
         }
-        // pointeur masqué par la frappe : sa position, pour l'habillage qui continue
-        let masque = cur.as_ref().filter(|c| active && !c.showing).map(|c| c.pos);
-        let Some(cur) = cur.filter(|c| active && c.showing) else {
+        // pointeur masqué par la frappe, ou curseur de texte (`[pause] texte`) : sa position, pour
+        // l'habillage qui continue
+        let cache = |c: &win::CursorState| !c.showing || (cfg.pause.texte && c.texte);
+        let masque = cur.as_ref().filter(|c| active && cache(c)).map(|c| c.pos);
+        let Some(cur) = cur.filter(|c| active && !cache(c)) else {
             // curseur masqué (frappe) : la bordure continue ; pause ou plein écran : remise
             border.tick(active && colorer, &cfg.bordure, render::prisme(cfg, t, 1.0), now);
             // l'habillage (équerres, liseré) continue comme elle ; tout le reste est effacé

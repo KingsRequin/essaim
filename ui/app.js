@@ -1767,6 +1767,10 @@ const APPLICATION = {
       note: "Jeu ou application en plein écran au premier plan, mode présentation : Essaim se met en pause et reprend tout seul ensuite.",
     },
     {
+      bascule: "Masquer l'essaim sur le texte", section: "pause", cle: "texte",
+      note: "Quand le pointeur devient le curseur de texte (zone de saisie, texte d'une page web), l'essaim s'efface pour laisser voir ce qu'on écrit, et revient dès que le pointeur change. La bordure et l'habillage de la fenêtre restent.",
+    },
+    {
       choix: "Sur batterie", section: "pause", cle: "batterie",
       valeurs: [["rien", "Rien ne change"], ["reduire", "30 images/s au plus"], ["pause", "Pause"]],
       note: "Sur batterie ou avec l'économiseur de batterie, Essaim peut ralentir pour durer plus longtemps, ou se mettre en pause.",

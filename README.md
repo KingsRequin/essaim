@@ -109,7 +109,7 @@ OBS (ou uni) ; elle suit ta musique comme l'essaim du pointeur.</td>
 | | |
 |---|---|
 | 🤖 **Si … alors …** | Des règles choisissent le preset : `artiste = Skrillex` → *Delta*, `bpm > 140 et heure >= 22:00` → *Intense*… ; ou selon l'appli au premier plan, ou l'heure |
-| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, session verrouillée, écran éteint, sur batterie ou devant les applis choisies ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut (la bordure colorée est alors coupée) |
+| 🌙 **Discret quand il le faut** | Pause en plein écran, en présentation, session verrouillée, écran éteint, sur batterie ou devant les applis choisies ; effacé sur une zone de texte ; cadence allégée si le PC peine ; invisible des captures et des streams si on veut (la bordure colorée est alors coupée) |
 | 🫶 **Sans flashs** | Pour les personnes sensibles aux flashs : éclats adoucis, trois par seconde au plus, bordure qui ne clignote plus (tout seul si Windows réduit les animations) |
 | 📺 **Fenêtre pour le stream** | L'essaim au centre d'une fenêtre à fond transparent, à ajouter dans OBS en *Capture de jeu* |
 | 🌀 **[Horizon](https://github.com/KingsRequin/horizon)** | Un plugin d'Horizon met Essaim en pause, change de preset et ouvre ses réglages depuis la barre |

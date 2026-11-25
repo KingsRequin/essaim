@@ -696,6 +696,9 @@ impl Default for MiseAJour {
 pub struct Pause {
     /// Pause quand Windows ne veut pas être dérangé (jeu ou appli en plein écran, présentation).
     pub ne_pas_deranger: bool,
+    /// Masque l'essaim tant que le pointeur est le curseur de texte (zone de saisie, texte d'une
+    /// page) : on voit ce qu'on écrit, même quand Windows ne cache pas le pointeur pendant la frappe.
+    pub texte: bool,
     /// Sur batterie ou économiseur de batterie actif.
     pub batterie: ModeBatterie,
     /// Exécutables qui mettent Essaim en pause quand ils sont au premier plan.
@@ -704,7 +707,7 @@ pub struct Pause {
 
 impl Default for Pause {
     fn default() -> Self {
-        Self { ne_pas_deranger: true, batterie: ModeBatterie::Reduire, applis: Vec::new() }
+        Self { ne_pas_deranger: true, texte: true, batterie: ModeBatterie::Reduire, applis: Vec::new() }
     }
 }
 
@@ -1602,6 +1605,7 @@ auto = true             # cherche les nouvelles versions sur GitHub, les téléc
 
 [pause]
 ne_pas_deranger = true  # pause quand Windows ne veut pas être dérangé (plein écran, présentation)
+texte = true            # essaim masqué tant que le pointeur est le curseur de texte (zone de saisie)
 batterie = "reduire"    # sur batterie : "rien", "reduire" (30 images/s au plus) ou "pause"
 applis = []             # pause quand l'une d'elles est au premier plan : ["obs64.exe", "zoom.exe"]
 
@@ -2184,11 +2188,12 @@ mod tests {
         assert!(!c.rendu.masquer_captures && !d.rendu.masquer_captures);
         assert!(c.rendu.adaptatif && d.rendu.adaptatif);
         assert!(c.pause.ne_pas_deranger && d.pause.ne_pas_deranger);
+        assert!(c.pause.texte && d.pause.texte);
         assert_eq!((c.pause.batterie, d.pause.batterie), (super::ModeBatterie::Reduire, super::ModeBatterie::Reduire));
         assert!(c.pause.applis.is_empty() && d.pause.applis.is_empty());
         // hors presets
         assert!(c.audio.applis.is_empty() && d.audio.applis.is_empty());
-        for (s, k) in [("rendu", "masquer_captures"), ("rendu", "adaptatif"), ("pause", "ne_pas_deranger"), ("pause", "batterie"), ("pause", "applis"), ("audio", "applis")] {
+        for (s, k) in [("rendu", "masquer_captures"), ("rendu", "adaptatif"), ("pause", "ne_pas_deranger"), ("pause", "texte"), ("pause", "batterie"), ("pause", "applis"), ("audio", "applis")] {
             assert!(!crate::profils::in_profile(s, k), "[{s}] {k}");
         }
         // écriture : valeur connue, inconnue refusée, liste d'applications
