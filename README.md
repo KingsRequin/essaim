@@ -29,7 +29,8 @@ cymbales font jaillir des étincelles, et au drop, tout explose.
 
 - **Il écoute vraiment la musique.** Le kick est reconnu par un petit modèle appris sur de vrais
   morceaux de 42 styles (de la techno au jazz, rap, rock, reggae, salsa…), en 25 ms environ et à
-  n'importe quel volume : l'essaim tombe sur le temps, pas après. Il entend aussi la caisse claire, la montée avant un drop, le tempo et le côté qui joue.
+  n'importe quel volume : l'essaim tombe sur le temps, pas après. Il entend aussi la caisse claire,
+  la montée avant un drop, le tempo et le côté qui joue.
   Rien à brancher : Essaim écoute ce que joue Windows.
 - **Ton pointeur reste le tien.** C'est le vrai curseur de Windows, sans aucun retard ; Essaim
   dessine seulement autour, dans un calque transparent aux clics.
@@ -123,12 +124,13 @@ Toutes les fonctions en détail : [docs/guide.md](docs/guide.md).
 
 ## La fenêtre des réglages
 
-À l'ouverture, le logo s'assemble en orbes, puis le nom file prendre sa place dans
-l'en-tête pendant que la fenêtre se dessine (un clic l'abrège).
+À l'ouverture, le logo s'assemble en orbes, puis le nom vient se poser dans l'en-tête pendant
+que la fenêtre se dessine (un clic l'abrège).
 
-**Les presets.** Une grille de 56 presets fournis, tous différents, chacun avec ses propres réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette, rubans, ressorts…), chacun animé
-en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en deux côte à côte,
-filtre par forme. Publie-les dans la
+**Les presets.** Une grille de 56 presets fournis, tous différents, chacun avec ses propres
+réactions à la musique (zen, néon, orage, disco, fantôme, vortex, pochette, rubans, ressorts…),
+chacun animé en direct avec ta musique : un clic l'applique. Enregistre les tiens, compare-en
+deux côte à côte, filtre par forme. Publie-les dans la
 [bibliothèque communautaire](https://github.com/KingsRequin/essaim-presets) et installe ceux des
 autres.
 
@@ -141,9 +143,9 @@ autres.
 </tr>
 <tr>
 <td valign="top"><b>Réglages</b> rangés par familles (l'essaim, les effets, les figures, la
-fenêtre et l'écran, les réactions, l'écoute, cet ordinateur), chacun avec ses options de base et avancées, appliqués en direct sur un grand aperçu
-qui suit ta musique ; un bouton y simule une montée et un drop, un autre teste chaque
-déclencheur. À côté de chaque réglage, dix cases disent ce qu'il coûte en puissance.</td>
+fenêtre et l'écran, les réactions, l'écoute, cet ordinateur), chacun avec ses options de base et
+avancées, appliqués en direct sur un grand aperçu qui suit ta musique ; un bouton y simule une
+montée et un drop, un autre teste chaque déclencheur. À côté de chaque réglage, dix cases disent ce qu'il coûte en puissance.</td>
 <td valign="top"><b>Curseurs</b> : tes jeux de curseurs Windows, animés, mis en place d'un clic.
 Un preset peut emporter le sien.</td>
 </tr>
@@ -171,8 +173,10 @@ installer, pas de droits administrateur. Au premier lancement, la fenêtre des r
 - Le curseur **Dotter** est à côté : `curseur-Dotter.zip` (voir l'étape 3 plus bas).
 - Essaim se met ensuite à jour tout seul : une notification prévient du téléchargement, puis
   propose de redémarrer. Pour ne pas attendre : *Chercher une mise à jour* dans la vue *Application*.
-- Relancer `essaim.exe` pendant qu'il tourne ouvre sa fenêtre des réglages (pas dans les 30 s qui
-  suivent son démarrage : c'est alors un second lancement automatique).
+- Relancer `essaim.exe` pendant qu'il tourne (double-clic) ouvre sa fenêtre des réglages. Le
+  démarrage avec Windows lance `essaim.exe --demarrage`, qui n'ouvre rien ; une ancienne entrée
+  sans cet argument est complétée par Essaim 30 s après son lancement (et, d'ici là, un second
+  lancement dans ces 30 s est ignoré).
 
 **Depuis les sources :** Essaim se compile en une commande.
 
@@ -241,9 +245,11 @@ réseau.
 <summary><b>L'essaim ne réagit pas au son.</b></summary>
 
 Essaim écoute la sortie audio *par défaut* de Windows. Si ta musique passe par une autre sortie,
-choisis-la dans *Réglages › Écoute › Avancé › Sortie son écoutée*. Pour qu'il n'écoute que ta musique (pas les notifications ni la vidéo d'à côté), coche son application dans *Applications écoutées*, juste en dessous. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend (kick, aigus,
-basse, note) ; s'il affiche « Son : erreur », la capture du son de Windows a échoué : la cause
-est dans le journal (`%APPDATA%\Essaim\essaim.log`).
+choisis-la dans *Réglages › Écoute › Avancé › Sortie son écoutée*. Pour qu'il n'écoute que ta
+musique (pas les notifications ni la vidéo d'à côté), coche son application dans *Applications
+écoutées*, juste en dessous. L'en-tête de la fenêtre des réglages montre ce qu'Essaim entend
+(kick, aigus, basse, note) ; s'il affiche « Son : erreur », la capture du son de Windows a
+échoué : la cause est dans le journal (`%APPDATA%\Essaim\essaim.log`).
 </details>
 
 <details>
@@ -303,7 +309,8 @@ Dans `%APPDATA%\Essaim` : `config.toml` (commenté, modifiable à la main), tes 
 `profils\`, et le journal `essaim.log` (l'ancien dans `essaim.old.log`). Tant qu'une règle du
 preset automatique agit, tes réglages d'avant attendent dans `auto-avant.toml`. Le dossier
 contient aussi `webview\` (le cache de la fenêtre des réglages), `ipc.jeton` (le secret de
-l'interface locale) et `bordure.hwnd` (la fenêtre dont la bordure doit retrouver sa couleur).
+l'interface locale), `bordure.hwnd` (la fenêtre dont la bordure doit retrouver sa couleur) et
+`version` (la dernière version lancée, pour annoncer une mise à jour).
 Pour tout effacer : quitte Essaim, puis supprime le dossier.
 </details>
 

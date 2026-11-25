@@ -195,8 +195,9 @@ fn fenetre_instance() -> Option<HWND> {
     None
 }
 
-/// Instance en cours plus jeune que cela : un lancement sans option est un second lancement
-/// automatique (démarrage de la session, installation), il n'ouvre pas ses réglages.
+/// Ancienne installation (clé Run sans `--demarrage`) et instance en cours plus jeune que cela :
+/// un lancement sans option est pris pour un second lancement automatique, il n'ouvre pas ses
+/// réglages. C'est aussi le délai avant que l'instance complète la clé Run (`completer_demarrage`).
 const INSTANCE_RECENTE: Duration = Duration::from_secs(30);
 
 /// Âge du processus qui possède la fenêtre `h` (heure de création de son processus) ; `None` s'il
@@ -272,13 +273,14 @@ fn main() {
     init_log(!deja);
     if deja {
         // relancé à la main (double-clic sur essaim.exe) pendant qu'il tourne : sans rien faire,
-        // on croirait que rien ne se passe ; la première instance ouvre ses réglages
+        // on croirait que rien ne se passe ; la première instance ouvre ses réglages. Lancement
+        // automatique (`--demarrage`, clé Run) : rien ne s'ouvre.
         if args.is_empty() {
             match fenetre_instance() {
-                // instance lancée il y a un instant : c'est un second lancement automatique
-                // (démarrage de la session, installation), pas un double-clic ; rien ne s'ouvre
-                Some(h) if age_instance(h).is_some_and(|a| a < INSTANCE_RECENTE) => {
-                    log::info!("déjà lancé il y a moins de {} s : second lancement automatique, sortie", INSTANCE_RECENTE.as_secs());
+                // ancienne installation (clé Run sans `--demarrage`) et instance lancée il y a un
+                // instant : sans doute un second lancement automatique, pas un double-clic
+                Some(h) if age_instance(h).is_some_and(|a| a < INSTANCE_RECENTE) && reglages::demarrage_sans_argument() => {
+                    log::info!("déjà lancé il y a moins de {} s, clé Run sans {} : second lancement automatique, sortie", INSTANCE_RECENTE.as_secs(), reglages::ARG_DEMARRAGE);
                 }
                 Some(h) => {
                     unsafe {
@@ -316,6 +318,12 @@ fn main() {
         default_hook(info);
     }));
     log::info!("démarrage d'Essaim {}", env!("CARGO_PKG_VERSION"));
+    // clé Run d'une ancienne installation : complétée de `--demarrage`, après `INSTANCE_RECENTE`
+    // (un second lancement automatique par l'ancienne commande la trouve encore sans lui)
+    let _ = std::thread::Builder::new().name("demarrage".into()).spawn(|| {
+        std::thread::sleep(INSTANCE_RECENTE);
+        reglages::completer_demarrage();
+    });
     let relance = run(open_settings, open_stream).unwrap_or_else(|e| {
         log::error!("arrêt sur erreur : {e:#}");
         None
@@ -418,16 +426,27 @@ const TEINTE_REJOINTE: f32 = 0.5;
 /// Teinte imposée suivie en douceur (~250 ms), par le plus court : `cible` = teinte imposée
 /// (pochette, application, Prisme) ou `None`, `h` = teinte suivie à l'image d'avant, `propre` =
 /// teinte propre de l'essaim en ce moment. Une teinte imposée qui apparaît part de la teinte
-/// propre ; qui disparaît, la suivie glisse vers la teinte propre et ne la lâche (`None`) qu'une
-/// fois rejointe : jamais de saut de couleur.
+/// propre. Qui disparaît : c'est l'écart à la teinte propre qui s'amortit (la teinte propre peut
+/// tourner vite, `vitesse_teinte`, et une poursuite la suivrait sans jamais la rejoindre) ; la
+/// suivie est lâchée (`None`) une fois l'écart sous `TEINTE_REJOINTE` : jamais de saut de couleur.
 fn glisser_teinte(cible: Option<f32>, h: Option<f32>, propre: f32, dt: f32) -> Option<f32> {
-    let depart = h.unwrap_or(propre);
-    let vers = cible.unwrap_or(propre);
-    let d = (vers - depart + 540.0).rem_euclid(360.0) - 180.0;
-    if cible.is_none() && (h.is_none() || d.abs() < TEINTE_REJOINTE) {
-        return None;
-    }
-    let suivie = (depart + d * (dt * 4.0).min(1.0)).rem_euclid(360.0);
+    let ecart = |a: f32, b: f32| (a - b + 540.0).rem_euclid(360.0) - 180.0;
+    let suivie = match (cible, h) {
+        (Some(c), h) => {
+            let depart = h.unwrap_or(propre);
+            depart + ecart(c, depart) * (dt * 4.0).min(1.0)
+        }
+        (None, None) => return None,
+        (None, Some(h)) => {
+            let o = ecart(h, propre) * (-4.0 * dt.max(0.0)).exp();
+            // écart illisible (NaN) : lâchée aussi
+            if o.is_nan() || o.abs() < TEINTE_REJOINTE {
+                return None;
+            }
+            propre + o
+        }
+    };
+    let suivie = suivie.rem_euclid(360.0);
     suivie.is_finite().then_some(suivie)
 }
 
@@ -1211,6 +1230,22 @@ mod tests {
         let v = glisser_teinte(Some(350.0), Some(10.0), 0.0, dt).unwrap();
         assert!(v < 10.0, "{v}");
         assert_eq!(glisser_teinte(None, None, 42.0, dt), None);
+        // teinte propre qui tourne vite (`vitesse_teinte = 60` : 60 °/s) : lâchée quand même, en
+        // moins de 2 s, sans saut par rapport à la teinte propre
+        let (mut h, mut propre) = (Some(200.0f32), 100.0f32);
+        let mut lachee = None;
+        for i in 0..600 {
+            propre = (propre + 60.0 * dt).rem_euclid(360.0);
+            h = glisser_teinte(None, h, propre, dt);
+            match h {
+                Some(v) => assert!(((v - propre + 540.0).rem_euclid(360.0) - 180.0).abs() <= 100.0, "{v} contre {propre}"),
+                None => {
+                    lachee = Some(i);
+                    break;
+                }
+            }
+        }
+        assert!(lachee.is_some_and(|i| i < 120), "jamais lâchée : {lachee:?}");
     }
 
     #[test]

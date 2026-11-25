@@ -27,7 +27,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
     200 000 places et ne sont jamais coupés ; après une pointe, la place des listes de
     pastilles est rendue dès qu'elle dépasse 4 fois l'usage de l'image d'avant (et 100 000
     éléments) ; points non finis ignorés ; un anneau plus large
-    que son diamètre devient un disque jusqu'à r + largeur / 2, comme le trait de tiny-skia ;
+    que son diamètre devient un disque jusqu'à r + largeur / 2, comme le trait de tiny-skia, et
+    un anneau plus large qu'un tiers de son rayon est découpé en rangées concentriques en
+    quinconce (essais `anneau_epais_sans_rosace` et `anneau_epais_relu --ignored`) ;
   - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
     modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié ;
     directement dans le calque, effacé, quand la zone le couvre entier : projecteur). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
@@ -47,10 +49,12 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   contours 1,2), pas d'un pire cas commun. Une forme de trajet changée, ou ses contours (autre
   icône au premier plan, autre image : `render::version_contours`, comptée seulement quand les
   contours changent vraiment), vide les traînées de son groupe (comètes ou satellites). Un preset
-  appliqué (ou « Annuler », fin d'une règle automatique) les vide toutes : `profils::applications`
-  est compté avant l'écriture de `config.toml`, la boucle le compare à chaque relecture et appelle
-  `Swarm::vider_trainees` (l'aperçu fait de même quand au moins deux valeurs changent d'un coup :
-  `changementsReglages`). Une modulation ajoutée, retirée ou déplacée remet à zéro les valeurs
+  appliqué (ou « Annuler », fin d'une règle automatique, « Surprends-moi ») les vide toutes :
+  `profils::applications` est incrémenté sous le verrou d'écriture, juste avant l'écriture de
+  `config.toml` et seulement si le fichier change (`profils::ecrire_d_un_coup`,
+  `config::apply_keys_avant`) ; la boucle le compare à chaque relecture et appelle
+  `Swarm::vider_trainees`, comme la fenêtre pour le stream (l'aperçu fait de même quand au moins
+  deux valeurs changent d'un coup, `changementsReglages`, ou quand les contours suivis changent). Une modulation ajoutée, retirée ou déplacée remet à zéro les valeurs
   lissées sans toucher aux traînées ; une glissière déplacée ne vide rien (le trajet glisse). Cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Un `DwmFlush` rendu en moins de
   2 ms, moins d'une demi-période après le précédent, n'a rien composé (écran éteint, pas de
@@ -109,7 +113,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   pendant qu'on tape ailleurs : veille. Compte comme plein écran une fenêtre qui couvre son écran
   (cadre lu par `DWMWA_EXTENDED_FRAME_BOUNDS`) sans être agrandie ni avoir de barre de titre ou
   de bord de redimensionnement : une fenêtre agrandie, barre des tâches masquée, ne compte pas.
-  En pause et en plein écran, la capture du son est arrêtée (sauf fenêtre des réglages ouverte).
+  En pause et en plein écran, la capture du son est arrêtée (sauf si la fenêtre des réglages ou la
+  fenêtre pour le stream est ouverte).
   Le calque de l'écran reste en place, vide (aucune fenêtre ne disparaît sous la souris) : un
   calque vide reste ainsi au-dessus d'un jeu en plein écran sans bordure ; son effet sur la
   présentation du jeu n'est pas mesuré. Un calque vide depuis 10 s n'est retiré qu'à une image
@@ -160,9 +165,10 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   drop, un éclat à moitié de force toutes les 1/3 s au plus (`loin::Filet::avance`), équerres
   allumées à +25 % au lieu de +50 %. La fenêtre pour le stream fait de même. L'aperçu
   (`ui/apercu.js`, `sansFlashs`) suit `[rendu] sans_flashs`, et pour `auto`
-  `prefers-reduced-motion`, que WebView2 tire du même réglage de Windows.
+  `prefers-reduced-motion`, que WebView2 tire du même réglage de Windows, par une seule requête
+  qui écoute ses changements.
 - **Éclat du kick** : le halo blanc est un anneau qui laisse un vide de 6 px (× échelle,
-  `render::HALO_VIDE`) sous la pointe : le texte visé n'est pas voilé à chaque kick.
+  `render::HALO_VIDE`, réduit à la moitié du halo pour un petit éclat) sous la pointe : le texte visé n'est pas voilé à chaque kick.
 - **Écrans** : l'essaim est dessiné sur chaque écran qu'il touche (la traînée passe la
   frontière) ; une traînée laissée à plus de 1200 px par un saut du pointeur est abandonnée
   (sinon elle resterait figée sur l'écran quitté). Quand la configuration des écrans change
@@ -275,8 +281,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   attend son retour. Ces
   seuils sont ceux de `[projecteur] sensibilite = 5` (`effets::secousse_exigence`) : la course
   minimale double tous les 5 crans en moins (104 px à 1, 30 px à 10), les deux durées
-  s'allongent comme l'inverse de sa racine (0,49 s et 0,85 s à 10). `secousse` et `sensibilite`
-  sont hors presets (`profils::in_profile`, `HORS_PRESET` dans `ui/app.js`).
+  s'allongent comme l'inverse de sa racine (0,49 s et 0,85 s à 10). `actif`, `secousse` et
+  `sensibilite` sont hors presets (`profils::in_profile`, `HORS_PRESET` dans `ui/app.js`).
 - **Étiquette du morceau** (`etiquette.rs`, tenue par la boucle principale) : un changement de
   piste (`media::pistes`) lance l'affichage. Le texte est écrit une fois par morceau dans une
   image (GDI : `CreateFontW` Segoe UI, `ExtTextOutW` en blanc sur une section DIB, la plus forte
@@ -312,7 +318,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   teinte de la précédente restant en attendant. Priorité des teintes : pochette (pendant la
   lecture) > application ou site > Prisme. Teinte imposée suivie en douceur
   (`main::glisser_teinte`) : elle part de la teinte propre quand elle apparaît et y revient en
-  glissant quand elle disparaît. Sans l'API (Windows N), une ligne au journal et rien ne change. Message
+  glissant quand elle disparaît, par un écart amorti (~250 ms), lâché sous 0,5°
+  (`TEINTE_REJOINTE`). Sans l'API (Windows N), une ligne au journal et rien ne change. Message
   `charge` : `morceau`, `lecture`, `pistes`.
 
 ## Interface locale (widget Horizon)
@@ -320,7 +327,7 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 WebSocket `ws://127.0.0.1:28670` (28642 = relais Discord, 28650 = Prisme, 28660 = hooks
 d'Horizon), JSON, même forme que Prisme : `get_state`, `set_paused`, `set_config`
 (`section`, `key`, `value` : écrit dans `config.toml` en gardant les commentaires, valeurs
-bornées ; par exemple `bordure`/`repos`), `list_presets` (presets fournis puis ceux de
+hors bornes refusées ; par exemple `bordure`/`repos`), `list_presets` (presets fournis puis ceux de
 l'utilisateur : `name`, `builtin`, `active`, relus à chaque demande), `apply_preset` (`name` :
 comme le menu de l'icône, curseurs du preset compris ; `ok: true` dès que les réglages sont
 écrits, avec `"warning"` si seul le jeu de curseurs n'a pas pu être installé), `open_settings` (fenêtre des réglages,
@@ -356,9 +363,10 @@ un ping WebSocket de temps en temps, moins d'une minute d'écart. `open_config` 
 confondus (au-delà, la demande attend son tour jusqu'à 2 s, puis « trop de demandes »). Un
 jeton aléatoire est écrit au premier lancement dans `%APPDATA%\Essaim\ipc.jeton` ; il n'est pas
 encore demandé (Horizon ne l'envoie pas). Le port est ouvert par le fil `essaim-ipc`, 10 essais
-sur 5 s (l'instance d'avant le tient encore juste après une mise à jour). `set_config` refuse les sections `mise_a_jour`,
-`bibliotheque`, `automatique` et `pause` (elles ne changent que par la fenêtre des réglages ou
-le fichier). Le plugin Essaim d'Horizon s'en sert (pause au clic ; dans son panneau, choix du
+à 0,5 s d'écart (l'instance d'avant le tient encore juste après une mise à jour). `set_config`
+refuse les sections `mise_a_jour`, `bibliotheque`, `automatique` et `pause` (elles ne changent
+que par la fenêtre des réglages ou le fichier). Le plugin Essaim d'Horizon s'en sert (pause au
+clic ; dans son panneau, choix du
 preset et ouverture des réglages).
 
 ## Consommation (mesurée le 2026-11-14)
@@ -382,9 +390,9 @@ applications choisies, `audio-commun` ouvre une capture « process loopback » p
 (racine de son arbre de processus, enfants compris), les mélange et revérifie les processus
 toutes les 2 s (README d'`audio-commun`, « Son de certaines applications »). `main::Son` relance
 la capture quand la sortie ou les applications changent ; la fenêtre des réglages demande la
-liste (`Demande::ApplisSonores` → `capture::applis_sonores`). Si Windows refuse l'écoute par
-application, toute la sortie est écoutée en attendant (nouvel essai toutes les 30 s dans un fil à
-part, sans couper l'écoute ni l'analyse ; jamais sur un Windows trop ancien) :
+liste (`Demande::ApplisSonores` → `capture::applis_sonores_detail`). Si Windows refuse l'écoute
+par application, toute la sortie par défaut est écoutée en attendant (nouvel essai toutes les 30 s
+dans un fil à part, sans couper l'écoute ni l'analyse ; jamais sur un Windows trop ancien) :
 `AudioShared::repli_applis`, montré dans la fenêtre des réglages, effacé à chaque nouvelle
 capture. Chaque capture a sa génération : une capture remplacée (fil détaché après 300 ms)
 n'écrit plus rien. Un flux rouvert à la même fréquence après moins de 3 s garde l'analyse et le
@@ -392,10 +400,10 @@ tempo. Un fil de capture qui panique le dit (`lost`) et est relancé 30 s plus t
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
-- **Kick** : 10 bandes (biquads, pas de FFT ; celles sous 4 kHz sur le son sous-échantillonné)
-  suivies tous les 5 ms ; chaque pic de montée d'énergie est jugé par un petit réseau appris sur de
-  vrais morceaux, 10, 20 ou 30 ms après l'attaque selon sa netteté (délai médian mesuré :
-  20–30 ms). Le réseau lit la forme de l'attaque et le contexte : l'état d'un petit réseau
+- **Kick** : 10 bandes (biquads, pas de FFT ; celles sous 4 kHz sur le son sous-échantillonné) ;
+  chaque pic de montée d'énergie est jugé par un petit réseau appris sur de vrais morceaux, 10, 20
+  ou 30 ms après l'attaque selon sa netteté (délai médian mesuré : 20–30 ms). Le réseau lit la
+  forme de l'attaque et le contexte : l'état d'un petit réseau
   récurrent (GRU) qui écoute les bandes en continu et retient le rythme, les coups récents et la
   nature du son (musique, voix seule, basse tenue) ; il est oublié après 2 s de silence.
   `sensibilite_kick` règle le dernier seuil ; sans kick depuis 4 s (intro, montée, reprise après
@@ -432,9 +440,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   claire à la fois. 50 ms au moins entre deux. En validation croisée : F1 0,78 sur les 107
   morceaux, 0,82 sur les 93 autres, 0,76 sur les 277 de 42 styles, 0,59 sur MDB Drums (0,68, 0,70
   et 0,39 sans le contexte sur les trois jeux d'alors) ;
-  délai médian 20 ms. Elle remplace un détecteur à seuils (bande à 2 kHz, enveloppes rapide et
-  lente, tenue à 25 ms) qui comptait aussi les kicks distordus du hardstyle. `Musique` lit le compteur de l'analyse du kick après chaque paquet ; elle
-  ne calcule plus elle-même que la brillance de la montée (`Eclat`).
+  délai médian 20 à 30 ms. Elle remplace un détecteur à seuils (bande à 2 kHz, enveloppes rapide
+  et lente, tenue à 25 ms) qui comptait aussi les kicks distordus du hardstyle. `Musique` lit le
+  compteur de l'analyse du kick après chaque paquet ; elle ne calcule plus elle-même que la
+  brillance de la montée (`Eclat`) et le niveau du son (le drop par retour de l'énergie).
 - **Montée et drop** (`Montee`) : tension = 0,75 × accélération + 0,45 × éclaircie, bornée à 1,
   lissée (montée 0,6 s, retombée 1,5 s). Accélération : caisses claires par seconde sur ~1 s face à
   celles sur ~12 s (au moins 1,5), écart / 5. Éclaircie : brillance (bande 8–12 kHz face au son
@@ -447,25 +456,31 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   sans montée ni drop, montée (roulement de 4 à 16 caisses par seconde) puis un seul drop, drop
   d'énergie après un passage 16 dB plus bas, caisses claires trouvées sans celles des kicks ; essai
   réel `cargo test --release musique_reelle -- --ignored --nocapture` (un morceau joué pendant 24 s).
-  Calculé seulement si une modulation (sources caisse, montée, drop) ou un déclencheur (caisse,
-  drop) l'écoute (`Config::analyse_musicale`, `AudioShared::set_musique`).
+  Calculé seulement si une modulation (sources caisse, montée, drop), un déclencheur (caisse,
+  drop), une figure ou l'habillage l'écoute (`Config::analyse_musicale`,
+  `AudioShared::set_musique`).
 - **Stéréo** : la capture d'`audio-commun` remet après chaque paquet le niveau efficace de chaque
-  canal (`Sink::stereo`, depuis le commit qui suit la v0.2.0). Équilibre = (D − G) / (D + G), lissé
+  canal (`Sink::stereo`). Équilibre = (D − G) / (D + G), lissé
   sur 0,25 s de son audible ; les paquets muets (blancs entre deux coups) ne le changent pas, et il
   revient au centre après 0,5 s de silence. Essai réel : groove joué tout à droite → +1,00.
 - **Temps, contretemps** (`render::Ecoute`) : la phase du tempo des kicks (`pulsation`) qui
   repasse par 0 (temps), ou passe 0,5 (contretemps).
-- **Sortie écoutée** : `capture::start_sur` d'`audio-commun` (sortie par défaut ou identifiant
-  Windows) ; si la sortie choisie disparaît, repli sur la sortie par défaut, et retour sur elle
+- **Sortie écoutée** : `capture::start_ecoute` d'`audio-commun`, avec `Ecoute::depuis_reglages`
+  (sortie par défaut ou identifiant Windows, applications choisies) ; si la sortie choisie
+  disparaît, repli sur la sortie par défaut, et retour sur elle
   dès qu'elle revient (vérification toutes les 2 s).
-- **Bandes du spectre** (`src/audio.rs`, `Bandes`) : seulement si `[spectre] actif` ; 8 à 32
-  passe-bande (deux biquads f32 en série chacun) répartis en échelle log de 40 Hz à 12 kHz,
+- **Bandes du spectre** (`src/audio.rs`, `Bandes`) : seulement si l'écoute est active et que
+  `[spectre] actif` (ou, à 16 bandes, que la forme *Spectre* de l'anneau, `[orbe]`, est active) ;
+  8 à 32 passe-bande (deux biquads f32 en série chacun) répartis en échelle log de 40 Hz à 12 kHz,
   enveloppes 5 ms / 120 ms, niveaux en dB sous le pic récent (plage 36 dB). 0,9 % d'un cœur à
   32 bandes.
-- Limites connues : sur un son sans batterie (voix seule, piano, orgue, contrebasse), il reste
-  environ un faux kick toutes les deux minutes (dix par minute avant le contexte) ; le kick
-  effleuré du jazz acoustique reste mal reconnu ; les notes fantômes de caisse claire de la
-  batterie acoustique sont souvent manquées (rappel 0,68 sur MDB Drums).
+- Limites connues : sur un son sans batterie (voix seule, piano, orgue, cordes, contrebasse,
+  ASMR), le modèle livré donne environ 1 faux kick par minute sur les 59 sons du banc, qu'il a
+  appris ; en validation croisée, 4,1 par minute, dont 3,0 viennent d'un seul son (des
+  tapotements d'ASMR) ; 11 par minute sur 31 autres sons sans batterie (chœurs, clavecin, pluie,
+  train…). Le kick effleuré du jazz acoustique reste mal reconnu ; les notes fantômes de caisse
+  claire de la batterie acoustique sont souvent manquées (rappel 0,46 sur MDB Drums en validation
+  croisée).
 
 ## Interface : technique et charte
 
@@ -486,8 +501,9 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   (`BitBlt`), sur chaque écran : `PrintWindow` fait rendre la page et ne montre pas ce blanc.
 - **Ouverture animée** (`ui/lancement.js`) : à chaque ouverture de la fenêtre, la page naît sous
   le voile `#ouverture` (`style.css` ; absent si Windows demande moins d'animations). Le logo s'y
-  assemble en orbes (SVG, soudure par un filtre de flou durci), puis le nom ESSAIM va se poser sur le titre de l'en-tête, mesuré dans
-  la page (même police, même interlettrage : il s'y superpose lettre pour lettre), son filet
+  assemble en orbes (SVG, soudure par un filtre de flou durci), puis le nom ESSAIM vient se poser
+  dans l'en-tête, sur le titre, mesuré dans la page (même police, même interlettrage : il s'y
+  superpose lettre pour lettre), son filet
   devient celui de l'en-tête et les blocs de la fenêtre entrent en décalé (Web Animations) ; le
   voile est alors retiré. L'animation part quand la fenêtre se montre (événement `essaim-prete`
   de la page). Un clic ou une touche l'abrège (un changement de taille aussi, une fois
@@ -693,7 +709,8 @@ et plus aucune une fois qu'une version attend le redémarrage. *Redémarrer* (`r
 Publier une version :
 
 1. monter `version` dans `Cargo.toml`, commiter, puis pousser un tag `vX.Y.Z` identique ;
-2. le workflow `.github/workflows/publication.yml` vérifie le tag, lance les tests, compile
+2. le workflow `.github/workflows/publication.yml` vérifie le tag, l'interface
+   (`node scripts/verifier-ui.mjs`), lance les tests et Clippy, compile
    (job sans droit d'écriture ni jeton conservé), puis un second job, qui ne compile rien, crée
    la version **en brouillon** avec `essaim.exe` (nom attendu par les mises à jour) et
    `curseur-Dotter.zip` ;

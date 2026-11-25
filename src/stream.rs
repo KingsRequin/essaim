@@ -557,6 +557,7 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let mut doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
     let mut panne = Panne::default();
     let mut cachee = false;
+    let mut presets_vus = crate::profils::applications();
     // une image tous les `intervalle` rafraîchissements de l'écran de la fenêtre (relu chaque
     // seconde : la fenêtre peut changer d'écran), et attente en plus pour une cadence fixée
     let rythme = |cadence: u32| {
@@ -583,6 +584,12 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
             relu = now;
             if conf.reload() {
                 calibree = portee(&conf.cfg);
+                // preset appliqué : comme la surcouche, les traînées repartent de zéro
+                let presets = crate::profils::applications();
+                if presets != presets_vus {
+                    presets_vus = presets;
+                    swarm.vider_trainees();
+                }
             }
             doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
             (intervalle, periode) = rythme(conf.cfg.rendu.cadence);
@@ -815,6 +822,46 @@ mod tests {
         eprintln!("petite pastille selon sa position : {lumieres:?}");
         let (min, max) = (*lumieres.iter().min().unwrap(), *lumieres.iter().max().unwrap());
         assert!(min > 0 && min as f32 >= 0.8 * max as f32, "pastille qui clignote : {lumieres:?}");
+    }
+
+    /// Anneau épais (halo du kick : de 6 à 28 px, opacité 0,35) sur la carte graphique, relu : rien
+    /// sous le creux, et même lumière dans toutes les directions (pas de rosace).
+    /// `cargo test --release anneau_epais_relu -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn anneau_epais_relu() {
+        let hwnd = fenetre_essai();
+        let (l, h) = (64u32, 64u32);
+        let mut r = Rendu::new(hwnd).unwrap();
+        let (vide, dehors) = (6.0f32, 28.0f32);
+        r.image(l, h, couleur_fond(Fond::Transparent), 1.0, None, |cv| cv.ring(0.0, 0.0, (vide + dehors) / 2.0, dehors - vide, (255, 255, 255), 0.35))
+            .unwrap();
+        let px = relire(&r);
+        let _ = unsafe { DestroyWindow(hwnd) };
+        // opacité moyenne par secteur de 15°, dans l'anneau (loin de ses bords)
+        let mut secteurs = [(0u32, 0u32); 24];
+        let mut sous_le_creux = 0u8;
+        for y in 0..h {
+            for x in 0..l {
+                let (dx, dy) = (x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0);
+                let d = dx.hypot(dy);
+                let a = px[(y * l + x) as usize][3];
+                if d < vide - 1.5 {
+                    sous_le_creux = sous_le_creux.max(a);
+                } else if d > vide + 2.0 && d < dehors - 2.0 {
+                    let i = ((dy.atan2(dx) + std::f32::consts::PI) / std::f32::consts::TAU * 24.0) as usize % 24;
+                    secteurs[i].0 += u32::from(a);
+                    secteurs[i].1 += 1;
+                }
+            }
+        }
+        let moyennes: Vec<f32> = secteurs.iter().map(|&(s, n)| s as f32 / n.max(1) as f32).collect();
+        let (min, max) = moyennes.iter().fold((f32::MAX, 0.0f32), |(m, n), &v| (m.min(v), n.max(v)));
+        eprintln!("opacité par secteur {min:.1} à {max:.1} (sur 255), sous le creux {sous_le_creux}");
+        assert!(sous_le_creux <= 3, "voilé sous le creux : {sous_le_creux}");
+        assert!(min >= 0.9 * max, "rosace : {min:.1} à {max:.1}");
+        // à peu près l'opacité voulue (0,35 × 255 = 89)
+        assert!((60.0..=120.0).contains(&max), "opacité {max}");
     }
 
     #[test]

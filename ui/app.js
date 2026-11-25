@@ -664,9 +664,10 @@ function signature(p) {
   return s;
 }
 
-// Habillage hors presets (fenêtre, écran, étiquette du morceau) : il reste quand on applique un
-// preset, donc les vignettes, la loupe et la comparaison le montrent tel qu'il est en place.
-const HABILLAGE = ["equerres", "halo", "lisere", "etiquette"];
+// Habillage hors presets (fenêtre, écran, étiquette du morceau) et rendu (mode sans flashs) : ils
+// restent quand on applique un preset, donc les vignettes, la loupe et la comparaison les
+// montrent tels qu'ils sont en place.
+const HABILLAGE = ["equerres", "halo", "lisere", "etiquette", "rendu"];
 function avecHabillage(r) {
   if (!etat.reglages || !r) return r;
   const plus = {};
@@ -1094,7 +1095,7 @@ const IMPACT = {
 const PRECISIONS = {
   "orbite.rayon": "Une orbite plus grande agrandit la zone redessinée à chaque image.",
   "rendu.cadence": "Multiplie le coût de tout le reste : 240 images/s coûtent huit fois plus que 30.",
-  "rendu.carte_graphique": "Mesuré : 0,35 ms par image avec la carte graphique, 1,09 ms avec le processeur.",
+  "rendu.carte_graphique": "Mesuré : 0,31 ms par image avec la carte graphique, 1,10 ms avec le processeur.",
   "projecteur.actif": "Rien hors de l'effet ; pendant l'effet, tout l'écran est redessiné : +0,13 ms par image avec la carte graphique, +9 ms avec le processeur.",
   "spectre.actif": "Analyse du son en bandes : 0,9 % d'un cœur à 32 bandes, rien quand l'anneau est coupé ; le dessin ne coûte presque rien.",
   "spectre.bandes": "L'analyse du son coûte en proportion : 0,2 % d'un cœur à 8 bandes, 0,9 % à 32.",
@@ -1527,7 +1528,7 @@ const PANNEAUX = [
     base: [
       {
         rangee: "Retrouver le pointeur", puces: [
-          ["Projecteur", "projecteur", "actif", "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver"],
+          ["Projecteur", "projecteur", "actif", "Secouer la souris (ou Ctrl+Alt+F) : l'écran s'assombrit autour du pointeur pour le retrouver. Ne change pas avec le preset"],
           ["Réticule", "reticule", "actif", "Deux fines lignes croisées centrées sur le pointeur, qui s'illuminent sur les éclats"],
         ],
       },
@@ -1625,7 +1626,7 @@ const PANNEAUX = [
   },
   {
     id: "pinceau", famille: "Figures", titre: "Trait", actif: ["pinceau", "actif"],
-    note: "Rien au repos. Quand la souris file, elle laisse un trait de pinceau, plus épais quand elle va vite, qui s'efface en moins d'une seconde ; chaque kick y fait glisser une perle. Dans l'aperçu, passe vite la souris dessus pour le voir.",
+    note: "Rien au repos. Quand la souris file, elle laisse un trait de pinceau, plus épais quand elle va vite, qui s'efface en une seconde au plus ; chaque kick y fait glisser une perle. Dans l'aperçu, passe vite la souris dessus pour le voir.",
     base: [
       { libelle: "Largeur à pleine vitesse", section: "pinceau", cle: "largeur", min: 2, max: 12, pas: 0.5, aff: (v) => virgule(+v, 1) },
       { libelle: "Durée", section: "pinceau", cle: "duree", min: 0.2, max: 1, pas: 0.02, aff: (v) => virgule(+v, 2) + " s" },
@@ -1657,7 +1658,7 @@ const PANNEAUX = [
   // l'essaim. La bordure est réglée par le preset ; équerres, halo et liseré sont hors des presets.
   {
     id: "bordure", famille: "Fenêtre et écran", titre: "Bordure", actif: ["bordure", "active"],
-    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11). Pas en mode sans flashs, ni quand Essaim est masqué des captures (elle se verrait dans un partage d'écran).",
+    note: "La bordure de la fenêtre au premier plan prend la couleur de l'essaim, et s'illumine sur ses déclencheurs (Windows 11), sauf en mode sans flashs. Quand Essaim est masqué des captures, elle n'est plus colorée du tout (elle se verrait dans un partage d'écran).",
     base: [
       { libelle: "Luminosité au repos", section: "bordure", cle: "repos", min: 0, max: 1, pas: 0.05, ...pourcent },
       { quand: ["bordure"], libelle: "S'illumine quand" },
@@ -1733,7 +1734,7 @@ const PANNEAUX = [
       { libelle: "Mise en veille après", section: "rendu", cle: "veille_apres", cache: (r) => typeof r.rendu.veille_apres !== "number", min: 0, max: 3600, pas: 10, ...dureeVeille },
       {
         bascule: "Dessin par la carte graphique", section: "rendu", cle: "carte_graphique",
-        note: "Mesuré sur Essaim : 0,35 ms de calcul par image avec la carte graphique, 1,09 ms avec le processeur (trois fois plus). À couper seulement si l'essaim s'affiche mal ; Essaim y revient seul en cas d'erreur.",
+        note: "Mesuré sur Essaim : 0,31 ms de calcul par image avec la carte graphique, 1,10 ms avec le processeur (trois fois et demie plus). À couper seulement si l'essaim s'affiche mal ; en cas d'erreur, Essaim passe seul au processeur et réessaie la carte graphique plus tard.",
       },
       {
         bascule: "Qualité adaptative", section: "rendu", cle: "adaptatif",
@@ -2888,7 +2889,7 @@ function majEtatEssaim() {
   if (etat.capture) {
     const [texte, info] = {
       active: ["Son capté", "Essaim entend le son de Windows."],
-      coupee: ["Son coupé", "Écoute arrêtée : « Réagir au son » est désactivé, ou Essaim est en pause ou derrière un plein écran."],
+      coupee: ["Son coupé", "Écoute arrêtée : la bascule « Actif » du panneau Écoute est éteinte."],
       erreur: ["Son : erreur", "La capture du son de Windows a échoué (voir le journal)."],
     }[etat.capture];
     parts.push([texte, `${texte} — ${info}`]);

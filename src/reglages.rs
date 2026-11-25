@@ -702,7 +702,8 @@ impl Fenetre {
             Demande::AppliquerReglages { nom, reglages } => match config_distante(reglages) {
                 Ok(cfg) => {
                     let avant = profils::capturer();
-                    match config::apply_keys(&cfg, |s, k| profils::in_profile(s, k) && (s, k) != ("souris", "jeu")) {
+                    // compté comme un preset appliqué : les traînées repartent de zéro
+                    match profils::ecrire_d_un_coup(&cfg, |s, k| profils::in_profile(s, k) && (s, k) != ("souris", "jeu")) {
                         Ok(()) => {
                             config::request_reload();
                             self.noter_avant(avant);
@@ -970,13 +971,31 @@ fn etat_demarrage(valeur: Option<&str>, permis: bool, exe: &std::path::Path) -> 
     }
 }
 
-/// Essaim démarre-t-il avec la session, et lequel ? Valeur `Essaim` de la clé Run de
-/// l'utilisateur, pas coupée dans le Gestionnaire des tâches, comparée à l'exécutable en cours.
-fn demarrage_actif() -> Demarrage {
-    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_SZ};
+/// Argument de la commande inscrite dans la clé Run : lancement automatique à l'ouverture de
+/// session. Une seconde instance lancée avec lui sort en silence ; sans lui (double-clic), elle
+/// ouvre les réglages de l'instance en cours.
+pub const ARG_DEMARRAGE: &str = "--demarrage";
+
+/// Commande inscrite dans la clé Run pour `exe`.
+fn commande_demarrage(exe: &std::path::Path) -> String {
+    format!("\"{}\" {ARG_DEMARRAGE}", exe.display())
+}
+
+/// La commande de la clé Run porte-t-elle `ARG_DEMARRAGE` (après le chemin de l'exécutable) ?
+fn avec_arg_demarrage(valeur: &str) -> bool {
+    let v = valeur.trim();
+    let exe = exe_de_la_commande(v);
+    // reste après le chemin (et son guillemet fermant, s'il y en a un)
+    let reste = v.find(exe).map_or("", |i| &v[i + exe.len()..]).trim_start_matches('"');
+    reste.split_whitespace().any(|a| a.eq_ignore_ascii_case(ARG_DEMARRAGE))
+}
+
+/// Valeur `Essaim` de la clé Run de l'utilisateur, s'il y en a une.
+fn valeur_run() -> Option<String> {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
     // la commande inscrite (taille demandée d'abord, en octets)
     let mut taille = 0u32;
-    let valeur = unsafe {
+    unsafe {
         if RegGetValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), RRF_RT_REG_SZ, None, None, Some(&mut taille)).is_err() {
             None
         } else {
@@ -986,7 +1005,43 @@ fn demarrage_actif() -> Demarrage {
                 .is_ok()
                 .then(|| String::from_utf16_lossy(&tampon[..(n as usize / 2).min(tampon.len())]).trim_end_matches('\0').to_owned())
         }
-    };
+    }
+}
+
+/// Écrit la valeur `Essaim` de la clé Run.
+fn ecrire_run(valeur: &str) -> Result<(), String> {
+    use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    let octets: Vec<u8> = valeur.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
+    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), REG_SZ.0, Some(octets.as_ptr() as *const _), octets.len() as u32) }
+        .ok()
+        .map_err(|e| e.to_string())
+}
+
+/// Clé Run d'une ancienne installation : une commande `Essaim` inscrite sans `ARG_DEMARRAGE`
+/// (un lancement sans argument peut alors être le démarrage de la session).
+pub fn demarrage_sans_argument() -> bool {
+    valeur_run().is_some_and(|v| !avec_arg_demarrage(&v))
+}
+
+/// Clé Run qui lance l'exécutable en cours sans `ARG_DEMARRAGE` (ancienne installation) :
+/// réécrite avec lui. Sa permission dans le Gestionnaire des tâches n'est pas touchée.
+pub fn completer_demarrage() {
+    let (Some(valeur), Ok(exe)) = (valeur_run(), std::env::current_exe()) else { return };
+    if avec_arg_demarrage(&valeur) || !meme_exe(std::path::Path::new(exe_de_la_commande(&valeur)), &exe) {
+        return;
+    }
+    match ecrire_run(&commande_demarrage(&exe)) {
+        Ok(()) => log::info!("démarrage : commande complétée de {ARG_DEMARRAGE}"),
+        Err(e) => log::warn!("démarrage : commande non complétée ({e})"),
+    }
+}
+
+/// Essaim démarre-t-il avec la session, et lequel ? Valeur `Essaim` de la clé Run de
+/// l'utilisateur, pas coupée dans le Gestionnaire des tâches, comparée à l'exécutable en cours
+/// (arguments ignorés).
+fn demarrage_actif() -> Demarrage {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY};
+    let valeur = valeur_run();
     let mut etat = [0u8; 12];
     let mut n = etat.len() as u32;
     let lu = unsafe {
@@ -1030,15 +1085,11 @@ fn demarrage_approuve(octet: u8) -> bool {
 
 /// Démarrage avec la session : l'exécutable en cours, ou plus rien.
 fn regler_demarrage(actif: bool) -> Result<(), String> {
-    use windows::Win32::System::Registry::{RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    use windows::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
     unsafe {
         if actif {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let valeur = format!("\"{}\"", exe.display());
-            let octets: Vec<u8> = valeur.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
-            RegSetKeyValueW(HKEY_CURRENT_USER, CLE_RUN, w!("Essaim"), REG_SZ.0, Some(octets.as_ptr() as *const _), octets.len() as u32)
-                .ok()
-                .map_err(|e| e.to_string())?;
+            ecrire_run(&commande_demarrage(&exe))?;
             // une coupure faite dans le Gestionnaire des tâches est levée : sans valeur, l'entrée
             // est permise
             let r = RegDeleteKeyValueW(HKEY_CURRENT_USER, CLE_RUN_APPROUVE, w!("Essaim"));
@@ -1853,6 +1904,17 @@ mod tests {
         assert_eq!(exe_de_la_commande(r"C:\Outils\Essaim\essaim.exe --reglages"), r"C:\Outils\Essaim\essaim.exe");
         assert_eq!(etat_demarrage(Some(r"C:\Outils\Essaim\ESSAIM.exe --reglages"), true, exe), Demarrage::Actif);
         assert_eq!(exe_de_la_commande(r"C:\x.exes\essaim.exe /b"), r"C:\x.exes\essaim.exe");
+        // commande écrite par Essaim : l'exécutable entre guillemets, puis `--demarrage`, ignoré
+        // pour la comparaison
+        let commande = commande_demarrage(exe);
+        assert_eq!(commande, r#""C:\Outils\Essaim\essaim.exe" --demarrage"#);
+        assert_eq!(etat_demarrage(Some(&commande), true, exe), Demarrage::Actif);
+        assert!(avec_arg_demarrage(&commande));
+        assert!(avec_arg_demarrage(r"C:\Outils\Essaim\essaim.exe --DEMARRAGE"));
+        // ancienne installation : sans l'argument (ou avec un autre, ou dans le chemin)
+        assert!(!avec_arg_demarrage(r#""C:\Outils\Essaim\essaim.exe""#));
+        assert!(!avec_arg_demarrage(r"C:\Outils\Essaim\essaim.exe --reglages"));
+        assert!(!avec_arg_demarrage(r#""C:\--demarrage\essaim.exe""#));
         // même fichier par un autre chemin (`..`) : chemins canoniques égaux
         let d = std::env::temp_dir().join(format!("essaim-demarrage-{}", std::process::id()));
         std::fs::create_dir_all(d.join("sous")).unwrap();

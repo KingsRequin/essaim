@@ -1830,15 +1830,27 @@ pub(crate) fn set_value_in(p: &Path, section: &str, key: &str, value: &serde_jso
     edit_file(p, |doc, known| set_in_doc(doc, known, section, key, value))
 }
 
-/// Écrit d'un coup les valeurs de `cfg` retenues par `keep(section, clé)` (application d'un
-/// profil), en gardant commentaires et mise en page.
-pub fn apply_keys(cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<(), String> {
-    apply_keys_in(&path(), cfg, keep)
+#[cfg(test)]
+pub(crate) fn apply_keys_in(p: &Path, cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<(), String> {
+    apply_keys_avant_in(p, cfg, keep, || ())
 }
 
-pub(crate) fn apply_keys_in(p: &Path, cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<(), String> {
+/// Écrit d'un coup les valeurs de `cfg` retenues par `keep(section, clé)` (application d'un
+/// profil), en gardant commentaires et mise en page. `avant_ecriture` est appelé sous le verrou,
+/// juste avant l'écriture du fichier, et seulement s'il change (compteur des presets appliqués :
+/// `profils::ecrire_d_un_coup`).
+pub fn apply_keys_avant(cfg: &Config, keep: impl Fn(&str, &str) -> bool, avant_ecriture: impl FnOnce()) -> Result<(), String> {
+    apply_keys_avant_in(&path(), cfg, keep, avant_ecriture)
+}
+
+pub(crate) fn apply_keys_avant_in(
+    p: &Path,
+    cfg: &Config,
+    keep: impl Fn(&str, &str) -> bool,
+    avant_ecriture: impl FnOnce(),
+) -> Result<(), String> {
     let values = serde_json::to_value(cfg.clone().clamped()).map_err(|e| e.to_string())?;
-    edit_file(p, |doc, known| set_keys(doc, known, &values, keep))
+    edit_file_avant(p, |doc, known| set_keys(doc, known, &values, keep), avant_ecriture)
 }
 
 /// Texte `base` (TOML) complété des valeurs de `cfg` retenues par `keep` (fichier d'un preset).
@@ -1927,6 +1939,16 @@ fn edit_file(
     p: &Path,
     change: impl FnOnce(&mut toml_edit::DocumentMut, &serde_json::Value) -> Result<(), String>,
 ) -> Result<(), String> {
+    edit_file_avant(p, change, || ())
+}
+
+/// Comme `edit_file`, `avant_ecriture` appelé sous le verrou juste avant d'écrire (pas si le
+/// fichier reste le même ou si le changement est refusé).
+fn edit_file_avant(
+    p: &Path,
+    change: impl FnOnce(&mut toml_edit::DocumentMut, &serde_json::Value) -> Result<(), String>,
+    avant_ecriture: impl FnOnce(),
+) -> Result<(), String> {
     let _verrou = verrou();
     let text = match std::fs::read_to_string(p) {
         Ok(t) => t,
@@ -1934,6 +1956,7 @@ fn edit_file(
         Err(e) => return Err(format!("{} illisible ({e}), rien n'a été écrit", p.display())),
     };
     let Some(new) = edit_text(&text, change)? else { return Ok(()) };
+    avant_ecriture();
     ecrire_atomique(p, &new).map_err(|e| format!("écriture de {} impossible : {e}", p.display()))?;
     ECRITURES.fetch_add(1, Ordering::Relaxed);
     Ok(())
@@ -2755,6 +2778,21 @@ liste = [{ source = \"basse\", cible = \"rayon\", sur = \"plus_tard\", quantite 
         assert!(super::set_value_in(&p, "orbite", "trainee", &serde_json::json!(0.01f32 as f64)).is_ok());
         assert!(super::set_value_in(&p, "orbite", "trainee", &serde_json::json!(0.009)).is_err());
         assert!(super::set_value_in(&p, "bordure", "repos", &serde_json::json!(1.01)).is_err());
+    }
+
+    #[test]
+    fn ecriture_d_un_coup_signalee_seulement_si_elle_change() {
+        // compteur des presets appliqués : appelé avant l'écriture, pas quand rien ne change
+        let d = dossier("avant-ecriture");
+        let p = d.join("config.toml");
+        let mut cfg = super::Config::default();
+        cfg.orbite.rayon = 77.0;
+        let mut appels = 0;
+        super::apply_keys_avant_in(&p, &cfg, |s, _| s == "orbite", || appels += 1).unwrap();
+        assert_eq!(appels, 1);
+        assert_eq!(super::Config::read(&p).unwrap().orbite.rayon, 77.0);
+        super::apply_keys_avant_in(&p, &cfg, |s, _| s == "orbite", || appels += 1).unwrap();
+        assert_eq!(appels, 1, "mêmes réglages : rien d'écrit, rien de compté");
     }
 
     #[test]

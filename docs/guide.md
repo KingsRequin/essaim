@@ -66,8 +66,10 @@ l'ordre de la liste.
 - `force` : pour un éclat, la bordure ou le frein, de 0 à 1 ; pour une onde, des éclats, une
   fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour des étincelles, de 0,2 à 3 (leur
   vitesse : leur taille ne change pas) ; pour une explosion ou une rafale, de 0,2 à 3 (la taille
-  de la grande onde seule) ; pour un rebond ou une poussée, de 0 à 3 (l'élan). `delai` : secondes au moins entre deux fois ;
-  `probabilite` : la chance de se déclencher à chaque événement (0,33 : un sur trois).
+  de la grande onde seule) ; pour un rebond ou une poussée, de 0 à 3 (l'élan). `nombre` et
+  `nombre_max` (satellites, étincelles, et ceux de l'explosion et de la rafale) : de 0 à 40, le
+  nombre tiré entre les deux à chaque fois. `delai` : secondes au moins entre deux fois (0 à 10) ;
+  `probabilite` : la chance de se déclencher à chaque événement (0 à 1 ; 0,33 : un sur trois).
 - Un événement ou une action inconnus (preset d'une version plus récente) ne font rien.
 
 ### Modulations
@@ -119,9 +121,8 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   traînée et opacité se multiplient (deux réactions qui resserrent l'orbite de moitié la
   resserrent au quart), dans des bornes lisibles. Avec le réglage, la rotation reste entre −180
   et 180 tr/min (celle d'une figure aussi) et la vitesse sur le trajet entre 0 et 60 radians/s.
-  Une figure ne descend pas sous la moitié de sa taille (l'échelle 0,5 de son allure) : plus
-  petite, elle se ramasserait sur le pointeur ; ni au-delà de deux fois et demie (elle couvrirait
-  l'écran).
+  Une figure ne descend pas sous la moitié de sa taille : plus petite, elle se ramasserait sur
+  le pointeur.
 
 Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillement]`,
 `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`, `[audio] pulsation_tempo`,
@@ -130,27 +131,34 @@ Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillem
 lancement, commentaires gardés. Un preset sans `[declencheurs]` dont la liste de modulations est
 vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dans le preset (une
 réaction non écrite y compte comme coupée, même la montée, active par défaut : ni ses
-modulations ni l'explosion au drop). Un preset d'avant
-garde son allure (essai
+modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
 `presets_comme_avant`, sur les presets fournis jusqu'à la version 0.6).
 
 ### Les effets
 
-- **Trajet** : les comètes (`[orbite] nombre` par anneau, `anneaux` emboîtés qui tournent de
-  moins en moins vite) suivent un trajet parmi quatorze formes (cercle, ellipse, triangle, carré,
-  losange, pentagone, hexagone, étoile, astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`),
-  ou les contours d'une image (`forme = "trace"`, points dans `contours`, 24 au plus, parcourus à
-  vitesse constante, coins compris ; plusieurs contours : un anneau de comètes chacun, quel que
-  soit `anneaux` ; un ancien trajet dessiné à la main, dans `trace`,
-  marche toujours), ou ceux de l'icône de l'application au premier plan (`forme = "icone"`, qui
-  change avec elle, les traînées repartant de zéro sur la nouvelle forme ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; quand sa rotation, modulations comprises, retombe sous 2 tours/min, il se redresse en douceur ; `rotation_sur` : `"tout"`,
-  `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet ; une autre valeur vaut
-  `"tout"`) ; les satellites suivent le
-  même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des satellites permanents,
-  même sans musique. Entre deux images, les traînées suivent le vrai trajet (points
-  intermédiaires) : elles restent lisses à grande vitesse.
-- **Couleurs** : une teinte de départ qui tourne en continu ou reste fixe ; ou la couleur
-  dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
+- **Trajet** : les comètes (`[orbite] cometes`, oui par défaut ; `nombre` par anneau, 1 à 8, 2
+  par défaut ; `anneaux` emboîtés, 1 à 4, qui tournent de moins en moins vite) suivent un trajet
+  parmi quatorze formes (cercle, ellipse, triangle, carré, losange, pentagone, hexagone, étoile,
+  astroïde, fleur, trèfle, cœur, huit, Lissajous ; `forme`), ou les contours d'une image
+  (`forme = "trace"`, points dans `contours`, 24 au plus, parcourus à vitesse constante, coins
+  compris ; plusieurs contours : un anneau de comètes chacun, quel que soit `anneaux` ; un ancien
+  trajet dessiné à la main, dans `trace`, marche toujours), ou ceux de l'icône de l'application au
+  premier plan (`forme = "icone"`, qui change avec elle, les traînées repartant de zéro sur la
+  nouvelle forme ; les réglages d'Essaim n'en changent pas). Autres réglages : `rayon` (4 à 200 px
+  à 100 %, 22 par défaut, sans basse), `vitesse_base` (vitesse de rotation sans basse, 0 à 60
+  radians/s, 3,5 par défaut) et `trainee` (durée de la traînée des comètes, 0,01 à 3 s, 0,3 par
+  défaut). Le trajet peut tourner sur lui-même (`rotation`, tours/min ; quand sa rotation,
+  modulations comprises, retombe sous 2 tours/min, il se redresse en douceur ; `rotation_sur` :
+  `"tout"`, `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet ; une autre valeur
+  vaut `"tout"`). Les satellites suivent le même trajet, ou le leur (`[essaim] forme`) ; `[essaim]
+  maximum` borne ceux qui naissent en même temps (0 à 64, 16 par défaut), chacun vivant `duree`
+  secondes (0,1 à 30, 2,8 par défaut) ; `fixes` ajoute des satellites permanents (0 à 32), même
+  sans musique. Entre deux images, les traînées suivent le vrai trajet (points intermédiaires) :
+  elles restent lisses à grande vitesse.
+- **Couleurs** : une teinte de départ (`[couleur] teinte`, 0 à 360°, 0 par défaut) qui tourne en
+  continu (`vitesse_teinte`, degrés par seconde, 0 à 720, 60 par défaut) ou reste fixe (0) ; un
+  écart de teinte entre la tête et la queue des traînées (`ecart_teinte`, 0 à 720°, 140 par
+  défaut) ; ou la couleur dominante de l'icône de l'application au premier plan (`[couleur] application`, une fois par
   exécutable ; les icônes grises gardent la teinte précédente) ; dans un navigateur, celle du
   site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
   mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
@@ -160,7 +168,8 @@ garde son allure (essai
   teinte dominante de la pochette du morceau qui joue (Spotify, navigateur… : tout ce que montre
   le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
   sans morceau, on retombe sur eux, dans cet ordre. Le passage de l'une à l'autre, et vers ou
-  depuis la teinte propre de l'essaim, se fait toujours en glissant, sans saut ; au changement de
+  depuis la teinte propre de l'essaim, se fait toujours en glissant, sans saut (une teinte qui
+  disparaît rejoint la teinte propre par un écart qui s'amortit en ~250 ms) ; au changement de
   morceau, la teinte de l'ancienne pochette reste le temps que la nouvelle soit lisible. Pour que la teinte glisse avec la musique :
   une modulation de la teinte « sur tout » (idée *La teinte suit la musique*).
 - **Palette** (`[couleur] palette`, 1 à 3 teintes) : les comètes et les satellites se partagent
@@ -185,6 +194,8 @@ garde son allure (essai
 - **Constellation** (`[essaim] constellation`) : de fines lignes relient les têtes (satellites et
   comètes) plus proches que 1,1 fois le rayon de l'orbite, d'autant plus vives qu'elles sont
   proches (160 lignes au plus).
+- **Éclat** (`[eclat] taille`, 0 à 20, 3,4 par défaut ; 0 : aucun) : la taille du halo et de
+  l'anneau que lance l'action `eclat`, sous le pointeur.
 - **Particules** (`[particules]`) : `taille` des ondes, des éclats et des implosions (0,3 à 3) ;
   `rebonds` (oui par défaut) : les étincelles (aigus, éclats, drop, clic droit) et la poussière du
   sillage rebondissent sur les bords de la fenêtre au premier plan, dedans comme dehors, en perdant
@@ -194,8 +205,9 @@ garde son allure (essai
   (déclencheur `fissure`, au clic par défaut), s'éclaire au début et sur les kicks, puis s'efface.
   Sa taille est celle du réglage fois la force du déclencheur, ses branches à 400 px au plus du
   point (à 100 %).
-- **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`) ; on
-  le voit aussi dans le grand aperçu des réglages quand la souris y file.
+- **Sillage** (`[sillage]`, éteint par défaut : `actif`) : quand la souris file vite, une
+  poussière reste derrière elle, plus ou moins dense (`densite`, 1 à 10, 5 par défaut) ; on le
+  voit aussi dans le grand aperçu des réglages quand la souris y file.
 - **Inertie** (`[orbite] inertie`, 0 à 1, 0 par défaut) : le centre de l'orbite suit le pointeur
   comme au bout d'un ressort : il traîne derrière la souris quand elle file (jusqu'à six fois plus
   loin qu'à 0), la dépasse un peu à l'arrêt, puis revient sur elle.
@@ -204,18 +216,20 @@ garde son allure (essai
   qui se resserre puis s'efface (`duree`, 1,2 s) ; le disque gonfle sur les éclats. *Sensibilité à
   la secousse* (`sensibilite`, 1 à 10, 5 par défaut) : à 1, il faut un geste ample et vif
   (allers d'au moins 104 px) ; à 10, un petit geste plus lent suffit (30 px). Un va-et-vient
-  bouton enfoncé (sélection, fenêtre traînée) ne compte pas. S'il part tout seul, la baisser ; `secousse = false` (*Projecteur lancé par › La secousse de la souris*) ne
-  garde que le raccourci. Ces deux réglages, propres à la main et à la souris, ne changent pas
-  avec le preset. Sous *+ Avancé* : *Taille du projecteur*, le rayon du disque à la fin de l'effet
+  bouton enfoncé (sélection, fenêtre traînée) ne compte pas. S'il part tout seul, la baisser ;
+  `secousse = false` (*Projecteur lancé par › La secousse de la souris*) ne garde que le
+  raccourci. Ces trois réglages (le projecteur lui-même, la secousse et la sensibilité), propres
+  à la machine, ne changent pas avec le preset. Sous *+ Avancé* : *Taille du projecteur*, le rayon du disque à la fin de l'effet
   (`taille`, 30 à 300, 60 par défaut), et *Obscurité du projecteur*, l'assombrissement de l'écran
   (`opacite`, 20 à 95 %, 62 % par défaut).
 - **Réticule** (`[reticule]`) : deux fines lignes croisées centrées sur le pointeur (`taille`,
   `opacite`), vides au centre, qui s'illuminent sur les éclats. Sous *+ Avancé* : l'épaisseur
   des lignes (`epaisseur`, 0,5 à 6, 1,2 par défaut) et le vide autour du pointeur (`vide`, 4 à
   60, 12 par défaut).
-- **Anneau de spectre** (`[spectre]`) : des barres autour du pointeur, une par bande de
-  fréquences (`bandes`, 8 à 32, de 40 Hz à 12 kHz), plus longues quand la bande est forte
-  (`rayon`, `hauteur`). Avec `masquer_sans_musique` (oui par défaut, *Masquer sans musique*),
+- **Anneau de spectre** (`[spectre]`, éteint par défaut : `actif`) : des barres autour du
+  pointeur, une par bande de fréquences (`bandes`, 8 à 32, 16 par défaut, de 40 Hz à 12 kHz),
+  plus longues quand la bande est forte (`rayon` intérieur, 10 à 150, 40 par défaut ; `hauteur`
+  à pleine énergie, 4 à 100, 24 par défaut). Avec `masquer_sans_musique` (oui par défaut, *Masquer sans musique*),
   l'anneau s'efface après 1,5 s sans aucun son et revient dès que la musique reprend.
 - **Arcs** (`[arcs]`) : deux arcs fins autour du pointeur, comme les anneaux d'une montre
   (`rayon` du grand, 10 à 80, 20 par défaut ; `epaisseur`, 0,5 à 6). Le grand s'ouvre avec la
@@ -229,15 +243,16 @@ garde son allure (essai
 - **Anneau** : un anneau qui suit le pointeur avec un temps de retard et s'étire quand il file,
   d'autant plus qu'il est loin derrière. Deux formes, seules ou ensemble (deux anneaux ; panneau
   *Anneau*, cases *Lisse* et *Spectre*) :
-- *Lisse* (`[anneau]`) : un trait net (`rayon`, 6 à 60, 13 par défaut ; `epaisseur`, 0,5 à 6).
-  Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec
-  la basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
-  mesure de quatre temps quand le tempo est régulier.
-- *Spectre* (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
-  pointeur, étirée comme la forme lisse (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à 5). Les bandes de fréquences la
-  déforment (`relief`, 2 à 30 : graves en haut, aigus en bas, les deux moitiés en miroir) ; chaque
-  kick en détache un écho qui garde la forme du son, un drop trois ; pendant une montée elle se
-  resserre et frise. Elle demande l'analyse en bandes, comme le spectre (16 bandes s'il est coupé).
+  - *Lisse* (`[anneau]`) : un trait net (`rayon`, 6 à 60, 13 par défaut ; `epaisseur`, 0,5 à
+    6). Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec la
+    basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
+    mesure de quatre temps quand le tempo est régulier.
+  - *Spectre* (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
+    pointeur, étirée comme la forme lisse (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à
+    5). Les bandes de fréquences la déforment (`relief`, 2 à 30 : graves en haut, aigus en bas,
+    les deux moitiés en miroir) ; chaque kick en détache un écho qui garde la forme du son, un
+    drop trois ; pendant une montée elle se resserre et frise. Elle demande l'analyse en bandes,
+    comme le spectre (16 bandes s'il est coupé).
 - **Ligne de voix** (`[voix]`) : une petite onde sous le pointeur, comme celle d'un message vocal
   (`largeur`, 20 à 120 ; `hauteur`, 2 à 20 ; `epaisseur`). Les grandes ondulations suivent la
   basse et le kick, les moyennes la caisse claire, les fines le charleston et la montée ; un drop
@@ -262,24 +277,25 @@ garde son allure (essai
   reviennent se souder, une montée fond tout en un seul anneau, un drop lâche cinq petites bulles.
   `taille` (0,6 à 1,6) agrandit ou réduit l'ensemble (à 1, les perles tournent jusqu'à 35 px du
   pointeur).
-  Ces neuf figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
-  pointeur dégagé, et s'utilisent seules ou avec l'essaim : ce sont des alternatives aux
-  comètes, aussi réglables qu'elles. Chacune a, en plus de ses réglages propres, son **allure**
-  (mêmes clés dans sa section) : `echelle` (0,5 à 2), `opacite` (0,1 à 1), `teinte` (degrés
-  ajoutés à celle de l'essaim, -180 à 180), `rotation` (tours par minute autour du pointeur, -30
-  à 30), `decalage_x` et `decalage_y` (sa place par rapport au pointeur, -80 à 80 px), et la
-  force de chacune de ses réactions à la musique, de 0 (aucune) à 2 (double) :
-  `reaction_kick`, `reaction_caisse`, `reaction_charleston`, `reaction_basse`,
-  `reaction_montee`, `reaction_drop`. Le trait et le pendule n'ont ni échelle, ni rotation, ni
-  décalage. Les modulations peuvent viser chaque figure (`sur`, ci-dessus). Dans la fenêtre des
-  réglages, *Copier sur toutes les figures* (sous *+ Avancé* d'une figure) donne sa teinte, son
-  opacité et ses réactions aux huit autres (Ctrl+Z pour revenir, tant qu'aucun preset n'a été
-  appliqué depuis, ici ou ailleurs) ; tant que le panneau d'une
-  figure active est affiché, le grand aperçu montre une croix au pointeur et, en pointillés, le
-  cadre de sa zone une fois posée (échelle, décalage), absents de l'export GIF.
+
+Ces neuf figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
+pointeur dégagé, et s'utilisent seules ou avec l'essaim : ce sont des alternatives aux comètes,
+aussi réglables qu'elles. Chacune a, en plus de ses réglages propres, son **allure** (mêmes clés
+dans sa section) : `echelle` (0,5 à 2), `opacite` (0,1 à 1), `teinte` (degrés ajoutés à celle de
+l'essaim, -180 à 180), `rotation` (tours par minute autour du pointeur, -30 à 30), `decalage_x`
+et `decalage_y` (sa place par rapport au pointeur, -80 à 80 px), et la force de chacune de ses
+réactions à la musique, de 0 (aucune) à 2 (double) : `reaction_kick`, `reaction_caisse`,
+`reaction_charleston`, `reaction_basse`, `reaction_montee`, `reaction_drop`. Le trait et le
+pendule n'ont ni échelle, ni rotation, ni décalage. Les modulations peuvent viser chaque figure
+(`sur`, ci-dessus). Dans la fenêtre des réglages, *Copier sur toutes les figures* (sous
+*+ Avancé* d'une figure) donne sa teinte, son opacité et ses réactions aux huit autres (Ctrl+Z
+pour revenir, tant qu'aucun preset n'a été appliqué depuis, ici ou ailleurs) ; tant que le
+panneau d'une figure active est affiché, le grand aperçu montre une croix au pointeur et, en
+pointillés, le cadre de sa zone une fois posée (échelle, décalage), absents de l'export GIF.
+
 - **Habillage de la fenêtre et de l'écran** : comme la bordure, les équerres, le halo et le
-  liseré ne sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils ne font
-  pas partie des presets : une fois allumés, ils restent quand on change de preset (la bordure,
+  liseré ne sont pas autour du pointeur ; ils accompagnent l'essaim et prennent ses couleurs. Ils
+  ne font pas partie des presets : une fois allumés, ils restent quand on change de preset (la bordure,
   elle, est réglée par le preset). Comme elle, ils restent affichés quand la frappe masque le
   pointeur et quand l'essaim s'éteint (veille) ; ils s'effacent en pause et en plein écran.
 - **Équerres** (`[equerres]`) : quatre petites équerres aux coins de la fenêtre au premier plan,
@@ -308,9 +324,10 @@ garde son allure (essai
   après 1,5 s sans son. `tous_ecrans = true` le met au bord bas de chaque écran, à l'épaisseur
   de son échelle : les éclats partent toujours de l'aplomb du pointeur et passent d'un écran à
   l'autre.
-  Ces trois figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
-  du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le halo et le liseré
-  tant que la musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.
+  Équerres, halo et liseré agrandissent la zone que le moteur redessine (un seul rectangle par
+  écran, du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le halo et le
+  liseré tant que la musique joue. C'est léger avec la carte graphique, lourd avec le dessin par
+  le processeur.
 - **Étiquette du morceau** (`[etiquette]`) : quand le morceau change, son titre et, dessous, son
   artiste s'écrivent à côté du pointeur (à droite et sous la flèche ; à gauche ou au-dessus près
   d'un bord de l'écran), en blanc cerné de sombre pour rester lisibles sur tout fond, soulignés
@@ -340,6 +357,11 @@ celles qui jouent en ce moment en tête, marquées « en lecture »
 navigateur avec tous ses onglets. Il faut Windows 10 2004 ou plus récent ; sinon, tout le son
 est écouté.
 
+Autres réglages de l'écoute (`[audio]`, panneau *Écoute*) : `actif` (oui par défaut ; non,
+Essaim n'écoute plus rien et les aperçus restent muets), `sensibilite_kick` (1 à 10, 5 par défaut :
+1 peu sensible, 10 très sensible) et `delai_kick` (écart minimal entre deux kicks, 0,05 à 1 s,
+0,1 par défaut).
+
 ## Curseurs
 
 Essaim ne dessine pas le pointeur : il reste un vrai curseur Windows. On installe un pack de
@@ -349,7 +371,9 @@ ceux de Windows) avec un aperçu, détaille les 17 curseurs du jeu en place et l
 comme le panneau de la souris (`src/souris.rs`). Les curseurs animés (`.ani`) sont animés dans
 la fenêtre, à leur cadence. Un preset garde le jeu en place quand on l'enregistre, et son
 curseur est dessiné au centre de son aperçu ; avec *Installer les curseurs du preset choisi*,
-appliquer ce preset remet aussi ce jeu.
+appliquer ce preset remet aussi ce jeu. En réglages : `[souris] jeu` est le nom du jeu de Windows
+choisi (vide : Essaim n'y touche pas ; un preset l'enregistre avec lui) et `avec_preset` (oui par défaut ; propre
+à la machine, hors presets) l'option *Installer les curseurs du preset choisi*.
 
 Le jeu conseillé avec Essaim est fourni dans `curseurs/Dotter` : **Dotter**, par
 [Verticablets](https://www.deviantart.com/verticablets/art/Dotter-856489042), sous licence
@@ -358,16 +382,17 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
 
 ## Utilisation
 
-- À chaque ouverture de la fenêtre des réglages, le logo s'assemble, puis le nom va prendre sa place dans l'en-tête pendant que la fenêtre se dessine
-  (trois secondes ; un clic ou une touche l'abrège ; rien si Windows demande moins d'animations).
+- À chaque ouverture de la fenêtre des réglages, le logo s'assemble, puis le nom vient se poser
+  dans l'en-tête pendant que la fenêtre se dessine (trois secondes ; un clic ou une touche
+  l'abrège ; rien si Windows demande moins d'animations).
 - Icône de notification : un clic (ou double-clic) ouvre les réglages ; clic droit, le menu :
   *Mettre en pause*, *Réglages…*, *Fenêtre pour le stream*, *Presets* (celui en place coché),
-  *Preset suivant* / *précédent*, *Quitter*, avec leurs raccourcis quand ils sont actifs. L'infobulle donne le preset en
-  place et l'état (pause, veille) ; l'icône est grisée en pause.
+  *Preset suivant* / *précédent*, *Quitter*, avec leurs raccourcis quand ils sont actifs.
+  L'infobulle donne le preset en place et l'état (pause, veille) ; l'icône est grisée en pause.
 - **Veille** : souris immobile, ni son ni clic depuis `[rendu] veille_apres` secondes (60 ;
   0 = jamais) : l'essaim s'efface, puis plus rien n'est dessiné jusqu'au prochain mouvement, son
   ou clic. En pause et en plein écran, la capture du son s'arrête aussi (sauf si la fenêtre des
-  réglages est ouverte).
+  réglages ou la fenêtre pour le stream est ouverte).
 - **Plein écran** : l'essaim se met en veille quand la fenêtre **sous le pointeur** est en plein
   écran (jeu, vidéo), qu'elle ait le clavier ou non ; avec un jeu en plein écran sur un écran et
   le pointeur sur l'autre, il continue. Un menu, une notification, une bulle ou la surcouche
@@ -388,6 +413,12 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   écran éteint (« Écran éteint » : délai d'extinction de Windows, la session restant ouverte ;
   pas quand il est seulement atténué).
   La raison s'affiche sous le bouton Pause.
+- **Cadence et dessin** (`[rendu]`, propres à la machine, hors presets) : `cadence`, les images
+  par seconde de l'essaim (0 à 500 ; 0 par défaut : celle de l'écran, 144… ; 72 : deux fois moins
+  de calcul qu'à 144) ; `cadence_repos` (0 à 500, 30 par défaut) : la cadence quand la souris est
+  immobile et que rien ne joue depuis 2 s, 0 pour ne jamais ralentir ; `carte_graphique` (oui par
+  défaut) : le dessin se fait par la carte graphique, non : par le processeur, plus lourd (en cas
+  d'erreur de la carte, Essaim bascule seul sur le processeur et réessaie plus tard).
 - **Qualité adaptative** (`[rendu] adaptatif`, oui par défaut) : si une image demande plus de
   4 ms de calcul, la cadence baisse par paliers (120, 60, 30 images/s au plus) et remonte quand
   le calcul redevient léger, ou à l'essai après 20 s sans image lourde ; un essai qui redevient
@@ -409,10 +440,11 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   les effets d'animation de Windows sont coupés (*Accessibilité › Effets visuels*), relu chaque
   seconde ; `"oui"` : toujours ; `"non"` : jamais.
 - **Fenêtre pour le stream** (*Fenêtre pour le stream* dans le menu de l'icône, le bouton de
-  la vue *Application* des réglages, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim danse au centre,
-  sur le fond `[stream] fond` (propre à la machine) : `"transparent"` (par défaut) ou un fond uni,
-  `"vert"`, `"bleu"`, `"magenta"` ou `"noir"`. Transparent, dans OBS : *Capture de jeu* en mode
-  *Capturer une fenêtre spécifique* sur « Essaim — stream », avec *Autoriser la transparence* et
+  la vue *Application* des réglages, ou `essaim.exe --stream`) : une fenêtre ordinaire où l'essaim
+  danse au centre, autour d'un petit point blanc qui tient lieu de pointeur (celui de Windows n'y
+  est pas), sur le fond `[stream] fond` (propre à la machine) : `"transparent"` (par défaut) ou
+  un fond uni, `"vert"`, `"bleu"`, `"magenta"` ou `"noir"`. Transparent, dans OBS : *Capture de
+  jeu* en mode *Capturer une fenêtre spécifique* sur « Essaim — stream », avec *Autoriser la transparence* et
   *Valeurs alpha prémultipliées* (sans cette dernière, les lueurs ont un bord sombre) ; à l'écran,
   la fenêtre paraît sur fond noir. Fond uni : *Capture de fenêtre*, puis un filtre *Incrustation
   chromatique* (ou, sur fond noir, un mode de fusion *Écran*). Elle suit le son et les
@@ -425,15 +457,17 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   l'écran ne s'y divise pas juste : des images régulières valent mieux qu'une attente qui en
   sauterait une sur deux).
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
-  (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
-  prévient Essaim de ces seules touches, sans hook sur le clavier. Pour Windows, AltGr vaut
-  Ctrl+Alt : sur un clavier où AltGr+touche écrit un caractère (AltGr+F donne « [ » en tchèque,
+  (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par
+  `RegisterHotKey` : Windows prévient Essaim de ces seules touches, sans hook sur le clavier.
+  Pour Windows, AltGr vaut Ctrl+Alt : sur un clavier où AltGr+touche écrit un caractère (AltGr+F donne « [ » en tchèque,
   hongrois, croate…), le raccourci de cette touche n'est pas pris, pour que le caractère s'écrive
   toujours ; la fenêtre des réglages le signale (*04 Auto*), et le projecteur reste à la secousse.
   Une disposition de clavier ajoutée ou retirée est vue dans la seconde.
-- **Preset automatique** (`[automatique]`) : des règles « si … alors … » (`regles`,
-  prioritaires), puis un preset par application au premier plan (nom de l'exécutable), puis par
-  plage horaire (qui peut passer minuit). Quand plus aucune règle ne s'applique, les réglages
+- **Preset automatique** (`[automatique]`, `actif`, coupé par défaut) : des règles « si … alors … »
+  (`regles`, prioritaires), puis un preset par application au premier plan (`applis` :
+  `{ appli = "jeu.exe", preset = "Discret" }`, nom de l'exécutable), puis par plage horaire
+  (`horaires` : `{ debut = "22:00", fin = "07:00", preset = "Discret" }`, qui peut passer
+  minuit). Quand plus aucune règle ne s'applique, les réglages
   d'avant reviennent, sauf ceux retouchés pendant la règle, qui sont gardés (curseurs compris).
   Ils sont gardés dans `auto-avant.toml` tant qu'une règle agit : un arrêt d'Essaim ou du PC ne
   les perd pas.
@@ -472,11 +506,13 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Particules*, *Fissures*, *Réticule et projecteur*, *Barres de spectre*), *Figures* (*Arcs*,
     *Quatre temps*, *Anneau* (formes lisse et spectre), *Ligne de voix*, *Trame*, *Trait*, *Pendule*,
     *Gouttes* ; sous *+ Avancé*, leur échelle, teinte, rotation, place et réactions, et un bouton
-    qui leur ajoute une modulation ; seuls les paramètres qui agissent sur la figure sont proposés), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
+    qui leur ajoute une modulation ; seuls les paramètres qui agissent sur la figure sont
+    proposés), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* (*Écoute*, *Étiquette du morceau*) et
-    *Cet ordinateur* (le dessin de l'essaim sur ce PC ; liens vers les pauses, la capture et les
-    pauses par application) ; les panneaux hors presets le disent dans leur en-tête ; chacun avec ses réglages courants et *+ Avancé*
-    pour les autres ; flèches haut et bas pour passer de l'un à l'autre. Un voyant dit si l'effet
+    *Cet ordinateur* (le dessin de l'essaim sur ce PC ; liens vers les pauses, les captures et le
+    stream, et les pauses par application) ; les panneaux hors presets le disent dans leur
+    en-tête ; chacun avec ses réglages courants et *+ Avancé* pour les autres ; flèches haut et
+    bas pour passer de l'un à l'autre. Un voyant dit si l'effet
     est là (bascule *Actif* en tête du panneau, ou au moins un déclencheur) ; un effet coupé, ou un
     réglage sans effet (densité du sillage sans sillage…), est estompé mais reste réglable. Chaque
     effet montre ses déclencheurs (*Quand* : un bouton par événement, × pour le retirer, un choix
@@ -484,7 +520,7 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     nombre ; *+* : délai minimal, chance ; *Tester* le joue dans le grand aperçu) ; *Modulations* :
     une ligne par modulation (source → paramètre, sur qui, quantité, jauge de la source en direct ;
     *+* : seuil, lissage, à l'envers) ; des idées à ajouter d'un clic. Sous l'aperçu, *Simuler* :
-    une montée suivie du drop (4 s), un kick, une caisse claire, un temps, un changement de piste,
+    une montée suivie du drop (3 s), un kick, une caisse claire, un temps, un changement de piste,
     pour voir les réactions sans attendre la musique ; tant qu'un morceau joue, l'aperçu suit le
     vrai son, même entre deux coups ; écoute coupée, les aperçus restent muets. *Image…* ouvre
     *Trajet d'une image* : une image (choisie, ou glissée sur la fenêtre : PNG, JPEG, GIF, WebP,
@@ -509,10 +545,11 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   - Au premier lancement, un accueil en trois étapes (à revoir depuis *Application*) ; dans *À
     savoir*, un raccourci que Windows n'a pas enregistré est marqué, avec sa raison.
   - En-tête : ce que l'essaim entend. Le témoin *Kick* rougit sur chaque kick ; *Basse* donne le
-    niveau du grave (faible → forte) et *Note* sa hauteur (25–85 Hz, grave → aiguë) ; le témoin
+    niveau du grave (faible → forte) et *Note* sa hauteur (25–83 Hz, grave → aiguë) ; le témoin
     *Aigus* s'allume sur les attaques des aigus. Sous *Pause*, l'état de l'écoute : *Son capté*,
-    *Son coupé* (pause, plein écran, son désactivé) ou *Son : erreur*, *En veille*, et la raison
-    d'une pause automatique ; le titre du morceau en cours (titre et artiste au survol, aussi
+    *Son coupé* (écoute désactivée : bascule *Actif* du panneau *Écoute* éteinte ; fenêtre des
+    réglages ouverte, l'écoute continue même en pause ou derrière un plein écran) ou *Son :
+    erreur*, *En veille*, et la raison d'une pause automatique ; le titre du morceau en cours (titre et artiste au survol, aussi
     dans l'infobulle de l'icône) et le tempo des kicks (BPM) quand il est régulier.
   - *Puissance utilisée* : temps de calcul par image × images par seconde, mesuré en direct
     (part d'un cœur du processeur), avec des pistes pour alléger quand elle est élevée.
@@ -542,8 +579,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     dans un dossier où il restera.
   - Clavier : `/` recherche, flèches dans la grille, Entrée applique, Ctrl+1 à 5 ou flèches
     (Début, Fin) sur les onglets, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+P pause, Échap ferme
-    une boîte (boîte ouverte : Ctrl+1 à 5 et Ctrl+S n'agissent pas). Fenêtre étroite ou zoomée
-    (Ctrl+molette) : colonnes resserrées, puis une seule colonne qui défile.
+    une boîte (boîte ouverte : Ctrl+1 à 5 et Ctrl+S n'agissent pas). Ctrl+plus et Ctrl+moins
+    agrandissent et réduisent la page, Ctrl+0 la remet à sa taille (Ctrl+molette aussi). Fenêtre
+    étroite ou zoomée : colonnes resserrées, puis une seule colonne qui défile.
   - Si Windows demande de réduire les animations, le grand aperçu, la loupe et la comparaison
     restent à l'arrêt, avec un bouton *Lecture*.
   - Préréglages fournis (56), chacun avec sa forme, ses couleurs, ses effets et ses propres
@@ -575,24 +613,25 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     qui tournent autour des quatre temps), *Respiration* (une orbe qui enfle sur la basse et vire
     au drop), *Planète* (un anneau décalé et son pendule, qui suit la stéréo) et *Duo* (une
     trame et la ligne de voix) : des figures combinées, avec leur allure et leurs modulations.
-    Chacun est refaisable à la main dans les réglages. Les
-    presets ne touchent pas à `[rendu]`, `[stream]` (propres à la machine), à l'option des
-    curseurs, ni à la secousse du projecteur et à sa sensibilité.
+    Chacun est refaisable à la main dans les réglages. Les presets ne touchent pas à `[rendu]`,
+    `[stream]` (propres à la machine), à l'option des curseurs, ni au projecteur (`actif`,
+    `secousse`, `sensibilite`).
 - Réglages : `%APPDATA%\Essaim\config.toml`, appliqués aussi dès l'enregistrement du fichier.
 - Journal : `%APPDATA%\Essaim\essaim.log` (états, cadence et temps de calcul toutes les minutes ;
   au-delà de 1 Mo, l'ancien devient `essaim.old.log`).
 - `essaim.exe --quitter` ferme l'instance en cours ; `essaim.exe --stream` ouvre la fenêtre pour
   le stream (celle de l'instance en cours s'il y en a une). Relancer `essaim.exe` sans option
-  pendant qu'il tourne (double-clic) ouvre les réglages de l'instance en cours, sauf si elle a
-  démarré il y a moins de 30 s (second lancement automatique à l'ouverture de session : rien ne
-  s'ouvre).
+  pendant qu'il tourne (double-clic) ouvre toujours les réglages de l'instance en cours. Le
+  démarrage avec Windows (clé Run de l'utilisateur) lance `essaim.exe --demarrage` : rien ne
+  s'ouvre. Une ancienne clé sans cet argument est complétée par l'instance 30 s après son
+  lancement ; d'ici là, un second lancement sans option dans ces 30 s est ignoré.
 - `essaim.exe --restaurer-bordure` rend sa couleur à la fenêtre restée colorée si l'appli a été
   tuée de force (fermeture normale, plantage, pause et plein écran le font tout seuls, et le
   lancement suivant aussi).
 
 ## Mises à jour
 
-La version installée est écrite en petit à côté du titre de la fenêtre des réglages (« v0.11.1 »),
+La version installée est écrite en petit à côté du titre de la fenêtre des réglages (« vX.Y.Z »),
 en grand dans la vue *Application*, et au début du journal à chaque lancement.
 
 Trente secondes après le lancement, puis toutes les six heures, Essaim regarde la dernière

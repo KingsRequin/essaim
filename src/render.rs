@@ -1534,7 +1534,9 @@ impl Swarm {
                 // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur ; le
                 // halo laisse un vide sous la pointe (le texte qu'elle vise n'est pas voilé)
                 if !self.doux {
-                    let (dehors, vide) = (r * (2.0 + 2.5 * self.env), HALO_VIDE * scale);
+                    // petit éclat : le vide se réduit à la moitié du halo, qui reste visible
+                    let dehors = r * (2.0 + 2.5 * self.env);
+                    let vide = (HALO_VIDE * scale).min(0.5 * dehors);
                     if dehors > vide {
                         cv.ring(px, py, (dehors + vide) / 2.0, dehors - vide, (255, 255, 255), 0.35 * self.env);
                     }
@@ -2498,6 +2500,13 @@ mod tests {
         assert_eq!(alpha(C.0 + 3.0, C.1 + 3.0), 0);
         // halo jusqu'à 4,5 fois la taille de l'éclat (18 px) : lumière entre le vide et ce bord
         assert!(alpha(C.0 + (HALO_VIDE + 18.0) / 2.0, C.1) > 0, "même lumière autour");
+        // petit éclat (halo de 9 px, moins que deux fois le vide) : le vide se réduit à la moitié
+        // du halo au lieu de l'effacer
+        cfg.eclat.taille = 2.0;
+        let (pm, o) = render(&s, C, 0.0, &cfg, 1.0);
+        let alpha = |x: f32, y: f32| pm.pixel((x - o.0) as u32, (y - o.1) as u32).unwrap().alpha();
+        assert_eq!(alpha(C.0, C.1), 0, "rien sous la pointe");
+        assert!(alpha(C.0 + 7.0, C.1) > 0, "halo du petit éclat");
     }
 
     #[test]

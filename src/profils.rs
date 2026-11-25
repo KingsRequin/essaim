@@ -486,26 +486,30 @@ pub fn apply(p: &Profile) -> Result<(), String> {
     apply_sauf(p, |_| false)
 }
 
-/// Presets appliqués (ou réglages remis d'un coup : « Annuler », fin d'une règle automatique)
-/// depuis le lancement. Compté avant l'écriture de `config.toml` : la boucle, qui le compare à
-/// chaque relecture des réglages, le voit au plus tard avec les nouveaux réglages et vide alors
-/// les traînées (`Swarm::vider_trainees`).
+/// Presets appliqués (ou réglages remis d'un coup : « Annuler », fin d'une règle automatique,
+/// « Surprise ») depuis le lancement. Compté sous le verrou d'écriture, juste avant l'écriture de
+/// `config.toml` et seulement si elle change quelque chose : la boucle et le stream, qui le
+/// comparent à chaque relecture des réglages, le voient au plus tard avec les nouveaux réglages et
+/// vident alors les traînées (`Swarm::vider_trainees`).
 static APPLICATIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Nombre de presets appliqués depuis le lancement (voir `APPLICATIONS`).
 pub fn applications() -> u64 {
-    APPLICATIONS.load(Ordering::Relaxed)
+    APPLICATIONS.load(Ordering::SeqCst)
 }
 
-fn compter_application() {
-    APPLICATIONS.fetch_add(1, Ordering::Relaxed);
+/// Écrit dans `config.toml` les réglages de `cfg` retenus par `keep`, d'un coup, en comptant une
+/// application de preset si le fichier change (`APPLICATIONS`).
+pub fn ecrire_d_un_coup(cfg: &Config, keep: impl Fn(&str, &str) -> bool) -> Result<(), String> {
+    config::apply_keys_avant(cfg, keep, || {
+        APPLICATIONS.fetch_add(1, Ordering::SeqCst);
+    })
 }
 
 /// Comme `apply`, sans les sections pour lesquelles `ecartee` est vrai.
 fn apply_sauf(p: &Profile, ecartee: impl Fn(&str) -> bool) -> Result<(), String> {
-    compter_application();
     let sans_jeu = p.cfg.souris.jeu.is_empty();
-    config::apply_keys(&p.cfg, |s, k| in_profile(s, k) && !ecartee(s) && !(sans_jeu && (s, k) == ("souris", "jeu")))
+    ecrire_d_un_coup(&p.cfg, |s, k| in_profile(s, k) && !ecartee(s) && !(sans_jeu && (s, k) == ("souris", "jeu")))
 }
 
 /// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée et
@@ -632,8 +636,7 @@ pub fn capturer() -> Option<Avant> {
 pub fn remettre(avant: &Avant) -> Result<(), String> {
     let mut cfg = avant.cfg.clone();
     cfg.souris.jeu.clone_from(&avant.jeu);
-    compter_application();
-    config::apply_keys(&cfg, in_profile)?;
+    ecrire_d_un_coup(&cfg, in_profile)?;
     config::request_reload();
     match &avant.curseurs {
         Some(e) => crate::souris::restaurer_si(e, |en_place| en_place != Some(e)).map(|_| ()),
@@ -648,8 +651,7 @@ pub fn remettre_partiel(avant: &Avant, apres: &Avant) -> Result<(), String> {
     let actuel = Config::read(&config::path()).map_err(|e| format!("réglages illisibles ({e})"))?;
     let cles = cles_a_remettre(&avant.cfg, &apres.cfg, &actuel);
     if !cles.is_empty() {
-        compter_application();
-        config::apply_keys(&avant.cfg, |s, k| cles.iter().any(|(a, b)| a == s && b == k))?;
+        ecrire_d_un_coup(&avant.cfg, |s, k| cles.iter().any(|(a, b)| a == s && b == k))?;
         config::request_reload();
     }
     // curseurs : seulement s'ils sont toujours ceux mis par la règle

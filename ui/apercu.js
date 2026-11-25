@@ -271,11 +271,15 @@ const ETIQUETTE_ARTISTE = [0.85, 0.9], ETIQUETTE_FILET = [1.4, 1.6], ETIQUETTE_F
 // ECART_FLASH secondes, à moitié de force. « auto » suit Windows (animations réduites), que la
 // page voit par prefers-reduced-motion.
 const ECART_FLASH = 1 / 3;
+// une seule requête, suivie (lue à chaque image) : le réglage de Windows peut changer en route
+const animationsReduitesApercu = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+let animationsReduitesVoulu = !!(animationsReduitesApercu && animationsReduitesApercu.matches);
+if (animationsReduitesApercu) animationsReduitesApercu.addEventListener("change", (e) => { animationsReduitesVoulu = e.matches; });
 function sansFlashs(c) {
   const mode = (c.rendu || {}).sans_flashs;
   if (mode === "oui") return true;
   if (mode === "non") return false;
-  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return animationsReduitesVoulu;
 }
 
 // Filet de lumière du liseré et du halo (comme loin::Filet) : état, avance, force en un point.
@@ -681,6 +685,13 @@ function changementsReglages(a, b, jusqua) {
   return n;
 }
 
+// Contours suivis (`orbite.contours`) différents de `a` à `b` : même liste (référence) d'abord,
+// sinon même contenu.
+function autresContours(a, b) {
+  const ca = (a.orbite || {}).contours, cb = (b.orbite || {}).contours;
+  return ca !== cb && JSON.stringify(ca) !== JSON.stringify(cb);
+}
+
 class Apercu {
   constructor(canvas) {
     this.canvas = canvas;
@@ -763,9 +774,11 @@ class Apercu {
   // Réglages changés d'un coup (preset appliqué, « Annuler », vignette qui montre un autre
   // preset) : toutes les traînées repartent de zéro, sinon un trait relierait l'ancien trajet au
   // nouveau (comme render::Swarm::vider_trainees). Une glissière ne change qu'une valeur à la
-  // fois : le trajet y glisse.
+  // fois : le trajet y glisse. D'autres contours suivis (boîte « Trajet d'une image » : seuil,
+  // texte) sont un autre trajet : les traînées repartent aussi de zéro.
   regler(reglages) {
-    if (this.reglages && reglages !== this.reglages && changementsReglages(this.reglages, reglages, 2) >= 2) this.viderTrainees();
+    if (this.reglages && reglages !== this.reglages
+      && (changementsReglages(this.reglages, reglages, 2) >= 2 || autresContours(this.reglages, reglages))) this.viderTrainees();
     this.reglages = reglages;
   }
 
@@ -2162,8 +2175,9 @@ class Apercu {
         g.stroke();
       } else {
         // éclat du kick : halo blanc et anneau coloré qui s'élargit sous le pointeur ; le halo
-        // laisse un vide sous la pointe (render::HALO_VIDE)
-        const dehors = eclat * (2 + 2.5 * this.env), vide = HALO_VIDE * S;
+        // laisse un vide sous la pointe (render::HALO_VIDE), réduit à la moitié du halo pour un
+        // petit éclat
+        const dehors = eclat * (2 + 2.5 * this.env), vide = Math.min(HALO_VIDE * S, 0.5 * dehors);
         if (!this.doux && dehors > vide) {
           g.strokeStyle = rgba([255, 255, 255], 0.35 * this.env);
           g.lineWidth = dehors - vide;

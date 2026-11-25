@@ -31,8 +31,9 @@ throw sparks, and on the drop, everything bursts.
 
 - **It really listens.** Kicks are recognized by a small model trained on real tracks in
   42 styles (from techno to jazz, rap, rock, reggae, salsa…), about 25 ms after they hit and at any
-  volume: the swarm lands on the beat, not after it. It also hears the snare, the build-up before a drop, the tempo and which side is
-  playing. Nothing to plug in: Essaim listens to what Windows plays.
+  volume: the swarm lands on the beat, not after it. It also hears the snare, the build-up before
+  a drop, the tempo and which side is playing. Nothing to plug in: Essaim listens to what Windows
+  plays.
 - **Your pointer stays yours.** It is the real Windows cursor, with no lag; Essaim only draws
   around it, in a click-through layer.
 - **Light.** Drawn by the GPU: 0.31 ms per frame on the benchmark, about 3% of one CPU core in
@@ -123,11 +124,12 @@ All features in detail (in French): [docs/guide.md](docs/guide.md).
 
 ## The settings window
 
-When it opens, the logo assembles out of orbs, then the name slides into the header
-while the window draws itself (a click skips it).
+When it opens, the logo assembles out of orbs, then the name settles into the header while the
+window draws itself (a click skips it).
 
-**Presets.** A grid of 56 bundled presets, all different, each with its own reactions to the music (zen, neon, storm, disco, ghost, vortex, album art, ribbons, springs…), each animated live with
-your music: one click applies it. Save your own, compare two side by side, filter by shape.
+**Presets.** A grid of 56 bundled presets, all different, each with its own reactions to the
+music (zen, neon, storm, disco, ghost, vortex, album art, ribbons, springs…), each animated live
+with your music: one click applies it. Save your own, compare two side by side, filter by shape.
 Publish them to the [community library](https://github.com/KingsRequin/essaim-presets) and
 install other people's.
 
@@ -140,9 +142,10 @@ install other people's.
 </tr>
 <tr>
 <td valign="top"><b>Settings</b> sorted by family (the swarm, the effects, the figures, the
-window and screen, the reactions, listening, this computer), each with its basic and advanced options, applied live on a large preview that
-follows your music; one button simulates a build-up and a drop, another tests each trigger. Next
-to each setting, ten squares tell its power cost.</td>
+window and screen, the reactions, listening, this computer), each with its basic and advanced
+options, applied live on a large preview that follows your music; one button simulates a
+build-up and a drop, another tests each trigger. Next to each setting, ten squares tell its power
+cost.</td>
 <td valign="top"><b>Cursors</b>: your Windows cursor schemes, animated, applied in one click. A
 preset can carry its own.</td>
 </tr>
@@ -168,8 +171,10 @@ question « The settings window doesn't open »).
 - The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
 - Essaim then updates itself: a notification tells you about the download, then offers to
   restart. To skip the wait: *Chercher une mise à jour* in the *Application* view.
-- Running `essaim.exe` again while it is running opens its settings window (not within 30 s
-  of its start: that is a second automatic launch).
+- Running `essaim.exe` again while it is running (double-click) opens its settings window.
+  Starting with Windows runs `essaim.exe --demarrage`, which opens nothing; an older entry without
+  that argument is completed by Essaim 30 s after it starts (until then, a second launch within
+  those 30 s is ignored).
 
 **From source:** Essaim builds with one command.
 
@@ -181,9 +186,9 @@ question « The settings window doesn't open »).
    powershell -ExecutionPolicy Bypass -File scripts\install.ps1
    ```
    Essaim is built, copied to `%LOCALAPPDATA%\Programs\Essaim`, starts with Windows and shows up
-   in the Start menu (« Essaim » and « Essaim - réglages »). No administrator rights needed. A self-built executable is replaced by the latest published
-   release as soon as automatic updates find it: set `[mise_a_jour] auto = false` in
-   `config.toml` to avoid that.
+   in the Start menu (« Essaim » and « Essaim - réglages »). No administrator rights needed. A
+   self-built executable is replaced by the latest published release as soon as automatic updates
+   find it: set `[mise_a_jour] auto = false` in `config.toml` to avoid that.
 3. *(Recommended)* Install the **Dotter** cursor: right-click
    `curseurs\Dotter\_install.inf` → *Install*, then pick it in the *03 Curseurs* tab. This step
    asks Windows for confirmation (administrator rights): the file copies the cursors into
@@ -234,7 +239,9 @@ listens on 127.0.0.1: it is never exposed to the network.
 <summary><b>The swarm doesn't react to sound.</b></summary>
 
 Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
-in *Réglages › Écoute › Avancé › Sortie son écoutée*. To make it listen to your music only (not notifications or the video next to it), tick its app in *Applications écoutées*, just below. The header of the settings window shows what Essaim hears (kick, highs, bass, note); if it says
+in *Réglages › Écoute › Avancé › Sortie son écoutée*. To make it listen to your music only (not
+notifications or the video next to it), tick its app in *Applications écoutées*, just below. The
+header of the settings window shows what Essaim hears (kick, highs, bass, note); if it says
 « Son : erreur », capturing Windows' sound failed: the cause is in the log
 (`%APPDATA%\Essaim\essaim.log`).
 </details>
@@ -294,9 +301,9 @@ says so in a balloon instead of opening the window. If that isn't the cause, the
 In `%APPDATA%\Essaim`: `config.toml` (commented, editable by hand), your presets in `profils\`,
 and the log `essaim.log` (the previous one in `essaim.old.log`). While an automatic preset rule is
 active, your previous settings wait in `auto-avant.toml`. The folder also holds `webview\` (the
-settings window's cache), `ipc.jeton` (the local interface's secret) and `bordure.hwnd` (the
-window whose border must get its color back). To erase everything: quit Essaim, then delete the
-folder.
+settings window's cache), `ipc.jeton` (the local interface's secret), `bordure.hwnd` (the window
+whose border must get its color back) and `version` (the last version that ran, used to announce
+an update). To erase everything: quit Essaim, then delete the folder.
 </details>
 
 ## Roadmap

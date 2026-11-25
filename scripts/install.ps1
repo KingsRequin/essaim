@@ -29,8 +29,9 @@ Get-Process essaim -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAct
 New-Item -ItemType Directory -Force $dest | Out-Null
 Copy-Item $built $dest -Force
 
-# Démarrage avec la session.
-Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Essaim' -Value "`"$installed`""
+# Démarrage avec la session. `--demarrage` : lancement automatique (une seconde instance lancée
+# ainsi sort en silence ; sans lui, un double-clic ouvre les réglages de l'instance en cours).
+Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Essaim' -Value "`"$installed`" --demarrage"
 # Une coupure faite dans le Gestionnaire des tâches ne survit pas à une réinstallation voulue.
 Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' -Name 'Essaim' -ErrorAction SilentlyContinue
 

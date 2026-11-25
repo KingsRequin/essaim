@@ -550,6 +550,71 @@ impl SpriteCanvas {
             self.poser(a.0 + dx * k, a.1 + dy * k, d * 0.5, c);
         }
     }
+
+    /// Anneau fin (`w` au plus `ANNEAU_FIN` fois le rayon) : pastilles de la largeur du trait
+    /// posées tous les demi-diamètres sur le cercle, leur opacité réduite pour leur recouvrement.
+    fn anneau_fin(&mut self, x: f32, y: f32, r: f32, w: f32, rgb: Rgb, alpha: f32) {
+        let d = w.max(2.0 * self.r_min());
+        if 2.0 * r <= d {
+            // trop petit ou trop large pour un anneau de pastilles : un disque de même lumière,
+            // aussi grand que le trait de tiny-skia (jusqu'à r + w/2, creux sous r − w/2)
+            let e = r + w * 0.5;
+            let a = alpha * (1.0 - ((r - w * 0.5).max(0.0) / e).powi(2));
+            self.dot(x, y, e, color(rgb, a));
+            return;
+        }
+        let step = d * 0.5;
+        let n = (std::f32::consts::TAU * r / step).ceil().clamp(8.0, MAX_PAR_TRAIT as f32) as usize;
+        let c = color(rgb, opacite_recouverte(alpha * w / d, d / step));
+        for i in 0..n {
+            let t = i as f32 / n as f32 * std::f32::consts::TAU;
+            self.poser(x + t.cos() * r, y + t.sin() * r, d * 0.5, c);
+        }
+    }
+}
+
+/// Anneau fin : largeur au plus ce rapport au rayon. Au-delà, `ring` le découpe en anneaux
+/// concentriques plus fins (`SpriteCanvas::anneau_epais`).
+const ANNEAU_FIN: f32 = 1.0 / 3.0;
+/// Anneaux concentriques au plus pour un anneau épais (un creux minuscule au centre d'un grand
+/// anneau : les plus fins sont alors un peu plus larges que `ANNEAU_FIN`).
+const ANNEAUX_MAX: f32 = 32.0;
+/// Anneau épais : rayon des pastilles rapporté à la largeur de leur rangée (elles débordent sur
+/// les rangées voisines : pas de couture sombre entre deux), sauf aux deux rangées du bord (moitié
+/// de la largeur : rien sous le creux ni au-delà du bord), et pas le long de la rangée rapporté à
+/// ce rayon. Écart de lumière selon l'angle de 1 à 3 % (`anneau_epais_sans_rosace`).
+const RANGEE_RAYON: f32 = 0.7;
+const RANGEE_PAS: f32 = 0.5;
+
+impl SpriteCanvas {
+    /// Anneau épais, du rayon `dedans` (> 0) à `dehors`. Des pastilles de sa largeur se
+    /// recouvriraient bien plus vers le centre qu'au bord, et la lumière varierait selon l'angle
+    /// (rosace) : il est découpé en rangées concentriques de largeurs en progression géométrique
+    /// (chacune aussi fine, rapportée à son rayon, que `ANNEAU_FIN`), en quinconce d'une rangée à
+    /// l'autre. Chaque rangée a son opacité compensée de son recouvrement moyen.
+    fn anneau_epais(&mut self, x: f32, y: f32, dedans: f32, dehors: f32, rgb: Rgb, alpha: f32) {
+        use std::f32::consts::{PI, TAU};
+        let rapport = (2.0 + ANNEAU_FIN) / (2.0 - ANNEAU_FIN);
+        let n = ((dehors / dedans).ln() / rapport.ln()).ceil().clamp(1.0, ANNEAUX_MAX) as usize;
+        let q = (dehors / dedans).powf(1.0 / n as f32);
+        let mut a = dedans;
+        for j in 0..n {
+            let b = a * q;
+            let (c, largeur) = ((a + b) * 0.5, b - a);
+            a = b;
+            let bord = j == 0 || j + 1 == n;
+            let rayon = (largeur * if bord { 0.5 } else { RANGEE_RAYON }).max(self.r_min());
+            let m = (TAU * c / (rayon * RANGEE_PAS)).ceil().clamp(8.0, MAX_PAR_TRAIT as f32) as usize;
+            // pastilles qui couvrent un point de la rangée, en moyenne
+            let couverture = PI * rayon * rayon / (TAU * c / m as f32 * largeur);
+            let col = color(rgb, opacite_recouverte(alpha, couverture));
+            let decalage = if j % 2 == 1 { 0.5 } else { 0.0 };
+            for i in 0..m {
+                let t = (i as f32 + decalage) / m as f32 * TAU;
+                self.poser(x + t.cos() * c, y + t.sin() * c, rayon, col);
+            }
+        }
+    }
 }
 
 fn color(rgb: Rgb, alpha: f32) -> D2D1_COLOR_F {
@@ -583,22 +648,13 @@ impl Canvas for SpriteCanvas {
             return;
         }
         let w = self.largeur(width);
-        let d = w.max(2.0 * self.r_min());
-        if 2.0 * r <= d {
-            // trop petit ou trop large pour un anneau de pastilles : un disque de même lumière,
-            // aussi grand que le trait de tiny-skia (jusqu'à r + w/2, creux sous r − w/2)
-            let e = r + w * 0.5;
-            let a = alpha * (1.0 - ((r - w * 0.5).max(0.0) / e).powi(2));
-            self.dot(x, y, e, color(rgb, a));
+        // anneau fin, ou trop petit (ou trop large) pour des pastilles : `anneau_fin` en fait un
+        // disque
+        if w <= r * ANNEAU_FIN || 2.0 * r <= w.max(2.0 * self.r_min()) {
+            self.anneau_fin(x, y, r, w, rgb, alpha);
             return;
         }
-        let step = d * 0.5;
-        let n = (std::f32::consts::TAU * r / step).ceil().clamp(8.0, MAX_PAR_TRAIT as f32) as usize;
-        let c = color(rgb, opacite_recouverte(alpha * w / d, d / step));
-        for i in 0..n {
-            let t = i as f32 / n as f32 * std::f32::consts::TAU;
-            self.poser(x + t.cos() * r, y + t.sin() * r, d * 0.5, c);
-        }
+        self.anneau_epais(x, y, r - w * 0.5, r + w * 0.5, rgb, alpha);
     }
 
     fn voile(&mut self, zone: (f32, f32, f32, f32), x: f32, y: f32, r: f32, flou: f32, rgb: Rgb, alpha: f32) {
@@ -729,12 +785,12 @@ mod tests {
     #[test]
     fn anneau_borne_comme_un_trait() {
         let mut s = SpriteCanvas::default();
-        // pastilles de la largeur du trait, posées tous les demi-diamètres
-        s.ring(0.0, 0.0, 10.0, 4.0, (255, 255, 255), 0.5);
+        // anneau fin : pastilles de la largeur du trait, posées tous les demi-diamètres
+        s.ring(0.0, 0.0, 10.0, 3.0, (255, 255, 255), 0.5);
         let n = s.rects.len();
-        assert_eq!(n, (std::f32::consts::TAU * 10.0 / 2.0).ceil() as usize);
-        let (cote, _) = niveau(2.0);
-        assert!(s.rects.iter().all(|r| ((r.right - r.left) - 4.0 * marge(cote)).abs() < 1e-3));
+        assert_eq!(n, (std::f32::consts::TAU * 10.0 / 1.5).ceil() as usize);
+        let (cote, _) = niveau(1.5);
+        assert!(s.rects.iter().all(|r| ((r.right - r.left) - 3.0 * marge(cote)).abs() < 1e-3));
         // au moins aussi large que son diamètre : un seul disque, jusqu'à r + w/2 comme tiny-skia
         s.ring(0.0, 0.0, 10.0, 50.0, (255, 255, 255), 0.5);
         assert_eq!(s.rects.len(), n + 1);
@@ -744,5 +800,57 @@ mod tests {
         // minuscule : un seul disque
         s.ring(0.0, 0.0, 0.3, 0.2, (255, 255, 255), 0.5);
         assert_eq!(s.rects.len(), n + 2);
+    }
+
+    /// Opacité en (x, y) des pastilles posées : disques de bord adouci sur un pixel, superposés.
+    fn opacite(s: &SpriteCanvas, x: f32, y: f32) -> f32 {
+        let mut reste = 1.0f32;
+        for ((r, src), c) in s.rects.iter().zip(&s.sources).zip(&s.colors) {
+            let rayon = (r.right - r.left) * 0.5 / marge(src.right - src.left);
+            let (cx, cy) = ((r.left + r.right) * 0.5, (r.top + r.bottom) * 0.5);
+            let couvert = (rayon + 0.5 - (x - cx).hypot(y - cy)).clamp(0.0, 1.0);
+            reste *= 1.0 - c.a * couvert;
+        }
+        1.0 - reste
+    }
+
+    /// Lumière de l'anneau selon l'angle (somme de l'opacité sur un rayon, de `de` à `a`) :
+    /// écart relatif entre la direction la plus sombre et la plus claire.
+    fn ecart_selon_l_angle(s: &SpriteCanvas, de: f32, a: f32) -> f32 {
+        let lumieres: Vec<f32> = (0..180)
+            .map(|i| {
+                let t = i as f32 / 180.0 * std::f32::consts::TAU;
+                (0..=((a - de) * 4.0) as usize).map(|k| de + k as f32 * 0.25).map(|p| opacite(s, t.cos() * p, t.sin() * p)).sum()
+            })
+            .collect();
+        let (min, max) = lumieres.iter().fold((f32::MAX, 0.0f32), |(m, n), &l| (m.min(l), n.max(l)));
+        1.0 - min / max
+    }
+
+    #[test]
+    fn anneau_epais_sans_rosace() {
+        // halo du kick : de 6 px (vide sous la pointe) à 40 px, opacité 0,35
+        let (vide, dehors, alpha) = (6.0f32, 40.0f32, 0.35f32);
+        let mut s = SpriteCanvas::default();
+        s.ring(0.0, 0.0, (vide + dehors) / 2.0, dehors - vide, (255, 255, 255), alpha);
+        // rien sous le vide (à son bord près, adouci)
+        for p in [0.0f32, 2.0, 4.0, vide - 1.0] {
+            for t in [0.0f32, 0.7, 2.0, 4.1] {
+                assert!(opacite(&s, t.cos() * p, t.sin() * p) < 0.02, "voilé à {p} px");
+            }
+        }
+        // couverture régulière autour du pointeur
+        let ecart = ecart_selon_l_angle(&s, vide - 1.0, dehors + 1.0);
+        // en un seul anneau de pastilles larges, la rosace (gardé pour comparaison)
+        let mut ancien = SpriteCanvas::default();
+        ancien.anneau_fin(0.0, 0.0, (vide + dehors) / 2.0, dehors - vide, (255, 255, 255), alpha);
+        let ecart_ancien = ecart_selon_l_angle(&ancien, vide - 1.0, dehors + 1.0);
+        eprintln!("écart selon l'angle : {ecart:.3} (un seul anneau : {ecart_ancien:.3})");
+        assert!(ecart < 0.05, "rosace : {ecart}");
+        // et à peu près l'opacité voulue dans l'anneau
+        let profil: Vec<f32> = (8..39).map(|p| opacite(&s, p as f32 * 0.6, p as f32 * 0.8)).collect();
+        eprintln!("opacité de 8 à 38 px : {profil:.2?}");
+        let moyenne = profil.iter().sum::<f32>() / profil.len() as f32;
+        assert!((moyenne - alpha).abs() < 0.1, "opacité moyenne {moyenne}");
     }
 }
