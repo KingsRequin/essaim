@@ -31,6 +31,8 @@ Copy-Item $built $dest -Force
 
 # Démarrage avec la session.
 Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Essaim' -Value "`"$installed`""
+# Une coupure faite dans le Gestionnaire des tâches ne survit pas à une réinstallation voulue.
+Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' -Name 'Essaim' -ErrorAction SilentlyContinue
 
 # Raccourcis du menu Démarrer.
 $programs = [Environment]::GetFolderPath('Programs')

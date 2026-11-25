@@ -23,9 +23,15 @@ on:
 
 permissions: {}
 
+# Une seule publication à la fois ; un nouveau tag n'interrompt pas celle qui est en cours.
+concurrency:
+  group: publication-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   compilation:
     runs-on: windows-latest
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -42,17 +48,16 @@ jobs:
             throw "Le tag $env:GITHUB_REF_NAME ne correspond pas à la version $version de Cargo.toml"
           }
 
-      # la fenêtre des réglages refuse tout le script à la moindre erreur de syntaxe (0.8.0)
-      - name: Syntaxe de l'interface
-        shell: pwsh
-        run: |
-          foreach ($f in Get-ChildItem ui -Filter *.js) {
-            node --check $f.FullName
-            if ($LASTEXITCODE) { throw "Erreur de syntaxe dans $($f.Name)" }
-          }
+      # la fenêtre des réglages refuse tout le script à la moindre erreur de syntaxe (0.8.0), et
+      # deux scripts ne doivent pas déclarer le même nom au premier niveau (0.21.0)
+      - name: Interface (syntaxe et noms partagés)
+        run: node scripts/verifier-ui.mjs
 
       - name: Tests
         run: cargo test --release
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Compilation
         run: cargo build --release
@@ -75,6 +80,7 @@ jobs:
     needs: compilation
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

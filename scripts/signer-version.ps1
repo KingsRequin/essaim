@@ -1,3 +1,4 @@
+#Requires -Version 7.3
 # Signe une version et la publie : les mises à jour automatiques la proposent dès lors à tout le
 # monde. Le workflow « Publication » a déjà vérifié le tag, passé les tests et créé le brouillon.
 #

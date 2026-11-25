@@ -15,9 +15,14 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   - **carte graphique** (par défaut, `gpu.rs`) : DirectComposition + surface virtuelle Direct2D,
     tout dessiné en un **lot de sprites** (une pastille ronde recopiée des milliers de fois ; un
     trait = une rangée de pastilles). Tracer chaque trait avec `DrawLine` coûtait plus que le
-    moteur processeur (Direct2D découpe chaque trait lissé sur le processeur) ;
+    moteur processeur (Direct2D découpe chaque trait lissé sur le processeur). Le lot est
+    crénelé : la pastille est prérendue à 64, 32, 16, 8 et 4 px sur une planche, chaque sprite
+    prend la taille qui lui va (`sourceRectangles`), et aucune n'a moins de 1 px de rayon (opacité
+    réduite d'autant) : un trait fin reste continu et un petit point ne clignote pas en bougeant
+    (essai relu : `cargo test --release traits_fins_relus -- --ignored`) ; 20 000 pastilles au
+    plus par image, points non finis ignorés ;
   - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
-    modifiée. Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
+    modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
   Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Avec une cadence plafonnée, la
   boucle attend l'image suivante sur une minuterie haute résolution
@@ -37,7 +42,8 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   plan, à la pause, en plein écran et à la fermeture (plantage compris ; la fenêtre colorée est
   notée dans `bordure.hwnd` pour le cas où Essaim est tué ; ce témoin n'est réécrit que pour une
   nouvelle fenêtre colorée, et le hook de plantage ne rend la bordure que si c'est le fil
-  principal qui plante ; une exception non gérée hors Rust passe par un filtre,
+  principal qui plante (une panique qui sortirait d'une procédure de fenêtre ferait `abort` :
+  les procédures de fenêtre attrapent les paniques (`catch_unwind`)) ; une exception non gérée hors Rust passe par un filtre,
   `bordure::installer_filtre_plantage`, qui rend la couleur sans allouer ; seuls `abort` et
   `__fastfail` y échappent, le témoin sert alors au lancement suivant). Ignorées (`bordure::eligible`, aussi utilisé par
   `win::cadre_premier_plan` pour le halo, les équerres et les rebonds) : fenêtres sans cadre ni
@@ -102,7 +108,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
 - **Carte graphique** : en cas d'erreur, bascule sur le processeur ; nouvel essai 10 s plus tard,
   puis attente triplée à chaque échec (10 min au plus, remise à 10 s après 5 min sans erreur).
   Les calques processeur ne sont remplacés qu'après une image carte graphique réussie ; un calque
-  carte graphique est créé caché et montré une fois prêt.
+  carte graphique est montré après son premier `Commit` réussi. Périphérique perdu (pilote mis
+  à jour, réinitialisé : `D2DERR_RECREATE_TARGET`, `DXGI_ERROR_DEVICE_REMOVED`…) : un nouveau `Gpu`
+  est créé et les mêmes fenêtres y sont rattachées (aucune fenêtre ne disparaît sous la souris) ;
+  bascule sur le processeur seulement si cela échoue, pour une autre erreur, ou pour une seconde
+  perte en moins de 10 s.
 - **Pauses automatiques** (`pauses.rs`) : `SHQueryUserNotificationState` chaque seconde (pause
   sur `QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`, `QUNS_PRESENTATION_MODE` ; pas
   `QUNS_QUIET_TIME`, première heure d'un nouveau compte ; `QUNS_BUSY` seulement si une vraie
@@ -136,8 +146,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   seconde (`config::Watched`) et lit le son par le même `AudioShared` ; la capture du son continue
   tant qu'elle est ouverte. Pas de `WDA_EXCLUDEFROMCAPTURE` : elle reste capturable. Une seule
   ouverture à la fois (place réservée avant le fil) ; un échec d'ouverture est dit par une bulle
-  de l'icône. Fenêtre cachée (`Present` répond `DXGI_STATUS_OCCLUDED`) : pas de dessin, un essai
-  `DXGI_PRESENT_TEST` toutes les 100 ms.
+  de l'icône ; sa place est rendue même si son fil panique. Réduite, écran éteint
+  (`GUID_CONSOLE_DISPLAY_STATE`) ou session retenue : pas de dessin (essai `DXGI_PRESENT_TEST`
+  toutes les 100 ms, coups de la musique jetés pour ne pas partir en rafale) ; seulement
+  recouverte, elle reste présentée pour OBS. Affichage perdu : ancien rendu libéré, nouvel essai
+  après 1, 2, 4… 30 s, une ligne de journal par minute au plus.
 - **Projecteur, réticule, spectre** (`effets.rs`) : le réticule et le spectre s'ajoutent à la
   zone de l'essaim ; le projecteur ajoute l'écran entier du pointeur aux zones à redessiner, le
   temps de l'effet seulement (voile : dégradé radial Direct2D, ou remplissage ligne par ligne sur
@@ -192,7 +205,8 @@ de 64 Ko au plus, client fermé après 60 s sans message. `open_config` passe un
 5 s au plus ; `set_config` et `apply_preset` sont étalés à 20 par seconde, tous clients
 confondus (au-delà, la demande attend son tour jusqu'à 2 s, puis « trop de demandes »). Un
 jeton aléatoire est écrit au premier lancement dans `%APPDATA%\Essaim\ipc.jeton` ; il n'est pas
-encore demandé (Horizon ne l'envoie pas). `set_config` refuse les sections `mise_a_jour`,
+encore demandé (Horizon ne l'envoie pas). Le port est ouvert par le fil `essaim-ipc`, 10 essais
+sur 5 s (l'instance d'avant le tient encore juste après une mise à jour). `set_config` refuse les sections `mise_a_jour`,
 `bibliotheque`, `automatique` et `pause` (elles ne changent que par la fenêtre des réglages ou
 le fichier). Le plugin Essaim d'Horizon s'en sert (pause au clic ; dans son panneau, choix du
 preset et ouverture des réglages).
@@ -219,8 +233,12 @@ applications choisies, `audio-commun` ouvre une capture « process loopback » p
 toutes les 2 s (README d'`audio-commun`, « Son de certaines applications »). `main::Son` relance
 la capture quand la sortie ou les applications changent ; la fenêtre des réglages demande la
 liste (`Demande::ApplisSonores` → `capture::applis_sonores`). Si Windows refuse l'écoute par
-application, toute la sortie est écoutée en attendant (nouvel essai toutes les 30 s, sauf sur un
-Windows trop ancien) : `AudioShared::repli_applis`, montré dans la fenêtre des réglages.
+application, toute la sortie est écoutée en attendant (nouvel essai toutes les 30 s dans un fil à
+part, sans couper l'écoute ni l'analyse ; jamais sur un Windows trop ancien) :
+`AudioShared::repli_applis`, montré dans la fenêtre des réglages, effacé à chaque nouvelle
+capture. Chaque capture a sa génération : une capture remplacée (fil détaché après 300 ms)
+n'écrit plus rien. Un flux rouvert à la même fréquence après moins de 3 s garde l'analyse et le
+tempo. Un fil de capture qui panique le dit (`lost`) et est relancé 30 s plus tard.
 
 Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
@@ -301,8 +319,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
 
 ## Interface : technique et charte
 
-- La fenêtre est une page web (`ui/`, intégrée à l'exécutable) affichée par WebView2 (fourni
-  avec Windows 10 et 11) via la crate `wry`. Elle n'a accès qu'à ses fichiers et à
+- La fenêtre est une page web (`ui/`, intégrée à l'exécutable) affichée par WebView2 (préinstallé
+  sur Windows 11 et sur la plupart des Windows 10 à jour ; sinon, runtime WebView2 Evergreen à
+  installer depuis le site de Microsoft ; sans lui, Essaim le dit par une bulle au lieu d'ouvrir la
+  fenêtre) via la crate `wry`. Son cache est dans `%APPDATA%\Essaim\webview\`. Elle n'a accès qu'à ses fichiers et à
   `raw.githubusercontent.com` (index de la bibliothèque et images d'aperçu) ; elle ne parle à l'appli que par messages (`src/reglages.rs`).
 - Charte graphique « Essaim » : `ui/style.css` en est la référence (jetons clair/sombre,
   typographie, composants). Une seule police, Archivo (Omnibus-Type, licence SIL OFL 1.1,
@@ -339,7 +359,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   (seuil, à l'envers), lissée à son rythme dans `Swarm::update` (`part_lissage` : constante de
   temps 0,4 × lissage² s) ; `effets` en fait l'effet sur les comètes et sur les satellites
   (`Effet` : tours/min de rotation, radians/s de vitesse, degrés de teinte et rayons de décalage
-  additionnés ; accélération, rayon, taille, lueur, traînée et opacité multipliés) et la teinte
+  additionnés ; accélération, rayon, taille, lueur, traînée et opacité multipliés, effet à fond et
+bornes dans `modulation::multipliee`, que la page reprend pour afficher l'effet réel ; totaux
+bornés à ±180 tr/min et 60 rad/s ; échelle des figures au moins 0,5, pour que le pointeur reste
+dégagé ; au plus une inversion du sens par image) et la teinte
   « sur tout », que la boucle principale passe à `render::set_decalage` (tout ce qui est dessiné
   la prend, bordure comprise). L'angle du trajet de chaque groupe s'accumule ; quand sa rotation
   (réglage plus modulations) retombe sous 2 tours/min, il revient vers 0 par le plus court
@@ -423,9 +446,12 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   calques sont refaits), qui redonne alors toutes ses zones ; en filet, les équerres au repos
   les redonnent toutes les 3 s (un calque sans zone depuis 10 s est retiré). `Effets` possède
   `Loin`, lui passe le son, le cadre de la fenêtre au premier plan (`win::cadre_premier_plan`,
-  relu à chaque image dessinée par `main::lire_fenetre`, aussi pour les rebonds, avec l'échelle
-  de l'écran de la fenêtre : halo et équerres y sont à sa taille, même si le pointeur est sur un
-  autre écran) et l'écran du pointeur. Leurs zones s'ajoutent à celles
+  relu à chaque image dessinée par `main::lire_fenetre`, aussi pour les rebonds) et l'écran du
+  pointeur. `loin::Fenetre::lire` y ajoute l'écran de la fenêtre (son DPI : halo et équerres y
+  sont à sa taille, même si le pointeur est ailleurs) et sa zone de travail : une équerre qui
+  sortirait de la zone de travail (fenêtre agrandie, ancrée au bord, barre des tâches) se
+  retourne dans le cadre. Les éclats du halo sont vidés quand la fenêtre change ; chaque bande du
+  liseré a l'épaisseur de son écran. Leurs zones s'ajoutent à celles
   des fissures (`Effets::zones_loin`), et ils sont dessinés sur tous les écrans
   (`Effets::dessiner_loin`). `Backend::frame` redessine, par écran, un seul rectangle qui englobe
   toutes les zones : une zone loin du pointeur l'agrandit d'autant. Les équerres ne donnent donc
@@ -479,7 +505,9 @@ est écrit puis forcé sur le disque ; l'exécutable en cours est déplacé en `
 autorise le renommage d'un exécutable lancé) et le nouveau mis à sa place, chaque fois par
 `MoveFileExW` (`REPLACE_EXISTING | WRITE_THROUGH`) avec cinq nouveaux essais espacés (un
 antivirus qui tient le fichier) ; à défaut, le nouveau est copié, sinon l'ancien revient : il
-reste toujours un `essaim.exe`. Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
+reste toujours un `essaim.exe`. Le déplacement de l'exécutable en cours attend que `.nouveau`
+puisse s'ouvrir en exclusif (antivirus fini) ; la sortie d'Essaim attend un remplacement en
+cours (`maj::attendre_remplacement`, 10 s au plus) et aucun ne commence pendant la fermeture. Redémarrer : la boucle s'arrête, la bordure est rendue, le verrou
 d'instance unique est fermé, puis le même chemin est relancé. Une compilation de travail (debug)
 ne vérifie rien.
 
@@ -510,8 +538,8 @@ l'auteur ; la clé de secours est rangée hors du PC. Si la principale est perdu
 ## Développement
 
 `cargo build --release` suffit : l'analyse du son vient de la bibliothèque
-[audio-commun](https://github.com/KingsRequin/audio-commun) (figée par commit, celui du tag
-`v0.5.0` : `rev` dans `Cargo.toml`), partagée avec Horizon.
+[audio-commun](https://github.com/KingsRequin/audio-commun) (figée par commit, version 0.7.3 d'après
+`Cargo.lock` : `rev` dans `Cargo.toml`), partagée avec Horizon.
 Pour la modifier en même temps, la cloner à côté et la désigner dans `.cargo/config.toml` (non
 suivi par git) :
 

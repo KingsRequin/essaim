@@ -119,6 +119,8 @@ preview, *Surprends-moi* (random settings), light or dark theme like Windows, sl
 away, automatic updates (downloaded, verified, applied on restart). The **Dotter** cursor scheme
 (a simple dot) is included.
 
+All features in detail (in French): [docs/guide.md](docs/guide.md).
+
 ## The settings window
 
 When it opens, the logo assembles out of orbs, then the name slides into the header
@@ -137,8 +139,8 @@ install other people's.
 <td width="50%" valign="top"><img src="docs/images/curseurs.png" alt="Cursors tab: installed cursor schemes"></td>
 </tr>
 <tr>
-<td valign="top"><b>Settings</b> sorted by family (the swarm, the effects, the reactions,
-listening), each with its basic and advanced options, applied live on a large preview that
+<td valign="top"><b>Settings</b> sorted by family (the swarm, the effects, the figures, the
+window and screen, the reactions, listening, this computer), each with its basic and advanced options, applied live on a large preview that
 follows your music; one button simulates a build-up and a drop, another tests each trigger. Next
 to each setting, ten squares tell its power cost.</td>
 <td valign="top"><b>Cursors</b>: your Windows cursor schemes, animated, applied in one click. A
@@ -155,12 +157,14 @@ starting with Windows, pauses, captures and streaming.
 
 **Easiest:** download `essaim.exe` from the
 [latest release](https://github.com/KingsRequin/essaim/releases/latest) and run it. Nothing to
-install, no administrator rights: the settings window opens on first launch.
+install, no administrator rights. On first launch, the settings window opens (it needs WebView2: see the
+question « The settings window doesn't open »).
 
 - First put the file where it will stay (for example `%LOCALAPPDATA%\Programs\Essaim`), then
   tick *Démarrer Essaim avec Windows* in the *Application* view (the gear, top right).
-- Windows may show « Windows protected your PC »: the executable isn't signed. *More info* →
-  *Run anyway*.
+- Windows may show « Windows protected your PC »: the executable has no Authenticode
+  signature (the certificate is paid for), so SmartScreen may warn you. *More info* →
+  *Run anyway*. Essaim's own updates do verify the author's signature.
 - The **Dotter** cursor sits next to it: `curseur-Dotter.zip` (see step 3 below).
 - Essaim then updates itself: a notification tells you about the download, then offers to
   restart. To skip the wait: *Chercher une mise à jour* in the *Application* view.
@@ -175,13 +179,22 @@ install, no administrator rights: the settings window opens on first launch.
    powershell -ExecutionPolicy Bypass -File scripts\install.ps1
    ```
    Essaim is built, copied to `%LOCALAPPDATA%\Programs\Essaim`, starts with Windows and shows up
-   in the Start menu (« Essaim » and « Essaim - réglages »). No administrator rights needed.
+   in the Start menu (« Essaim » and « Essaim - réglages »). No administrator rights needed. A self-built executable is replaced by the latest published
+   release as soon as automatic updates find it: set `[mise_a_jour] auto = false` in
+   `config.toml` to avoid that.
 3. *(Recommended)* Install the **Dotter** cursor: right-click
-   `curseurs\Dotter\_install.inf` → *Install*, then pick it in the *03 Curseurs* tab.
+   `curseurs\Dotter\_install.inf` → *Install*, then pick it in the *03 Curseurs* tab. This step
+   asks Windows for confirmation (administrator rights): the file copies the cursors into
+   `%WINDIR%\Cursors`.
 
 Then: Essaim's tray icon → *Réglages…*
 
-Uninstall: `scripts\uninstall.ps1` (your settings are kept).
+Uninstall (installed from source):
+`powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1` (your settings are kept).
+
+Uninstall (downloaded `essaim.exe`): untick *Démarrer Essaim avec Windows* in the *Application*
+view, quit Essaim (tray icon → *Quitter*), then delete `essaim.exe`. To keep nothing, also delete
+the `%APPDATA%\Essaim` folder.
 
 ## FAQ
 
@@ -208,14 +221,17 @@ No. No keyboard or mouse hook: clicks are read once per frame, and hotkeys go th
 `RegisterHotKey` (Windows notifies Essaim of those keys only). The website color comes from a
 thin strip at the top of the page on screen; the window title is only used to notice a page
 change. The address is not read, and nothing is logged or sent: Essaim only connects to GitHub,
-for the preset library and updates.
+for the preset library and updates. The local interface (for Horizon and other plugins) only
+listens on 127.0.0.1: it is never exposed to the network.
 </details>
 
 <details>
 <summary><b>The swarm doesn't react to sound.</b></summary>
 
 Essaim listens to Windows' *default* audio output. If your music plays on another output, pick it
-in *Réglages › Écoute › Avancé › Sortie son écoutée*. To make it listen to your music only (not notifications or the video next to it), tick its app in *Applications écoutées*, just below. The header of the settings window shows what Essaim hears (kick, highs, bass, note).
+in *Réglages › Écoute › Avancé › Sortie son écoutée*. To make it listen to your music only (not notifications or the video next to it), tick its app in *Applications écoutées*, just below. The header of the settings window shows what Essaim hears (kick, highs, bass, note); if it says
+« Son : erreur », capturing Windows' sound failed: the cause is in the log
+(`%APPDATA%\Essaim\essaim.log`).
 </details>
 
 <details>
@@ -252,7 +268,18 @@ back.
 <summary><b>What about Windows 10?</b></summary>
 
 Essaim is developed and tested on Windows 11. The colored border needs it; the rest should work on
-Windows 10 (with WebView2, installed with Edge), but hasn't been tried there.
+Windows 10, but hasn't been tried there. Minimum versions: 1703 for mixed-scale monitors
+(per-monitor DPI), 1809 for the current track, 2004 for per-app listening and hiding from
+captures. WebView2 (the settings window) must be present: see the next question.
+</details>
+
+<details>
+<summary><b>The settings window doesn't open.</b></summary>
+
+It is a web page shown by WebView2, preinstalled on Windows 11 and on most up-to-date Windows 10;
+otherwise, install the WebView2 Evergreen runtime from Microsoft's website. Without it, Essaim
+says so in a balloon instead of opening the window. If that isn't the cause, the log
+(`%APPDATA%\Essaim\essaim.log`) gives it.
 </details>
 
 <details>
@@ -260,7 +287,10 @@ Windows 10 (with WebView2, installed with Edge), but hasn't been tried there.
 
 In `%APPDATA%\Essaim`: `config.toml` (commented, editable by hand), your presets in `profils\`,
 and the log `essaim.log` (the previous one in `essaim.old.log`). While an automatic preset rule is
-active, your previous settings wait in `auto-avant.toml`.
+active, your previous settings wait in `auto-avant.toml`. The folder also holds `webview\` (the
+settings window's cache), `ipc.jeton` (the local interface's secret) and `bordure.hwnd` (the
+window whose border must get its color back). To erase everything: quit Essaim, then delete the
+folder.
 </details>
 
 ## Roadmap

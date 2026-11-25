@@ -53,7 +53,8 @@ l'ordre de la liste.
   boutons sont inversés).
 - `faire` : `eclat` (halo blanc et anneau sous le pointeur, qui font briller les têtes),
   `satellites` (de `nombre` à `nombre_max`, dans la limite de `[essaim] maximum`), `inversion` (du
-  sens de rotation), `bordure` (la bordure de la fenêtre au premier plan s'illumine), `onde` (de
+  sens de rotation ; une seule par image : deux kicks ou un kick et une caisse claire arrivés
+  ensemble ne s'annulent pas), `bordure` (la bordure de la fenêtre au premier plan s'illumine), `onde` (de
   choc), `eclats` (seize étincelles projetées), `fissure`, `implosion` (une onde qui se referme,
   douze étincelles aspirées), `carre` (posé sur la pointe, qui s'ouvre), `etincelles` (`nombre`,
   depuis les têtes), `explosion` (éclat, satellites, grande onde, gerbe d'étincelles depuis le
@@ -62,8 +63,9 @@ l'ordre de la liste.
   la vitesse, +5 radians/s à la force 1, qui retombe en un quart de seconde), `frein` (la
   rotation perd d'un coup jusqu'à 80 % de sa vitesse, puis repart).
 - `force` : pour un éclat, la bordure ou le frein, de 0 à 1 ; pour une onde, des éclats, une
-  fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour un rebond ou une poussée, de
-  0 à 3 (l'élan). `delai` : secondes au moins entre deux fois ;
+  fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour des étincelles, de 0,2 à 3 (leur
+  vitesse : leur taille ne change pas) ; pour une explosion ou une rafale, de 0,2 à 3 (la taille
+  de la grande onde seule) ; pour un rebond ou une poussée, de 0 à 3 (l'élan). `delai` : secondes au moins entre deux fois ;
   `probabilite` : la chance de se déclencher à chaque événement (0,33 : un sur trois).
 - Un événement ou une action inconnus (preset d'une version plus récente) ne font rien.
 
@@ -84,7 +86,13 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   +400 %, `taille` des têtes et des traînées +150 %, `teinte` +180° (`sur = "tout"` : tout ce
   qu'Essaim dessine, particules et bordure comprises ; comètes ou satellites : leurs têtes et
   traînées), `decalage` de l'orbite vers la droite (1,6 rayon ; vers la gauche en négatif),
-  `luminosite` (la lueur des têtes, +200 %), `trainee` (+300 %), `opacite` (−1 : transparent).
+  `luminosite` (la lueur des têtes, +200 %), `trainee` (+300 %), `opacite` (−1 : transparent ;
+  une quantité positive est sans effet seule, l'opacité étant déjà au plus, mais compense une
+  autre modulation qui la baisse). En négatif, ces parts multipliées s'arrêtent à leur borne :
+  le rayon et la traînée à −90 % (× 0,1), l'accélération, la taille et la lueur à −100 % ; la
+  fenêtre des réglages affiche cet effet borné et arrête la glissière là où plus rien ne change
+  (−0,25 pour le rayon, −0,33 pour la traînée, −0,5 pour l'accélération et la lueur, −0,67 pour la
+  taille ; avec la stéréo, qui agit dans les deux sens, autant de chaque côté).
 - `sur` : `"tout"` (les comètes et les satellites), `"cometes"`, `"satellites"`, `"figures"`
   (toutes les figures autour du pointeur) ou une figure : `"arcs"`, `"quatre_temps"`,
   `"anneau"`, `"orbe"`, `"voix"`, `"trame"`, `"pinceau"` (le trait), `"pendule"`, `"gouttes"`.
@@ -95,16 +103,21 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   Le trait et le pendule ne tournent, ne grandissent ni ne se déplacent. `quantite` de -1 à 1 (négatif : dans l'autre
   sens). `seuil` (0 à 0,95) : rien sous ce niveau de la source, puis jusqu'au maximum. `lissage`
   (0 à 1) : 0 réagit aussitôt, 1 en douceur (0,4 s ; 0,35 par défaut ≈ 50 ms). `inverser` : la
-  source à l'envers (1 − valeur ; stéréo : l'autre côté).
+  source à l'envers (1 − valeur ; stéréo : l'autre côté) ; une source nulle en silence agit donc
+  à fond tant que rien ne joue.
 - Rotations, vitesses, teintes et décalages s'additionnent ; accélération, rayon, taille, lueur,
   traînée et opacité se multiplient (deux réactions qui resserrent l'orbite de moitié la
-  resserrent au quart), dans des bornes lisibles ; la vitesse ne devient jamais négative.
+  resserrent au quart), dans des bornes lisibles. Avec le réglage, la rotation reste entre −180
+  et 180 tr/min (celle d'une figure aussi) et la vitesse sur le trajet entre 0 et 60 radians/s.
+  Une figure ne descend pas sous la moitié de sa taille (l'échelle 0,5 de son allure) : plus
+  petite, elle se ramasserait sur le pointeur.
 
 Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillement]`,
 `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`, `[audio] pulsation_tempo`,
 `[orbite] vitesse_basse`, `eloignement_grave`, `inverse_au_kick`, `[essaim] par_kick_min` et
 `par_kick_max`) sont convertis avec leurs valeurs ; `config.toml` est réécrit une fois au
-lancement, commentaires gardés. Un preset d'avant garde son allure (essai
+lancement, commentaires gardés. Un preset sans `[declencheurs]` dont la liste de modulations est
+vide (`liste = []`) la garde vide, sauf pour les réactions d'avant écrites dans le preset. Un preset d'avant garde son allure (essai
 `presets_comme_avant`, sur les presets fournis jusqu'à la version 0.6).
 
 ### Les effets
@@ -117,7 +130,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   soit `anneaux` ; un ancien trajet dessiné à la main, dans `trace`,
   marche toujours), ou ceux de l'icône de l'application au premier plan (`forme = "icone"`, qui
   change avec elle ; les réglages d'Essaim n'en changent pas), qui peut tourner sur lui-même (`rotation`, tours/min ; quand sa rotation, modulations comprises, retombe sous 2 tours/min, il se redresse en douceur ; `rotation_sur` : `"tout"`,
-  `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet) ; les satellites suivent le
+  `"cometes"` ou `"satellites"`, seul ce groupe tourne avec le trajet ; une autre valeur vaut
+  `"tout"`) ; les satellites suivent le
   même trajet, ou le leur (`[essaim] forme`) ; `[essaim] fixes` ajoute des satellites permanents,
   même sans musique. Entre deux images, les traînées suivent le vrai trajet (points
   intermédiaires) : elles restent lisses à grande vitesse.
@@ -127,8 +141,8 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   site affiché (`[couleur] site` : couleur dominante du haut de la page, sous la barre d'adresse,
   mesurée à chaque changement de page et toutes les 3 s ; une page grise garde la teinte
   précédente) ; ou, si l'outil Prisme de l'auteur tourne (non fourni ici), celle de l'éclairage
-  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`, montrée seulement quand Prisme
-  répond). Avec `[couleur] pochette`, la
+  RGB (bascule *Synchro Prisme*, `[couleur] synchro_prisme`, montrée quand Prisme répond, ou
+  tant qu'elle est cochée, pour pouvoir la décocher). Avec `[couleur] pochette`, la
   teinte dominante de la pochette du morceau qui joue (Spotify, navigateur… : tout ce que montre
   le panneau multimédia de Windows) passe avant l'application, le site et Prisme ; en pause ou
   sans morceau, on retombe sur eux, dans cet ordre. Pour que la teinte glisse avec la musique :
@@ -251,7 +265,11 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
   pointeur et quand l'essaim s'éteint (veille) ; ils s'effacent en pause et en plein écran.
 - **Équerres** (`[equerres]`) : quatre petites équerres aux coins de la fenêtre au premier plan,
   à l'extérieur de son cadre (`bras`, 4 à 30, 10 par défaut ; `epaisseur`, 1 à 5) : rien autour du
-  pointeur, rien sur le contenu. Elles s'écartent sur le kick puis reviennent, leurs bras
+  pointeur, rien sur le contenu. Elles ne sortent jamais de la zone de travail de l'écran de la
+  fenêtre : quand la place manque dehors (fenêtre agrandie, ancrée au bord, qui passe sous la
+  barre des tâches), l'équerre de ce coin se retourne dans le cadre, plutôt que de tomber sur
+  l'écran voisin ou la barre des tâches. Équerres et halo sont à l'échelle de l'écran que Windows
+  attribue à la fenêtre. Elles s'écartent sur le kick puis reviennent, leurs bras
   s'allongent avec la basse, la caisse claire allume une diagonale puis l'autre, une montée les
   serre contre la fenêtre, un drop les écarte en grand. Le cadre est relu à chaque image : les
   équerres et le halo suivent une fenêtre qu'on déplace ou redimensionne. Ils habillent les mêmes
@@ -268,8 +286,9 @@ lancement, commentaires gardés. Un preset d'avant garde son allure (essai
 - **Liseré** (`[lisere]`) : un filet de lumière au bord bas de l'écran du pointeur (`epaisseur`,
   1 à 8, 3 par défaut), à son aplomb. Il s'élargit avec la basse, chaque kick y court vers la
   gauche et la droite, une montée charge tout le bord, un drop l'allume en entier. Il s'efface
-  après 1,5 s sans son. `tous_ecrans = true` le met au bord bas de chaque écran : les éclats
-  partent toujours de l'aplomb du pointeur et passent d'un écran à l'autre.
+  après 1,5 s sans son. `tous_ecrans = true` le met au bord bas de chaque écran, à l'épaisseur
+  de son échelle : les éclats partent toujours de l'aplomb du pointeur et passent d'un écran à
+  l'autre.
   Ces trois figures agrandissent la zone que le moteur redessine (un seul rectangle par écran,
   du pointeur jusqu'à elles) : les équerres seulement quand elles bougent, le halo et le liseré
   tant que la musique joue. C'est léger avec la carte graphique, lourd avec le dessin par le processeur.

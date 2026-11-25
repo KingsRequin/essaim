@@ -1,3 +1,4 @@
+#Requires -Version 7.3
 # Crée les deux clés qui signent les versions d'Essaim (une seule fois, sur le PC de l'auteur).
 # Les mises à jour automatiques n'installent qu'un essaim.exe signé par l'une d'elles : un
 # compte GitHub ou un workflow compromis ne suffit pas à faire passer un faux exécutable.
