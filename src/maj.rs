@@ -276,6 +276,16 @@ fn verifier(exe: &Path) -> anyhow::Result<Option<String>> {
 const ATTENTES_DEPLACEMENT: [Duration; 5] =
     [Duration::from_millis(100), Duration::from_millis(250), Duration::from_millis(500), Duration::from_secs(1), Duration::from_secs(2)];
 
+/// Temps laissé au-delà des attentes (écriture et copies de l'exécutable sur un disque lent).
+const MARGE_REMPLACEMENT: Duration = Duration::from_secs(5);
+
+/// Durée maximale d'un remplacement en cours (`remplacer_avec`) : au pire quatre séries
+/// d'attentes (nouvelle version libre, exécutable renommé, nouvelle version en place, ancienne
+/// revenue), plus une marge. La sortie d'Essaim l'attend au plus ce temps-là.
+pub fn duree_remplacement_max() -> Duration {
+    4 * ATTENTES_DEPLACEMENT.iter().sum::<Duration>() + MARGE_REMPLACEMENT
+}
+
 // Déclaré ici : le paquet `windows` n'a pas la partie « Storage_FileSystem » activée.
 #[link(name = "kernel32", kind = "raw-dylib")]
 unsafe extern "system" {
@@ -522,6 +532,12 @@ mod tests {
         assert!(!plus_recente("0.1.0", "0.2.0"));
         assert!(!plus_recente("1.0.0-beta", "1.0.0"));
         assert!(!plus_recente("n'importe quoi", "0.1.0"));
+    }
+
+    #[test]
+    fn la_sortie_attend_le_pire_remplacement() {
+        // quatre séries d'attentes complètes : 4 × 3,85 s
+        assert!(duree_remplacement_max() > Duration::from_millis(15_400), "{:?}", duree_remplacement_max());
     }
 
     #[test]

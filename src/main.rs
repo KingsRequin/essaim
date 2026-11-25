@@ -265,7 +265,7 @@ fn main() {
     bordure::restore();
     // une mise à jour en train de remplacer l'exécutable, ou des curseurs en cours d'écriture,
     // finissent avant la sortie (sinon : plus d'essaim.exe, ou un jeu de curseurs à moitié écrit)
-    maj::attendre_remplacement(Duration::from_secs(10));
+    maj::attendre_remplacement(maj::duree_remplacement_max());
     souris::attendre_curseurs(Duration::from_secs(2));
     // nouvelle version en place : le verrou est rendu avant de lancer la suivante
     if let (true, Some(exe)) = (relancer, maj::exe()) {
@@ -302,15 +302,13 @@ fn habillage_seul(
     backend.frame(monitors, layer::AUCUNE, &zones, &|cv, _| effets.dessiner_loin(cv, cfg, t, scale));
 }
 
-/// Relit le cadre de la fenêtre au premier plan (s'il sert : rebonds, équerres, halo) et
-/// l'échelle de son écran ; renvoie les murs des rebonds. Quelques appels à Windows, de l'ordre
-/// de la dizaine de microsecondes : fait à chaque image dessinée.
+/// Relit le cadre de la fenêtre au premier plan (s'il sert : rebonds, équerres, halo) ; renvoie
+/// les murs des rebonds. Quelques appels à Windows, de l'ordre de la dizaine de microsecondes :
+/// fait à chaque image dessinée (ses écrans ne sont relus que quand elle change :
+/// `loin::FenetreLue`).
 fn lire_fenetre(effets: &mut effets::Effets, cfg: &config::Config) -> Option<(f32, f32, f32, f32)> {
     let voulu = cfg.particules.rebonds || cfg.equerres.actif || cfg.halo.actif;
     effets.fenetre = if voulu { win::cadre_premier_plan() } else { None };
-    if let Some((l, t, r, b)) = effets.fenetre {
-        effets.echelle_fenetre = win::scale_at(((l + r) / 2.0) as i32, ((t + b) / 2.0) as i32);
-    }
     effets.fenetre.filter(|_| cfg.particules.rebonds)
 }
 

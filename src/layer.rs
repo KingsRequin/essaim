@@ -1,6 +1,7 @@
 //! Un calque transparent par écran, de la taille de l'écran et immobile. Tout y est dessiné
 //! (essaim, fissures) ; seule la zone qui change est effacée, redessinée et envoyée à Windows.
-//! Le dessin est découpé à cette zone (tracé dans une image de sa taille, puis recopié) : rien
+//! Le dessin est découpé à cette zone (tracé dans une image de sa taille, puis recopié ; tracé
+//! directement dans le calque quand la zone le couvre entier) : rien
 //! n'est laissé hors de la zone, où il ne serait jamais effacé et reparaîtrait au premier envoi
 //! complet (après un envoi refusé, `win::Surface` renvoie tout le calque).
 //!
@@ -104,8 +105,15 @@ impl Layer {
 
 /// Efface la zone `local` (pixels du calque `pm`, dont le coin est en `origine` à l'écran) et y
 /// laisse dessiner `draw`, découpé à la zone : il dessine dans une image transparente de sa
-/// taille (pixels gardés dans `tampon` pour leur mémoire), recopiée ensuite dans le calque.
+/// taille (pixels gardés dans `tampon` pour leur mémoire), recopiée ensuite dans le calque. Une
+/// zone qui couvre tout le calque (projecteur, habillage sur tout l'écran) est dessinée
+/// directement dedans : le calque lui-même est déjà découpé à la zone.
 fn peindre_zone(pm: &mut Pixmap, tampon: &mut Vec<u8>, local: IRect, origine: (i32, i32), draw: impl FnOnce(&mut dyn Canvas)) {
+    if local == (0, 0, pm.width() as i32, pm.height() as i32) {
+        pm.data_mut().fill(0);
+        draw(&mut PixCanvas { pm, origin: (origine.0 as f32, origine.1 as f32) });
+        return;
+    }
     let (zl, zh) = ((local.2 - local.0) as usize, (local.3 - local.1) as usize);
     let mut px = std::mem::take(tampon);
     px.clear();
@@ -166,6 +174,12 @@ mod tests {
         // zone redessinée vide : effacée
         peindre_zone(&mut pm, &mut tampon, (40, 40, 110, 110), (100, 100), |_| {});
         assert!(pm.data().iter().all(|&o| o == 0), "calque vide");
+        // zone du calque entier : dessiné directement, à la même place, l'ancien dessin effacé
+        peindre_zone(&mut pm, &mut tampon, (0, 0, 300, 200), (100, 100), |cv| cv.circle(200.0, 200.0, 20.0, (255, 255, 255), 1.0));
+        assert_eq!(px(&pm, 200, 200), 255);
+        peindre_zone(&mut pm, &mut tampon, (0, 0, 300, 200), (100, 100), |cv| cv.circle(300.0, 250.0, 5.0, (255, 255, 255), 1.0));
+        assert_eq!(px(&pm, 200, 200), 0, "ancien dessin effacé");
+        assert_eq!(px(&pm, 300, 250), 255);
     }
 
     #[test]

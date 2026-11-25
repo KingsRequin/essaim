@@ -333,11 +333,19 @@ pub struct Etiquette {
     kick: f32,
     /// Coin haut gauche du texte (écran).
     coin: (f32, f32),
+    /// Côté du pointeur où le texte est posé (à gauche, au-dessus), choisi au début de
+    /// l'affichage et gardé tant qu'il tient (`placer`) ; `None` avant.
+    cote: Option<(bool, bool)>,
 }
+
+/// Le texte, passé à gauche (ou au-dessus) du pointeur faute de place, ne revient à droite (ou
+/// dessous) que s'il y tient avec cette marge en plus (px à 100 %) : un pointeur qui hésite au
+/// bord ne le fait pas sauter d'un côté à l'autre.
+const HYSTERESE: f32 = 48.0;
 
 impl Etiquette {
     pub fn new() -> Self {
-        Self { pistes: None, kicks: None, debut: None, texte: None, echelle: 1.0, kick: 0.0, coin: (0.0, 0.0) }
+        Self { pistes: None, kicks: None, debut: None, texte: None, echelle: 1.0, kick: 0.0, coin: (0.0, 0.0), cote: None }
     }
 
     /// Avance d'une image : un changement de piste montre le morceau ; `ecran` est celui du
@@ -352,11 +360,11 @@ impl Etiquette {
         // un changement de piste : le compteur a bougé depuis l'image précédente (rien au lancement)
         let pistes = crate::media::pistes();
         if self.pistes.is_some_and(|p| p != pistes) {
-            (self.debut, self.texte) = (Some(t), None);
+            (self.debut, self.texte, self.cote) = (Some(t), None, None);
         }
         self.pistes = Some(pistes);
         if self.debut.is_some_and(|d| (t - d) as f32 >= c.duree + SORTIE) {
-            (self.debut, self.texte) = (None, None);
+            (self.debut, self.texte, self.cote) = (None, None, None);
         }
         if self.debut.is_some() && (self.texte.is_none() || self.echelle != scale) {
             let morceau = crate::media::morceau().unwrap_or_default();
@@ -375,18 +383,26 @@ impl Etiquette {
         }
     }
 
-    /// Place le texte près du pointeur, du côté où il tient dans l'écran.
+    /// Place le texte près du pointeur, du côté où il tient dans l'écran : à droite et dessous
+    /// par défaut, à gauche ou au-dessus faute de place. Le côté choisi est gardé tant qu'il
+    /// tient ; il ne revient à droite ou dessous qu'avec `HYSTERESE` de marge.
     fn placer(&mut self, cursor: (f32, f32), scale: f32, ecran: Option<IRect>) {
         let (dx, dy) = (DECALAGE.0 * scale, DECALAGE.1 * scale);
         self.coin = (cursor.0 + dx, cursor.1 + dy);
         if let (Some(e), Some(tx)) = (ecran, &self.texte) {
             let (l, h) = (tx.image.width() as f32, tx.image.height() as f32 + (FILET_ECART + FILET.0 + FILET.1) * scale);
-            if self.coin.0 + l > e.2 as f32 {
+            // déjà de l'autre côté : il faut la marge en plus pour revenir
+            let (avant_g, avant_d) = self.cote.unwrap_or((false, false));
+            let marge = |deja: bool| if deja { HYSTERESE * scale } else { 0.0 };
+            let gauche = self.coin.0 + l + marge(avant_g) > e.2 as f32;
+            let dessus = self.coin.1 + h + marge(avant_d) > e.3 as f32;
+            if gauche {
                 self.coin.0 = (cursor.0 - dx - l).max(e.0 as f32);
             }
-            if self.coin.1 + h > e.3 as f32 {
+            if dessus {
                 self.coin.1 = (cursor.1 - dy - h).max(e.1 as f32);
             }
+            self.cote = Some((gauche, dessus));
         }
         self.coin = (self.coin.0.round(), self.coin.1.round());
     }
@@ -636,6 +652,14 @@ mod tests {
         e.placer((790.0, 590.0), 1.0, Some(ECRAN));
         let z = e.rect().unwrap();
         assert!(z.2 <= 790 && z.3 <= 600 && z.0 >= -10, "{z:?}");
+        // le pointeur recule un peu : le texte reste à gauche et au-dessus (pas de saut), puis
+        // revient à droite et dessous quand il y tient largement
+        let l = e.texte.as_ref().unwrap().image.width() as f32;
+        let juste = 800.0 - DECALAGE.0 - l - 4.0;
+        e.placer((juste, 590.0 - 40.0), 1.0, Some(ECRAN));
+        assert!(e.coin.0 < juste, "le texte a sauté à droite : {:?}", e.coin);
+        e.placer((juste - HYSTERESE - 4.0, 300.0), 1.0, Some(ECRAN));
+        assert_eq!(e.coin, ((juste - HYSTERESE - 4.0 + DECALAGE.0).round(), 300.0 + DECALAGE.1));
         // après sa durée, plus rien
         let mut pm = Pixmap::new(800, 600).unwrap();
         e.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, (cfg.etiquette.duree + SORTIE + 0.1) as f64, &cfg, 1.0);

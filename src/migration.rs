@@ -32,9 +32,6 @@ pub const ANCIENNES_CLES: [(&str, &str); 21] = [
     ("musique", "stereo"),
     ("audio", "pulsation_tempo"),
 ];
-/// Anciennes clés des réactions qui deviennent la queue des modulations (`Ancien::modulations`,
-/// `reste`) : montée, contretemps, teinte qui suit la musique, décalage stéréo.
-const RESTE: [(&str, &str); 4] = [("musique", "montee"), ("musique", "contretemps"), ("couleur", "musique"), ("musique", "stereo")];
 /// Sections qui n'existent plus (retirées si elles sont vides après la conversion).
 pub const ANCIENNES_SECTIONS: [&str; 3] = ["scintillement", "clic", "musique"];
 
@@ -265,7 +262,8 @@ fn table<'a>(t: &'a mut toml::Table, section: &str) -> &'a mut toml::Table {
 /// déclencheurs. Les anciennes clés sont retirées ; sans `[declencheurs]`, les réactions
 /// d'avant (valeurs du fichier, ou celles par défaut d'alors) deviennent les déclencheurs et
 /// s'ajoutent aux modulations (sauf à une liste de modulations vidée exprès, qui ne reçoit que
-/// les réactions écrites dans la table) ; sans `[modulations]`, ou avec les anciennes clés de la
+/// les modulations des réactions écrites dans la table : une réaction non écrite, même active par
+/// défaut comme la montée, y compte comme coupée) ; sans `[modulations]`, ou avec les anciennes clés de la
 /// basse, les réactions à la basse passent en tête des modulations. Une modulation de même
 /// source, même cible et même groupe déjà là est gardée. Renvoie vrai si la table a changé.
 pub fn migrer(t: &mut toml::Table) -> bool {
@@ -292,17 +290,33 @@ pub fn migrer(t: &mut toml::Table) -> bool {
             table(t, "particules").entry(nouvelle).or_insert(v);
         }
     }
-    // les réactions d'avant qui deviennent la queue des modulations, écrites dans le fichier
-    let reste_explicite = RESTE.iter().any(|(s, c)| vieux.get(*s).and_then(|s| s.get(*c)).is_some());
-    let ancien = Ancien::deserialize(vieux).unwrap_or_default();
+    let ecrite = |section: &str, cle: &str| vieux.get(section).and_then(|s| s.get(cle)).is_some();
+    // une liste vidée exprès n'en reçoit pas par défaut : seulement les réactions écrites dans la
+    // table, une réaction non écrite y compte comme coupée (même active par défaut, la montée)
     let liste = match table(t, "modulations").remove("liste") {
         Some(toml::Value::Array(a)) => Some(a),
         _ => None,
     };
-    // une liste vidée exprès n'en reçoit pas par défaut : seulement les réactions écrites
     let videe = liste.as_ref().is_some_and(Vec::is_empty);
-    let tete = if !avait_mod || basse_explicite { ancien.modulations(true, false) } else { Vec::new() };
-    let queue = if avait_decl || (videe && !reste_explicite) { Vec::new() } else { ancien.modulations(false, true) };
+    let ancien = Ancien::deserialize(vieux.clone()).unwrap_or_default();
+    let mut ecrites = ancien.clone();
+    if videe {
+        let (o, mu) = (&mut ecrites.orbite, &mut ecrites.musique);
+        if !ecrite("orbite", "vitesse_basse") {
+            o.vitesse_basse = 0.0;
+        }
+        if !ecrite("orbite", "eloignement_grave") {
+            o.eloignement_grave = 0.0;
+        }
+        mu.montee &= ecrite("musique", "montee");
+        mu.contretemps &= ecrite("musique", "contretemps");
+        ecrites.couleur.musique &= ecrite("couleur", "musique");
+        if !ecrite("musique", "stereo") {
+            mu.stereo = 0.0;
+        }
+    }
+    let tete = if !avait_mod || basse_explicite { ecrites.modulations(true, false) } else { Vec::new() };
+    let queue = if avait_decl { Vec::new() } else { ecrites.modulations(false, true) };
     let liste = liste.unwrap_or_default();
     fn nom<T: serde::Serialize>(x: T) -> Option<String> {
         toml::Value::try_from(x).ok().and_then(|v| v.as_str().map(str::to_owned))
@@ -348,7 +362,14 @@ mod tests {
         assert!(modulations("[modulations]\nliste = []").is_empty());
         // sauf pour une réaction d'avant écrite dans le preset
         let l = modulations("[modulations]\nliste = []\n[musique]\ncontretemps = true");
-        assert!(l.iter().any(|m| m.source == Source::Contretemps), "{l:?}");
+        assert!(l.iter().all(|m| m.source == Source::Contretemps) && l.len() == 2, "seulement le contretemps écrit, pas la montée par défaut : {l:?}");
+        // la montée, écrite, y entre ; une clé de la basse écrite n'amène pas l'autre
+        let l = modulations("[modulations]\nliste = []\n[musique]\nmontee = true\n[orbite]\nvitesse_basse = 5.0");
+        assert!(l.iter().filter(|m| m.source == Source::Montee).count() == 2 && l.iter().any(|m| m.source == Source::Basse), "{l:?}");
+        assert!(!l.iter().any(|m| m.source == Source::Grave), "{l:?}");
+        // hors liste vidée : les réactions par défaut d'alors, comme avant
+        let l = modulations("[modulations]\nliste = [{ source = \"kick\", cible = \"taille\", quantite = 0.5 }]\n[musique]\ncontretemps = true");
+        assert!(l.iter().any(|m| m.source == Source::Montee) && l.iter().any(|m| m.source == Source::Contretemps), "{l:?}");
         // une modulation de même source et même cible, sur un autre groupe, n'en remplace pas une
         // réaction d'avant
         let l = modulations("[modulations]\nliste = [{ source = \"montee\", cible = \"rayon\", sur = \"satellites\", quantite = 0.5 }]");

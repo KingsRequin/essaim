@@ -70,37 +70,77 @@ fn proches(a: Rgb, b: Rgb) -> bool {
 }
 
 /// Fenêtre au premier plan telle que l'habillage la voit : son cadre (gauche, haut, droite, bas,
-/// px écran), l'échelle de son écran, la zone de travail de cet écran (sans la barre des tâches)
-/// et un numéro qui change avec la fenêtre.
+/// px écran), l'échelle de son écran, la zone de travail (sans la barre des tâches) de l'écran de
+/// chacun de ses coins (haut gauche, haut droit, bas droit, bas gauche : une fenêtre à cheval sur
+/// deux écrans a ses coins sur l'un et l'autre) et un numéro qui change avec la fenêtre.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Fenetre {
     pub cadre: (f32, f32, f32, f32),
     pub echelle: f32,
-    pub travail: IRect,
+    pub travail: [IRect; 4],
     pub id: isize,
 }
 
+/// Une fenêtre lue est relue au moins à cet intervalle, même si rien n'a bougé : les écrans
+/// (échelle, barre des tâches) peuvent changer sous elle.
+const FENETRE_RELUE: std::time::Duration = std::time::Duration::from_secs(1);
+
 impl Fenetre {
-    /// La fenêtre au premier plan de cadre `cadre` (`win::cadre_premier_plan`), sur l'écran que
-    /// Windows lui attribue (celui qui en porte la plus grande part) : son échelle (DPI de cet
-    /// écran ; `echelle` s'il ne répond pas) et sa zone de travail. L'échelle de l'écran, et non
-    /// `GetDpiForWindow` : une fenêtre qui ne gère pas le DPI y répond toujours 96, alors que son
-    /// cadre est en pixels réels.
-    pub fn lire(cadre: (f32, f32, f32, f32), echelle: f32) -> Fenetre {
-        use windows::Win32::Foundation::RECT;
-        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    /// La fenêtre `id` de cadre `cadre` (`win::cadre_premier_plan`). Son échelle est celle de
+    /// l'écran que Windows lui attribue (celui qui en porte la plus grande part ; à défaut, celle
+    /// du centre de son cadre), et non `GetDpiForWindow` : une fenêtre qui ne gère pas le DPI y
+    /// répond toujours 96, alors que son cadre est en pixels réels. Chaque coin prend la zone de
+    /// travail de l'écran où il est (le plus proche s'il est hors de tout écran).
+    fn lire(cadre: (f32, f32, f32, f32), id: isize) -> Fenetre {
+        use windows::Win32::Foundation::{POINT, RECT};
+        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MonitorFromRect, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST};
         use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-        let r = RECT { left: cadre.0.round() as i32, top: cadre.1.round() as i32, right: cadre.2.round() as i32, bottom: cadre.3.round() as i32 };
+        let (l, t, r, b) = (cadre.0.round() as i32, cadre.1.round() as i32, cadre.2.round() as i32, cadre.3.round() as i32);
         // sans réponse de Windows : aucune limite (l'équerre reste dehors, comme avant)
         let partout = (i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4);
-        unsafe {
-            let mon = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
+        let travail_de = |mon: HMONITOR| unsafe {
             let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-            let travail = if GetMonitorInfoW(mon, &mut mi).as_bool() { (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom) } else { partout };
-            let (mut dx, mut dy) = (96u32, 96u32);
-            let echelle = if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() { dx as f32 / 96.0 } else { echelle };
-            Fenetre { cadre, echelle, travail, id: GetForegroundWindow().0 as isize }
+            if GetMonitorInfoW(mon, &mut mi).as_bool() {
+                (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom)
+            } else {
+                partout
+            }
+        };
+        // derniers pixels du cadre (droite et bas exclus), dans l'ordre de `Equerres::coins`
+        let coins = [(l, t), ((r - 1).max(l), t), ((r - 1).max(l), (b - 1).max(t)), (l, (b - 1).max(t))];
+        let mut vus: Vec<(HMONITOR, IRect)> = Vec::with_capacity(2);
+        let travail = coins.map(|(x, y)| {
+            let mon = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+            if let Some(&(_, w)) = vus.iter().find(|v| v.0 == mon) {
+                return w;
+            }
+            let w = travail_de(mon);
+            vus.push((mon, w));
+            w
+        });
+        let mon = unsafe { MonitorFromRect(&RECT { left: l, top: t, right: r, bottom: b }, MONITOR_DEFAULTTONEAREST) };
+        let (mut dx, mut dy) = (96u32, 96u32);
+        let echelle = if unsafe { GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) }.is_ok() { dx as f32 / 96.0 } else { crate::win::scale_at((l + r) / 2, (t + b) / 2) };
+        Fenetre { cadre, echelle, travail, id }
+    }
+}
+
+/// Dernière fenêtre lue (`Fenetre::lire`), gardée tant que la fenêtre au premier plan et son
+/// cadre ne changent pas, au plus `FENETRE_RELUE` : l'habillage la demande à chaque image.
+#[derive(Default)]
+pub struct FenetreLue(Option<(Fenetre, std::time::Instant)>);
+
+impl FenetreLue {
+    /// La fenêtre au premier plan de cadre `cadre`.
+    pub fn lire(&mut self, cadre: (f32, f32, f32, f32)) -> Fenetre {
+        let id = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as isize;
+        match self.0 {
+            Some((f, quand)) if f.id == id && f.cadre == cadre && quand.elapsed() < FENETRE_RELUE => f,
+            _ => {
+                let f = Fenetre::lire(cadre, id);
+                self.0 = Some((f, std::time::Instant::now()));
+                f
+            }
         }
     }
 }
@@ -108,13 +148,13 @@ impl Fenetre {
 /// Point ou direction (px écran).
 type Point = (f32, f32);
 
-/// Ce qui est dessiné des équerres : cadre de la fenêtre et zone de travail de son écran, écart
+/// Ce qui est dessiné des équerres : cadre de la fenêtre et zone de travail de l'écran de chaque coin, écart
 /// et bras (px écran), opacité des deux diagonales, couleur. Deux images au même dessin ne
 /// redemandent pas leurs zones.
 #[derive(Clone, Copy, PartialEq)]
 struct Equerres {
     cadre: (i32, i32, i32, i32),
-    travail: IRect,
+    travail: [IRect; 4],
     ecart: f32,
     bras: f32,
     opacites: [f32; 2],
@@ -125,15 +165,18 @@ struct Equerres {
 impl Equerres {
     /// Les quatre coins : sommet de l'équerre, sens de ses bras (vers l'intérieur du cadre),
     /// diagonale (0 ou 1). L'équerre est dehors, écartée du coin ; s'il n'y a pas la place dans la
-    /// zone de travail (fenêtre agrandie, ancrée au bord, sous la barre des tâches), elle est
-    /// retournée dans le cadre, et son sommet ne sort jamais de cette zone (ni sur l'écran voisin,
-    /// ni sur la barre des tâches).
+    /// zone de travail de son écran (fenêtre agrandie, ancrée au bord, sous la barre des tâches),
+    /// elle est retournée dans le cadre, et son sommet ne sort jamais de cette zone (ni sur l'écran
+    /// voisin, ni sur la barre des tâches).
     fn coins(&self) -> [(Point, Point, usize); 4] {
         let (l, t, r, b) = (self.cadre.0 as f32, self.cadre.1 as f32, self.cadre.2 as f32, self.cadre.3 as f32);
-        let (wl, wt, wr, wb) = (self.travail.0 as f32, self.travail.1 as f32, self.travail.2 as f32, self.travail.3 as f32);
         let marge = self.epaisseur / 2.0 + 1.0;
         let dans = |v: f32, lo: f32, hi: f32| v.min(hi - marge).max(lo + marge);
-        [(l, t, -1.0, -1.0, 0), (r, t, 1.0, -1.0, 1), (r, b, 1.0, 1.0, 0), (l, b, -1.0, 1.0, 1)].map(|(x, y, sx, sy, diag)| {
+        let coins = [(l, t, -1.0, -1.0, 0), (r, t, 1.0, -1.0, 1), (r, b, 1.0, 1.0, 0), (l, b, -1.0, 1.0, 1)];
+        std::array::from_fn(|i| {
+            let (x, y, sx, sy, diag) = coins[i];
+            let w = self.travail[i];
+            let (wl, wt, wr, wb) = (w.0 as f32, w.1 as f32, w.2 as f32, w.3 as f32);
             let (ox, oy) = (x + sx * (self.ecart + marge), y + sy * (self.ecart + marge));
             let place = (wl..=wr).contains(&ox) && (wt..=wb).contains(&oy);
             let s = if place { 1.0 } else { -1.0 };
@@ -341,7 +384,7 @@ impl Loin {
         self.bandes.clear();
     }
 
-    /// Avance d'une image. `fenetre` : la fenêtre au premier plan (`Fenetre::lire`) ; `ecrans` :
+    /// Avance d'une image. `fenetre` : la fenêtre au premier plan (`FenetreLue::lire`) ; `ecrans` :
     /// ceux qui portent le liseré (celui du pointeur, ou tous : `[lisere] tous_ecrans`), chacun
     /// avec son échelle.
     #[allow(clippy::too_many_arguments)]
@@ -558,7 +601,7 @@ mod tests {
 
     /// Fenêtre de cadre `cadre` sur l'écran d'essai, à 100 %.
     fn fenetre(cadre: (f32, f32, f32, f32), id: isize) -> Fenetre {
-        Fenetre { cadre, echelle: 1.0, travail: ECRAN, id }
+        Fenetre { cadre, echelle: 1.0, travail: [ECRAN; 4], id }
     }
 
     fn avancer(l: &mut Loin, t: f64, bass: f32, coups: Coups, cfg: &Config, cadre: Option<(f32, f32, f32, f32)>) {
@@ -832,7 +875,7 @@ mod tests {
         let travail = (0, 0, 1200, 760);
         for cadre in [(0.0, 0.0, 1200.0, 760.0), (0.0, 0.0, 600.0, 760.0), (300.0, 500.0, 900.0, 900.0)] {
             let mut l = Loin::new();
-            avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre, echelle: 1.0, travail, id: 1 }));
+            avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre, echelle: 1.0, travail: [travail; 4], id: 1 }));
             let zones = l.zones().to_vec();
             let pm = image(&l, 0.0, &cfg);
             let mut peints = 0;
@@ -849,10 +892,31 @@ mod tests {
         }
         // fenêtre au milieu : les équerres restent dehors, écartées du cadre
         let mut l = Loin::new();
-        avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre: FENETRE, echelle: 1.0, travail, id: 1 }));
+        avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre: FENETRE, echelle: 1.0, travail: [travail; 4], id: 1 }));
         let pm = image(&l, 0.0, &cfg);
         assert!(pm.pixel(FENETRE.0 as u32 - 4, FENETRE.1 as u32 + 10).unwrap().alpha() > 0);
         assert_eq!(pm.pixel(FENETRE.0 as u32 + 4, FENETRE.1 as u32 + 10).unwrap().alpha(), 0);
+    }
+
+    #[test]
+    fn equerres_a_cheval_sur_deux_ecrans() {
+        let mut cfg = Config::default();
+        (cfg.equerres.actif, cfg.equerres.bras) = (true, 30.0);
+        // écran gauche : barre des tâches de 760 à 800 ; écran droit : sans barre. La fenêtre
+        // descend sous la barre du gauche et porte la plus grande part de son cadre sur le droit
+        let (gauche, droit) = ((0, 0, 1200, 760), (1200, 0, 2400, 800));
+        let cadre = (1000.0, 100.0, 1600.0, 790.0);
+        let mut l = Loin::new();
+        avancer_dans(&mut l, 0.0, 0.0, Coups::default(), &cfg, Some(Fenetre { cadre, echelle: 1.0, travail: [gauche, droit, droit, gauche], id: 1 }));
+        let mut pm = Pixmap::new(2400, 800).unwrap();
+        l.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 0.0, &cfg, 1.0);
+        let peint = |x0: u32, x1: u32, y0: u32, y1: u32| (x0..x1).flat_map(|x| (y0..y1).map(move |y| (x, y))).any(|(x, y)| pm.pixel(x, y).unwrap().alpha() > 0);
+        // les coins de gauche restent sur l'écran gauche, dehors en haut, au-dessus de sa barre en bas
+        assert!(peint(980, 1000, 80, 100), "coin haut gauche dehors, sur l'écran gauche");
+        assert!(peint(1000, 1040, 740, 760), "coin bas gauche rentré au-dessus de la barre");
+        assert!(!peint(0, 1200, 760, 800), "rien sur la barre des tâches de l'écran gauche");
+        // ceux de droite, sur l'écran droit sans barre, restent dehors
+        assert!(peint(1600, 1620, 790, 800), "coin bas droit dehors, sur l'écran droit");
     }
 
     #[test]

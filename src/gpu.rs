@@ -317,9 +317,13 @@ const NIVEAUX: [(u32, u32); 5] = [(64, 0), (32, 66), (16, 100), (8, 118), (4, 12
 const PLANCHE: (u32, u32) = (132, 64);
 /// Rayon minimal d'une pastille, en pixels de l'écran.
 const R_MIN_PX: f32 = 1.0;
-/// Pastilles au plus par image : au-delà (coordonnées aberrantes, trait démesuré), le reste est
-/// ignoré plutôt que de remplir la mémoire.
-const MAX_PASTILLES: usize = 20_000;
+/// Pastilles au plus par trait ou anneau : un trait démesuré (coordonnées aberrantes) garde sa
+/// longueur, ses pastilles plus espacées, au lieu de remplir la mémoire.
+const MAX_PAR_TRAIT: usize = 20_000;
+/// Garde-fou de mémoire sur l'image entière (~24 Mo de pastilles) : très au-dessus d'une image
+/// réelle (un halo sur une fenêtre agrandie en 4K en pose ~33 000), il ne coupe jamais l'essaim,
+/// dessiné après l'habillage.
+const MAX_PASTILLES: usize = 500_000;
 
 /// Rapport entre le demi-côté de l'image d'une pastille et le rayon de son disque.
 fn marge(cote: u32) -> f32 {
@@ -508,12 +512,9 @@ impl SpriteCanvas {
         let d = w.max(2.0 * self.r_min());
         let step = d * 0.5;
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let n = (dx.hypot(dy) / step).ceil().clamp(1.0, MAX_PASTILLES as f32) as usize;
+        let n = (dx.hypot(dy) / step).ceil().clamp(1.0, MAX_PAR_TRAIT as f32) as usize;
         let c = color(rgb, opacite_recouverte(alpha * w / d, d / step));
         for i in usize::from(!with_start)..=n {
-            if self.rects.len() >= MAX_PASTILLES {
-                break;
-            }
             let k = i as f32 / n as f32;
             self.poser(a.0 + dx * k, a.1 + dy * k, d * 0.5, c);
         }
@@ -544,23 +545,20 @@ impl Canvas for SpriteCanvas {
         if !(fini((x, y)) && r.is_finite() && width.is_finite()) || r <= 0.0 {
             return;
         }
-        // un anneau plus large que son diamètre est un disque
-        let w = self.largeur(width).min(2.0 * r);
+        let w = self.largeur(width);
         let d = w.max(2.0 * self.r_min());
         if 2.0 * r <= d {
-            // trop petit pour un anneau de pastilles : un disque de même lumière
+            // trop petit ou trop large pour un anneau de pastilles : un disque de même lumière,
+            // aussi grand que le trait de tiny-skia (jusqu'à r + w/2, creux sous r − w/2)
             let e = r + w * 0.5;
             let a = alpha * (1.0 - ((r - w * 0.5).max(0.0) / e).powi(2));
             self.dot(x, y, e, color(rgb, a));
             return;
         }
         let step = d * 0.5;
-        let n = (std::f32::consts::TAU * r / step).ceil().clamp(8.0, MAX_PASTILLES as f32) as usize;
+        let n = (std::f32::consts::TAU * r / step).ceil().clamp(8.0, MAX_PAR_TRAIT as f32) as usize;
         let c = color(rgb, opacite_recouverte(alpha * w / d, d / step));
         for i in 0..n {
-            if self.rects.len() >= MAX_PASTILLES {
-                break;
-            }
             let t = i as f32 / n as f32 * std::f32::consts::TAU;
             self.poser(x + t.cos() * r, y + t.sin() * r, d * 0.5, c);
         }
@@ -626,11 +624,39 @@ mod tests {
         s.line((0.0, 0.0), (f32::INFINITY, 0.0), 2.0, (255, 0, 0), 1.0, true);
         s.ring(0.0, 0.0, f32::INFINITY, 2.0, (255, 0, 0), 1.0);
         assert!(s.rects.is_empty());
+        // un trait ou un anneau démesuré : borné à lui seul, ses pastilles espacées sur sa longueur
         s.line((0.0, 0.0), (1.0e9, 0.0), 2.0, (255, 0, 0), 1.0, true);
+        assert_eq!(s.rects.len(), MAX_PAR_TRAIT + 1);
+        assert!(s.rects.last().unwrap().right > 0.99e9, "le trait va jusqu'au bout");
         s.ring(0.0, 0.0, 1.0e9, 2.0, (255, 0, 0), 1.0);
-        assert_eq!(s.rects.len(), MAX_PASTILLES);
+        assert_eq!(s.rects.len(), 2 * MAX_PAR_TRAIT + 1);
         assert_eq!(s.sources.len(), s.rects.len());
         assert_eq!(s.colors.len(), s.rects.len());
+        // garde-fou de mémoire sur l'image entière
+        for _ in 0..MAX_PASTILLES / MAX_PAR_TRAIT + 1 {
+            s.line((0.0, 0.0), (1.0e9, 0.0), 2.0, (255, 0, 0), 1.0, true);
+        }
+        assert_eq!(s.rects.len(), MAX_PASTILLES);
+    }
+
+    #[test]
+    fn un_grand_halo_ne_coupe_pas_l_essaim() {
+        // halo sur une fenêtre agrandie en 4K (12 000 px de tour) : un filet au bord et quatre
+        // nappes, soit bien plus de 20 000 pastilles ; l'essaim, dessiné après, est là
+        let mut s = SpriteCanvas::default();
+        let coins = [(0.0, 0.0), (3840.0, 0.0), (3840.0, 2160.0), (0.0, 2160.0), (0.0, 0.0)];
+        for n in 0..5 {
+            let r = n as f32 * 12.0;
+            let pts: Vec<(f32, f32)> = coins.iter().map(|&(x, y)| (x + if x > 0.0 { -r } else { r }, y + if y > 0.0 { -r } else { r })).collect();
+            for w in pts.windows(2) {
+                s.bande(w[0], w[1], 1.0, (255, 255, 255), 0.5);
+            }
+        }
+        assert!(s.rects.len() > 50_000, "{} pastilles", s.rects.len());
+        s.circle(1920.0, 1080.0, 3.0, (255, 0, 0), 1.0);
+        let p = s.rects.last().unwrap();
+        assert_eq!(((p.left + p.right) / 2.0, (p.top + p.bottom) / 2.0), (1920.0, 1080.0));
+        assert_eq!(s.colors.last().unwrap().g, 0.0, "le point d'essaim est dessiné");
     }
 
     #[test]
@@ -642,11 +668,12 @@ mod tests {
         assert_eq!(n, (std::f32::consts::TAU * 10.0 / 2.0).ceil() as usize);
         let (cote, _) = niveau(2.0);
         assert!(s.rects.iter().all(|r| ((r.right - r.left) - 4.0 * marge(cote)).abs() < 1e-3));
-        // au moins aussi large que son diamètre (largeur ramenée à 2r) : un seul disque, de rayon 2r
+        // au moins aussi large que son diamètre : un seul disque, jusqu'à r + w/2 comme tiny-skia
         s.ring(0.0, 0.0, 10.0, 50.0, (255, 255, 255), 0.5);
         assert_eq!(s.rects.len(), n + 1);
-        let (cote, _) = niveau(20.0);
-        assert!(((s.rects[n].right - s.rects[n].left) - 40.0 * marge(cote)).abs() < 1e-3);
+        let (cote, _) = niveau(35.0);
+        assert!(((s.rects[n].right - s.rects[n].left) - 70.0 * marge(cote)).abs() < 1e-3);
+        assert!((s.colors[n].a - 0.5).abs() < 1e-5, "plein : r − w/2 < 0");
         // minuscule : un seul disque
         s.ring(0.0, 0.0, 0.3, 0.2, (255, 255, 255), 0.5);
         assert_eq!(s.rects.len(), n + 2);
