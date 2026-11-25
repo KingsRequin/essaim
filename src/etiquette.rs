@@ -18,11 +18,12 @@ use crate::render::prisme;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tiny_skia::Pixmap;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GdiFlush, GetTextExtentPoint32W, SelectObject, SetBkMode, SetTextColor, TextOutW,
-    ANTIALIASED_QUALITY, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, HFONT, OUT_DEFAULT_PRECIS, TRANSPARENT,
+    CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, ExtTextOutW, GdiFlush, GetTextExtentExPointW, GetTextExtentPoint32W, SelectObject, SetBkMode,
+    SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, ETO_OPTIONS, ETO_RTLREADING, HDC, HFONT,
+    OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 
 /// Place du texte par rapport au pointeur (px à 100 %) : à droite et dessous, hors de la flèche.
@@ -38,8 +39,12 @@ const CERNE_OPACITE: f32 = 0.6;
 const ARTISTE: (f32, f32) = (0.85, 0.9);
 /// Graisse du titre et de l'artiste.
 const GRAISSE: (i32, i32) = (700, 600);
-/// Lettres gardées par ligne (au-delà : coupée, avec des points de suspension).
-const LETTRES_MAX: usize = 48;
+/// Largeur d'une ligne au plus (px à 100 %) : au-delà, coupée entre deux caractères visibles,
+/// avec des points de suspension. Elle borne aussi le calcul du cerne, sur le fil de rendu.
+const LARGEUR_MAX: f32 = 480.0;
+/// Caractères au plus confiés à la mesure : un titre démesuré n'est pas mesuré en entier.
+const CARACTERES_MAX: usize = 512;
+const POINTS: &str = "…";
 /// Filet sous le texte : épaisseur au repos et ce qu'un kick y ajoute (px à 100 %), écart au texte.
 const FILET: (f32, f32) = (1.4, 1.6);
 const FILET_ECART: f32 = 2.0;
@@ -54,38 +59,168 @@ fn opacite(age: f32, duree: f32) -> f32 {
     lisse(0.0, ENTREE, age) * (1.0 - lisse(duree, duree + SORTIE, age))
 }
 
-/// Ligne coupée à `LETTRES_MAX` lettres.
-fn abregee(s: &str) -> String {
-    let s = s.trim();
-    if s.chars().count() <= LETTRES_MAX {
-        s.to_string()
-    } else {
-        s.chars().take(LETTRES_MAX - 1).chain(['…']).collect()
+// --- Coupure du texte -------------------------------------------------------------------------
+//
+// Sans dépendance de segmentation Unicode : une table des caractères qui se rattachent au
+// précédent suffit à ne jamais couper au milieu d'un emoji composé, d'un drapeau ou d'une lettre
+// accentuée par marques combinantes.
+
+/// Le caractère se rattache au précédent (ne commence pas un groupe visible) : marques
+/// combinantes des principales écritures, ZWJ et ZWNJ, sélecteurs de variante, modificateurs de
+/// teint, étiquettes des drapeaux régionaux, voyelles et finales du hangûl décomposé.
+fn se_rattache(c: char) -> bool {
+    let u = c as u32;
+    // écritures indiennes (U+0900 à U+0D7F) : même disposition dans chaque bloc de 128
+    if (0x0900..0x0D80).contains(&u) {
+        let o = u & 0x7F;
+        return o <= 0x03 || ((0x3A..=0x4F).contains(&o) && o != 0x3D) || (0x51..=0x57).contains(&o) || (0x62..=0x63).contains(&o);
+    }
+    matches!(u,
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05BD | 0x05BF | 0x05C1..=0x05C2 | 0x05C4..=0x05C5 | 0x05C7
+        | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E4 | 0x06E7..=0x06E8 | 0x06EA..=0x06ED
+        | 0x0711 | 0x0730..=0x074A | 0x07A6..=0x07B0 | 0x07EB..=0x07F3 | 0x0816..=0x082D | 0x0859..=0x085B | 0x0898..=0x089F
+        | 0x08CA..=0x08E1 | 0x08E3..=0x08FF
+        | 0x0D81..=0x0D83 | 0x0DCA..=0x0DDF | 0x0DF2..=0x0DF3
+        | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E | 0x0EB1 | 0x0EB4..=0x0EBC | 0x0EC8..=0x0ECE
+        | 0x0F18..=0x0F19 | 0x0F35 | 0x0F37 | 0x0F39 | 0x0F3E..=0x0F3F | 0x0F71..=0x0F84 | 0x0F86..=0x0F87 | 0x0F8D..=0x0FBC
+        | 0x102B..=0x103E | 0x1056..=0x1059 | 0x105E..=0x1060 | 0x1062..=0x1064 | 0x1067..=0x106D | 0x1071..=0x1074
+        | 0x1082..=0x108D | 0x108F | 0x109A..=0x109D
+        | 0x1160..=0x11FF | 0x17B4..=0x17D3 | 0x17DD
+        | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x200C..=0x200D | 0x20D0..=0x20FF | 0x302A..=0x302F | 0x3099..=0x309A
+        | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F
+        | 0x1F3FB..=0x1F3FF | 0xE0020..=0xE007F | 0xE0100..=0xE01EF)
+}
+
+fn indicateur_regional(c: char) -> bool {
+    ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
+}
+
+/// Débuts des groupes de caractères visibles de `s` (en octets), puis `s.len()` : les seuls
+/// endroits où le couper. Un caractère se joint au précédent s'il s'y rattache ou suit un ZWJ ;
+/// les indicateurs régionaux (drapeaux) vont par deux.
+fn limites(s: &str) -> Vec<usize> {
+    let mut v = Vec::new();
+    let (mut prec, mut regionaux) = (None::<char>, 0usize);
+    for (i, c) in s.char_indices() {
+        let joint = prec.is_some() && (se_rattache(c) || prec == Some('\u{200D}') || (indicateur_regional(c) && regionaux % 2 == 1));
+        if !joint {
+            v.push(i);
+        }
+        regionaux = if indicateur_regional(c) { regionaux + 1 } else { 0 };
+        prec = Some(c);
+    }
+    v.push(s.len());
+    v
+}
+
+/// Le texte s'écrit de droite à gauche : son premier caractère fort (lettre) est hébreu, arabe,
+/// syriaque, thâna, n'ko… Les chiffres, signes et emojis ne comptent pas.
+fn droite_a_gauche(s: &str) -> bool {
+    for c in s.chars() {
+        if c.is_numeric() || !c.is_alphabetic() {
+            continue;
+        }
+        let u = c as u32;
+        return matches!(u, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF);
+    }
+    false
+}
+
+/// Début de `s` gardé pour la mesure : `CARACTERES_MAX` caractères au plus, coupé entre deux
+/// groupes ; vrai s'il a fallu couper.
+fn debut_mesurable(s: &str) -> (&str, bool) {
+    match s.char_indices().nth(CARACTERES_MAX) {
+        None => (s, false),
+        Some((fin, _)) => {
+            let fin = limites(s).into_iter().take_while(|&b| b <= fin).last().unwrap_or(0);
+            (&s[..fin], true)
+        }
+    }
+}
+
+/// Où couper `s` pour que, suivi de « … » (`points` px), il tienne dans `max` px : `cumul[i]` est
+/// la largeur des `i + 1` premiers caractères UTF-16 (`GetTextExtentExPointW`). `None` : `s` tient
+/// en entier (et `forcee` est faux). Toujours entre deux groupes visibles, espaces de fin ôtés.
+fn coupure(s: &str, cumul: &[i32], max: i32, points: i32, forcee: bool) -> Option<usize> {
+    if !forcee && cumul.last().is_none_or(|&l| l <= max) {
+        return None;
+    }
+    let largeur = |octet: usize| {
+        let n = s[..octet].encode_utf16().count();
+        if n == 0 {
+            0
+        } else {
+            cumul.get(n - 1).copied().unwrap_or(i32::MAX)
+        }
+    };
+    let fin = limites(s).into_iter().filter(|&b| b < s.len() || forcee).take_while(|&b| largeur(b) + points <= max).last().unwrap_or(0);
+    Some(s[..fin].trim_end().len())
+}
+
+/// Ligne prête à écrire : texte UTF-16, coupé au besoin pour tenir dans `max` px avec la police
+/// choisie dans `dc`, sa largeur, et son sens (droite à gauche).
+///
+/// # Safety
+/// `dc` est un contexte de périphérique valide.
+unsafe fn ajuster(dc: HDC, s: &str, max: i32) -> (Vec<u16>, i32, bool) {
+    let rtl = droite_a_gauche(s);
+    let (s, forcee) = debut_mesurable(s);
+    let mesure = |t: &[u16]| {
+        let mut taille = SIZE::default();
+        let _ = GetTextExtentPoint32W(dc, t, &mut taille);
+        taille.cx
+    };
+    let u: Vec<u16> = s.encode_utf16().collect();
+    let mut cumul = vec![0i32; u.len()];
+    let mut taille = SIZE::default();
+    let _ = GetTextExtentExPointW(dc, PCWSTR(u.as_ptr()), u.len() as i32, 0, None, Some(cumul.as_mut_ptr()), &mut taille);
+    let points: Vec<u16> = POINTS.encode_utf16().collect();
+    let Some(mut fin) = coupure(s, &cumul, max, mesure(&points), forcee) else {
+        let l = mesure(&u);
+        return (u, l, rtl);
+    };
+    // la mise en forme (ligatures, écritures liées) peut élargir un peu : un groupe de moins
+    loop {
+        let texte: Vec<u16> = format!("{}{POINTS}", &s[..fin]).encode_utf16().collect();
+        let l = mesure(&texte);
+        if l <= max || fin == 0 {
+            return (texte, l.min(max), rtl);
+        }
+        fin = limites(&s[..fin]).into_iter().rev().nth(1).unwrap_or(0);
+        fin = s[..fin].trim_end().len();
     }
 }
 
 /// Texte écrit : son image (RGBA prémultiplié), un numéro qui change à chaque écriture (la carte
-/// graphique garde l'image tant qu'il ne change pas), la largeur du titre et la marge autour des
-/// lettres (px).
+/// graphique garde l'image tant qu'il ne change pas), le filet sous la première ligne (début et
+/// largeur dans l'image, sens) et la marge autour des lettres (px).
 struct Texte {
     image: Pixmap,
     id: u64,
-    titre: f32,
+    filet: (f32, f32),
+    rtl: bool,
     marge: f32,
 }
 
 /// Écrit `titre` (taille `taille` px, gras) et dessous `artiste` (plus petit, plus pâle, s'il y en
-/// a un), en blanc cerné de sombre. `None` si le titre est vide ou si Windows refuse.
-fn ecrire(titre: &str, artiste: &str, taille: f32) -> Option<Texte> {
+/// a un) ; sans titre, l'artiste seul, à la place du titre. Chaque ligne tient dans `largeur_max`
+/// px, alignée à droite si elle s'écrit de droite à gauche. Blanc cerné de sombre. `None` si les
+/// deux sont vides ou si Windows refuse.
+fn ecrire(titre: &str, artiste: &str, taille: f32, largeur_max: f32) -> Option<Texte> {
     static NUMERO: AtomicU64 = AtomicU64::new(1);
-    let lignes: Vec<(Vec<u16>, f32, i32, f32)> = [(abregee(titre), taille, GRAISSE.0, 1.0), (abregee(artiste), taille * ARTISTE.0, GRAISSE.1, ARTISTE.1)]
-        .into_iter()
-        .filter(|l| !l.0.is_empty())
-        .map(|(s, px, graisse, opacite)| (s.encode_utf16().collect(), px, graisse, opacite))
-        .collect();
-    if titre.trim().is_empty() {
+    let (titre, artiste) = (titre.trim(), artiste.trim());
+    let lignes: Vec<(&str, f32, i32, f32)> = if titre.is_empty() {
+        vec![(artiste, taille, GRAISSE.0, 1.0)]
+    } else {
+        vec![(titre, taille, GRAISSE.0, 1.0), (artiste, taille * ARTISTE.0, GRAISSE.1, ARTISTE.1)]
+    }
+    .into_iter()
+    .filter(|l| !l.0.is_empty())
+    .collect();
+    if lignes.is_empty() {
         return None;
     }
+    let max = largeur_max.round().max(1.0) as i32;
     let marge = CERNE + 1;
     unsafe {
         let dc = CreateCompatibleDC(None);
@@ -95,19 +230,22 @@ fn ecrire(titre: &str, artiste: &str, taille: f32) -> Option<Texte> {
         let police = |px: f32, graisse: i32| -> HFONT {
             CreateFontW(-(px.round().max(6.0) as i32), 0, 0, 0, graisse, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, 0, w!("Segoe UI"))
         };
-        // mesure de chaque ligne : (police, largeur, hauteur)
-        let mesures: Vec<(HFONT, i32, i32)> = lignes
+        // chaque ligne coupée et mesurée : (police, texte, largeur, hauteur, droite à gauche)
+        let mesures: Vec<(HFONT, Vec<u16>, i32, i32, bool)> = lignes
             .iter()
             .map(|(texte, px, graisse, _)| {
                 let f = police(*px, *graisse);
                 let ancien = SelectObject(dc, f.into());
+                let (u, largeur, rtl) = ajuster(dc, texte, max);
                 let mut s = SIZE::default();
-                let _ = GetTextExtentPoint32W(dc, texte, &mut s);
+                let _ = GetTextExtentPoint32W(dc, &u, &mut s);
                 SelectObject(dc, ancien);
-                (f, s.cx.max(1), s.cy.max(1))
+                (f, u, largeur.clamp(1, max), s.cy.max(1), rtl)
             })
             .collect();
-        let (l, h) = (mesures.iter().map(|m| m.1).max().unwrap_or(1) + 2 * marge, mesures.iter().map(|m| m.2).sum::<i32>() + 2 * marge);
+        // largeur bornée par `max` : le cerne, calculé plus bas pixel par pixel, l'est aussi
+        let largeur = mesures.iter().map(|m| m.2).max().unwrap_or(1);
+        let (l, h) = (largeur + 2 * marge, mesures.iter().map(|m| m.3).sum::<i32>() + 2 * marge);
         let bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: l, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
             ..Default::default()
@@ -124,9 +262,11 @@ fn ecrire(titre: &str, artiste: &str, taille: f32) -> Option<Texte> {
                 let mut y = marge;
                 // lignes de l'image où commence chaque ligne de texte, avec son opacité
                 let mut bandes = Vec::new();
-                for ((texte, _, _, opacite), (f, _, haut)) in lignes.iter().zip(&mesures) {
+                for ((_, _, _, opacite), (f, texte, large, haut, rtl)) in lignes.iter().zip(&mesures) {
                     let avant = SelectObject(dc, (*f).into());
-                    let _ = TextOutW(dc, marge, y, texte);
+                    // de droite à gauche : sens de lecture (« … » à gauche), ligne alignée à droite
+                    let (x, sens) = if *rtl { (marge + largeur - large, ETO_RTLREADING) } else { (marge, ETO_OPTIONS(0)) };
+                    let _ = ExtTextOutW(dc, x, y, sens, None, PCWSTR(texte.as_ptr()), texte.len() as u32, None);
                     SelectObject(dc, avant);
                     bandes.push((y, y + haut, *opacite));
                     y += haut;
@@ -174,7 +314,9 @@ fn ecrire(titre: &str, artiste: &str, taille: f32) -> Option<Texte> {
             let blanc = (c * 255.0).round() as u8;
             px.copy_from_slice(&[blanc, blanc, blanc, (a * 255.0).round() as u8]);
         }
-        Some(Texte { image, id: NUMERO.fetch_add(1, Ordering::Relaxed), titre: mesures[0].1 as f32, marge: marge as f32 })
+        let (premiere, rtl) = (mesures[0].2, mesures[0].4);
+        let filet = (if rtl { marge + largeur - premiere } else { marge } as f32, premiere as f32);
+        Some(Texte { image, id: NUMERO.fetch_add(1, Ordering::Relaxed), filet, rtl, marge: marge as f32 })
     }
 }
 
@@ -225,9 +367,9 @@ impl Etiquette {
         self.placer(cursor, scale, ecran);
     }
 
-    /// Écrit le morceau à montrer ; sans titre, rien n'est montré.
+    /// Écrit le morceau à montrer ; sans titre ni artiste, rien n'est montré.
     fn ecrire(&mut self, titre: &str, artiste: &str, taille: f32, scale: f32) {
-        (self.texte, self.echelle) = (ecrire(titre, artiste, taille * scale), scale);
+        (self.texte, self.echelle) = (ecrire(titre, artiste, taille * scale, LARGEUR_MAX * scale), scale);
         if self.texte.is_none() {
             self.debut = None;
         }
@@ -266,10 +408,12 @@ impl Etiquette {
         }
         let (x, y) = (self.coin.0 - (GLISSE * scale * (1.0 - entree)).round(), self.coin.1);
         cv.vignette(&tx.image, tx.id, x, y, a);
-        // filet sous le texte : il se déploie à l'entrée et bat avec le kick
+        // filet sous le texte : il se déploie à l'entrée dans le sens de lecture, et bat avec le kick
         let epais = (FILET.0 + FILET.1 * self.kick) * scale;
         let yf = y + tx.image.height() as f32 - tx.marge + FILET_ECART * scale + epais / 2.0;
-        cv.line((x + tx.marge, yf), (x + tx.marge + tx.titre * entree, yf), epais, prisme(cfg, t, 1.0), a, true);
+        let (debut, long) = (x + tx.filet.0, tx.filet.1 * entree);
+        let x0 = if tx.rtl { debut + tx.filet.1 - long } else { debut };
+        cv.line((x0, yf), (x0 + long, yf), epais, prisme(cfg, t, 1.0), a, true);
     }
 }
 
@@ -279,9 +423,89 @@ mod tests {
 
     const ECRAN: IRect = (0, 0, 800, 600);
 
+    /// Coupe `s` à `max` « px », chaque unité UTF-16 comptant 10 px, « … » 10 px.
+    fn coupe_fictive(s: &str, max: i32) -> String {
+        let cumul: Vec<i32> = (1..=s.encode_utf16().count() as i32).map(|n| n * 10).collect();
+        match coupure(s, &cumul, max, 10, false) {
+            None => s.to_string(),
+            Some(fin) => format!("{}{POINTS}", &s[..fin]),
+        }
+    }
+
+    #[test]
+    fn groupes_de_caracteres_visibles() {
+        // famille (emojis liés par ZWJ), drapeau, teint, lettre et marques combinantes, variante
+        let famille = "👨\u{200D}👩\u{200D}👧";
+        let s = format!("a{famille}🇫🇷🇩🇪👍🏽e\u{301}\u{323}❤\u{FE0F}क्षि");
+        let l = limites(&s);
+        let groupes: Vec<&str> = l.windows(2).map(|w| &s[w[0]..w[1]]).collect();
+        assert_eq!(groupes, ["a", famille, "🇫🇷", "🇩🇪", "👍🏽", "e\u{301}\u{323}", "❤\u{FE0F}", "क्", "षि"]);
+        // trois indicateurs régionaux : une paire, puis un seul
+        assert_eq!(limites("🇫🇷🇩").len(), 3);
+        assert_eq!(limites(""), [0]);
+    }
+
+    #[test]
+    fn coupure_entre_deux_groupes() {
+        // tient : intact
+        assert_eq!(coupe_fictive("abc", 30), "abc");
+        // trop long : coupé avec « … », dans la largeur
+        assert_eq!(coupe_fictive("abcdef", 40), "abc…");
+        // jamais au milieu d'un emoji composé (8 unités UTF-16), d'un drapeau, d'un combinant
+        let famille = "👨\u{200D}👩\u{200D}👧";
+        for max in 10..=200 {
+            for s in [format!("ab{famille}cd"), "a🇫🇷🇩🇪b".to_string(), "ae\u{301}\u{301}e\u{301}bc".to_string(), format!("{famille}{famille}")] {
+                let c = coupe_fictive(&s, max);
+                let garde = c.strip_suffix(POINTS).unwrap_or(&c);
+                assert!(limites(&s).contains(&garde.len()), "« {s} » coupé en « {c} » ({max})");
+                if c != s {
+                    assert!(garde.encode_utf16().count() as i32 * 10 + 10 <= max || garde.is_empty(), "« {c} » dépasse {max}");
+                }
+            }
+        }
+        // espaces de fin ôtés avant « … »
+        assert_eq!(coupe_fictive("ab cdefgh", 40), "ab…");
+        assert_eq!(coupe_fictive("ab cdefgh", 50), "ab c…");
+        // titre démesuré : début gardé entre deux groupes, « … » obligatoire même s'il tient
+        let long = "é".repeat(CARACTERES_MAX + 10);
+        let (debut, coupe) = debut_mesurable(&long);
+        assert!(coupe && debut.chars().count() == CARACTERES_MAX);
+        let drapeaux = "🇫🇷".repeat(CARACTERES_MAX);
+        let (debut, _) = debut_mesurable(&drapeaux);
+        assert!(limites(&drapeaux).contains(&debut.len()) && debut.chars().count() % 2 == 0);
+        let cumul = vec![1; 4];
+        assert_eq!(coupure("abcd", &cumul, 100, 1, true), Some(4));
+    }
+
+    #[test]
+    fn sens_de_lecture() {
+        assert!(droite_a_gauche("שלום"));
+        assert!(droite_a_gauche("مرحبا بالعالم"));
+        assert!(droite_a_gauche("2024 — «سلام» feat. X"));
+        assert!(!droite_a_gauche("Hello سلام"));
+        assert!(!droite_a_gauche("👍 123 !"));
+        assert!(!droite_a_gauche("Ünïcödé"));
+    }
+
+    #[test]
+    fn ecriture_de_droite_a_gauche_et_largeur_bornee() {
+        // de droite à gauche : écrit, filet sous la première ligne, aligné à droite
+        let tx = ecrire("أغنية طويلة جدا", "فنان", 12.0, 480.0).expect("texte écrit");
+        assert!(tx.rtl);
+        assert!((tx.filet.0 + tx.filet.1 - (tx.image.width() as f32 - tx.marge)).abs() < 0.5, "filet {:?}, largeur {}", tx.filet, tx.image.width());
+        // titre interminable, dans toutes les écritures : jamais plus large que la largeur maximale
+        let marges = 2 * (CERNE + 1) as u32;
+        for titre in ["W".repeat(300), "ש".repeat(300), "👨\u{200D}👩\u{200D}👧".repeat(200), "e\u{301}".repeat(400), "🇫🇷".repeat(300)] {
+            for max in [480.0, 120.0, 30.0] {
+                let tx = ecrire(&titre, "Artiste", 16.0, max).expect("texte écrit");
+                assert!(tx.image.width() <= max as u32 + marges, "{} px pour {max}", tx.image.width());
+            }
+        }
+    }
+
     #[test]
     fn le_texte_est_blanc_cerne_de_sombre() {
-        let tx = ecrire("Titre du morceau", "Artiste", 12.0).expect("texte écrit");
+        let tx = ecrire("Titre du morceau", "Artiste", 12.0, LARGEUR_MAX).expect("texte écrit");
         let (l, h) = (tx.image.width(), tx.image.height());
         assert!(l > 60 && h > 20 && h < 60, "{l} × {h}");
         let px: Vec<&[u8]> = tx.image.data().chunks_exact(4).collect();
@@ -292,16 +516,17 @@ mod tests {
         // prémultiplié : aucune composante au-dessus de l'opacité
         assert!(px.iter().all(|p| p[0] <= p[3]));
         // le titre est plus large que l'artiste, plus petit ; un titre plus long élargit l'image
-        assert!(tx.titre > 40.0 && tx.titre <= l as f32);
-        let long = ecrire("Titre du morceau, version longue", "Artiste", 12.0).unwrap();
+        assert!(!tx.rtl && tx.filet.0 == tx.marge && tx.filet.1 > 40.0 && tx.filet.1 <= l as f32);
+        let long = ecrire("Titre du morceau, version longue", "Artiste", 12.0, LARGEUR_MAX).unwrap();
         assert!(long.image.width() > l && long.id != tx.id);
-        // sans artiste : une seule ligne ; sans titre : rien
-        assert!(ecrire("Titre", "", 12.0).unwrap().image.height() < h);
-        assert!(ecrire("  ", "Artiste", 12.0).is_none());
-        // un titre interminable est coupé
-        let coupe = ecrire(&"a".repeat(400), "", 12.0).unwrap();
-        assert!(coupe.image.width() < 800, "{} px", coupe.image.width());
-        assert_eq!(abregee(&"é".repeat(60)).chars().count(), LETTRES_MAX);
+        // sans artiste : une seule ligne ; sans titre : l'artiste seul, en titre ; sans rien : rien
+        assert!(ecrire("Titre", "", 12.0, LARGEUR_MAX).unwrap().image.height() < h);
+        let artiste = ecrire("  ", "Artiste", 12.0, LARGEUR_MAX).expect("artiste seul montré");
+        assert!(artiste.image.height() < h && artiste.filet.1 > 20.0);
+        assert!(ecrire("  ", " ", 12.0, LARGEUR_MAX).is_none());
+        // un titre interminable est coupé à la largeur maximale
+        let coupe = ecrire(&"a".repeat(400), "", 12.0, LARGEUR_MAX).unwrap();
+        assert!(coupe.image.width() <= LARGEUR_MAX as u32 + 2 * (CERNE + 1) as u32, "{} px", coupe.image.width());
     }
 
     /// Zone de l'écran (gauche, haut, droite, bas) lue par capture, en BGRA.

@@ -4,14 +4,15 @@
 //! incrémente un compteur que la boucle d'affichage salue d'une rafale (`[musique] rafale_piste`).
 //!
 //! Tout se passe sur un fil à part (« essaim-media ») : les appels WinRT asynchrones y sont
-//! attendus (`join`), jamais sur le fil de rendu, qui ne lit que l'état publié ici. Mise à jour
+//! attendus, `ATTENTE_MAX` au plus chacun (au-delà : annulés, le tour est sauté), jamais sur le
+//! fil de rendu, qui ne lit que l'état publié ici. Mise à jour
 //! sur les événements de Windows (session courante, propriétés du morceau, lecture), et par une
 //! interrogation de secours toutes les 5 s (chaque seconde tant qu'une pochette ou une reprise
 //! de lecture est attendue). Sans l'API (Windows N sans Media Feature Pack), rien ne change : c'est
 //! noté une fois au journal.
 
 use crate::appli::teinte_dominante;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
@@ -25,6 +26,8 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionMediaProperties as Proprietes,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Statut,
 };
+use windows::core::{Error, Result as WinResult, HRESULT};
+use windows::Win32::Foundation::{E_ABORT, E_FAIL, ERROR_TIMEOUT};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 /// Interrogation de secours quand aucun événement n'arrive (les événements de Windows suffisent
@@ -43,6 +46,53 @@ const DELAI_LECTURE: Duration = Duration::from_secs(3);
 const ESSAIS_POCHETTE: u8 = 3;
 /// Côté de la miniature décodée pour la teinte (pixels).
 const COTE_MINIATURE: u32 = 48;
+/// Pochette plus grande (côté en pixels, ou taille du fichier) : ignorée, sans teinte. Une
+/// pochette ordinaire fait quelques centaines de pixels et quelques centaines de Ko.
+const POCHETTE_COTE_MAX: u32 = 4096;
+const POCHETTE_OCTETS_MAX: u64 = 16 << 20;
+/// Attente au plus d'un appel asynchrone de Windows (une application qui ne répond plus ne bloque
+/// pas le fil), et pas de l'interrogation de son état.
+const ATTENTE_MAX: Duration = Duration::from_secs(2);
+const ATTENTE_PAS: Duration = Duration::from_millis(5);
+
+/// Attend une opération asynchrone WinRT (`IAsyncOperation`) `ATTENTE_MAX` au plus : son
+/// résultat, son erreur, ou `ERROR_TIMEOUT` après l'avoir annulée. Une macro, parce que le type
+/// de l'opération (crate `windows-future`, non réexportée) n'est pas nommable d'ici.
+macro_rules! attendre {
+    ($op:expr) => {
+        $op.and_then(|op| attente(|| op.Status().map(|s| s.0), || op.ErrorCode(), || op.Cancel()).and_then(|()| op.GetResults()))
+    };
+}
+
+/// États d'une opération asynchrone (`AsyncStatus`).
+const EN_COURS: i32 = 0;
+const TERMINEE: i32 = 1;
+const ANNULEE: i32 = 2;
+
+/// Interroge `statut` jusqu'à la fin de l'opération, `ATTENTE_MAX` au plus (puis `annuler`) ;
+/// `Ok` si elle s'est terminée sans erreur.
+fn attente(statut: impl Fn() -> WinResult<i32>, code: impl Fn() -> WinResult<HRESULT>, annuler: impl Fn() -> WinResult<()>) -> WinResult<()> {
+    let limite = Instant::now() + ATTENTE_MAX;
+    loop {
+        match statut()? {
+            EN_COURS if Instant::now() < limite => std::thread::sleep(ATTENTE_PAS),
+            EN_COURS => {
+                let _ = annuler();
+                return Err(Error::new(ERROR_TIMEOUT.to_hresult(), "délai dépassé"));
+            }
+            TERMINEE => return Ok(()),
+            ANNULEE => return Err(Error::new(E_ABORT, "opération annulée")),
+            _ => {
+                let c = code()?;
+                return Err(if c.is_err() { Error::from_hresult(c) } else { Error::new(E_FAIL, "opération en échec") });
+            }
+        }
+    }
+}
+
+fn delai_depasse(e: &Error) -> bool {
+    e.code() == ERROR_TIMEOUT.to_hresult()
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Morceau {
@@ -253,37 +303,60 @@ impl Drop for Abonnement {
     }
 }
 
-/// Lecture et propriétés de la session (titres vides : aucun morceau).
-fn lire(session: &Session) -> (Option<Morceau>, Option<bool>, Option<Proprietes>) {
+/// Ce que dit une session : morceau (titres vides : aucun), lecture, propriétés.
+type Lu = (Option<Morceau>, Option<bool>, Option<Proprietes>);
+
+/// Lecture et propriétés de la session. `Err` seulement si l'application tarde à répondre : le
+/// tour est alors sauté, l'état publié ne change pas.
+fn lire(session: &Session) -> WinResult<Lu> {
     let lecture = session.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()).ok().map(|s| s == Statut::Playing);
-    let props = session.TryGetMediaPropertiesAsync().and_then(|op| op.join()).ok();
+    let props = match attendre!(session.TryGetMediaPropertiesAsync()) {
+        Ok(p) => Some(p),
+        Err(e) if delai_depasse(&e) => return Err(e),
+        Err(_) => None,
+    };
     let morceau = props.as_ref().and_then(|p| {
-        let texte = |r: windows::core::Result<windows::core::HSTRING>| r.map(|h| h.to_string().trim().to_owned()).unwrap_or_default();
+        let texte = |r: WinResult<windows::core::HSTRING>| r.map(|h| h.to_string().trim().to_owned()).unwrap_or_default();
         let m = Morceau { titre: texte(p.Title()), artiste: texte(p.Artist()) };
         (!m.titre.is_empty() || !m.artiste.is_empty()).then_some(m)
     });
-    (morceau, lecture, props)
+    Ok((morceau, lecture, props))
+}
+
+/// Une pochette de `octets` et de plus grand côté `cote` (pixels) est-elle à décoder ?
+fn pochette_acceptable(octets: u64, cote: u32) -> bool {
+    octets <= POCHETTE_OCTETS_MAX && cote <= POCHETTE_COTE_MAX
 }
 
 /// Teinte dominante de la pochette (miniature réduite à 48 × 48 avant le calcul). `Err` : pas
-/// de miniature lisible.
-fn teinte_miniature(props: &Proprietes) -> windows::core::Result<Option<f32>> {
-    let flux = props.Thumbnail()?.OpenReadAsync()?.join()?;
-    let decodeur = BitmapDecoder::CreateAsync(&flux)?.join()?;
+/// de miniature lisible (relue au tour suivant) ; `Ok(None)` : pas de teinte, ou pochette trop
+/// lourde ou trop grande, ignorée sans être décodée.
+fn teinte_miniature(props: &Proprietes) -> WinResult<Option<f32>> {
+    let flux = attendre!(props.Thumbnail().and_then(|t| t.OpenReadAsync()))?;
+    let octets = flux.Size()?;
+    if !pochette_acceptable(octets, 0) {
+        log::info!("média : pochette de {} Mo ignorée", octets >> 20);
+        return Ok(None);
+    }
+    // l'en-tête seulement : la taille de l'image est connue avant tout décodage
+    let decodeur = attendre!(BitmapDecoder::CreateAsync(&flux))?;
+    let (l, h) = (decodeur.PixelWidth()?, decodeur.PixelHeight()?);
+    if !pochette_acceptable(octets, l.max(h)) {
+        log::info!("média : pochette de {l} × {h} px ignorée");
+        return Ok(None);
+    }
     let reduction = BitmapTransform::new()?;
     reduction.SetScaledWidth(COTE_MINIATURE)?;
     reduction.SetScaledHeight(COTE_MINIATURE)?;
     reduction.SetInterpolationMode(BitmapInterpolationMode::Fant)?;
-    let pixels = decodeur
-        .GetPixelDataTransformedAsync(
-            BitmapPixelFormat::Bgra8,
-            BitmapAlphaMode::Straight,
-            &reduction,
-            ExifOrientationMode::IgnoreExifOrientation,
-            ColorManagementMode::DoNotColorManage,
-        )?
-        .join()?
-        .DetachPixelData()?;
+    let pixels = attendre!(decodeur.GetPixelDataTransformedAsync(
+        BitmapPixelFormat::Bgra8,
+        BitmapAlphaMode::Straight,
+        &reduction,
+        ExifOrientationMode::IgnoreExifOrientation,
+        ColorManagementMode::DoNotColorManage,
+    ))?
+    .DetachPixelData()?;
     Ok(teinte_dominante(&pixels))
 }
 
@@ -296,11 +369,18 @@ fn fil() {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
-    let gestionnaire = match Gestionnaire::RequestAsync().and_then(|op| op.join()) {
-        Ok(g) => g,
-        Err(e) => {
-            log::warn!("média : API de Windows indisponible ({e}) ; titre, pochette et changement de piste désactivés");
-            return;
+    // le service média de Windows peut tarder (ouverture de session) : redemandé plus tard
+    let gestionnaire = loop {
+        match attendre!(Gestionnaire::RequestAsync()) {
+            Ok(g) => break g,
+            Err(e) if delai_depasse(&e) => {
+                log::info!("média : API de Windows lente à répondre, nouvel essai");
+                std::thread::sleep(INTERROGATION);
+            }
+            Err(e) => {
+                log::warn!("média : API de Windows indisponible ({e}) ; titre, pochette et changement de piste désactivés");
+                return;
+            }
         }
     };
     let (tx, rx) = channel::<Signal>();
@@ -309,40 +389,81 @@ fn fil() {
         let _ = t.send(Signal::Session);
         Ok(())
     }));
-    static MINIATURE_ILLISIBLE: AtomicBool = AtomicBool::new(false);
-    let mut abonnement: Option<Abonnement> = None;
-    let mut suivi = SuiviPiste::default();
-    // morceau dont la pochette a été lue, et essais restants si elle manquait
-    let (mut pochette_de, mut essais) = (None::<Morceau>, 0u8);
-    let mut relire_pochette = false;
-    let mut appli_vue = String::new();
+    let mut lecteur = Lecteur::default();
     loop {
+        lecteur.tour(&gestionnaire, &tx);
+        // attente : un événement (puis la fin de sa rafale), ou l'interrogation de secours
+        let attendu = (lecteur.essais > 0 && etat().pochette.is_none()) || lecteur.suivi.differe.is_some();
+        let mut premier = match rx.recv_timeout(if attendu { INTERROGATION_PROCHE } else { INTERROGATION }) {
+            Ok(s) => Some(s),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        while let Some(s) = premier {
+            if matches!(s, Signal::Proprietes | Signal::Session) {
+                lecteur.relire_pochette = true;
+            }
+            premier = rx.recv_timeout(APAISEMENT).ok();
+        }
+    }
+}
+
+/// État du fil « essaim-media » d'un tour à l'autre.
+#[derive(Default)]
+struct Lecteur {
+    abonnement: Option<Abonnement>,
+    suivi: SuiviPiste,
+    /// Morceau dont la pochette a été lue, et essais restants si elle manquait.
+    pochette_de: Option<Morceau>,
+    essais: u8,
+    relire_pochette: bool,
+    appli_vue: String,
+    /// Une application a tardé à répondre (noté une fois au journal jusqu'à sa prochaine réponse).
+    lente: bool,
+    miniature_illisible: bool,
+}
+
+impl Lecteur {
+    /// Un tour : session courante, morceau, pochette, état publié. Une application qui tarde à
+    /// répondre fait sauter le tour, sans rien publier.
+    fn tour(&mut self, gestionnaire: &Gestionnaire, tx: &Sender<Signal>) {
         // la pochette n'est relue que si le morceau change ou sur un événement : un même objet
         // de session rendu sous un autre pointeur ne coûte qu'un réabonnement
         let courante = gestionnaire.GetCurrentSession().ok();
-        if abonnement.as_ref().map(|a| &a.session) != courante.as_ref() {
+        if self.abonnement.as_ref().map(|a| &a.session) != courante.as_ref() {
             let nom = nom_appli(courante.as_ref());
-            if nom != appli_vue {
+            if nom != self.appli_vue {
                 log::info!("média : session de {nom}");
-                appli_vue = nom;
+                self.appli_vue = nom;
             }
-            abonnement = courante.map(|s| Abonnement::new(s, &tx));
+            self.abonnement = courante.map(|s| Abonnement::new(s, tx));
         }
-        let (morceau, lecture, props) = abonnement.as_ref().map(|a| lire(&a.session)).unwrap_or_default();
-        if morceau != pochette_de {
-            (pochette_de, essais, relire_pochette) = (morceau.clone(), ESSAIS_POCHETTE, true);
+        let (morceau, lecture, props) = match self.abonnement.as_ref().map(|a| lire(&a.session)).transpose() {
+            Ok(lu) => {
+                self.lente = false;
+                lu.unwrap_or_default()
+            }
+            Err(e) => {
+                if !std::mem::replace(&mut self.lente, true) {
+                    log::info!("média : {} ne répond pas ({e}), tour sauté", self.appli_vue);
+                }
+                return;
+            }
+        };
+        if morceau != self.pochette_de {
+            (self.pochette_de, self.essais, self.relire_pochette) = (morceau.clone(), ESSAIS_POCHETTE, true);
         }
         let mut pochette = etat().pochette;
-        if relire_pochette || (pochette.is_none() && essais > 0) {
-            relire_pochette = false;
-            essais = essais.saturating_sub(1);
+        if self.relire_pochette || (pochette.is_none() && self.essais > 0) {
+            self.relire_pochette = false;
+            self.essais = self.essais.saturating_sub(1);
             pochette = match props.as_ref().filter(|_| morceau.is_some()).map(teinte_miniature) {
                 Some(Ok(h)) => {
-                    essais = 0;
+                    self.essais = 0;
                     h
                 }
                 Some(Err(e)) => {
-                    if essais == 0 && !MINIATURE_ILLISIBLE.swap(true, Ordering::Relaxed) {
+                    if self.essais == 0 && !std::mem::replace(&mut self.miniature_illisible, true) {
                         log::info!("média : pochette illisible ({e})");
                     }
                     None
@@ -350,7 +471,7 @@ fn fil() {
                 None => None,
             };
         }
-        let salue = suivi.observer(morceau.as_ref(), lecture == Some(true), Instant::now());
+        let salue = self.suivi.observer(morceau.as_ref(), lecture == Some(true), Instant::now());
         {
             let mut e = etat();
             if e.morceau != morceau || e.lecture != lecture {
@@ -363,19 +484,6 @@ fn fil() {
         }
         if salue {
             PISTES.fetch_add(1, Ordering::Relaxed);
-        }
-        // attente : un événement (puis la fin de sa rafale), ou l'interrogation de secours
-        let attendu = (essais > 0 && pochette.is_none()) || suivi.differe.is_some();
-        let mut premier = match rx.recv_timeout(if attendu { INTERROGATION_PROCHE } else { INTERROGATION }) {
-            Ok(s) => Some(s),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => return,
-        };
-        while let Some(s) = premier {
-            if matches!(s, Signal::Proprietes | Signal::Session) {
-                relire_pochette = true;
-            }
-            premier = rx.recv_timeout(APAISEMENT).ok();
         }
     }
 }
@@ -462,6 +570,45 @@ mod tests {
         assert!(long.ends_with('…'));
     }
 
+    #[test]
+    fn attente_bornee() {
+        use std::cell::Cell;
+        // terminée, en échec, annulée
+        assert!(attente(|| Ok(TERMINEE), || Ok(HRESULT(0)), || Ok(())).is_ok());
+        let e = attente(|| Ok(3), || Ok(E_FAIL), || Ok(())).unwrap_err();
+        assert_eq!(e.code(), E_FAIL);
+        assert!(!delai_depasse(&attente(|| Ok(ANNULEE), || Ok(HRESULT(0)), || Ok(())).unwrap_err()));
+        // terminée après quelques interrogations
+        let n = Cell::new(0);
+        let statut = || {
+            n.set(n.get() + 1);
+            Ok(if n.get() < 4 { EN_COURS } else { TERMINEE })
+        };
+        assert!(attente(statut, || Ok(HRESULT(0)), || Ok(())).is_ok());
+        // jamais finie : annulée après `ATTENTE_MAX`, et le délai est reconnu
+        let (annulee, t0) = (Cell::new(false), Instant::now());
+        let e = attente(
+            || Ok(EN_COURS),
+            || Ok(HRESULT(0)),
+            || {
+                annulee.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(delai_depasse(&e) && annulee.get());
+        let duree = t0.elapsed();
+        assert!(duree >= ATTENTE_MAX && duree < ATTENTE_MAX + Duration::from_secs(1), "{duree:?}");
+    }
+
+    #[test]
+    fn pochettes_demesurees_ignorees() {
+        assert!(pochette_acceptable(300_000, 600));
+        assert!(pochette_acceptable(POCHETTE_OCTETS_MAX, POCHETTE_COTE_MAX));
+        assert!(!pochette_acceptable(POCHETTE_OCTETS_MAX + 1, 600));
+        assert!(!pochette_acceptable(300_000, 20_000));
+    }
+
     /// Lit la session média réelle (lecture seule) : `cargo test --release -- --ignored
     /// session_reelle --nocapture`.
     #[test]
@@ -473,7 +620,7 @@ mod tests {
             return;
         };
         let meme = g.GetCurrentSession().map(|s2| s2 == s).unwrap_or(false);
-        let (morceau, lecture, props) = lire(&s);
+        let (morceau, lecture, props) = lire(&s).expect("session média muette");
         println!("appli : {}", nom_appli(Some(&s)));
         println!("même objet d'un appel à l'autre : {meme}");
         println!("morceau : {morceau:?}");

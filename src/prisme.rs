@@ -4,18 +4,33 @@
 //! éteintes ou blanches → pas de teinte (Essaim reprend sa teinte qui tourne seule).
 //!
 //! Le client ne tourne que si la synchro est voulue, et se reconnecte toutes les 5 s si Prisme
-//! est absent. Synchro coupée, une simple connexion TCP toutes les 5 s dit si Prisme est là
-//! (`present`) : la fenêtre des réglages ne propose la synchro qu'alors.
+//! est absent. Synchro coupée, une simple connexion TCP toutes les 30 s dit si Prisme est là
+//! (`present`) : la fenêtre des réglages ne propose la synchro qu'alors. Une synchro demandée
+//! entre deux essais est prise dans la seconde.
+//!
+//! Ce qui vient du port est lu avec méfiance : connexion et poignée de main bornées dans le
+//! temps, messages de 64 Ko au plus, composantes ramenées entre 0 et 255.
 
+use anyhow::anyhow;
 use serde_json::Value;
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tungstenite::stream::MaybeTlsStream;
+use tungstenite::handshake::HandshakeError;
+use tungstenite::protocol::WebSocketConfig;
 use tungstenite::Message;
 
 const URL: &str = "ws://127.0.0.1:28650";
 const ADRESSE: ([u8; 4], u16) = ([127, 0, 0, 1], 28650);
+/// Plus gros message ou fragment accepté de Prisme (octets) : une prévisualisation de plusieurs
+/// milliers de LED y tient largement.
+const MESSAGE_MAX: usize = 64 * 1024;
+/// Synchro coupée : intervalle entre deux sondes de présence.
+const SONDE: Duration = Duration::from_secs(30);
+/// Délai de connexion, et d'attente de chaque réponse pendant la poignée de main.
+const CONNEXION: Duration = Duration::from_millis(500);
+const POIGNEE: Duration = Duration::from_secs(2);
 /// Prisme joignable (dernier essai) : la synchro n'est proposée qu'alors.
 static PRESENT: AtomicBool = AtomicBool::new(false);
 
@@ -50,7 +65,7 @@ impl PrismeHue {
     }
 
     fn store(&self, hue: Option<f32>) {
-        let Some(h) = hue else { return };
+        let Some(h) = hue.filter(|h| h.is_finite()) else { return };
         self.hue.store(h.to_bits(), Ordering::Relaxed);
         if let Ok(mut s) = self.stamp.lock() {
             *s = Some(Instant::now());
@@ -66,7 +81,7 @@ pub fn start() -> Arc<PrismeHue> {
             let ouvert = std::net::TcpStream::connect_timeout(&ADRESSE.into(), Duration::from_millis(200)).is_ok();
             PRESENT.store(ouvert, Ordering::Relaxed);
             // reprend vite si la synchro est demandée entre deux essais
-            for _ in 0..5 {
+            for _ in 0..SONDE.as_secs() {
                 if s.wanted.load(Ordering::Relaxed) {
                     break;
                 }
@@ -87,10 +102,16 @@ pub fn start() -> Arc<PrismeHue> {
 }
 
 fn session(s: &PrismeHue) -> anyhow::Result<()> {
-    let (mut ws, _) = tungstenite::connect(URL)?;
-    if let MaybeTlsStream::Plain(t) = ws.get_mut() {
-        t.set_read_timeout(Some(Duration::from_millis(500)))?;
-    }
+    let tcp = TcpStream::connect_timeout(&ADRESSE.into(), CONNEXION)?;
+    // un serveur qui se tait pendant la poignée de main ne garde pas le fil
+    tcp.set_read_timeout(Some(POIGNEE))?;
+    tcp.set_write_timeout(Some(POIGNEE))?;
+    let limites = WebSocketConfig::default().max_message_size(Some(MESSAGE_MAX)).max_frame_size(Some(MESSAGE_MAX));
+    let (mut ws, _) = tungstenite::client::client_with_config(URL, tcp, Some(limites)).map_err(|e| match e {
+        HandshakeError::Failure(e) => anyhow::Error::from(e),
+        HandshakeError::Interrupted(_) => anyhow!("poignée de main sans réponse"),
+    })?;
+    ws.get_mut().set_read_timeout(Some(Duration::from_millis(500)))?;
     ws.send(Message::Text(r#"{"id":1,"cmd":"preview","enabled":true}"#.into()))?;
     s.connected.store(true, Ordering::Relaxed);
     PRESENT.store(true, Ordering::Relaxed);
@@ -113,12 +134,13 @@ fn session(s: &PrismeHue) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Teinte dominante d'une liste `[[r, g, b], …]` ; `None` si tout est éteint ou gris.
+/// Teinte dominante d'une liste `[[r, g, b], …]` ; `None` si tout est éteint ou gris. Une
+/// composante absente, non numérique ou hors de 0 à 255 est ramenée dans ces bornes.
 pub fn dominant_hue(colors: &Value) -> Option<f32> {
     let (mut x, mut y, mut n) = (0f32, 0f32, 0usize);
     for c in colors.as_array()? {
         let c = c.as_array()?;
-        let [r, g, b] = [0, 1, 2].map(|i| c.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32 / 255.0);
+        let [r, g, b] = [0, 1, 2].map(|i| c.get(i).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 255.0) as f32 / 255.0);
         let (max, min) = (r.max(g).max(b), r.min(g).min(b));
         n += 1;
         if max <= 0.0 || max - min < 1e-3 {
@@ -140,7 +162,8 @@ pub fn dominant_hue(colors: &Value) -> Option<f32> {
     if n == 0 || (x * x + y * y).sqrt() / (n as f32) < 0.08 {
         return None;
     }
-    Some(y.atan2(x).to_degrees().rem_euclid(360.0))
+    let h = y.atan2(x).to_degrees().rem_euclid(360.0);
+    h.is_finite().then_some(h)
 }
 
 #[cfg(test)]
@@ -156,5 +179,34 @@ mod tests {
         assert!((h - 240.0).abs() < 10.0, "bleu : {h}");
         assert!(dominant_hue(&json!([[0, 0, 0], [0, 0, 0]])).is_none(), "éteint");
         assert!(dominant_hue(&json!([[255, 255, 255], [200, 200, 200]])).is_none(), "blanc");
+    }
+
+    #[test]
+    fn composantes_hors_bornes() {
+        // composantes énormes ou négatives : ramenées entre 0 et 255 (rouge franc ici)
+        let h = dominant_hue(&json!([[1e300, -5e300, 0], [f64::MAX, 0, -1]])).unwrap();
+        assert!(h.is_finite() && !(5.0..=355.0).contains(&h), "{h}");
+        let h = dominant_hue(&json!([[0, 0, 1e9]])).unwrap();
+        assert!((h - 240.0).abs() < 1.0, "{h}");
+        // tout au maximum : blanc, pas de teinte
+        assert!(dominant_hue(&json!([[1e308, 1e308, 1e308]])).is_none());
+        // NaN et infinis ne passent pas par JSON ; non numériques ou absentes : zéro
+        assert!(dominant_hue(&json!([["x", null, {}], []])).is_none());
+        assert!(dominant_hue(&json!([[255, "x"]])).unwrap() < 1.0);
+        // pas une liste : rien
+        assert!(dominant_hue(&json!({"r": 255})).is_none());
+        assert!(dominant_hue(&json!([[255, 0, 0], 7])).is_none());
+    }
+
+    #[test]
+    fn teinte_non_finie_refusee() {
+        let p = super::PrismeHue::default();
+        p.connected.store(true, std::sync::atomic::Ordering::Relaxed);
+        p.store(Some(f32::NAN));
+        assert!(p.current().is_none());
+        p.store(Some(f32::INFINITY));
+        assert!(p.current().is_none());
+        p.store(Some(120.0));
+        assert_eq!(p.current(), Some(120.0));
     }
 }

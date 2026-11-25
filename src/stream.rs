@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface, PCWSTR};
-use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{DXGI_STATUS_OCCLUDED, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT};
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
@@ -39,8 +39,11 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::Matrix3x2;
 
 const CLASSE: PCWSTR = w!("EssaimStream");
-/// Fenêtre ouverte (0 : aucune).
+/// Fenêtre ouverte (0 : aucune ; `OUVERTURE` : réservée, en cours de création).
 static FENETRE: AtomicIsize = AtomicIsize::new(0);
+const OUVERTURE: isize = -1;
+/// Fenêtre cachée (`DXGI_STATUS_OCCLUDED`) : pause entre deux essais de présentation.
+const CACHEE: Duration = Duration::from_millis(100);
 /// Taille de départ de la zone de dessin (px).
 const TAILLE: i32 = 480;
 /// Marge laissée vide le long des bords (px de la fenêtre).
@@ -61,26 +64,60 @@ pub fn ouverte() -> bool {
     FENETRE.load(Ordering::Relaxed) != 0
 }
 
-/// Ouvre la fenêtre (ou la ramène devant si elle l'est déjà).
+/// Ouvre la fenêtre (ou la ramène devant si elle l'est déjà). La place est réservée avant de
+/// lancer le fil : deux demandes rapprochées n'ouvrent qu'une fenêtre. Un échec d'ouverture est
+/// noté au journal et dit par une bulle de l'icône (`win::bulle`), d'où qu'il vienne.
 pub fn ouvrir(son: Arc<AudioShared>) {
-    let h = FENETRE.load(Ordering::Relaxed);
-    if h != 0 {
-        let hwnd = HWND(h as *mut _);
-        unsafe {
-            if IsWindow(Some(hwnd)).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                let _ = SetForegroundWindow(hwnd);
-                return;
+    match reserver() {
+        Place::Reservee => {}
+        // déjà en cours d'ouverture : la fenêtre arrive
+        Place::EnOuverture => return,
+        // ouverte : ramenée devant (si elle se ferme à l'instant, son fil libère la place)
+        Place::Ouverte(hwnd) => {
+            unsafe {
+                if IsWindow(Some(hwnd)).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                    let _ = SetForegroundWindow(hwnd);
+                }
             }
+            return;
         }
     }
-    let _ = std::thread::Builder::new().name("essaim-stream".into()).spawn(move || {
-        if let Err(e) = run(son) {
-            log::warn!("stream : fenêtre impossible à ouvrir ({e})");
+    let lance = std::thread::Builder::new().name("essaim-stream".into()).spawn(move || {
+        let resultat = run(son);
+        FENETRE.store(0, Ordering::Release);
+        match resultat {
+            Ok(()) => log::info!("stream : fenêtre fermée"),
+            Err(e) => echec(&e.to_string()),
         }
-        FENETRE.store(0, Ordering::Relaxed);
-        log::info!("stream : fenêtre fermée");
     });
+    if let Err(e) = lance {
+        FENETRE.store(0, Ordering::Release);
+        echec(&e.to_string());
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Place {
+    /// Libre : elle est maintenant réservée à cette demande.
+    Reservee,
+    EnOuverture,
+    Ouverte(HWND),
+}
+
+/// Réserve la place de la fenêtre, d'un seul geste (`compare_exchange`).
+fn reserver() -> Place {
+    match FENETRE.compare_exchange(0, OUVERTURE, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => Place::Reservee,
+        Err(OUVERTURE) => Place::EnOuverture,
+        Err(h) => Place::Ouverte(HWND(h as *mut _)),
+    }
+}
+
+/// Ouverture ratée : au journal, et dans une bulle de l'icône.
+fn echec(raison: &str) {
+    log::warn!("stream : fenêtre impossible à ouvrir ({raison})");
+    crate::win::bulle(&format!("Fenêtre pour le stream impossible à ouvrir : {}", raison.trim()));
 }
 
 extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -279,7 +316,9 @@ impl Rendu {
 
     /// Dessine une image de `l` × `h` sur `fond` : `draw` dessine en px à 100 % autour de
     /// (0, 0), agrandi `z` fois et centré. Sans `presenter`, l'image reste dans le tampon (essais).
-    fn image(&mut self, l: u32, h: u32, fond: D2D1_COLOR_F, z: f32, presenter: bool, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<()> {
+    /// `Ok(true)` : la fenêtre n'est pas visible (`DXGI_STATUS_OCCLUDED`), inutile de redessiner
+    /// avant que `visible` le dise.
+    fn image(&mut self, l: u32, h: u32, fond: D2D1_COLOR_F, z: f32, presenter: bool, draw: impl FnOnce(&mut dyn Canvas)) -> windows::core::Result<bool> {
         self.cible(l, h)?;
         unsafe {
             self.dc.BeginDraw();
@@ -290,11 +329,19 @@ impl Rendu {
             self.dc.EndDraw(None, None)?;
             peint?;
             if presenter {
-                // une image par rafraîchissement de l'écran
-                self.chaine.Present(1, DXGI_PRESENT(0)).ok()?;
+                // une image par rafraîchissement de l'écran ; cachée, Present ne freine plus la
+                // boucle (pas de synchronisation) : c'est à elle d'attendre
+                let r = self.chaine.Present(1, DXGI_PRESENT(0));
+                r.ok()?;
+                return Ok(r == DXGI_STATUS_OCCLUDED);
             }
         }
-        Ok(())
+        Ok(false)
+    }
+
+    /// La fenêtre est-elle de nouveau visible ? (Rien n'est présenté.)
+    fn visible(&self) -> bool {
+        unsafe { self.chaine.Present(0, DXGI_PRESENT_TEST) != DXGI_STATUS_OCCLUDED }
     }
 }
 
@@ -357,6 +404,7 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let mut pistes = crate::media::pistes();
     let mut doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
     let mut panne: Option<Instant> = None;
+    let mut cachee = false;
     loop {
         unsafe {
             let mut msg = MSG::default();
@@ -385,6 +433,15 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
             std::thread::sleep(Duration::from_millis(50));
             continue;
         }
+        // cachée (écran verrouillé ou éteint…) : un essai toutes les `CACHEE`, sans dessiner
+        if cachee {
+            std::thread::sleep(CACHEE);
+            if !rendu.visible() {
+                avant = Instant::now();
+                continue;
+            }
+            cachee = false;
+        }
         let t = (now - debut).as_secs_f64();
         let dt = (now - avant).as_secs_f32().clamp(0.0005, 0.25);
         avant = now;
@@ -410,16 +467,17 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
             continue;
         }
         let dessin = rendu.image(l as u32, h as u32, couleur_fond(cfg.stream.fond), z, true, |cv| dessiner(cv, &swarm, &effets, t, cfg));
-        if let Err(e) = dessin {
-            // pilote réinitialisé, sortie de veille… : tout est refait, au plus une fois par seconde
-            log::warn!("stream : erreur d'affichage ({e}), nouvel essai");
-            panne = Some(now);
-            match Rendu::new(hwnd) {
-                Ok(r) => rendu = r,
-                Err(e) => log::warn!("stream : affichage impossible à refaire ({e})"),
+        match dessin {
+            Err(e) => {
+                // pilote réinitialisé, sortie de veille… : tout est refait, au plus une fois par seconde
+                log::warn!("stream : erreur d'affichage ({e}), nouvel essai");
+                panne = Some(now);
+                match Rendu::new(hwnd) {
+                    Ok(r) => rendu = r,
+                    Err(e) => log::warn!("stream : affichage impossible à refaire ({e})"),
+                }
             }
-        } else {
-            panne = None;
+            Ok(c) => (panne, cachee) = (None, c),
         }
     }
 }
@@ -491,6 +549,20 @@ mod tests {
             let z = zoom(TAILLE, TAILLE, p);
             assert!(p * z <= TAILLE as f32 / 2.0 - BORD + 0.01, "{nom} : déborde");
         }
+    }
+
+    #[test]
+    fn une_seule_ouverture_a_la_fois() {
+        // seul essai à toucher `FENETRE` : deux demandes rapprochées, une seule place réservée
+        assert_eq!(reserver(), Place::Reservee);
+        assert!(ouverte());
+        assert_eq!(reserver(), Place::EnOuverture);
+        FENETRE.store(0x1234, Ordering::Release);
+        assert_eq!(reserver(), Place::Ouverte(HWND(0x1234 as *mut _)));
+        FENETRE.store(0, Ordering::Release);
+        assert_eq!(reserver(), Place::Reservee);
+        FENETRE.store(0, Ordering::Release);
+        assert!(!ouverte());
     }
 
     #[test]
