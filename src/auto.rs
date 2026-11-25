@@ -1,21 +1,34 @@
 //! Preset automatique (`[automatique]`) : règles « si … alors … » (artiste, titre, application,
 //! tempo, heure ; prioritaires), puis application au premier plan, puis heure. Quand plus aucune
 //! règle ne s'applique, les réglages d'avant reviennent, sauf ceux que l'utilisateur a retouchés
-//! pendant la règle.
+//! pendant la règle. Ces réglages d'avant sont aussi écrits dans `auto-avant.toml` : un arrêt
+//! d'Essaim pendant une règle ne les perd pas.
 
 use crate::config::{Config, Horaire, Regle};
-use crate::profils::{self, Avant};
+use crate::profils::{self, Avant, Echec};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Un changement dû à la musique (artiste, titre, tempo) attend qu'elle soit stable ce temps-là.
+/// Un changement de preset attend que sa cible soit stable ce temps-là (une fenêtre traversée
+/// d'un Alt+Tab ne change rien)…
+const STABLE: Duration = Duration::from_secs(1);
+/// … et celui dû à la musique (artiste, titre, tempo), ce temps-là.
 const STABLE_MUSIQUE: Duration = Duration::from_secs(2);
+/// Réglages d'avant repris au démarrage : le morceau et son tempo ont ce temps pour être relus
+/// avant que la règle soit tenue pour finie.
+const STABLE_REPRISE: Duration = Duration::from_secs(10);
+
+/// Fichier des réglages d'avant une règle en cours.
+fn fichier_avant() -> PathBuf {
+    crate::config::dir().join("auto-avant.toml")
+}
 
 #[derive(Default)]
 pub struct Auto {
     /// Preset mis par une règle, et si cette règle parlait de la musique.
     courant: Option<String>,
     courant_musical: bool,
-    /// Cible vue en attente de stabilité (changement dû à la musique), et depuis quand.
+    /// Cible vue en attente de stabilité, et depuis quand.
     attente: Option<(Option<String>, Instant)>,
     /// Règles illisibles déjà notées au journal.
     illisibles: Vec<String>,
@@ -25,6 +38,12 @@ pub struct Auto {
     prochain: Option<Instant>,
     /// Échec déjà noté au journal (réessayé à chaque tour sans le répéter).
     echec: bool,
+    /// Fichier des réglages d'avant déjà relu au démarrage, et réglages d'avant repris de ce
+    /// fichier sans décision encore prise.
+    relu: bool,
+    repris: bool,
+    /// Dernier tempo lu pendant que le son était écouté.
+    bpm: Option<f32>,
 }
 
 /// Minutes depuis minuit d'une heure « HH:MM ».
@@ -49,24 +68,87 @@ fn heure_locale() -> u32 {
     t.wHour as u32 * 60 + t.wMinute as u32
 }
 
+/// Écrit les réglages d'avant une règle (et ceux d'après son dernier preset) dans `p`, d'un coup.
+fn sauver_avant_in(p: &Path, avant: &Avant, apres: Option<&Avant>) -> Result<(), String> {
+    let texte = profils::avant_en_texte(avant, apres)?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    crate::config::ecrire_atomique(p, &texte).map_err(|e| e.to_string())
+}
+
+/// Relit les réglages gardés dans `p` ; `None` sans fichier. Un fichier abîmé est noté au
+/// journal et retiré (il ne servirait à rien de le relire à chaque démarrage).
+fn lire_avant_in(p: &Path) -> Option<(Avant, Option<Avant>)> {
+    let texte = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            log::warn!("automatique : {} illisible ({e}), réglages d'avant non repris", p.display());
+            return None;
+        }
+    };
+    match profils::avant_de_texte(&texte) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            log::warn!("automatique : {} abîmé ({e}), retiré", p.display());
+            effacer_avant_in(p);
+            None
+        }
+    }
+}
+
+/// Retire le fichier des réglages d'avant (fin de la règle).
+fn effacer_avant_in(p: &Path) {
+    if let Err(e) = std::fs::remove_file(p) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("automatique : {} non retiré ({e})", p.display());
+        }
+    }
+}
+
+/// Capture du son relancée depuis moins de ce temps : un tempo encore inconnu ne compte pas (il
+/// faut quelques secondes de musique pour le mesurer).
+const TEMPO_RELU: Duration = Duration::from_secs(8);
+
 impl Auto {
+    /// Garde sur le disque les réglages d'avant en cours ; un échec n'empêche pas la règle.
+    fn sauver(&self) {
+        let Some(avant) = &self.avant else { return };
+        if let Err(e) = sauver_avant_in(&fichier_avant(), avant, self.apres.as_ref()) {
+            log::warn!("automatique : réglages d'avant gardés en mémoire seulement ({e})");
+        }
+    }
+
     /// À appeler à chaque image ; ne regarde qu'une fois toutes les 0,7 s. `bpm` : tempo des
-    /// kicks, quand il est stable.
-    pub fn tick(&mut self, cfg: &Config, now: Instant, bpm: Option<f32>) {
+    /// kicks, quand il est stable ; `ecoute` : depuis quand la capture du son tourne (`None` :
+    /// coupée, en pause ou en plein écran). Capture coupée ou tout juste relancée, le tempo n'est
+    /// pas mesuré : les conditions sur le tempo gardent la dernière valeur lue.
+    pub fn tick(&mut self, cfg: &Config, now: Instant, bpm: Option<f32>, ecoute: Option<Instant>) {
         if self.prochain.is_some_and(|p| now < p) {
             return;
         }
         self.prochain = Some(now + Duration::from_millis(700));
+        if !self.relu {
+            self.relu = true;
+            if let Some((avant, apres)) = lire_avant_in(&fichier_avant()) {
+                log::info!("automatique : réglages d'avant la règle repris (Essaim arrêté pendant une règle)");
+                (self.avant, self.apres, self.repris) = (Some(avant), apres, true);
+            }
+        }
+        if ecoute.is_some_and(|depuis| bpm.is_some() || now.duration_since(depuis) >= TEMPO_RELU) {
+            self.bpm = bpm;
+        }
         let a = &cfg.automatique;
-        let (cible, musicale) = if a.actif {
+        let (cible, musicale, tempo) = if a.actif {
             // fenêtre d'Essaim ou sans exécutable lisible : rien ne change
             let Some(exe) = crate::appli::nom_premier_plan() else { return };
             self.signaler_illisibles(&a.regles);
             let minutes = heure_locale();
             let morceau = if crate::media::en_lecture() == Some(true) { crate::media::morceau() } else { None };
-            let ctx = Contexte { appli: Some(exe.clone()), morceau: morceau.map(|m| (m.titre, m.artiste)), bpm, minutes };
+            let ctx = Contexte { appli: Some(exe.clone()), morceau: morceau.map(|m| (m.titre, m.artiste)), bpm: self.bpm, minutes };
             match regle_vraie(&a.regles, &ctx) {
-                Some((preset, musicale)) => (Some(preset.to_owned()), musicale),
+                Some(c) => (Some(c.preset.to_owned()), c.musicale, c.tempo),
                 None => (
                     a.applis
                         .iter()
@@ -74,20 +156,30 @@ impl Auto {
                         .map(|r| r.preset.clone())
                         .or_else(|| horaire(&a.horaires, minutes).map(str::to_owned)),
                     false,
+                    false,
                 ),
             }
         } else {
-            (None, false)
+            (None, false, false)
         };
-        if cible == self.courant {
+        // rien à faire, sauf des réglages d'avant repris au démarrage alors que plus aucune règle
+        // ne s'applique : ils reviennent comme à une fin de règle
+        if cible == self.courant && !(cible.is_none() && self.avant.is_some()) {
             self.attente = None;
             return;
         }
-        // changement dû à la musique (ou qui la quitte) : seulement s'il tient 2 s
-        if a.actif && (musicale || self.courant_musical) {
+        // un changement n'est fait que s'il tient un moment
+        if a.actif {
+            let stable = if self.repris && cible.is_none() {
+                STABLE_REPRISE
+            } else if musicale || self.courant_musical {
+                STABLE_MUSIQUE
+            } else {
+                STABLE
+            };
             match &self.attente {
                 Some((vue, depuis)) if *vue == cible => {
-                    if now.duration_since(*depuis) < STABLE_MUSIQUE {
+                    if now.duration_since(*depuis) < stable {
                         return;
                     }
                 }
@@ -100,16 +192,23 @@ impl Auto {
         self.attente = None;
         match &cible {
             Some(nom) => {
-                if self.courant.is_none() {
+                if self.avant.is_none() {
                     // réglages illisibles : rien n'est appliqué, nouvel essai au tour suivant
                     let Some(avant) = profils::capturer() else { return self.echoue("réglages d'avant illisibles") };
-                    self.avant = Some(avant);
+                    (self.avant, self.apres) = (Some(avant), None);
+                    self.sauver();
                 }
-                match profils::appliquer(nom) {
+                // règle sur le tempo : le preset ne touche pas à `[audio]`, qui change la mesure
+                // du tempo (sinon la règle pourrait se défaire et se refaire sans fin)
+                match profils::appliquer_detaille(nom, tempo) {
                     Ok(()) => log::info!("automatique : preset « {nom} »"),
+                    // rien n'a été écrit (fichier verrouillé…) : nouvel essai au tour suivant
+                    Err(Echec::Reglages(e)) => return self.echoue(&format!("preset « {nom} » non appliqué ({e})")),
+                    // aucun preset de ce nom, curseurs refusés : noté, la règle compte comme faite
                     Err(e) => log::warn!("automatique : preset « {nom} » non appliqué ({e})"),
                 }
                 self.apres = profils::capturer();
+                self.sauver();
             }
             None => {
                 if let Some(avant) = &self.avant {
@@ -123,9 +222,11 @@ impl Auto {
                     }
                     log::info!("automatique : réglages d'avant remis");
                     (self.avant, self.apres) = (None, None);
+                    effacer_avant_in(&fichier_avant());
                 }
             }
         }
+        self.repris = false;
         self.echec = false;
         self.courant = cible;
         self.courant_musical = musicale;
@@ -324,12 +425,25 @@ pub fn musicale(conditions: &[Condition]) -> bool {
     conditions.iter().any(|c| matches!(c.cle, Cle::Artiste | Cle::Titre | Cle::Bpm))
 }
 
-/// Preset de la première règle dont toutes les conditions sont vraies, et si elle est musicale.
-/// Les règles illisibles sont ignorées.
-pub fn regle_vraie<'a>(regles: &'a [Regle], c: &Contexte) -> Option<(&'a str, bool)> {
+/// Règle retenue : son preset, et ce dont elle parle.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Choix<'a> {
+    pub preset: &'a str,
+    /// Elle parle de la musique (artiste, titre, tempo).
+    pub musicale: bool,
+    /// Elle parle du tempo : son preset n'écrit pas `[audio]`, qui change la mesure du tempo.
+    pub tempo: bool,
+}
+
+/// Première règle dont toutes les conditions sont vraies. Les règles illisibles sont ignorées.
+pub fn regle_vraie<'a>(regles: &'a [Regle], c: &Contexte) -> Option<Choix<'a>> {
     regles.iter().find_map(|r| {
         let conditions = analyser(&r.si).ok()?;
-        conditions.iter().all(|x| x.vraie(c)).then(|| (r.alors.as_str(), musicale(&conditions)))
+        conditions.iter().all(|x| x.vraie(c)).then(|| Choix {
+            preset: r.alors.as_str(),
+            musicale: musicale(&conditions),
+            tempo: conditions.iter().any(|x| x.cle == Cle::Bpm),
+        })
     })
 }
 
@@ -378,9 +492,38 @@ mod tests {
             Regle { si: "faux".into(), alors: "X".into() },
             Regle { si: "appli = spotify.exe".into(), alors: "Calme".into() },
         ];
-        assert_eq!(regle_vraie(&regles, &skrillex), Some(("Triangle", true)));
-        assert_eq!(regle_vraie(&regles[1..], &skrillex), Some(("Calme", false)));
+        assert_eq!(regle_vraie(&regles, &skrillex), Some(Choix { preset: "Triangle", musicale: true, tempo: false }));
+        assert_eq!(regle_vraie(&regles[1..], &skrillex), Some(Choix { preset: "Calme", musicale: false, tempo: false }));
         assert_eq!(regle_vraie(&regles, &silence), None);
+        let tempo = [Regle { si: "bpm < 120 et appli = spotify".into(), alors: "Lent".into() }];
+        assert_eq!(regle_vraie(&tempo, &skrillex), Some(Choix { preset: "Lent", musicale: true, tempo: true }));
+    }
+
+    #[test]
+    fn reglages_d_avant_gardes_sur_le_disque() {
+        let d = std::env::temp_dir().join(format!("essaim-auto-avant-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let p = d.join("auto-avant.toml");
+        assert!(lire_avant_in(&p).is_none(), "sans fichier");
+        let mut cfg = Config::default();
+        cfg.orbite.rayon = 33.0;
+        let avant = Avant::essai(cfg.clone());
+        sauver_avant_in(&p, &avant, None).unwrap();
+        let (relu, apres) = lire_avant_in(&p).expect("relu");
+        assert!(profils::same(&relu.reglages(), &cfg) && apres.is_none());
+        // après le premier preset : les deux sont gardés
+        let mut ensuite = Config::default();
+        ensuite.orbite.rayon = 50.0;
+        sauver_avant_in(&p, &avant, Some(&Avant::essai(ensuite.clone()))).unwrap();
+        let (_, apres) = lire_avant_in(&p).unwrap();
+        assert!(apres.is_some_and(|a| profils::same(&a.reglages(), &ensuite)));
+        effacer_avant_in(&p);
+        assert!(!p.exists() && lire_avant_in(&p).is_none());
+        effacer_avant_in(&p); // déjà retiré : rien
+        // fichier abîmé : ignoré et retiré
+        std::fs::write(&p, "avant = 3").unwrap();
+        assert!(lire_avant_in(&p).is_none() && !p.exists());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Pauses automatiques (`[pause]`, propres à la machine, hors presets) : Windows ne veut pas être
-//! dérangé, batterie, application de la liste au premier plan. Tout est interrogé à intervalles
+//! dérangé, batterie, application de la liste au premier plan ; et, sans réglage, session
+//! verrouillée, déconnectée ou à distance (`win::session_retenue`, notifiée par Windows). Le
+//! reste est interrogé à intervalles
 //! (pas de hook) : l'état de notification de l'utilisateur et l'application au premier plan
 //! chaque seconde, l'alimentation toutes les 5 s ou dès que Windows la signale changée
 //! (`WM_POWERBROADCAST`, fenêtre de l'icône).
@@ -138,7 +140,10 @@ impl Pauses {
         }
         let batterie = effet_batterie(cfg.batterie, self.alimentation.0, self.alimentation.1);
         let appli = self.premier_plan.as_deref().and_then(|exe| appli_en_pause(&cfg.applis, exe));
-        let pause = if self.derange {
+        // session verrouillée, déconnectée ou à distance : toujours, quel que soit `[pause]`
+        let pause = if let Some(s) = crate::win::session_retenue() {
+            Some(s.to_owned())
+        } else if self.derange {
             Some("Ne pas déranger".to_owned())
         } else if batterie == EffetBatterie::Pause {
             Some("Sur batterie".to_owned())

@@ -77,30 +77,83 @@ fn start_instant() -> Instant {
     Instant::now()
 }
 
-struct FileLog(std::sync::Mutex<std::fs::File>);
+/// Taille au-delà de laquelle le journal passe dans `essaim.old.log` (l'ancien est remplacé).
+const JOURNAL_MAX: u64 = 1 << 20;
+/// Taille du journal vérifiée toutes les `JOURNAL_LIGNES` lignes ou toutes les minutes.
+const JOURNAL_LIGNES: u32 = 200;
+const JOURNAL_VERIF: Duration = Duration::from_secs(60);
+
+struct Journal {
+    chemin: std::path::PathBuf,
+    f: Option<std::fs::File>,
+    lignes: u32,
+    verifie: Instant,
+}
+
+impl Journal {
+    fn ouvrir(chemin: &std::path::Path) -> Option<std::fs::File> {
+        std::fs::OpenOptions::new().create(true).append(true).open(chemin).ok()
+    }
+
+    /// Trop gros : renommé en `essaim.old.log`, puis un journal neuf est ouvert. Renommage
+    /// impossible (fichier ouvert ailleurs sans partage) : on continue dans le même, nouvel essai
+    /// plus tard.
+    fn tourner_si_gros(&mut self) {
+        (self.lignes, self.verifie) = (0, Instant::now());
+        let gros = self.f.as_ref().and_then(|f| f.metadata().ok()).is_some_and(|m| m.len() > JOURNAL_MAX);
+        if !gros {
+            return;
+        }
+        self.f = None;
+        let tourne = tourner(&self.chemin);
+        self.f = Self::ouvrir(&self.chemin);
+        if let (true, Some(f)) = (tourne, self.f.as_mut()) {
+            let _ = writeln!(f, "{} INFO journal précédent : essaim.old.log", secondes());
+        }
+    }
+}
+
+/// Renomme le journal `p` en `essaim.old.log` (à côté) ; vrai si c'est fait.
+fn tourner(p: &std::path::Path) -> bool {
+    std::fs::rename(p, p.with_file_name("essaim.old.log")).is_ok()
+}
+
+fn secondes() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+struct FileLog(std::sync::Mutex<Journal>);
 impl log::Log for FileLog {
     fn enabled(&self, m: &log::Metadata) -> bool {
         m.level() <= log::Level::Info
     }
     fn log(&self, r: &log::Record) {
         if self.enabled(r.metadata()) {
-            if let Ok(mut f) = self.0.lock() {
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                let _ = writeln!(f, "{secs} {} {}", r.level(), r.args());
+            if let Ok(mut j) = self.0.lock() {
+                j.lignes += 1;
+                if j.lignes >= JOURNAL_LIGNES || j.verifie.elapsed() >= JOURNAL_VERIF {
+                    j.tourner_si_gros();
+                }
+                if let Some(f) = j.f.as_mut() {
+                    let _ = writeln!(f, "{} {} {}", secondes(), r.level(), r.args());
+                }
             }
         }
     }
     fn flush(&self) {}
 }
 
-fn init_log() {
+/// Ouvre le journal. `tourner_au_debut` : seulement pour l'instance qui tient le verrou (une
+/// seconde instance, qui s'arrête aussitôt, ne doit pas renommer le journal de la première).
+fn init_log(tourner_au_debut: bool) {
     let _ = std::fs::create_dir_all(config::dir());
     let p = config::dir().join("essaim.log");
-    if std::fs::metadata(&p).map(|m| m.len() > 1 << 20).unwrap_or(false) {
-        let _ = std::fs::remove_file(&p);
+    if tourner_au_debut && std::fs::metadata(&p).is_ok_and(|m| m.len() > JOURNAL_MAX) {
+        tourner(&p);
     }
-    if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
-        let _ = log::set_boxed_logger(Box::new(FileLog(std::sync::Mutex::new(f))));
+    if let Some(f) = Journal::ouvrir(&p) {
+        let journal = Journal { chemin: p, f: Some(f), lignes: 0, verifie: Instant::now() };
+        let _ = log::set_boxed_logger(Box::new(FileLog(std::sync::Mutex::new(journal))));
         log::set_max_level(log::LevelFilter::Info);
     }
 }
@@ -164,17 +217,19 @@ fn main() {
         }
         return;
     }
-    init_log();
     // verrou d'instance unique, gardé jusqu'à la fin (ou rendu avant de relancer)
-    let verrou = unsafe {
+    let (verrou, deja) = unsafe {
         let verrou = CreateMutexW(None, true, VERROU);
-        if GetLastError() == ERROR_ALREADY_EXISTS {
-            log::info!("déjà lancé, sortie");
-            return;
-        }
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        verrou
+        (verrou, GetLastError() == ERROR_ALREADY_EXISTS)
     };
+    init_log(!deja);
+    if deja {
+        log::info!("déjà lancé, sortie");
+        return;
+    }
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
     // Quoi qu'il arrive, la bordure des fenêtres doit revenir (y compris celle laissée colorée
     // par une instance tuée).
     bordure::restore();
@@ -267,6 +322,8 @@ fn reglages_ouverts() -> bool {
 #[derive(Default)]
 struct Son {
     capture: Option<audio::AudioThread>,
+    /// Lancement de la capture en cours.
+    lancee: Option<Instant>,
     /// Sortie écoutée par la capture en cours (`[audio] sortie`, vide = par défaut) et
     /// applications écoutées (`[audio] applis`, vide = tout le son).
     sortie: String,
@@ -280,12 +337,13 @@ impl Son {
     fn regler(&mut self, voulu: bool, sortie: &str, applis: &[String], shared: &Arc<audio::AudioShared>, now: Instant) {
         // autre sortie ou autres applications choisies : la capture est relancée tout de suite
         if self.capture.is_some() && (self.sortie != sortie || self.applis != applis) {
-            self.capture = None;
+            (self.capture, self.lancee) = (None, None);
             self.reessai = None;
             log::info!("son : sortie ou applications écoutées changées, capture relancée");
         }
         if !voulu {
             self.reessai = None;
+            self.lancee = None;
             if self.capture.take().is_some() {
                 // fil arrêté (attendu) : plus rien n'écrit, les niveaux peuvent être remis à zéro
                 shared.reset();
@@ -294,7 +352,7 @@ impl Son {
         } else if self.capture.is_none() && self.reessai.is_none_or(|r| now >= r) {
             match audio::start(shared.clone(), sortie, applis) {
                 Ok(c) => {
-                    self.capture = Some(c);
+                    (self.capture, self.lancee) = (Some(c), Some(now));
                     sortie.clone_into(&mut self.sortie);
                     applis.clone_into(&mut self.applis);
                     self.reessai = None;
@@ -444,9 +502,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                     }
                 }
                 c if c >= win::CMD_PRESET => {
-                    if let Some(p) = profils::list().get(c - win::CMD_PRESET) {
-                        if let Err(e) = profils::appliquer(&p.name) {
-                            log::warn!("menu : preset « {} » non appliqué ({e})", p.name);
+                    // le nom de l'entrée choisie, pas le rang dans une liste qui a pu changer
+                    if let Some(nom) = win::preset_du_menu(c - win::CMD_PRESET) {
+                        if let Err(e) = profils::appliquer(&nom) {
+                            log::warn!("menu : preset « {nom} » non appliqué ({e})");
                         }
                     }
                 }
@@ -537,7 +596,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // qui le montrent)
         let son_voulu = conf.cfg.audio.actif && (!(user_paused || retrait) || reglages_ouverts() || stream::ouverte());
         son.regler(son_voulu, &conf.cfg.audio.sortie, &conf.cfg.audio.applis, &shared, now);
-        automatique.tick(&conf.cfg, now, shared.view().bpm);
+        // tempo mesuré seulement pendant la capture ; son coupé dans les réglages : il n'y en a
+        // pas, les règles sur le tempo sont fausses
+        let ecoute = if conf.cfg.audio.actif { son.lancee } else { Some(start) };
+        automatique.tick(&conf.cfg, now, shared.view().bpm, ecoute);
         let cfg = &conf.cfg;
         prisme.set_wanted(cfg.couleur.synchro_prisme);
         // preset en place (interface locale, infobulle de l'icône) : recherché quand les réglages changent
@@ -567,11 +629,12 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
 
         let active = !user_paused && !retrait;
+        // le masquage par la frappe (curseur caché par Windows le temps de taper) n'est pas noté :
+        // il reviendrait à chaque mot
         let state = match &cur {
             _ if !active => "en pause",
             None => "position du curseur illisible",
-            Some(c) if !c.showing => "curseur masqué par Windows",
-            Some(_) => "affiché",
+            Some(_) => "actif",
         };
         if state != last_state {
             log::info!("état : {state}");
@@ -830,4 +893,29 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     }
     drop(son);
     Ok(relancer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn journal_trop_gros_renomme_puis_rouvert() {
+        let d = std::env::temp_dir().join(format!("essaim-journal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("essaim.log");
+        std::fs::write(&p, vec![b'x'; JOURNAL_MAX as usize + 1]).unwrap();
+        let mut j = Journal { chemin: p.clone(), f: Journal::ouvrir(&p), lignes: JOURNAL_LIGNES, verifie: Instant::now() };
+        j.tourner_si_gros();
+        let ancien = std::fs::metadata(d.join("essaim.old.log")).unwrap().len();
+        assert_eq!(ancien, JOURNAL_MAX + 1);
+        assert!(std::fs::metadata(&p).unwrap().len() < 100, "journal neuf");
+        assert!(j.f.is_some() && j.lignes == 0);
+        // petit : rien ne bouge
+        j.tourner_si_gros();
+        assert_eq!(std::fs::metadata(d.join("essaim.old.log")).unwrap().len(), ancien);
+        drop(j);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

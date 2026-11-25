@@ -541,7 +541,7 @@ pub const CMD_REDEMARRER: usize = 6;
 pub const CMD_PROJECTEUR: usize = 7;
 /// Fenêtre pour le stream (`stream.rs`).
 pub const CMD_STREAM: usize = 8;
-/// Presets du menu : `CMD_PRESET + rang` dans `profils::list()`.
+/// Presets du menu : `CMD_PRESET + rang` dans le dernier menu construit (`preset_du_menu`).
 pub const CMD_PRESET: usize = 100;
 const WM_TRAY: u32 = WM_APP + 1;
 pub const TRAY_CLASS: PCWSTR = w!("EssaimTray");
@@ -585,6 +585,70 @@ thread_local! {
     static DISPLAY_CHANGED: Cell<bool> = const { Cell::new(false) };
     /// Alimentation changée (secteur, batterie, économiseur) : `WM_POWERBROADCAST`.
     static POWER_CHANGED: Cell<bool> = const { Cell::new(false) };
+    /// Noms des presets du dernier menu construit, dans l'ordre des entrées.
+    static MENU_PRESETS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Preset de l'entrée `rang` du dernier menu de l'icône (le nom vu par l'utilisateur, même si la
+/// liste a changé depuis).
+pub fn preset_du_menu(rang: usize) -> Option<String> {
+    MENU_PRESETS.with(|m| m.borrow().get(rang).cloned())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Session Windows : verrouillée, console déconnectée ou ouverte à distance, l'essaim se retire
+// (comme en plein écran). Notifications `WM_WTSSESSION_CHANGE` de la fenêtre de l'icône.
+
+#[link(name = "wtsapi32", kind = "raw-dylib")]
+extern "system" {
+    fn WTSRegisterSessionNotification(hwnd: HWND, flags: u32) -> windows::core::BOOL;
+    fn WTSUnRegisterSessionNotification(hwnd: HWND) -> windows::core::BOOL;
+}
+
+const NOTIFY_FOR_THIS_SESSION: u32 = 0;
+const WM_SESSION: u32 = 0x02B1; // WM_WTSSESSION_CHANGE
+const WTS_CONSOLE_CONNECT: usize = 1;
+const WTS_CONSOLE_DISCONNECT: usize = 2;
+const WTS_SESSION_LOCK: usize = 7;
+const WTS_SESSION_UNLOCK: usize = 8;
+
+static VERROUILLEE: AtomicBool = AtomicBool::new(false);
+static CONSOLE_DECONNECTEE: AtomicBool = AtomicBool::new(false);
+static A_DISTANCE: AtomicBool = AtomicBool::new(false);
+
+fn relire_distance() {
+    A_DISTANCE.store(unsafe { GetSystemMetrics(SM_REMOTESESSION) } != 0, Ordering::Relaxed);
+}
+
+/// Changement de session signalé par Windows (`wParam` de `WM_WTSSESSION_CHANGE`).
+fn session_changee(evenement: usize) {
+    match evenement {
+        WTS_SESSION_LOCK => VERROUILLEE.store(true, Ordering::Relaxed),
+        // déverrouillée : l'utilisateur est revenu, à la console ou à distance
+        WTS_SESSION_UNLOCK => {
+            VERROUILLEE.store(false, Ordering::Relaxed);
+            CONSOLE_DECONNECTEE.store(false, Ordering::Relaxed);
+        }
+        WTS_CONSOLE_DISCONNECT => CONSOLE_DECONNECTEE.store(true, Ordering::Relaxed),
+        WTS_CONSOLE_CONNECT => CONSOLE_DECONNECTEE.store(false, Ordering::Relaxed),
+        _ => {}
+    }
+    // connexion ou déconnexion à distance, et tout autre changement : relu
+    relire_distance();
+}
+
+/// Raison de retirer l'essaim tenant à la session (`pauses.rs`) : verrouillée, console
+/// déconnectée ou ouverte à distance (bureau à distance : l'écran est envoyé par le réseau).
+pub fn session_retenue() -> Option<&'static str> {
+    if VERROUILLEE.load(Ordering::Relaxed) {
+        Some("Session verrouillée")
+    } else if A_DISTANCE.load(Ordering::Relaxed) {
+        Some("Session à distance")
+    } else if CONSOLE_DECONNECTEE.load(Ordering::Relaxed) {
+        Some("Session déconnectée")
+    } else {
+        None
+    }
 }
 
 /// Raccourcis clavier enregistrés (le menu les affiche alors à côté des entrées).
@@ -599,21 +663,33 @@ fn tray_hwnd() -> HWND {
     HWND(TRAY_HWND.load(Ordering::Relaxed) as *mut _)
 }
 
+/// Raccourcis que Windows a refusés au dernier enregistrement (déjà pris par une autre appli).
+static REFUSES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// Raccourcis globaux (RegisterHotKey, sans hook) : Ctrl+Alt+→ / ← preset suivant / précédent,
 /// Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Les enregistre ou les retire.
 pub fn raccourcis(actif: bool) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_LEFT, VK_RIGHT};
     let hwnd = tray_hwnd();
-    let touches = [(1, VK_RIGHT.0 as u32), (2, VK_LEFT.0 as u32), (3, b'P' as u32), (4, b'F' as u32)];
+    let touches = [(1, VK_RIGHT.0 as u32, "Ctrl+Alt+→"), (2, VK_LEFT.0 as u32, "Ctrl+Alt+←"), (3, b'P' as u32, "Ctrl+Alt+P"), (4, b'F' as u32, "Ctrl+Alt+F")];
     RACCOURCIS.store(actif, Ordering::Relaxed);
+    let mut refuses = Vec::new();
     unsafe {
-        for (id, vk) in touches {
+        for (id, vk, libelle) in touches {
             let _ = UnregisterHotKey(Some(hwnd), id);
             if actif && RegisterHotKey(Some(hwnd), id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk).is_err() {
-                log::warn!("raccourci {id} déjà pris par une autre application");
+                log::warn!("raccourci {libelle} déjà pris par une autre application");
+                refuses.push(libelle.to_owned());
             }
         }
     }
+    *REFUSES.lock().unwrap_or_else(|e| e.into_inner()) = refuses;
+}
+
+/// Raccourcis globaux refusés par Windows au dernier enregistrement (« Ctrl+Alt+F »…) ; vide
+/// quand tous sont pris par Essaim ou que les raccourcis sont coupés.
+pub fn raccourcis_refuses() -> Vec<String> {
+    REFUSES.lock().map(|r| r.clone()).unwrap_or_default()
 }
 
 /// Petite notification de l'icône (changement de preset au clavier, téléchargement).
@@ -743,11 +819,15 @@ unsafe fn menu(hwnd: HWND) {
         // presets : celui en place coché
         if let Ok(sous) = CreatePopupMenu() {
             let cfg = crate::config::Config::read(&crate::config::path()).unwrap_or_default();
-            for (i, p) in crate::profils::list().iter().enumerate().take(80) {
+            let mut noms = Vec::new();
+            for (i, p) in crate::profils::list().into_iter().enumerate().take(80) {
                 let nom: Vec<u16> = p.name.encode_utf16().chain(Some(0)).collect();
                 let coche = if crate::profils::same(&p.cfg, &cfg) { MF_CHECKED } else { MF_UNCHECKED };
                 let _ = AppendMenuW(sous, MF_STRING | coche, CMD_PRESET + i, PCWSTR(nom.as_ptr()));
+                noms.push(p.name);
             }
+            // la liste peut changer avant le choix : l'entrée choisie désigne ce nom-là
+            MENU_PRESETS.with(|m| *m.borrow_mut() = noms);
             let _ = AppendMenuW(menu, MF_POPUP, sous.0 as usize, w!("Presets"));
         }
         let _ = AppendMenuW(menu, MF_STRING, CMD_SUIVANT, PCWSTR(suivant.as_ptr()));
@@ -806,6 +886,15 @@ extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         if msg == WM_POWERBROADCAST && wp.0 == PBT_APMPOWERSTATUSCHANGE as usize {
             POWER_CHANGED.with(|p| p.set(true));
         }
+        // sortie de veille : écrans et alimentation ont pu changer pendant le sommeil
+        if msg == WM_POWERBROADCAST && wp.0 == PBT_APMRESUMEAUTOMATIC as usize {
+            DISPLAY_CHANGED.with(|d| d.set(true));
+            POWER_CHANGED.with(|p| p.set(true));
+        }
+        if msg == WM_SESSION {
+            session_changee(wp.0);
+            return LRESULT(0);
+        }
         if msg == WM_ENDSESSION {
             // la session se ferme vraiment (wParam ≠ 0) : le processus peut être arrêté à tout
             // moment après ce message, la bordure est rendue tout de suite
@@ -851,6 +940,10 @@ impl Tray {
             if !Shell_NotifyIconW(NIM_ADD, &nid(hwnd)).as_bool() {
                 log::warn!("icône de notification : ajout impossible");
             }
+            relire_distance();
+            if !WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION).as_bool() {
+                log::warn!("session : notifications de verrouillage indisponibles");
+            }
             Ok(Self { hwnd })
         }
     }
@@ -860,6 +953,7 @@ impl Drop for Tray {
     fn drop(&mut self) {
         unsafe {
             TRAY_HWND.store(0, Ordering::Relaxed);
+            let _ = WTSUnRegisterSessionNotification(self.hwnd);
             let _ = Shell_NotifyIconW(NIM_DELETE, &nid(self.hwnd));
             let _ = DestroyWindow(self.hwnd);
         }
@@ -1151,6 +1245,20 @@ mod tests {
         f.pousser(CMD_QUIT);
         f.pousser(CMD_CONFIG);
         assert_eq!((f.prendre(), f.prendre(), f.prendre()), (CMD_QUIT, CMD_CONFIG, 0));
+    }
+
+    #[test]
+    fn session_verrouillee_puis_rendue() {
+        let distance = unsafe { GetSystemMetrics(SM_REMOTESESSION) } != 0;
+        session_changee(WTS_SESSION_LOCK);
+        assert_eq!(session_retenue(), Some("Session verrouillée"));
+        session_changee(WTS_CONSOLE_DISCONNECT);
+        session_changee(WTS_SESSION_UNLOCK);
+        assert_eq!(session_retenue(), distance.then_some("Session à distance"), "reprise au déverrouillage");
+        session_changee(WTS_CONSOLE_DISCONNECT);
+        assert!(session_retenue().is_some());
+        session_changee(WTS_CONSOLE_CONNECT);
+        assert_eq!(session_retenue(), distance.then_some("Session à distance"));
     }
 
     #[test]

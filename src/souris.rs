@@ -6,7 +6,7 @@
 
 use std::ffi::c_void;
 use windows::core::{w, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     DIB_RGB_COLORS,
@@ -158,25 +158,88 @@ fn valeurs_etat() -> impl Iterator<Item = &'static str> {
     ["", "Scheme Source"].into_iter().chain(ROLES)
 }
 
-/// Curseurs en place, pour y revenir (« Annuler », fin d'une règle automatique).
+/// Curseurs en place, pour y revenir (« Annuler », fin d'une règle automatique). `None` si une
+/// valeur n'a pas pu être lue (autre erreur que « absente ») : un état incomplet effacerait au
+/// retour des rôles qui existent bien.
 pub fn etat() -> Option<Etat> {
     let k = ouvrir(HKEY_CURRENT_USER, CURSEURS, false)?;
-    let lire = |nom: &str| -> Option<Valeur> {
+    // `Ok(None)` : valeur absente ; `Err(())` : lecture ratée
+    let lire = |nom: &str| -> Result<Option<Valeur>, ()> {
         let nom = HSTRING::from(nom);
         let (mut genre, mut n) = (REG_VALUE_TYPE(0), 0u32);
         unsafe {
-            if RegQueryValueExW(k.0, &nom, None, Some(&mut genre), None, Some(&mut n)) != ERROR_SUCCESS {
-                return None;
+            match RegQueryValueExW(k.0, &nom, None, Some(&mut genre), None, Some(&mut n)) {
+                ERROR_SUCCESS => {}
+                ERROR_FILE_NOT_FOUND => return Ok(None),
+                _ => return Err(()),
             }
             let mut octets = vec![0u8; n as usize];
             if RegQueryValueExW(k.0, &nom, None, Some(&mut genre), Some(octets.as_mut_ptr()), Some(&mut n)) != ERROR_SUCCESS {
-                return None;
+                return Err(());
             }
             octets.truncate(n as usize);
-            Some((genre.0, octets))
+            Ok(Some((genre.0, octets)))
         }
     };
-    Some(Etat(valeurs_etat().map(|nom| (nom, lire(nom))).collect()))
+    let valeurs: Result<Vec<_>, ()> = valeurs_etat().map(|nom| lire(nom).map(|v| (nom, v))).collect();
+    match valeurs {
+        Ok(v) => Some(Etat(v)),
+        Err(()) => {
+            log::warn!("curseurs : lecture des curseurs en place ratée, ils ne seront pas remis");
+            None
+        }
+    }
+}
+
+/// Une valeur de `Etat` telle qu'écrite dans un fichier (`auto-avant.toml`) : type et octets en
+/// hexadécimal, ou rien si elle était absente.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ValeurSauvee {
+    pub nom: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub octets: Option<String>,
+}
+
+impl Etat {
+    /// Valeurs à écrire dans un fichier.
+    pub fn sauver(&self) -> Vec<ValeurSauvee> {
+        self.0
+            .iter()
+            .map(|(nom, v)| ValeurSauvee {
+                nom: (*nom).to_owned(),
+                genre: v.as_ref().map(|v| v.0),
+                octets: v.as_ref().map(|v| v.1.iter().map(|o| format!("{o:02x}")).collect()),
+            })
+            .collect()
+    }
+
+    /// Relit des valeurs écrites par `sauver` ; `None` si une valeur gardée manque, est en trop
+    /// ou est abîmée (rien n'est alors remis plutôt qu'un état faux).
+    pub fn reprendre(valeurs: &[ValeurSauvee]) -> Option<Etat> {
+        if valeurs.len() != valeurs_etat().count() {
+            return None;
+        }
+        let hex = |s: &str| -> Option<Vec<u8>> {
+            if !s.len().is_multiple_of(2) {
+                return None;
+            }
+            (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+        };
+        let etat = valeurs_etat()
+            .map(|nom| {
+                let v = valeurs.iter().find(|v| v.nom == nom)?;
+                let valeur = match (&v.genre, &v.octets) {
+                    (Some(g), Some(o)) => Some((*g, hex(o)?)),
+                    (None, None) => None,
+                    _ => return None,
+                };
+                Some((nom, valeur))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Etat(etat))
+    }
 }
 
 /// Remet des curseurs gardés par `etat`, puis les fait recharger par Windows.
@@ -396,6 +459,21 @@ mod tests {
         std::env::set_var("ESSAIM_TEST_RACINE", "C:\\Windows");
         assert_eq!(developper("%ESSAIM_TEST_RACINE%\\cursors\\a.cur"), "C:\\Windows\\cursors\\a.cur");
         assert_eq!(developper("100%"), "100%");
+    }
+
+    #[test]
+    fn etat_sauve_puis_repris() {
+        let etat = Etat(valeurs_etat().enumerate().map(|(i, nom)| (nom, (i % 3 != 0).then(|| (1, vec![i as u8, 0xff, 0])))).collect());
+        let sauve = etat.sauver();
+        assert_eq!(Etat::reprendre(&sauve), Some(etat.clone()));
+        // une valeur manquante ou abîmée : rien n'est repris
+        assert_eq!(Etat::reprendre(&sauve[1..]), None);
+        let mut abime = sauve.clone();
+        abime[1].octets = Some("zz".into());
+        assert_eq!(Etat::reprendre(&abime), None);
+        let mut sans_type = sauve;
+        sans_type[1].genre = None;
+        assert_eq!(Etat::reprendre(&sans_type), None);
     }
 
     /// Les pas d'un curseur animé du jeu en place donnent des images différentes (`--ignored`).

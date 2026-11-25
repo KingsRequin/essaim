@@ -12,7 +12,10 @@
 
 use crate::config::{self, Config};
 use crate::prereglages::builtins;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 /// Sections enregistrées dans un profil.
 const SECTIONS: [&str; 26] = [
@@ -26,27 +29,85 @@ pub fn in_profile(section: &str, key: &str) -> bool {
         && !matches!((section, key), ("souris", "avec_preset") | ("audio", "sortie") | ("audio", "applis") | ("projecteur", "actif") | ("projecteur", "secousse") | ("projecteur", "sensibilite"))
 }
 
+#[derive(Clone)]
 pub struct Profile {
     pub name: String,
     pub builtin: bool,
     pub cfg: Config,
     /// Dernière modification du fichier (profils de l'utilisateur).
-    pub date: Option<std::time::SystemTime>,
+    pub date: Option<SystemTime>,
 }
 
 pub fn dir() -> PathBuf {
     config::dir().join("profils")
 }
 
-/// Préréglages puis profils de l'utilisateur (ordre alphabétique).
+/// Préréglages puis profils de l'utilisateur (ordre alphabétique). Gardée en mémoire tant que
+/// les fichiers du dossier (noms, dates, tailles) ne changent pas et que `profils` n'y a rien
+/// écrit : la boucle principale la consulte à chaque relecture de `config.toml`.
 pub fn list() -> Vec<Profile> {
-    let mut user: Vec<Profile> = std::fs::read_dir(dir())
+    list_in(&dir())
+}
+
+/// Fichiers `.toml` du dossier, avec leur date et leur taille, triés.
+type Empreinte = Vec<(std::ffi::OsString, Option<SystemTime>, u64)>;
+
+struct Cache {
+    dossier: PathBuf,
+    empreinte: Empreinte,
+    ecritures: u64,
+    liste: Vec<Profile>,
+}
+
+static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+/// Écritures faites par `profils` (enregistrement, renommage, suppression) : chacune invalide la
+/// liste gardée, même si la date du fichier n'a pas bougé.
+static ECRITURES: AtomicU64 = AtomicU64::new(0);
+
+fn ecrit() {
+    ECRITURES.fetch_add(1, Ordering::Relaxed);
+}
+
+fn est_toml(p: &Path) -> bool {
+    p.extension().is_some_and(|x| x == "toml")
+}
+
+fn empreinte(dir: &Path) -> Empreinte {
+    let mut e: Empreinte = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| est_toml(&e.path()))
+        .map(|e| {
+            let m = e.metadata().ok();
+            (e.file_name(), m.as_ref().and_then(|m| m.modified().ok()), m.map_or(0, |m| m.len()))
+        })
+        .collect();
+    e.sort();
+    e
+}
+
+fn list_in(dir: &Path) -> Vec<Profile> {
+    // relevées avant la lecture : une écriture faite pendant celle-ci invalide le résultat
+    let ecritures = ECRITURES.load(Ordering::Relaxed);
+    let emp = empreinte(dir);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(c) = cache.as_ref().filter(|c| c.dossier == dir && c.empreinte == emp && c.ecritures == ecritures) {
+        return c.liste.clone();
+    }
+    let liste = lire_liste(dir);
+    *cache = Some(Cache { dossier: dir.to_owned(), empreinte: emp, ecritures, liste: liste.clone() });
+    liste
+}
+
+fn lire_liste(dir: &Path) -> Vec<Profile> {
+    let mut user: Vec<Profile> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let p = e.path();
-            if p.extension()? != "toml" {
+            if !est_toml(&p) {
                 return None;
             }
             let name = p.file_stem()?.to_string_lossy().into_owned();
@@ -90,6 +151,13 @@ pub fn nom_reserve(nom: &str) -> bool {
 /// Longueur maximale d'un nom de preset.
 const NOM_MAX: usize = 40;
 
+/// Caractère de mise en forme invisible (catégorie Unicode Cf) : espaces et liants sans largeur,
+/// marques et enchâssements de sens d'écriture, opérateurs invisibles, indicateur d'ordre des
+/// octets.
+fn invisible(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
 /// Nom de profil utilisable comme nom de fichier.
 fn check_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
@@ -101,6 +169,10 @@ fn check_name(name: &str) -> Result<&str, String> {
     }
     if name.chars().any(|c| c.is_control() || r#"\/:*?"<>|"#.contains(c)) || name.ends_with('.') {
         return Err(r#"caractères interdits dans le nom : \ / : * ? " < > |"#.into());
+    }
+    // deux noms identiques à l'œil n'en feraient pas moins deux fichiers
+    if name.chars().any(invisible) {
+        return Err("caractère invisible dans le nom (espace sans largeur, marque de sens d'écriture…) : retape-le".into());
     }
     if nom_reserve(name) {
         return Err(format!("« {name} » est un nom réservé par Windows : choisis un autre nom"));
@@ -117,18 +189,19 @@ pub fn save(name: &str, cfg: &Config) -> Result<String, String> {
     save_in(&dir(), name, cfg)
 }
 
-fn save_in(dir: &std::path::Path, name: &str, cfg: &Config) -> Result<String, String> {
+fn save_in(dir: &Path, name: &str, cfg: &Config) -> Result<String, String> {
     let name = check_name(name)?;
     if is_builtin(name) {
         return Err(format!("« {name} » est un préréglage : choisis un autre nom"));
     }
     let body = config::text_with_keys("", cfg, in_profile)?;
-    let p = dir.join(format!("{name}.toml"));
+    let p = fichier_in(dir, name);
     let _verrou = config::verrou();
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    config::ecrire_atomique(&p, &format!("# Profil d'Essaim « {name} » (fenêtre des réglages).\n\n{body}"))
-        .map_err(|e| format!("écriture de {} impossible : {e}", p.display()))?;
-    Ok(name.to_owned())
+    let r = config::ecrire_atomique(&p, &format!("# Profil d'Essaim « {name} » (fenêtre des réglages).\n\n{body}"))
+        .map_err(|e| format!("écriture de {} impossible : {e}", p.display()));
+    ecrit();
+    r.map(|()| name.to_owned())
 }
 
 /// Enregistre un preset venu d'ailleurs (bibliothèque, fichier importé) sans écraser un preset
@@ -137,12 +210,22 @@ pub fn ajouter(name: &str, cfg: &Config) -> Result<String, String> {
     ajouter_in(&dir(), name, cfg)
 }
 
-fn ajouter_in(dir: &std::path::Path, name: &str, cfg: &Config) -> Result<String, String> {
-    let nom = check_name(name)?;
-    let existant = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).find(|p| {
+/// Fichier `.toml` du dossier dont le nom désigne le même preset que `nom` (`meme_nom`).
+fn fichier_du_nom(dir: &Path, nom: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).find(|p| {
         p.extension().is_some_and(|x| x.eq_ignore_ascii_case("toml")) && p.file_stem().is_some_and(|s| meme_nom(&s.to_string_lossy(), nom))
-    });
-    if let Some(p) = existant {
+    })
+}
+
+/// Preset de l'utilisateur déjà présent sous ce nom : à la casse près (`meme_nom`), ou selon le
+/// système de fichiers lui-même (ses règles de casse ne sont pas tout à fait celles de Rust).
+fn existant_in(dir: &Path, nom: &str) -> Option<PathBuf> {
+    fichier_du_nom(dir, nom).or_else(|| Some(fichier_in(dir, nom)).filter(|p| p.exists()))
+}
+
+fn ajouter_in(dir: &Path, name: &str, cfg: &Config) -> Result<String, String> {
+    let nom = check_name(name)?;
+    if let Some(p) = existant_in(dir, nom) {
         // le même preset déjà installé : rien à refuser
         if !Config::read(&p).is_ok_and(|c| same_strict(&c, cfg)) {
             let deja = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -152,9 +235,23 @@ fn ajouter_in(dir: &std::path::Path, name: &str, cfg: &Config) -> Result<String,
     save_in(dir, nom, cfg)
 }
 
+/// Un preset de l'utilisateur porte-t-il déjà ce nom (à la casse près) ? Faux pour un nom
+/// invalide.
+pub fn existe(nom: &str) -> bool {
+    existe_in(&dir(), nom)
+}
+
+fn existe_in(dir: &Path, nom: &str) -> bool {
+    check_name(nom).is_ok_and(|n| existant_in(dir, n).is_some())
+}
+
 /// Fichier d'un profil de l'utilisateur.
 pub fn fichier(name: &str) -> PathBuf {
-    dir().join(format!("{}.toml", name.trim()))
+    fichier_in(&dir(), name)
+}
+
+fn fichier_in(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{}.toml", name.trim()))
 }
 
 /// Fichier du preset `name`, après vérification du nom (nom venu de la page des réglages).
@@ -182,7 +279,9 @@ pub fn rename(ancien: &str, nouveau: &str) -> Result<String, String> {
     if cible.exists() && !meme_nom(ancien, nouveau) {
         return Err(format!("un preset s'appelle déjà « {nouveau} »"));
     }
-    std::fs::rename(fichier(ancien), &cible).map_err(|_| format!("aucun profil « {ancien} »"))?;
+    let r = std::fs::rename(fichier(ancien), &cible);
+    ecrit();
+    r.map_err(|_| format!("aucun profil « {ancien} »"))?;
     regles_suivent(ancien, Some(nouveau));
     Ok(nouveau.to_owned())
 }
@@ -228,11 +327,15 @@ fn regles_suivent(ancien: &str, nouveau: Option<&str>) {
 
 /// Copie un preset (fourni ou non) sous « nom (copie) » ; renvoie le nom de la copie.
 pub fn dupliquer(name: &str) -> Result<String, String> {
-    let liste = list();
-    let p = liste.iter().find(|p| p.name == name).ok_or_else(|| format!("aucun preset « {name} »"))?;
-    let pris = |n: &str| liste.iter().any(|q| meme_nom(&q.name, n));
-    let nom = (1..100).map(|i| nom_de_copie(name, i)).find(|n| !pris(n)).ok_or("trop de copies")?;
-    save(&nom, &p.cfg)
+    dupliquer_in(&dir(), name)
+}
+
+fn dupliquer_in(dir: &Path, name: &str) -> Result<String, String> {
+    let liste = list_in(dir);
+    let p = liste.iter().find(|p| meme_nom(&p.name, name)).ok_or_else(|| format!("aucun preset « {name} »"))?;
+    let pris = |n: &str| liste.iter().any(|q| meme_nom(&q.name, n)) || existant_in(dir, n).is_some();
+    let nom = (1..100).map(|i| nom_de_copie(&p.name, i)).find(|n| !pris(n)).ok_or("trop de copies")?;
+    save_in(dir, &nom, &p.cfg)
 }
 
 /// « nom (copie) », « nom (copie 2) »… : le nom est raccourci pour que le tout tienne dans la
@@ -301,16 +404,22 @@ pub fn delete(name: &str) -> Result<(), String> {
     if is_builtin(name) {
         return Err(format!("« {name} » est un préréglage : il ne peut pas être supprimé"));
     }
-    let p = dir().join(format!("{name}.toml"));
-    std::fs::remove_file(&p).map_err(|_| format!("aucun profil « {name} »"))?;
+    let r = std::fs::remove_file(fichier(name));
+    ecrit();
+    r.map_err(|_| format!("aucun profil « {name} »"))?;
     regles_suivent(name, None);
     Ok(())
 }
 
 /// Écrit le profil dans `config.toml`. Un profil sans jeu de curseurs garde celui des réglages.
 pub fn apply(p: &Profile) -> Result<(), String> {
+    apply_sauf(p, |_| false)
+}
+
+/// Comme `apply`, sans les sections pour lesquelles `ecartee` est vrai.
+fn apply_sauf(p: &Profile, ecartee: impl Fn(&str) -> bool) -> Result<(), String> {
     let sans_jeu = p.cfg.souris.jeu.is_empty();
-    config::apply_keys(&p.cfg, |s, k| in_profile(s, k) && !(sans_jeu && (s, k) == ("souris", "jeu")))
+    config::apply_keys(&p.cfg, |s, k| in_profile(s, k) && !ecartee(s) && !(sans_jeu && (s, k) == ("souris", "jeu")))
 }
 
 /// Installe le jeu de curseurs d'un preset qu'on vient d'appliquer, si l'option est cochée et
@@ -326,12 +435,39 @@ pub fn curseurs_du_preset(preset: &Config) -> Result<(), String> {
 
 /// Applique le preset `nom` (et ses curseurs), puis fait relire la config.
 pub fn appliquer(nom: &str) -> Result<(), String> {
+    appliquer_detaille(nom, false).map_err(|e| e.to_string())
+}
+
+/// Pourquoi un preset n'a pas été appliqué.
+#[derive(Debug)]
+pub enum Echec {
+    /// Aucun preset de ce nom : rien n'a été écrit.
+    Absent(String),
+    /// `config.toml` n'a pas pu être écrit (fichier verrouillé, illisible…) : rien n'a changé.
+    Reglages(String),
+    /// Réglages écrits, mais curseurs du preset non installés.
+    Curseurs(String),
+}
+
+impl std::fmt::Display for Echec {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Echec::Absent(nom) => write!(f, "aucun preset « {nom} »"),
+            Echec::Reglages(e) | Echec::Curseurs(e) => f.write_str(e),
+        }
+    }
+}
+
+/// Comme `appliquer`, en disant ce qui a échoué. `sans_audio` : la section `[audio]` du preset
+/// n'est pas écrite (règle automatique sur le tempo : le preset ne doit pas changer la mesure
+/// qui l'a déclenché).
+pub fn appliquer_detaille(nom: &str, sans_audio: bool) -> Result<(), Echec> {
     let liste = list();
     // même règle que partout : casse et espaces autour du nom ignorés (règles écrites à la main)
-    let p = liste.iter().find(|p| meme_nom(&p.name, nom)).ok_or_else(|| format!("aucun preset « {nom} »"))?;
-    apply(p)?;
+    let p = liste.iter().find(|p| meme_nom(&p.name, nom)).ok_or_else(|| Echec::Absent(nom.trim().to_owned()))?;
+    apply_sauf(p, |s| sans_audio && s == "audio").map_err(Echec::Reglages)?;
     config::request_reload();
-    curseurs_du_preset(&p.cfg)
+    curseurs_du_preset(&p.cfg).map_err(Echec::Curseurs)
 }
 
 /// Réglages et curseurs gardés pour y revenir (« Annuler », fin d'une règle automatique).
@@ -342,6 +478,62 @@ pub struct Avant {
     jeu: String,
     /// Valeurs des curseurs en place, pour revenir aussi à des curseurs sans nom de jeu.
     curseurs: Option<crate::souris::Etat>,
+}
+
+/// `Avant` tel qu'écrit dans un fichier.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AvantEcrit {
+    jeu: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    curseurs: Option<Vec<crate::souris::ValeurSauvee>>,
+    reglages: Config,
+}
+
+/// Réglages d'avant une règle automatique et, si un preset a déjà été appliqué, ceux d'après.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Sauvegarde {
+    avant: AvantEcrit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apres: Option<AvantEcrit>,
+}
+
+impl Avant {
+    fn ecrit(&self) -> AvantEcrit {
+        AvantEcrit { jeu: self.jeu.clone(), curseurs: self.curseurs.as_ref().map(crate::souris::Etat::sauver), reglages: self.cfg.clone() }
+    }
+
+    fn relu(e: AvantEcrit) -> Result<Avant, String> {
+        let curseurs = match e.curseurs {
+            Some(v) => Some(crate::souris::Etat::reprendre(&v).ok_or("curseurs gardés abîmés")?),
+            None => None,
+        };
+        Ok(Avant { cfg: e.reglages.clamped(), jeu: e.jeu, curseurs })
+    }
+}
+
+#[cfg(test)]
+impl Avant {
+    /// Réglages gardés sans curseurs (essais, sans lire `config.toml` ni le registre).
+    pub fn essai(cfg: Config) -> Avant {
+        Avant { cfg, jeu: String::new(), curseurs: None }
+    }
+
+    pub fn reglages(&self) -> Config {
+        self.cfg.clone()
+    }
+}
+
+/// Texte d'un fichier qui garde `avant` (et `apres`) au-delà d'un arrêt d'Essaim.
+pub fn avant_en_texte(avant: &Avant, apres: Option<&Avant>) -> Result<String, String> {
+    let s = Sauvegarde { avant: avant.ecrit(), apres: apres.map(Avant::ecrit) };
+    let corps = toml::to_string(&s).map_err(|e| e.to_string())?;
+    Ok(format!("# Réglages d'avant une règle automatique d'Essaim, remis à sa fin. Écrit par Essaim.\n\n{corps}"))
+}
+
+/// Relit un texte écrit par `avant_en_texte`.
+pub fn avant_de_texte(texte: &str) -> Result<(Avant, Option<Avant>), String> {
+    let s: Sauvegarde = toml::from_str(texte).map_err(|e| e.to_string())?;
+    Ok((Avant::relu(s.avant)?, s.apres.map(Avant::relu).transpose()?))
 }
 
 /// Note les réglages et les curseurs en place ; `None` si `config.toml` est illisible.
@@ -477,6 +669,74 @@ mod tests {
         for n in ["Console", "COM0", "COM10", "LPT", "Nullité", "AUXI"] {
             assert!(check_name(n).is_ok(), "{n} refusé");
         }
+    }
+
+    #[test]
+    fn noms_a_caracteres_invisibles_refuses() {
+        for n in ["Nuit\u{200B}", "\u{FEFF}Nuit", "Nu\u{202E}it", "N\u{2060}uit", "Nuit\u{2066}"] {
+            assert!(check_name(n).is_err(), "{n:?} accepté");
+        }
+        assert!(check_name("Nuit d'été").is_ok());
+    }
+
+    /// Dossier temporaire propre à un essai, vidé à la fin.
+    struct Dossier(PathBuf);
+    impl Dossier {
+        fn neuf(nom: &str) -> Self {
+            let d = std::env::temp_dir().join(format!("essaim-profils-{nom}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            Dossier(d)
+        }
+    }
+    impl Drop for Dossier {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn liste_gardee_puis_relue_quand_le_dossier_change() {
+        let d = Dossier::neuf("cache");
+        let mien = |n: &str| list_in(&d.0).into_iter().filter(|p| !p.builtin).map(|p| p.name).collect::<Vec<_>>() == [n.to_owned()];
+        save_in(&d.0, "Un", &Config::default()).unwrap();
+        assert!(mien("Un"));
+        // fichier ajouté par un autre que `profils` (copie à la main) : vu
+        std::fs::rename(d.0.join("Un.toml"), d.0.join("Deux.toml")).unwrap();
+        assert!(mien("Deux"));
+        // contenu changé à la main : relu
+        let mut cfg = Config::default();
+        cfg.orbite.rayon = 77.0;
+        std::fs::write(d.0.join("Deux.toml"), config::text_with_keys("", &cfg, in_profile).unwrap()).unwrap();
+        assert!(list_in(&d.0).iter().any(|p| p.name == "Deux" && p.cfg.orbite.rayon == 77.0));
+    }
+
+    #[test]
+    fn copie_et_existence_sans_casse() {
+        let d = Dossier::neuf("copie");
+        save_in(&d.0, "Soirée", &Config::default()).unwrap();
+        assert!(existe_in(&d.0, "SOIRÉE") && existe_in(&d.0, " soirée ") && !existe_in(&d.0, "Matin"));
+        assert!(!existe_in(&d.0, "../Soirée"), "nom invalide");
+        // nom donné dans une autre casse : la copie part du vrai nom
+        assert_eq!(dupliquer_in(&d.0, "soirée").unwrap(), "Soirée (copie)");
+        assert_eq!(dupliquer_in(&d.0, "Soirée").unwrap(), "Soirée (copie 2)");
+        assert!(dupliquer_in(&d.0, "Absent").is_err());
+    }
+
+    #[test]
+    fn reglages_d_avant_ecrits_puis_relus() {
+        let mut cfg = Config::default();
+        cfg.orbite.rayon = 42.0;
+        cfg.declencheurs.liste.pop();
+        let avant = Avant { cfg: cfg.clone(), jeu: "Mon jeu".into(), curseurs: None };
+        let mut apres = Avant { cfg: Config::default(), jeu: String::new(), curseurs: None };
+        apres.cfg.couleur.teinte = 120.0;
+        let texte = avant_en_texte(&avant, Some(&apres)).unwrap();
+        let (a, p) = avant_de_texte(&texte).unwrap();
+        assert!(same_strict(&a.cfg, &cfg) && a.jeu == "Mon jeu" && a.curseurs.is_none());
+        assert!(p.is_some_and(|p| same_strict(&p.cfg, &apres.cfg)));
+        let (_, p) = avant_de_texte(&avant_en_texte(&avant, None).unwrap()).unwrap();
+        assert!(p.is_none());
+        assert!(avant_de_texte("pas du toml [").is_err());
     }
 
     #[test]
