@@ -12,6 +12,10 @@
 //! Le kick reçoit le son à sa fréquence d'origine ; aigus, bandes du spectre et montée le
 //! reçoivent ramené à 48 kHz au plus (`Reduction`) : à 96 ou 192 kHz, ils coûteraient deux à
 //! quatre fois plus pour des fréquences que personne n'entend.
+//!
+//! Flux rouvert à la même fréquence après moins de 3 s (erreur, sortie changée, fin du repli des
+//! applis) : l'analyse continue, tempo compris. Chaque capture a sa génération dans `AudioShared` :
+//! celle qu'une nouvelle capture ou l'arrêt a remplacée n'y écrit plus rien.
 
 use audio_commun::capture::{self, Capture, Ecoute, Sink};
 use audio_commun::kick::Analyzer;
@@ -52,6 +56,10 @@ pub struct AudioShared {
     drops: AtomicU32,
     tension: AtomicU32,
     balance: AtomicU32,
+    /// Capture qui a le droit d'écrire ici : changée à chaque nouvelle capture et à l'arrêt. Le
+    /// fil d'une capture lâchée encore en vie (arrêt borné à 300 ms, fil détaché) n'écrit plus
+    /// rien.
+    generation: AtomicU32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -105,9 +113,11 @@ impl AudioShared {
     pub fn set_min_gap(&self, s: f32) {
         self.min_gap.store(s.to_bits(), Ordering::Relaxed);
     }
-    /// Capture arrêtée : niveaux à zéro (sinon basse, hauteur et brillance resteraient figées et
-    /// la musique semblerait jouer). Les compteurs gardent leur valeur : ils ne reculent jamais.
+    /// Capture arrêtée (lâchée) : niveaux à zéro (sinon basse, hauteur et brillance resteraient
+    /// figées et la musique semblerait jouer). Les compteurs gardent leur valeur : ils ne reculent
+    /// jamais. Le fil de la capture lâchée, s'il tourne encore, n'écrit plus rien.
     pub fn reset(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
         for a in [&self.bass, &self.pitch, &self.brillance, &self.bpm, &self.phase, &self.tension, &self.balance] {
             a.store(0f32.to_bits(), Ordering::Relaxed);
         }
@@ -156,6 +166,12 @@ impl AudioShared {
     pub fn repli_applis(&self) -> bool {
         self.repli.load(Ordering::Relaxed)
     }
+    /// Nouvelle capture : elle seule écrira désormais (numéro rendu), plus de repli annoncé.
+    fn nouvelle_capture(&self) -> u32 {
+        let g = self.generation.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        self.repli.store(false, Ordering::Relaxed);
+        g
+    }
 }
 
 fn fini(v: f32) -> f32 {
@@ -170,16 +186,26 @@ fn fini(v: f32) -> f32 {
 pub type AudioThread = Capture;
 
 /// Lance la capture : de la sortie `sortie` (identifiant Windows ; vide = sortie par défaut), ou
-/// des seules applications `applis` (noms d'exécutables) si la liste n'est pas vide.
+/// des seules applications `applis` (noms d'exécutables) si la liste n'est pas vide. Une capture
+/// précédente sur le même `shared` n'y écrit plus rien, même si son fil tourne encore.
 pub fn start(shared: Arc<AudioShared>, sortie: &str, applis: &[String]) -> std::io::Result<AudioThread> {
     capture::start_ecoute("essaim-audio", Ecoute::depuis_reglages(sortie, applis), Kick::new(shared))
 }
 
 /// Sous ce niveau crête (−50 dBFS), un paquet compte comme silencieux pour le tempo.
 const AUDIBLE: f32 = 0.003;
+/// Flux rouvert à la même fréquence après une coupure plus courte que ça (erreur, sortie
+/// changée, fin du repli des applis) : l'analyse continue, la coupure comptée comme du silence.
+/// Au-delà, le tempo serait de toute façon oublié (3 s de silence).
+const REPRISE_MAX: Duration = Duration::from_secs(3);
 
 struct Kick {
     shared: Arc<AudioShared>,
+    /// Génération de la capture de ce `Sink` (`AudioShared::generation`) : plus rien n'est
+    /// écrit quand ce n'est plus la sienne.
+    generation: u32,
+    /// Dernier réveil du fil (`tick`) : durée d'une coupure du flux.
+    vu: Option<Instant>,
     an: Option<Analyzer>,
     aigus: Option<Aigus>,
     tempo: Pulsation,
@@ -204,9 +230,12 @@ struct Kick {
 }
 
 impl Kick {
+    /// `Sink` d'une nouvelle capture : celui d'avant sur ce `shared` n'y écrit plus.
     fn new(shared: Arc<AudioShared>) -> Self {
         Self {
+            generation: shared.nouvelle_capture(),
             shared,
+            vu: None,
             an: None,
             aigus: None,
             tempo: Pulsation::new(),
@@ -220,6 +249,11 @@ impl Kick {
             base: (0, 0),
             propre: Vec::new(),
         }
+    }
+
+    /// Cette capture est-elle toujours celle qui écrit ?
+    fn courante(&self) -> bool {
+        self.shared.generation.load(Ordering::Relaxed) == self.generation
     }
 
     /// Compteurs de l'analyse du kick.
@@ -588,8 +622,26 @@ impl Bandes {
     }
 }
 
+// Chaque méthode commence par `courante` : une capture remplacée ou arrêtée n'écrit plus rien.
 impl Sink for Kick {
     fn open(&mut self, sample_rate: u32) {
+        if !self.courante() {
+            return;
+        }
+        self.shared.perdu.store(false, Ordering::Relaxed);
+        // même fréquence, courte coupure : l'analyse continue (tempo gardé), la coupure passée
+        // comme du silence pour que son horloge suive le temps réel
+        if self.an.is_some() && sample_rate == self.fs {
+            if let Some(coupure) = self.vu.map(|t| t.elapsed()).filter(|&d| d <= REPRISE_MAX) {
+                let n = (coupure.as_secs_f64() * f64::from(sample_rate)) as usize;
+                let paquet = (sample_rate as usize / 100).max(1);
+                for k in (0..n).step_by(paquet) {
+                    self.silence(paquet.min(n - k));
+                }
+                self.vu = Some(Instant::now());
+                return;
+            }
+        }
         // flux rouvert : les compteurs publiés continuent depuis leur valeur actuelle
         self.base = (self.shared.kicks.load(Ordering::Relaxed), self.shared.aigus.load(Ordering::Relaxed));
         // le kick à la fréquence du flux, le reste à 48 kHz au plus
@@ -603,10 +655,13 @@ impl Sink for Kick {
         // analyse musicale refaite à la nouvelle fréquence ; ses compteurs publiés continuent
         self.fs = sample_rate;
         self.musique = None;
-        self.shared.perdu.store(false, Ordering::Relaxed);
+        self.vu = Some(Instant::now());
     }
 
     fn samples(&mut self, mono: &[f32]) {
+        if !self.courante() {
+            return;
+        }
         let mono = assainir(mono, &mut self.propre);
         if let Some(an) = &mut self.an {
             // Réglages lus à chaque paquet : un changement de config agit tout de suite.
@@ -657,6 +712,9 @@ impl Sink for Kick {
     }
 
     fn silence(&mut self, frames: usize) {
+        if !self.courante() {
+            return;
+        }
         if let Some(an) = &mut self.an {
             an.push_silence(frames);
         }
@@ -677,12 +735,18 @@ impl Sink for Kick {
         }
     }
 
-    fn tick(&mut self, _now: Instant) -> Duration {
-        self.publier();
+    fn tick(&mut self, now: Instant) -> Duration {
+        if self.courante() {
+            self.vu = Some(now);
+            self.publier();
+        }
         Duration::from_millis(10)
     }
 
     fn lost(&mut self) {
+        if !self.courante() {
+            return;
+        }
         let sh = &self.shared;
         sh.bass.store(0f32.to_bits(), Ordering::Relaxed);
         sh.brillance.store(0f32.to_bits(), Ordering::Relaxed);
@@ -695,12 +759,17 @@ impl Sink for Kick {
     }
 
     fn stereo(&mut self, gauche: f32, droite: f32) {
+        if !self.courante() {
+            return;
+        }
         self.balance.paquet(gauche, droite, self.duree_paquet);
         self.shared.balance.store(self.balance.valeur.to_bits(), Ordering::Relaxed);
     }
 
     fn repli(&mut self, actif: bool) {
-        self.shared.repli.store(actif, Ordering::Relaxed);
+        if self.courante() {
+            self.shared.repli.store(actif, Ordering::Relaxed);
+        }
     }
 }
 
@@ -1538,6 +1607,68 @@ mod tests {
         k.repli(true);
         shared.reset();
         assert!(!shared.repli_applis());
+        // nouvelle capture : le repli resté levé par la précédente est effacé
+        let mut k = Kick::new(shared.clone());
+        k.repli(true);
+        let _nouvelle = Kick::new(shared.clone());
+        assert!(!shared.repli_applis());
+    }
+
+    #[test]
+    fn une_capture_remplacee_n_ecrit_plus_rien() {
+        let shared = Arc::new(AudioShared::default());
+        let mut ancienne = Kick::new(shared.clone());
+        ancienne.open(FS);
+        ancienne.an.as_mut().unwrap().kicks = 5;
+        ancienne.tick(std::time::Instant::now());
+        assert_eq!(shared.view().kicks, 5);
+        // nouvelle capture (fil de l'ancienne détaché, encore en vie)
+        let mut nouvelle = Kick::new(shared.clone());
+        nouvelle.open(FS);
+        ancienne.an.as_mut().unwrap().kicks = 9;
+        ancienne.tick(std::time::Instant::now());
+        ancienne.samples(&sinus(1000.0, 4800));
+        ancienne.stereo(0.0, 0.5);
+        ancienne.lost();
+        ancienne.repli(true);
+        let v = shared.view();
+        assert_eq!((v.kicks, v.balance, v.brillance), (5, 0.0, 0.0));
+        assert!(!shared.perdu() && !shared.repli_applis());
+        // la nouvelle écrit, et ses compteurs continuent ceux d'avant
+        nouvelle.an.as_mut().unwrap().kicks = 2;
+        nouvelle.tick(std::time::Instant::now());
+        assert_eq!(shared.view().kicks, 7);
+        nouvelle.lost();
+        assert!(shared.perdu());
+        // arrêt : plus rien de la nouvelle non plus
+        shared.reset();
+        nouvelle.lost();
+        nouvelle.repli(true);
+        assert!(!shared.perdu() && !shared.repli_applis());
+    }
+
+    #[test]
+    fn flux_rouvert_a_la_meme_frequence_garde_le_tempo() {
+        let shared = Arc::new(AudioShared::default());
+        let mut k = Kick::new(shared.clone());
+        k.open(FS);
+        let kicks: Vec<f64> = (0..).map(|i| 0.3 + i as f64 * 0.5).take_while(|&t| t < 11.5).collect();
+        let tempo = ecouter(&mut k, &shared, &morceau(12.0, 120.0, &kicks)).bpm.expect("tempo");
+        // coupure brève (erreur), rouvert à la même fréquence : tempo et horloge continuent
+        let t_avant = k.an.as_ref().unwrap().t;
+        k.lost();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        k.open(FS);
+        assert!(!shared.perdu());
+        let t_apres = k.an.as_ref().unwrap().t;
+        assert!(t_apres - t_avant >= 0.19, "coupure comptée comme silence : {t_avant} → {t_apres}");
+        k.samples(&[0.0; 480]);
+        assert_eq!(shared.view().bpm, Some(tempo));
+        // autre fréquence : analyse refaite, tempo à retrouver
+        k.open(44_100);
+        k.samples(&[0.0; 441]);
+        assert_eq!(shared.view().bpm, None);
+        assert_eq!(k.an.as_ref().unwrap().kicks, 0);
     }
 
     fn bruit(graine: &mut u64) -> f32 {
