@@ -512,25 +512,36 @@ impl Panne {
     }
 }
 
-/// Cadence de la fenêtre quand `[rendu] cadence` n'est pas fixée (celle d'une capture de stream),
-/// et plancher de l'intervalle : jamais moins d'images que cela.
+/// Cadence de la fenêtre quand `[rendu] cadence` n'est pas fixée (celle d'une capture de stream).
 const CADENCE_STREAM: u32 = 60;
 
-/// Intervalle de synchronisation de `Present` sur un écran à `frequence` Hz (0 = inconnue) : une
-/// image tous les `n` rafraîchissements, `n = max(1, fréquence / max(cadence, 60))` arrondi vers
-/// le bas (`cadence` : `[rendu] cadence`, 0 = non fixée, compte pour 60). La fenêtre reste ainsi
-/// au moins à 60 images/s et au moins à la cadence choisie (144 Hz : 72 i/s, 90 Hz : 90 i/s,
-/// 240 Hz : 60 i/s) sans en calculer autant que l'écran en affiche ; une cadence choisie plus basse
-/// est tenue par `periode_min`. DXGI accepte 1 à 4.
-fn intervalle_synchro(frequence: u32, cadence: u32) -> u32 {
-    // cadence non fixée (0) : 60 aussi
-    (frequence / cadence.max(CADENCE_STREAM)).clamp(1, 4)
+/// Cadence visée par la fenêtre : `[rendu] cadence`, ou `CADENCE_STREAM` si elle n'est pas fixée (0).
+fn cadence_visee(cadence: u32) -> u32 {
+    if cadence == 0 { CADENCE_STREAM } else { cadence }
 }
 
-/// Écart minimal entre deux images pour `[rendu] cadence` (0 : aucun), quand l'intervalle de
-/// synchronisation, plafonné à 4, ne suffit pas à la tenir.
-fn periode_min(cadence: u32) -> Duration {
-    if cadence == 0 { Duration::ZERO } else { Duration::from_secs_f64(1.0 / f64::from(cadence)) }
+/// Intervalle de synchronisation de `Present` sur un écran à `frequence` Hz (0 = inconnue) : une
+/// image tous les `n` rafraîchissements, `n` le plus grand qui garde `fréquence / n` au moins à la
+/// cadence visée (`cadence_visee`), soit `fréquence / n` le plus proche d'elle sans passer dessous
+/// (144 Hz : 72 i/s pour 60, 90 Hz : 90 i/s, 240 Hz : 60 i/s ; 60 Hz pour 30 : 30 i/s). DXGI accepte
+/// 1 à 4 : au-delà, `periode_min` tient la cadence.
+fn intervalle_synchro(frequence: u32, cadence: u32) -> u32 {
+    (frequence / cadence_visee(cadence)).clamp(1, 4)
+}
+
+/// Écart minimal entre deux images pour `[rendu] cadence` : aucun si elle n'est pas fixée, ni
+/// quand l'intervalle de synchronisation la tient déjà à 10 % près (attendre en plus ferait sauter
+/// un rafraîchissement sur deux : images inégales) ; sinon une période de la cadence.
+fn periode_min(frequence: u32, cadence: u32) -> Duration {
+    if cadence == 0 {
+        return Duration::ZERO;
+    }
+    let obtenue = f64::from(frequence) / f64::from(intervalle_synchro(frequence, cadence));
+    if frequence > 0 && obtenue <= 1.1 * f64::from(cadence) {
+        Duration::ZERO
+    } else {
+        Duration::from_secs_f64(1.0 / f64::from(cadence))
+    }
 }
 
 fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
@@ -547,8 +558,12 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
     let mut panne = Panne::default();
     let mut cachee = false;
     // une image tous les `intervalle` rafraîchissements de l'écran de la fenêtre (relu chaque
-    // seconde : la fenêtre peut changer d'écran)
-    let mut intervalle = intervalle_synchro(crate::win::frequence_fenetre(hwnd), conf.cfg.rendu.cadence);
+    // seconde : la fenêtre peut changer d'écran), et attente en plus pour une cadence fixée
+    let rythme = |cadence: u32| {
+        let f = crate::win::frequence_fenetre(hwnd);
+        (intervalle_synchro(f, cadence), periode_min(f, cadence))
+    };
+    let (mut intervalle, mut periode) = rythme(conf.cfg.rendu.cadence);
     loop {
         unsafe {
             let mut msg = MSG::default();
@@ -570,10 +585,9 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
                 calibree = portee(&conf.cfg);
             }
             doux = crate::win::sans_flashs(conf.cfg.rendu.sans_flashs);
-            intervalle = intervalle_synchro(crate::win::frequence_fenetre(hwnd), conf.cfg.rendu.cadence);
+            (intervalle, periode) = rythme(conf.cfg.rendu.cadence);
         }
         let cfg = &conf.cfg;
-        let periode = periode_min(cfg.rendu.cadence);
         let mut zone = RECT::default();
         let _ = unsafe { GetClientRect(hwnd, &mut zone) };
         let (l, h) = (zone.right - zone.left, zone.bottom - zone.top);
@@ -813,18 +827,26 @@ mod tests {
         assert_eq!(intervalle_synchro(144, 100), 1);
         assert_eq!(intervalle_synchro(60, 144), 1);
         assert_eq!(intervalle_synchro(240, 100), 2);
-        // cadence fixée basse : 60 i/s au moins par l'intervalle, `periode_min` tient le reste
-        assert_eq!(intervalle_synchro(144, 30), 2);
-        // aucune combinaison ne descend sous max(cadence, 60) quand l'écran va au moins aussi vite
+        // cadence fixée basse : l'intervalle s'en approche par au-dessus (144 Hz pour 30 : 36 i/s,
+        // 4 au plus), `periode_min` tient le reste
+        assert_eq!(intervalle_synchro(144, 30), 4);
+        assert_eq!(intervalle_synchro(60, 30), 2);
+        // aucune combinaison ne descend sous la cadence visée quand l'écran va au moins aussi vite
         for f in [60u32, 75, 90, 100, 120, 144, 165, 175, 240, 360] {
             for c in [0u32, 30, 60, 75, 100, 120, 144, 240] {
-                let voulu = c.max(60);
+                let voulu = cadence_visee(c);
                 let n = intervalle_synchro(f, c);
                 assert!(f < voulu || f / n >= voulu, "{f} Hz, cadence {c} : {} i/s", f / n);
             }
         }
-        assert_eq!(periode_min(0), Duration::ZERO);
-        assert_eq!(periode_min(50), Duration::from_millis(20));
+        // attente en plus : jamais sans cadence fixée, ni quand l'intervalle la tient à 10 % près
+        // (60 Hz pour 30, 165 Hz pour 80 : 82,5 i/s) ; sinon une période de la cadence
+        assert_eq!(periode_min(144, 0), Duration::ZERO);
+        assert_eq!(periode_min(60, 30), Duration::ZERO);
+        assert_eq!(periode_min(165, 80), Duration::ZERO);
+        assert_eq!(periode_min(144, 50), Duration::from_millis(20));
+        assert_eq!(periode_min(0, 50), Duration::from_millis(20));
+        assert_eq!(periode_min(144, 100), Duration::from_millis(10));
     }
 
     #[test]

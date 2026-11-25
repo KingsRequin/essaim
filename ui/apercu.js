@@ -8,6 +8,13 @@
 
 const TAU = Math.PI * 2;
 const SAT_R_MAX = 1.9;
+// Dépassement des satellites en mode ressorts, point le plus loin d'un trajet de rayon 1, marge,
+// retard du centre au plus et étendue de la fenêtre (px à 100 %) : comme SAT_DEPASSEMENT,
+// ETENDUE_FORME, MARGIN, CENTER_LAG_MAX et MAX_EXTENT de render.rs.
+const SAT_DEPASSEMENT = 1.4, ETENDUE_FORME = 1.3, MARGE = 12, RETARD_CENTRE_MAX = 30, ETENDUE_MAX = 2400;
+// Points de toutes les traînées au plus, tours de trajet qu'une traînée couvre au plus : comme
+// POINTS_TRAINEES et TOURS_TRAINEE.
+const POINTS_TRAINEES = 60000, TOURS_TRAINEE = 5;
 const SAT_TRAINEE = 0.25;
 const PAS_TRAINEE = 1 / 90;
 // Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points),
@@ -42,7 +49,7 @@ const ROTATION_MAX = 180, VITESSE_MAX = 60;
 const borneRotation = (tr) => (Number.isFinite(tr) ? Math.min(ROTATION_MAX, Math.max(-ROTATION_MAX, tr)) : 0);
 // Ressorts et rubans : comme REBOND, POUSSEE, FREIN, TREMBLE, SAT_RESSORT, SAT_ENTREE_SORTIE,
 // SAT_FONTE, SAT_TRAIL_RESSORTS, ETIREMENT, ANNEAU_RESSORTS, VRILLE et RUBAN_MORCEAU de render.rs.
-const REBOND = 6.67, POUSSEE = [5, 4], FREIN = [0.8, 9], TREMBLE = [0.053, 46];
+const REBOND = 6.67, REBOND_MAX = 3 * REBOND, POUSSEE = [5, 4], FREIN = [0.8, 9], TREMBLE = [0.053, 46];
 const SAT_RESSORT = [10, 16, 0.3], SAT_ENTREE_SORTIE = [0.3, 0.35], SAT_FONTE = 0.6, SAT_TRAIL_RESSORTS = 0.68;
 const ETIREMENT = [0.02, 8.7], ANNEAU_RESSORTS = [5, 4.5], VRILLE = [0.58, 2.4, 1.4], RUBAN_MORCEAU = 2;
 // Petites figures (arcs, quatre temps, anneau) : comme les constantes de src/figures.rs.
@@ -80,8 +87,11 @@ const geometrique = (i) => i !== F_TRAIT && i !== F_PENDULE;
 // Part de la vitesse des modulations prise par la rotation d'une figure, décalage d'une figure par
 // « rayon » de décalage (px à 100 %) : comme FIG_VITESSE et FIG_DECALAGE.
 const FIG_VITESSE = 0.1, FIG_DECALAGE = 30;
-// Échelle d'une figure, modulations comprises, jamais sous 0,5 (comme figures::GEO_MIN).
-const GEO_MIN = 0.5;
+// Échelle d'une figure, modulations comprises, de 0,5 à 2,5 (comme figures::GEO_MIN, GEO_MAX).
+const GEO_MIN = 0.5, GEO_MAX = 2.5;
+// Fissures : rayon le plus long en tailles et portée la plus longue (px à 100 %), comme
+// render::FISSURE_RAYON et FISSURE_PORTEE_MAX.
+const FISSURE_RAYON_MAX = 44, FISSURE_PORTEE_MAX = 400;
 // Allure d'une figure (comme config::Allure) : défaut et bornes de chaque réglage.
 const ALLURE = {
   echelle: [1, 0.5, 2], opacite: [1, 0.1, 1], teinte: [0, -180, 180], rotation: [0, -30, 30], decalage_x: [0, -80, 80], decalage_y: [0, -80, 80],
@@ -566,14 +576,44 @@ const entre = (a, b) => a + Math.random() * (b - a);
 // nouveau point fixe n'est ajouté que tous les PAS_TRAINEE ou tous les `ecart` pixels, mesurés
 // depuis l'avant-dernier.
 // Au-delà de VIE_FINE, pas et écart sont multipliés par vie / VIE_FINE (une traînée de 12 s ne
-// compte pas plus de points qu'une de 3 s) ; TRAINEE_POINTS_MAX borne le reste.
+// compte pas plus de points qu'une de 3 s).
+// Propre à l'aperçu : `max` points au plus (Apercu.plafondTrainee, selon la taille du canevas et
+// le nombre de traînées). Au-delà, la traînée est éclaircie (un point sur deux, la tête gardée) et
+// ses pas suivants doublés (`tr.espace`), pour une densité égale sur toute sa longueur ; ils
+// redeviennent plus fins quand elle n'a plus qu'un quart de son plafond.
 const VIE_FINE = 3, TRAINEE_POINTS_MAX = 4000;
-function pousser(tr, t, x, y, vie, ecart) {
-  const n = tr.length, p = n >= 2 ? tr[n - 2] : null, k = Math.max(1, vie / VIE_FINE), pas = PAS_TRAINEE * k, gap = ecart * k;
+// Plafonds de l'aperçu : points par traînée et pour toutes, par pixel de largeur du canevas ; une
+// traînée en garde toujours POINTS_TRAINEE_MIN.
+const POINTS_PAR_PX = [0.6, 16], POINTS_TRAINEE_MIN = 8;
+function pousser(tr, t, x, y, vie, ecart, max = TRAINEE_POINTS_MAX) {
+  const espace = tr.espace || 1;
+  const n = tr.length, p = n >= 2 ? tr[n - 2] : null, k = Math.max(1, vie / VIE_FINE) * espace, pas = PAS_TRAINEE * k, gap = ecart * k;
   if (p && t - p[0] < pas && (p[1] - x) ** 2 + (p[2] - y) ** 2 < gap * gap) tr[n - 1] = [t, x, y];
   else tr.push([t, x, y]);
-  while (tr.length && t - tr[0][0] > vie) tr.shift();
-  if (tr.length > TRAINEE_POINTS_MAX) tr.splice(0, tr.length - TRAINEE_POINTS_MAX);
+  let debut = 0;
+  while (debut < tr.length && t - tr[debut][0] > vie) debut++;
+  if (debut) tr.splice(0, debut);
+  if (tr.length > max) {
+    let j = 0;
+    for (let i = (tr.length - 1) % 2; i < tr.length; i += 2) tr[j++] = tr[i];
+    tr.length = j;
+    tr.espace = espace * 2;
+  } else if (espace > 1 && tr.length < max / 4) {
+    tr.espace = espace / 2;
+  }
+}
+
+// Vie utile d'une traînée de vie `vie` (s) qui tourne à `w` radians/s (lissée) : au plus
+// TOURS_TRAINEE tours de son trajet (comme render::vie_utile).
+const vieUtile = (vie, w) => (Number.isFinite(w) && w > 1e-3 ? Math.min(vie, (TOURS_TRAINEE * TAU) / w) : vie);
+
+// Facteur du rayon et décalage (en rayons) d'un groupe, ramenés ensemble pour que son point le
+// plus loin du centre reste à moins de `dispo` (comme render::borne_etendue).
+function borneEtendue(facteur, decalage, rayon, portee, dispo) {
+  const total = Math.abs(decalage) * rayon + ETENDUE_FORME * portee * rayon * facteur;
+  if (!(Number.isFinite(total) && total > dispo && total > 0)) return [facteur, decalage];
+  const k = dispo / total;
+  return [facteur * k, decalage * k];
 }
 
 // Pas intermédiaires pour un déplacement d'angle `da` sur un rayon de `r` px (comme
@@ -636,6 +676,14 @@ class Apercu {
     this.hauteur = 50;
     this.env = 0;
     this.trainees = [];
+    // plafonds de points des traînées (fixés par dimensionner)
+    this.pointsTrainee = TRAINEE_POINTS_MAX;
+    this.pointsTotal = POINTS_TRAINEES;
+    // vitesse angulaire des comètes et des satellites, lissée (Swarm::w_lisse), vie utile des
+    // traînées des comètes par anneau (Swarm::vies), ce qui fait le trajet (Swarm::cle_trajet)
+    this.wLisse = [0, 0];
+    this.vies = [];
+    this.cleTrajet = null;
     this.sats = [];
     this.fixes = [];
     this.teinteImposee = null;
@@ -678,8 +726,21 @@ class Apercu {
     const rayonMax = fond(1).groupes.concat(fond(-1).groupes).reduce((m, e) => Math.max(m, e.rayon), 1);
     // plusieurs contours : un anneau chacun, tous au rayon 1
     const anneaux = contoursDe(o, o.forme).length > 1 ? 1 : o.anneaux;
-    const portee = o.rayon * Math.max(SAT_R_MAX, anneau(anneaux - 1)[0]) * 1.3 * (1 + (rayonMax - 1) * 0.7) + 6;
+    // l'essaim ne va jamais au-delà de la moitié de l'étendue (Apercu.pas, borneEtendue)
+    const portee = Math.min(ETENDUE_MAX / 2, o.rayon * Math.max(SAT_R_MAX, anneau(anneaux - 1)[0]) * 1.3 * (1 + (rayonMax - 1) * 0.7) + 6);
     this.echelle = Math.min(2.2 * dpr, (w * 0.46) / portee);
+    // points des traînées au plus, selon la taille du canevas (une vignette n'a pas besoin des
+    // centaines de points d'une traînée à l'écran) : par traînée et pour toutes ensemble
+    this.pointsTrainee = Math.min(TRAINEE_POINTS_MAX, Math.max(POINTS_TRAINEE_MIN, Math.round(w * POINTS_PAR_PX[0])));
+    this.pointsTotal = Math.min(POINTS_TRAINEES, Math.round(w * POINTS_PAR_PX[1]));
+  }
+
+  // Points au plus d'une traînée à cette image : son plafond, et la part de chacune dans le
+  // plafond de toutes (render.rs : POINTS_TRAINEES partagés également), jamais sous
+  // POINTS_TRAINEE_MIN.
+  plafondTrainee() {
+    const n = this.trainees.length + this.sats.length + this.fixes.length;
+    return Math.max(POINTS_TRAINEE_MIN, Math.min(this.pointsTrainee, Math.floor(this.pointsTotal / Math.max(1, n))));
   }
 
   // Souris sur le canevas (coordonnées de la fenêtre), ou `survoler(null)` quand elle en sort.
@@ -816,7 +877,7 @@ class Apercu {
       }
       f.poses[i] = {
         angle: geo ? f.angles[i] : 0,
-        geo: geo ? Math.max(GEO_MIN, a.echelle * m.rayon) : 1,
+        geo: geo ? Math.min(GEO_MAX, Math.max(GEO_MIN, a.echelle * m.rayon)) : 1,
         traits: m.taille,
         decalage: geo ? [(a.decalage_x + m.decalage * FIG_DECALAGE) * S, a.decalage_y * S] : [0, 0],
         alpha: a.opacite * m.opacite * m.luminosite,
@@ -1500,12 +1561,21 @@ class Apercu {
     if (son.hauteur > 0) this.hauteur += (son.hauteur - this.hauteur) * Math.min(dt * 25, 1);
     const grave = Math.max(0, Math.min(1, (80 - this.hauteur) / 50));
     const presence = Math.max(0, Math.min(1, son.basse * 2.5));
+    const liste = (c.modulations || {}).liste || [];
+    // trajet changé (preset, forme, rayon de base, modulation ajoutée, retirée ou déplacée) : les
+    // traînées et les valeurs lissées repartent de zéro (comme render::CleTrajet)
+    const formeSats = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
+    const cle = JSON.stringify([o.forme, formeSats, o.rayon, liste.map((m) => [m.source, m.cible, m.sur || "tout"])]);
+    if (cle !== this.cleTrajet) {
+      for (const tr of this.trainees.concat(this.sats.map((q) => q.trainee), this.fixes.map((q) => q.trainee))) { tr.length = 0; tr.espace = 1; }
+      this.valeurs = [];
+      this.cleTrajet = cle;
+    }
     // modulations : valeur visée de chacune (source, seuil, à l'envers), lissée à son rythme
     this.avancerSources(dt, [coups.kicks, coups.caisses, coups.aigus, coups.drops, coups.contretemps ? 1 : 0], son.tension || 0);
     this.sonVu = son;
     this.grave = grave;
     this.presence = presence;
-    const liste = (c.modulations || {}).liste || [];
     this.valeurs.length = liste.length;
     liste.forEach((m, i) => {
       const vise = visee(m, this.valeurSource(m.source));
@@ -1536,22 +1606,32 @@ class Apercu {
       this.cibles[g] = cible;
       return Math.max(0.05, cible + this.rebond[g][0]);
     });
+    // plusieurs contours (une image, une icône, un texte) : un anneau par contour, à sa place
+    const contoursCometes = contoursDe(o, o.forme), nContours = Math.max(1, contoursCometes.length);
+    const nAnneaux = nContours > 1 ? nContours : Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
+    // étendue bornée (comme Swarm::update) : le point le plus loin de chaque groupe, décalage et
+    // retard du centre compris, reste à moins de la moitié de l'étendue ; à l'échelle 100 %,
+    // l'aperçu n'ayant pas celle de l'écran
+    const rayon = o.rayon * S;
+    const lim = RETARD_CENTRE_MAX * (1 + 5 * Math.min(1, Math.max(0, finiOu(+o.inertie, 0))));
+    const dispo = Math.max(0, ETENDUE_MAX / 2 - MARGE - lim) * S;
+    const portees = [nContours > 1 ? 1 : anneau(nAnneaux - 1)[0], SAT_R_MAX * ((c.ressorts || {}).actif ? SAT_DEPASSEMENT : 1)];
+    portees.forEach((portee, g) => {
+      [this.facteurs[g], this.mods[g].decalage] = borneEtendue(this.facteurs[g], this.mods[g].decalage, rayon, portee, dispo);
+    });
     // vrille des rubans : un cran de plus à chaque caisse claire, rejoint en douceur
     if (coups.caisses > 0 && ru.actif) this.vrille[0] += VRILLE[2];
     this.vrille[1] += (this.vrille[0] - this.vrille[1]) * (1 - Math.exp(-dt * 12));
     if (this.vrille[1] > TAU) this.vrille = [this.vrille[0] - TAU, this.vrille[1] - TAU];
-    // comètes : `nombre` par anneau, réparties sur le trajet ; plusieurs contours (une image, une
-    // icône, un texte) : un anneau par contour, à sa place
-    const contoursCometes = contoursDe(o, o.forme), nContours = Math.max(1, contoursCometes.length);
-    const nAnneaux = nContours > 1 ? nContours : Math.max(1, o.anneaux), nombre = Math.max(1, o.nombre);
+    // comètes : `nombre` par anneau, réparties sur le trajet
     while (this.angles.length < nAnneaux) this.angles.push(0);
     this.angles.length = nAnneaux;
-    while (this.trainees.length < nAnneaux * nombre) this.trainees.push([]);
-    this.trainees.length = nAnneaux * nombre;
+    // anneaux ou comètes par anneau changés : chaque traînée appartiendrait à une autre comète ;
+    // elles repartent de zéro (comme Swarm::update)
+    if (this.trainees.length !== nAnneaux * nombre) this.trainees = Array.from({ length: nAnneaux * nombre }, () => []);
     const vie = Math.max(0.01, o.trainee) * this.mods[0].trainee;
     // une pose par groupe (render::Pose) : rotation du trajet, rayon et décalage au début et à la
     // fin de l'image ; les points intermédiaires suivent la vraie forme, coins compris
-    const rayon = o.rayon * S;
     // ce qui tourne avec le trajet (comme Groupe::inclut ; un autre groupe vaut « tout », comme
     // Config::clamped)
     const sur = ["tout", "cometes", "satellites"].includes(o.rotation_sur) ? o.rotation_sur : "tout";
@@ -1572,23 +1652,6 @@ class Apercu {
       const rr = (q.rayon0 + (q.rayon - q.rayon0) * f) * rel;
       return [cx + q.dx0 + (q.dx - q.dx0) * f + (x * cos - y * sin) * rr, cy + (x * sin + y * cos) * rr];
     };
-    const wCometes = this.dir * this.vitesse(0), wSats = this.dir * this.vitesse(1);
-    // les écarts de render.rs sont en pixels d'écran : ici, à l'échelle de l'aperçu
-    const finCometes = [FINESSE_COMETES[0], FINESSE_COMETES[1] * S], finSats = [FINESSE_SATELLITES[0], FINESSE_SATELLITES[1] * S];
-    for (let k = 0; k < nAnneaux; k++) {
-      const [rk, wk] = nContours > 1 ? [1, 1] : anneau(k);
-      const contour = k % nContours;
-      const a0 = this.angles[k], da = wCometes * wk * dt;
-      this.angles[k] = reste(a0 + da, TAU);
-      const n = sousPas(da, poses[0].rayon * rk * longueurParRadian(contoursCometes, contour), finCometes);
-      for (let i = 0; i < nombre; i++) {
-        const decale = (i * TAU) / nombre;
-        for (let j = 1; j <= n; j++) {
-          const f = j / n, [x, y] = point(poses[0], o.forme, contour, a0 + da * f + decale, rk, f);
-          pousser(this.trainees[k * nombre + i], t - dt * (1 - f), x, y, vie, finCometes[1]);
-        }
-      }
-    }
     const duree = Math.max(0.1, e.duree);
     this.sats = this.sats.filter((s) => t - s.ne < duree);
     // satellites permanents : répartis une fois pour toutes (nombre d'or), toujours les mêmes
@@ -1599,8 +1662,35 @@ class Apercu {
         return { a: j * 2.399963, r, mul: 0.6 + 0.8 * (1 - u), ne: Infinity, trainee: [], couleur: j, rr: r, rv: 0, w: SAT_RESSORT[0] };
       });
     }
+    // part de chaque traînée dans le budget de points commun
+    const plafond = this.plafondTrainee();
+    // vitesse sur le trajet ; lissée, elle borne la vie utile des traînées (TOURS_TRAINEE tours de trajet)
+    const wCometes = this.dir * this.vitesse(0), wSats = this.dir * this.vitesse(1);
+    this.wLisse = this.wLisse.map((w, g) => {
+      const v = Math.abs(g === 0 ? wCometes : wSats), lisse = w + (v - w) * (1 - Math.exp(-dt * 2));
+      return Number.isFinite(lisse) ? lisse : v;
+    });
+    this.vies.length = nAnneaux;
+    // les écarts de render.rs sont en pixels d'écran : ici, à l'échelle de l'aperçu
+    const finCometes = [FINESSE_COMETES[0], FINESSE_COMETES[1] * S], finSats = [FINESSE_SATELLITES[0], FINESSE_SATELLITES[1] * S];
+    for (let k = 0; k < nAnneaux; k++) {
+      const [rk, wk] = nContours > 1 ? [1, 1] : anneau(k);
+      const contour = k % nContours;
+      const a0 = this.angles[k], da = wCometes * wk * dt;
+      this.angles[k] = reste(a0 + da, TAU);
+      const vieK = vieUtile(vie, this.wLisse[0] * wk);
+      this.vies[k] = vieK;
+      const n = sousPas(da, poses[0].rayon * rk * longueurParRadian(contoursCometes, contour), finCometes);
+      for (let i = 0; i < nombre; i++) {
+        const decale = (i * TAU) / nombre;
+        for (let j = 1; j <= n; j++) {
+          const f = j / n, [x, y] = point(poses[0], o.forme, contour, a0 + da * f + decale, rk, f);
+          pousser(this.trainees[k * nombre + i], t - dt * (1 - f), x, y, vieK, finCometes[1], plafond);
+        }
+      }
+    }
     // satellites : sur le trajet des comètes, ou le leur, à des distances variées
-    const forme = !e.forme || e.forme === "cometes" ? o.forme : e.forme;
+    const forme = formeSats;
     const vieSats = SAT_TRAINEE * this.mods[1].trainee * (re.actif ? SAT_TRAIL_RESSORTS : 1);
     // plusieurs contours : chaque satellite suit l'un d'eux, de près
     const listeSats = contoursDe(o, forme), contoursSats = Math.max(1, listeSats.length);
@@ -1608,7 +1698,8 @@ class Apercu {
       // mode ressorts : le satellite est au bout de son propre ressort, un peu en retard
       if (re.actif) {
         const [ecart, v] = ressort(finiOu(s.rr, s.r) - s.r, s.rv || 0, s.w || SAT_RESSORT[0], SAT_RESSORT[2], dt);
-        s.rr = Math.max(0, s.r + ecart);
+        // dépassement borné (~37 % au plus) : l'étendue reste celle prévue
+        s.rr = Math.min(SAT_R_MAX * SAT_DEPASSEMENT, Math.max(0, s.r + ecart));
         s.rv = v;
       } else {
         s.rr = s.r;
@@ -1617,10 +1708,11 @@ class Apercu {
       const contour = contoursSats > 1 ? (s.couleur || 0) % contoursSats : 0, rel = contoursSats > 1 ? 1 + (s.r - 1.3) * 0.25 : s.rr;
       const a0 = s.a, da = wSats * s.mul * dt;
       s.a = reste(a0 + da, TAU);
+      const vieS = vieUtile(vieSats, this.wLisse[1] * s.mul);
       const n = sousPas(da, poses[1].rayon * rel * longueurParRadian(listeSats, contour), finSats);
       for (let j = 1; j <= n; j++) {
         const f = j / n, [x, y] = point(poses[1], forme, contour, a0 + da * f, rel, f);
-        pousser(s.trainee, t - dt * (1 - f), x, y, vieSats, finSats[1]);
+        pousser(s.trainee, t - dt * (1 - f), x, y, vieS, finSats[1], plafond);
       }
     }
   }
@@ -1708,7 +1800,8 @@ class Apercu {
       case "satellites": this.ajouterSatellites(Math.floor(entre(lo, hi + 0.999)), t, maximum); break;
       // une seule inversion par image (comme Swarm::agir) : deux s'annuleraient
       case "inversion": if (this.inverseA !== t) { this.dir = -this.dir; this.inverseA = t; } break;
-      case "rebond": for (const r of this.rebond) r[1] += REBOND * force; break;
+      // élan borné à celui d'un rebond de force 3 (comme render::Action::Rebond)
+      case "rebond": for (const r of this.rebond) r[1] = Math.min(REBOND_MAX, Math.max(-REBOND_MAX, r[1] + REBOND * force)); break;
       case "poussee": this.pousse += POUSSEE[0] * force; break;
       case "frein": this.frein = Math.max(this.frein, Math.min(1, force)); break;
       case "onde": this.particules.push({ x, y, vx: 0, vy: 0, ne: t, vie: 0.55, taille: 46 * taille * S, genre: "onde" }); break;
@@ -1720,7 +1813,10 @@ class Apercu {
         break;
       case "fissure": {
         // une fissure simple : quelques branches brisées depuis le point (render::Crack est plus fin)
-        const branches = [], long = 7 * Math.max(0.2, (c.fissures || {}).taille || 1.4) * force * S;
+        // taille × force bornée comme render::taille_fissure : ses rayons ne vont pas au-delà de
+        // FISSURE_PORTEE_MAX px
+        const tailleFissure = Math.min(FISSURE_PORTEE_MAX / FISSURE_RAYON_MAX, Math.max(0.2, (c.fissures || {}).taille || 1.4) * force);
+        const branches = [], long = 7 * tailleFissure * S;
         for (let b = 0; b < 5; b++) {
           let a = entre(0, TAU), px = x, py = y;
           const pts = [[px, py]];
@@ -1911,15 +2007,18 @@ class Apercu {
         }
       }
       const al = Math.min(1, k * 1.5) * ms.opacite;
-      trainee(s.trainee, vieSats, 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
+      trainee(s.trainee, vieUtile(vieSats, this.wLisse[1] * s.mul), 2.6 * k * S * ms.taille, al, false, s.couleur || 0, ms.teinte);
       const p = s.trainee[s.trainee.length - 1];
       if (p) tetes.push({ x: p[1], y: p[2], s: (0.6 + 1.6 * k) * S * ms.taille, al, lueur: ms.luminosite, devant: p[2] > cy, rgb: teinte(1, s.couleur || 0, ms.teinte), queue: queue(s.trainee) });
     }
     // les comètes (devant : sous le centre de l'orbite, comme vues de biais), chacune dans une
     // teinte de la palette. En rubans : une traînée large, vrillée, sans tête
     if (c.orbite.cometes) {
-      const vie = Math.max(0.01, c.orbite.trainee) * mc.trainee, phase = reste(-VRILLE[1] * t, TAU) + this.vrille[1];
+      const vieReglee = Math.max(0.01, c.orbite.trainee) * mc.trainee, phase = reste(-VRILLE[1] * t, TAU) + this.vrille[1];
+      const nombre = Math.max(1, c.orbite.nombre);
       this.trainees.forEach((tr, i) => {
+        // vie utile de son anneau (TOURS_TRAINEE tours de trajet au plus), comme dans `pas`
+        const vie = finiOu(this.vies[Math.floor(i / nombre)], vieReglee);
         if (rubans.actif) {
           const large = Math.min(14, Math.max(1, finiOu(+rubans.largeur, 4))) * S * mc.taille;
           ruban(tr, vie, large, 0.6 * S, mc.opacite, i, mc.teinte, [VRILLE[0] * Math.min(1, Math.max(0, finiOu(+rubans.vrille, 1))), phase + 2 * i]);

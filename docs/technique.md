@@ -21,19 +21,32 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
     réduite d'autant) : un trait fin reste continu et un petit point ne clignote pas en bougeant
     (essai relu : `cargo test --release traits_fins_relus -- --ignored`) ; 20 000 pastilles au
     plus par trait ou anneau (un trait démesuré garde sa longueur, pastilles espacées), 500 000
-    par image en garde-fou de mémoire (un halo sur une fenêtre agrandie en 4K en pose ~33 000 :
-    l'essaim, dessiné après, n'est jamais coupé) ; après une pointe, la place des listes de
+    par image en garde-fou de mémoire, dont 300 000 au plus pour les traînées de l'essaim
+    (`Canvas::trainee`, comptées à part) : les têtes, particules, éclats, figures, l'étiquette et
+    l'habillage (un halo sur une fenêtre agrandie en 4K en pose ~33 000) ont toujours au moins
+    200 000 places et ne sont jamais coupés ; après une pointe, la place des listes de
     pastilles est rendue dès qu'elle dépasse 4 fois l'usage de l'image d'avant (et 100 000
     éléments) ; points non finis ignorés ; un anneau plus large
     que son diamètre devient un disque jusqu'à r + largeur / 2, comme le trait de tiny-skia ;
   - **processeur** (secours, `layer.rs`) : tiny-skia + `UpdateLayeredWindowIndirect` avec zone
     modifiée ; le dessin est découpé à la zone (tracé dans une image de sa taille, puis recopié ;
     directement dans le calque, effacé, quand la zone le couvre entier : projecteur). Bascule automatique si la carte graphique échoue ; `[rendu] carte_graphique`.
-  Les traînées sont en coordonnées écran et s'étirent derrière la souris ; cadence calée sur le
+  Les traînées sont en coordonnées écran et s'étirent derrière la souris. Leur durée utile est
+  de cinq tours de leur trajet au plus (`render::vie_utile`, vitesse angulaire lissée ~0,5 s :
+  au-delà, elle repasse sur elle-même sans rien montrer de plus ; un tour mordait sur des presets
+  fournis, qui en font près de 4 basse à fond) et toutes ensemble comptent 60 000 points au plus, partagés
+  également (`POINTS_TRAINEES`, 4 000 au plus par traînée ; les plus vieux points partent).
+  Le trajet de chaque groupe (anneau extérieur, satellite le plus écarté, avec son dépassement en
+  mode ressorts, décalage et retard du centre compris) est ramené à moins de 1 200 px du pointeur
+  (`render::borne_etendue`, rayon et décalage réduits ensemble) : au-delà, les points sont
+  retirés (traînée laissée derrière par un saut du pointeur). Un trajet changé (forme, rayon de
+  base, modulations ajoutées, retirées ou déplacées : un preset appliqué) vide les traînées et
+  les valeurs lissées des modulations. Cadence calée sur le
   compositeur (`DwmFlush`), plafonnable par `[rendu] cadence`. Un `DwmFlush` rendu en moins de
   2 ms, moins d'une demi-période après le précédent, n'a rien composé (écran éteint, pas de
-  rafraîchissement) : la boucle attend alors elle-même la fréquence de l'écran du pointeur (60 si
-  inconnue) au lieu de tourner à vide. Avec une cadence plafonnée, la
+  rafraîchissement) : la boucle attend alors elle-même la période de l'écran le plus rapide (le
+  compositeur suit celui-là quand les écrans ont des fréquences différentes ; 60 Hz si inconnue)
+  au lieu de tourner à vide. Avec une cadence plafonnée, la
   boucle attend l'image suivante sur une minuterie haute résolution
   (`CreateWaitableTimerExW` + `MsgWaitForMultipleObjects`, réveil au moins toutes les 30 ms pour
   lire les clics) au lieu de se réveiller à chaque rafraîchissement. Au-delà de 0,05 s entre
@@ -77,7 +90,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   `GW_OWNER`, ou `WS_EX_LAYERED` + `WS_EX_TOPMOST` comme les surcouches de Discord, Steam ou
   NVIDIA), et dont le cadre contient le point. Hystérésis (`win::plein_ecran_retenu`) : la
   fenêtre en plein écran retenue reste tant qu'elle couvre l'écran du pointeur et que la fenêtre
-  survolée n'est pas une vraie fenêtre (barre de titre ou bord de redimensionnement). Un menu,
+  survolée n'est pas une vraie fenêtre (barre de titre ou bord de redimensionnement) ni la racine
+  de la fenêtre au premier plan (`GetAncestor(GetForegroundWindow(), GA_ROOTOWNER)` : une appli
+  sans cadre qu'on vient d'activer lève la pause). Un menu,
   une notification ou une bulle au-dessus d'une vidéo en plein écran ne lève donc pas la pause.
   Position du pointeur illisible un instant : l'état est gardé. Un jeu en plein écran
   sur un écran et le pointeur sur l'autre : l'essaim continue ; une vidéo en plein écran survolée
@@ -94,7 +109,9 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   clic appuyé et relâché entre deux lectures (tap du pavé tactile ; `main::nouveau_clic`). Ce bit
   est partagé entre processus : une autre appli qui le lit l'efface, ce clic-là reste manqué ;
   il ne crée pas de faux clic. Il est lu une fois avant la boucle pour oublier les appuis
-  antérieurs au lancement.
+  antérieurs au lancement, et ignoré à la lecture qui suit une position illisible ou une pause de
+  Windows (session verrouillée, écran éteint : `pauses::Etat::systeme`) : il garderait les clics
+  faits sur le bureau sécurisé (invite de l'UAC, écran de connexion).
 - **Rebonds** : cadre affiché de la fenêtre au premier plan (`DWMWA_EXTENDED_FRAME_BOUNDS`, relu
   à chaque image par `main::lire_fenetre` ; mêmes fenêtres que la bordure, `bordure::eligible` :
   ni bureau, ni barre des tâches, ni barre ou menu sans cadre, ni fenêtre réduite ou en plein
@@ -199,10 +216,12 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   propre fil, son propre `Swarm` et ses `Effets`. Affichage : périphérique Direct3D 11 (carte
   graphique, sinon WARP), chaîne d'échange DXGI à retournement (`FLIP_DISCARD`), présentée tous
   les `n` rafraîchissements de l'écran de la fenêtre (`stream::intervalle_synchro` :
-  `n = max(1, fréquence / max(c, 60))` en division entière, `c` = `[rendu] cadence` si fixée,
-  sinon 60 ; 4 au plus ; 90 Hz → 90 i/s, 144 Hz → 72 i/s, 240 Hz → 60 i/s : jamais sous 60 ni
-  sous la cadence choisie ; une cadence choisie plus basse est tenue par une attente ; fréquence
-  relue chaque seconde, la fenêtre peut changer d'écran), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
+  `n = fréquence / c` en division entière, de 1 à 4, `c` = `[rendu] cadence` si fixée, sinon
+  60 : la cadence obtenue est la plus proche de `c` sans passer dessous ; 90 Hz → 90 i/s, 144 Hz
+  → 72 i/s, 240 Hz → 60 i/s, 60 Hz pour 30 → 30 i/s. Quand elle dépasse une cadence fixée de plus
+  de 10 % (144 Hz pour 100), une attente la tient (`stream::periode_min`) ; à 10 % près, aucune
+  attente, qui ferait sauter un rafraîchissement sur deux ; fréquence relue chaque seconde, la
+  fenêtre peut changer d'écran), dessin Direct2D dans son tampon avec le `Pinceau` de `gpu.rs` (lot de
   sprites). Le tampon garde la transparence, prémultipliée (fond `"transparent"`, effacé à 0) : la
   *Capture de jeu* d'OBS le reprend sur la carte graphique (*Autoriser la transparence*, *Valeurs
   alpha prémultipliées*) ; DWM l'affiche sans transparence, sur noir. Essai réel relu sur la carte
@@ -280,8 +299,10 @@ que la réponse à `get_state` (`main.rs`, publiés par `ipc::Shared::publish`) 
 - `config` : les réglages en vigueur (`Config` entière, plus les clés d'avant calculées,
   `ipc::config_publiee`) ;
 - `preset` : le nom du preset en place, `null` si les réglages ne sont ceux d'aucun (recherché à
-  chaque relecture de `config.toml` ; un preset enregistré ou supprimé sans autre changement ne
-  le fait pas bouger, `list_presets` reste juste).
+  chaque relecture de `config.toml` par `profils::en_place`, dans la liste gardée en mémoire avec
+  les réglages de chaque preset déjà mis à plat : seuls les réglages en place sont sérialisés ;
+  un preset enregistré ou supprimé sans autre changement ne le fait pas bouger, `list_presets`
+  reste juste).
 
 Avant la première publication de la boucle principale (juste après le lancement), `get_state`
 répond `{"ok": true, "data": null}` : un client attend l'événement `state` ou redemande.
@@ -454,8 +475,10 @@ Tout est causal, échantillon par échantillon, décisions toutes les 5 ms.
   (`Effet` : tours/min de rotation, radians/s de vitesse, degrés de teinte et rayons de décalage
   additionnés ; accélération, rayon, taille, lueur, traînée et opacité multipliés, effet à fond et
 bornes dans `modulation::multipliee`, que la page reprend pour afficher l'effet réel ; totaux
-bornés à ±180 tr/min et 60 rad/s ; échelle des figures au moins 0,5, pour que le pointeur reste
-dégagé ; au plus une inversion du sens par image) et la teinte
+bornés à ±180 tr/min et 60 rad/s (`[orbite] vitesse_base` va de 0 à 60) ; échelle des figures
+de 0,5, pour que le pointeur reste dégagé, à 2,5, pour qu'une figure ne couvre pas l'écran (sa
+zone : demi-côté × échelle, plus son trait le plus large × (traits − 1)) ; au plus une inversion
+du sens par image) et la teinte
   « sur tout », que la boucle principale passe à `render::set_decalage` (tout ce qui est dessiné
   la prend, bordure comprise). L'angle du trajet de chaque groupe s'accumule ; quand sa rotation
   (réglage plus modulations) retombe sous 2 tours/min, il revient vers 0 par le plus court
@@ -469,7 +492,7 @@ dégagé ; au plus une inversion du sens par image) et la teinte
   l'écart d'un ressort amorti (`render::ressort` : Euler semi-implicite en petits pas,
   pulsation × pas ≤ 0,25, stable jusqu'à 20 images/s au ressort le plus raide). L'action `rebond`
   lui donne un élan (6,67 rayons/s à la force 1 : +25 % de rayon au sommet avec les réglages par
-  défaut). En mode ressorts (`actif`), le ressort suit la cible elle-même (modulations, plus un
+  défaut ; 20 rayons/s au plus, plusieurs rebonds dans la même image compris). En mode ressorts (`actif`), le ressort suit la cible elle-même (modulations, plus un
   tremblement de 5 % à 46 rad/s pendant une montée) : tout changement de rayon dépasse puis
   revient. Sans rebond ni mode ressorts, l'écart reste exactement nul : les presets d'avant ne
   changent pas (`presets_comme_avant`). `poussee` ajoute 5 radians/s par unité de force (retombée

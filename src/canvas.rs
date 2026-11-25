@@ -10,6 +10,12 @@ pub trait Canvas {
     fn line(&mut self, a: (f32, f32), b: (f32, f32), width: f32, rgb: Rgb, alpha: f32, smooth: bool);
     /// Ligne brisée d'une seule couleur.
     fn polyline(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool);
+    /// Morceau d'une traînée de l'essaim : une ligne brisée, que la carte graphique compte à part
+    /// (son plafond de pastilles ne coupe que les traînées, jamais les têtes, les particules, les
+    /// figures ni l'habillage).
+    fn trainee(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
+        self.polyline(pts, width, rgb, alpha, smooth);
+    }
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32);
     fn ring(&mut self, x: f32, y: f32, r: f32, width: f32, rgb: Rgb, alpha: f32);
     /// Trait à bouts droits : deux traits tracés bout à bout se rejoignent sans se recouvrir
@@ -242,6 +248,10 @@ impl Canvas for Fondu<'_> {
 
     fn polyline(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
         self.cv.polyline(pts, width, rgb, alpha * self.k, smooth);
+    }
+
+    fn trainee(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
+        self.cv.trainee(pts, width, rgb, alpha * self.k, smooth);
     }
 
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32) {

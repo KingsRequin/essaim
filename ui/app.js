@@ -1422,7 +1422,7 @@ const PANNEAUX = [
     base: [
       { libelle: "Rayon", section: "orbite", cle: "rayon", min: 4, max: 200, pas: 1, aff: (v) => String(Math.round(v)) },
       // les comètes et les satellites avancent sur le trajet ; le trajet lui-même tourne
-      { libelle: "Vitesse sur le trajet", section: "orbite", cle: "vitesse_base", min: 0, max: 100, pas: 0.1, ...tpm },
+      { libelle: "Vitesse sur le trajet", section: "orbite", cle: "vitesse_base", min: 0, max: 60, pas: 0.1, ...tpm },
       { libelle: "Rotation de la forme", section: "orbite", cle: "rotation", min: -60, max: 60, pas: 1, aff: (v) => Math.round(v) + " tr/min" },
       { choix: "Ce qui tourne avec le trajet", section: "orbite", cle: "rotation_sur", si: SI.rotation, valeurs: [["tout", "Comètes et satellites"], ["cometes", "Comètes"], ["satellites", "Satellites"]] },
       { quand: ["inversion"], libelle: "Sens inversé quand" },
@@ -4013,7 +4013,8 @@ window.essaim = {
         if (copieDepassee(m)) annulationLocale = null;
         etat.reglages = reglagesRecus(m.reglages);
         etat.defauts = m.defauts;
-        etat.presets = m.presets;
+        // `presets` absent ou null : la liste n'a pas changé depuis le dernier état, on garde la nôtre
+        if (Array.isArray(m.presets)) etat.presets = m.presets;
         suivreRenommages();
         etat.actif = m.actif;
         etat.proche = m.proche;
@@ -4277,31 +4278,56 @@ function boucle(maintenant) {
   }
   cumul += dt;
   if (etat.vue === "presets" && cumul >= 1 / 30) {
-    const pas = Math.min(0.1, cumul);
     cumul = 0;
-    for (const id of visibles) {
-      const t = tuiles.get(id);
-      if (!t || t.erreur || !t.p.reglages) continue;
-      // une vignette en erreur est laissée de côté jusqu'à ce que ses réglages changent
-      t.erreur = !protege(t.p.nom, () => {
-        t.apercu.teinteImposee = teinteImposee(t.p.reglages);
-        // le curseur du preset (ou celui en place, que le preset ne changera pas)
-        t.apercu.curseur = flecheJeu((t.p.reglages.souris && t.p.reglages.souris.jeu) || etat.curseurs);
-        if (!t.pret) {
-          // première image : un peu d'histoire pour que les traînées existent déjà
-          figer(t.apercu, son);
-          t.pret = true;
-        }
-        const anime = etat.mode === "direct" || (etat.mode === "survol" && etat.survol === id);
-        const image = !anime && !!t.p.image && !t.imageKo;
-        if (t.image.hidden === image) { t.image.hidden = !image; t.canvas.hidden = image; }
-        if (anime) {
-          t.apercu.dimensionner();
-          t.apercu.avancer(pas, son);
-          t.apercu.dessiner();
-        }
-      });
-    }
+    avancerGrille(maintenant, son);
+  }
+}
+
+// Vignettes de la grille, à 30 images/s, dans un budget de BUDGET_GRILLE ms par image : chacune à
+// son tour, en commençant par celle qui suit la dernière servie, avec le temps écoulé depuis son
+// dernier pas (0,1 s au plus). Leur première image (HISTOIRE pas de 1/30 s, pour que les traînées
+// existent déjà) se fait par tranches, dans le même budget : des presets lourds ne figent plus la
+// page, ils bougent seulement moins souvent.
+const BUDGET_GRILLE = 6, HISTOIRE = 40;
+let tourGrille = 0;
+function avancerGrille(maintenant, son) {
+  const ids = [...visibles], n = ids.length, debut = performance.now();
+  const restant = () => BUDGET_GRILLE - (performance.now() - debut);
+  for (let k = 0; k < n && (k === 0 || restant() > 0); k++) {
+    const id = ids[(tourGrille + k) % n];
+    tourGrille = (tourGrille + k + 1) % n;
+    const t = tuiles.get(id);
+    if (!t || t.erreur || !t.p.reglages) continue;
+    // une vignette en erreur est laissée de côté jusqu'à ce que ses réglages changent
+    t.erreur = !protege(t.p.nom, () => {
+      const ap = t.apercu;
+      ap.teinteImposee = teinteImposee(t.p.reglages);
+      // le curseur du preset (ou celui en place, que le preset ne changera pas)
+      ap.curseur = flecheJeu((t.p.reglages.souris && t.p.reglages.souris.jeu) || etat.curseurs);
+      const anime = etat.mode === "direct" || (etat.mode === "survol" && etat.survol === id);
+      const image = !anime && !!t.p.image && !t.imageKo;
+      if (t.image.hidden === image) { t.image.hidden = !image; t.canvas.hidden = image; }
+      if (!t.pret) {
+        // `t.histoire` : pas qui restent ; au moins un par tour, puis tant que le budget le permet
+        if (!t.histoire) t.histoire = HISTOIRE;
+        ap.dimensionner();
+        do {
+          ap.avancer(1 / 30, son);
+          t.histoire--;
+        } while (t.histoire > 0 && restant() > 0);
+        if (t.histoire > 0) return;
+        ap.dessiner();
+        t.pret = true;
+        t.vu = maintenant;
+        return;
+      }
+      if (anime) {
+        ap.dimensionner();
+        ap.avancer(Math.min(0.1, Math.max(0, (maintenant - (t.vu || maintenant)) / 1000)), son);
+        ap.dessiner();
+      }
+      t.vu = maintenant;
+    });
   }
 }
 

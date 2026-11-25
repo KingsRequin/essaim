@@ -1368,7 +1368,7 @@ rotation_sur = "tout"   # ce qui tourne avec le trajet : "tout", "cometes" ou "s
 trace = []              # trajet d'avant les images (forme = "trace"), points [x, y]
 contours = []           # contours d'une image (forme = "trace"), un par anneau : [[[x, y], …], …]
 inertie = 0             # 0 = l'orbite suit le pointeur de près, 1 = ressort souple qui traîne derrière
-vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s)
+vitesse_base = 3.5      # vitesse de rotation sans basse (radians/s, 0 à 60)
 trainee = 0.3           # durée de la traînée des comètes (s)
 
 [essaim]
@@ -1675,6 +1675,8 @@ fn limites_connues(section: &str, key: &str) -> Option<(f64, f64)> {
         ("orbite", "anneaux") => (1.0, 4.0),
         ("orbite", "rotation") => (-60.0, 60.0),
         ("orbite", "inertie") => (0.0, 1.0),
+        // au-delà, la somme avec les modulations est de toute façon bornée (`modulation::VITESSE_MAX`)
+        ("orbite", "vitesse_base") => (0.0, crate::modulation::VITESSE_MAX as f64),
         ("orbite", _) => (0.0, 100.0),
         ("essaim", "fixes") => (0.0, 32.0),
         ("particules", "taille") => (0.3, 3.0),

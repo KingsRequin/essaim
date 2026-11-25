@@ -19,11 +19,19 @@ use std::f32::consts::{PI, TAU};
 use crate::canvas::Canvas;
 
 /// Marge autour de tout ce qui est dessiné, décalage maximal du centre lissé, et étendue
-/// maximale de la fenêtre (une traînée plus longue que ça est coupée).
+/// maximale de la fenêtre : un point de traînée à plus de `MAX_EXTENT / 2` du pointeur (laissé
+/// derrière par un saut du pointeur) est retiré. Le trajet lui-même est ramené en deçà
+/// (`borne_etendue`).
 const MARGIN: f32 = 12.0;
 const CENTER_LAG_MAX: f32 = 30.0;
 const MAX_EXTENT: f32 = 2400.0;
+/// Distance au centre (en rayons) des satellites les plus écartés, et part qu'ils dépassent au plus
+/// en mode ressorts (nés au centre, ils rejoignent leur place avec un dépassement de ~37 %).
 const SAT_R_MAX: f32 = 1.9;
+const SAT_DEPASSEMENT: f32 = 1.4;
+/// Point le plus loin du centre d'un trajet de rayon 1, toutes formes confondues (ellipse,
+/// astroïde : 1,3 ; contours d'une image : 1,2).
+const ETENDUE_FORME: f32 = 1.3;
 const SAT_TRAIL: f64 = 0.25;
 const TRAIL_STEP: f64 = 1.0 / 90.0;
 /// Finesse des traînées (angle maximal en radians, écart maximal en px entre deux points) :
@@ -56,6 +64,7 @@ fn sous_pas(da: f32, r: f32, (angle, ecart): (f32, f32)) -> usize {
 /// (radians/s) et sa retombée (par seconde) ; part de la vitesse retirée par un coup de frein et
 /// sa retombée (par seconde) ; tremblement du rayon pendant une montée (part du rayon, rad/s).
 const REBOND: f32 = 6.67;
+const REBOND_MAX: f32 = 3.0 * REBOND;
 const POUSSEE: (f32, f32) = (5.0, 4.0);
 const FREIN: (f32, f32) = (0.8, 9.0);
 const TREMBLE: (f32, f64) = (0.053, 46.0);
@@ -328,8 +337,9 @@ type Trail = VecDeque<(f64, f32, f32)>;
 ///
 /// Au-delà de `VIE_FINE` (traînée allongée par une modulation), les points sont espacés d'autant
 /// (en temps et en distance) : une traînée de 12 s ne compte pas plus de points qu'une de 3 s.
-/// `TRAIL_POINTS_MAX` borne le reste (pointeur qui file très vite).
-fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
+/// `max` (sa part de `POINTS_TRAINEES`, `TRAIL_POINTS_MAX` au plus) borne le reste (pointeur qui
+/// file très vite) : les points les plus vieux s'en vont.
+fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32, max: usize) {
     let n = tr.len();
     let k = (life / VIE_FINE).max(1.0);
     let (pas, gap) = (TRAIL_STEP * k, gap * k as f32);
@@ -342,8 +352,9 @@ fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
     while tr.front().is_some_and(|p| t - p.0 > life) {
         tr.pop_front();
     }
-    if tr.len() > TRAIL_POINTS_MAX {
-        let trop = tr.len() - TRAIL_POINTS_MAX;
+    let max = max.max(2);
+    if tr.len() > max {
+        let trop = tr.len() - max;
         tr.drain(..trop);
     }
 }
@@ -352,6 +363,37 @@ fn push_trail(tr: &mut Trail, t: f64, x: f32, y: f32, life: f64, gap: f32) {
 /// `[orbite] trainee`), et points d'une traînée au plus.
 const VIE_FINE: f64 = 3.0;
 const TRAIL_POINTS_MAX: usize = 4000;
+/// Points de toutes les traînées réunies au plus, partagés également entre elles (jusqu'à 32
+/// comètes, 64 satellites et 32 permanents : 468 chacune au pire, au-delà d'une traînée
+/// ordinaire : un point tous les 1/90 s, ~25 pour un satellite, 27 à 270 pour une comète de 0,3 à
+/// 3 s, plus quand le pointeur file).
+const POINTS_TRAINEES: usize = 60_000;
+/// Tours de son trajet qu'une traînée couvre au plus : au-delà, elle repasse sur elle-même
+/// (traînée de 15 s à grande vitesse) sans rien montrer de plus, et coûte autant de points. Pas un
+/// seul : des presets fournis (Intense, Fantôme, Typhon…) font 1,7 tour sur le son d'essai, et
+/// près de 4 basse à fond, où le bout de la traînée, pâle, repasse sur la tête ; cinq n'en
+/// touchent aucun.
+const TOURS_TRAINEE: f64 = 5.0;
+
+/// Vie utile d'une traînée de vie `vie` (s) qui tourne à `w` radians/s (lissée) : au plus
+/// `TOURS_TRAINEE` tours de son trajet.
+fn vie_utile(vie: f64, w: f32) -> f64 {
+    if w.is_finite() && w > 1e-3 { vie.min(TOURS_TRAINEE * std::f64::consts::TAU / w as f64) } else { vie }
+}
+
+/// Facteur du rayon et décalage (en rayons) d'un groupe, ramenés ensemble (la forme garde ses
+/// proportions) pour que son point le plus loin du centre — `ETENDUE_FORME` × `portee` (anneau
+/// extérieur, satellite le plus écarté) × `rayon` (px) × facteur, plus le décalage — reste à moins
+/// de `dispo` px.
+fn borne_etendue(facteur: f32, decalage: f32, rayon: f32, portee: f32, dispo: f32) -> (f32, f32) {
+    let total = decalage.abs() * rayon + ETENDUE_FORME * portee * rayon * facteur;
+    if total.is_finite() && total > dispo && total > 0.0 {
+        let k = dispo / total;
+        (facteur * k, decalage * k)
+    } else {
+        (facteur, decalage)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Genre {
@@ -653,8 +695,37 @@ pub struct Swarm {
     pub env: f32,
     /// Têtes des traînées (étincelles des aigus), tampon gardé d'une image à l'autre.
     tetes: Vec<(f32, f32)>,
+    /// Vitesse angulaire des comètes et des satellites (radians/s, sans le sens), lissée (~0,5 s) :
+    /// la vie utile des traînées en dépend (`vie_utile`) sans sauter à chaque kick.
+    w_lisse: [f32; 2],
+    /// Vie utile des traînées des comètes, anneau par anneau (s).
+    vies: Vec<f64>,
+    /// Ce qui fait le trajet : changé (preset, forme, rayon, modulations ajoutées ou retirées), les
+    /// traînées et les valeurs lissées des modulations repartent de zéro.
+    cle_trajet: Option<CleTrajet>,
     /// Tampons du dessin, gardés d'une image à l'autre (le dessin ne prend que `&self`).
     tampons: std::cell::RefCell<Tampons>,
+}
+
+/// Forme du trajet des comètes et de celui des satellites, rayon de base, et modulations (source,
+/// cible, groupe, dans l'ordre) : ce qui déplace le trajet ou change à qui appartient chaque
+/// valeur lissée. Une quantité, une opacité, une couleur n'en font pas partie.
+#[derive(PartialEq)]
+struct CleTrajet {
+    formes: (Forme, Forme),
+    rayon: f32,
+    modulations: Vec<(crate::config::Source, crate::config::Cible, crate::config::Groupe)>,
+}
+
+impl CleTrajet {
+    fn de(cfg: &Config) -> Self {
+        let o = &cfg.orbite;
+        Self {
+            formes: (o.forme, cfg.essaim.forme.suivie(o.forme)),
+            rayon: o.rayon,
+            modulations: cfg.modulations.liste.iter().map(|m| (m.source, m.cible, m.sur)).collect(),
+        }
+    }
 }
 
 /// Trajet d'un groupe pendant une image : rotation au début et son avance, rayon et décalage
@@ -740,6 +811,9 @@ impl Swarm {
             pitch: 50.0,
             env: 0.0,
             tetes: Vec::new(),
+            w_lisse: [0.0; 2],
+            vies: Vec::new(),
+            cle_trajet: None,
             tampons: Default::default(),
         }
     }
@@ -919,6 +993,17 @@ impl Swarm {
         if !self.pitch.is_finite() {
             self.pitch = 50.0;
         }
+        // trajet changé (preset appliqué, forme, rayon de base, modulation ajoutée, retirée ou
+        // déplacée) : les traînées suivraient l'ancien trajet jusqu'à leur fin, et chaque valeur
+        // lissée appartiendrait à une autre modulation ; tout repart de zéro
+        let cle = CleTrajet::de(cfg);
+        if self.cle_trajet.as_ref() != Some(&cle) {
+            for tr in self.trails.iter_mut().chain(self.sats.iter_mut().chain(self.fixes.iter_mut()).map(|s| &mut s.trail)) {
+                tr.clear();
+            }
+            self.valeurs.clear();
+            self.cle_trajet = Some(cle);
+        }
         // modulations : valeur visée de chacune (source, seuil, à l'envers), lissée à son rythme
         self.sources.avancer(dt, [kicks, caisses, aigus, drops, contre as u32], au.tension);
         let liste = &cfg.modulations.liste;
@@ -961,6 +1046,20 @@ impl Swarm {
             self.cibles[g] = cible;
             self.facteurs[g] = (cible + ecart).max(0.05);
         }
+        // plusieurs contours (une image, une icône, un texte) : un anneau par contour, à sa place
+        let contours_cometes = nombre_contours(o.forme);
+        let anneaux = if contours_cometes > 1 { contours_cometes } else { o.anneaux.max(1) as usize };
+        // étendue bornée : le point le plus loin de chaque groupe (anneau extérieur, satellite le
+        // plus écarté, avec son dépassement en mode ressorts), décalage et retard du centre
+        // compris, reste à moins de `MAX_EXTENT / 2` du pointeur, au-delà de quoi les points sont
+        // retirés (un grand rayon modulé sur un grand écran les y jetait tous : l'essaim
+        // disparaissait). Le rayon et le décalage sont ramenés ensemble.
+        let rayon = o.rayon * scale;
+        let portees = [if contours_cometes > 1 { 1.0 } else { anneau(anneaux - 1).0 }, SAT_R_MAX * if re.actif { SAT_DEPASSEMENT } else { 1.0 }];
+        let dispo = (MAX_EXTENT / 2.0 - MARGIN * scale - lim).max(0.0);
+        for (g, &portee) in portees.iter().enumerate() {
+            (self.facteurs[g], self.mods[g].decalage) = borne_etendue(self.facteurs[g], self.mods[g].decalage, rayon, portee, dispo);
+        }
         // vrille des rubans : un cran de plus à chaque caisse claire, rejoint en douceur
         if caisses > 0 && cfg.rubans.actif {
             self.vrille.0 += VRILLE.2;
@@ -972,9 +1071,6 @@ impl Swarm {
 
         // comètes : `nombre` par anneau, réparties sur le trajet
         let e = &cfg.essaim;
-        // plusieurs contours (une image, une icône, un texte) : un anneau par contour, à sa place
-        let contours_cometes = nombre_contours(o.forme);
-        let anneaux = if contours_cometes > 1 { contours_cometes } else { o.anneaux.max(1) as usize };
         let nombre = o.nombre.max(1) as usize;
         self.angles.resize(anneaux, 0.0);
         // anneaux ou comètes par anneau changés : chaque traînée appartiendrait à une autre
@@ -987,7 +1083,6 @@ impl Swarm {
         // une pose par groupe : rotation du trajet (`rotation_sur` : comètes, satellites ou tout,
         // plus les modulations), rayon et décalage au début et à la fin de l'image ; les points
         // intermédiaires suivent la vraie forme, coins compris
-        let rayon = o.rayon * scale;
         let pose = |g: usize, rot: &mut f32, mods: &[Effet; 2], avant: &[Effet; 2]| {
             let base = if o.rotation_sur.inclut(g == 1) { o.rotation } else { 0.0 };
             let rot0 = if rot.is_finite() { *rot } else { 0.0 };
@@ -1006,24 +1101,6 @@ impl Swarm {
             let dx = p.dx0 + (p.dx - p.dx0) * f;
             (c0.0 + (cx - c0.0) * f + dx + x * rr, c0.1 + (cy - c0.1) * f + y * rr)
         };
-        // vitesse : celle du trajet plus celle des modulations (accélérée aussi), jamais négative
-        let vitesse = |g: usize| self.dir * self.vitesse(g);
-        let (w_cometes, w_sats) = (vitesse(0), vitesse(1));
-        for (k, angle) in self.angles.iter_mut().enumerate() {
-            let (rk, wk) = if contours_cometes > 1 { (1.0, 1.0) } else { anneau(k) };
-            let contour = k % contours_cometes;
-            let (a0, da) = (*angle, w_cometes * wk * dt);
-            *angle = (a0 + da).rem_euclid(TAU);
-            let n = sous_pas(da, poses[0].rayon * rk * longueur_par_radian(o.forme, contour), FINESSE_COMETES);
-            for i in 0..nombre {
-                let decale = i as f32 * TAU / nombre as f32;
-                for j in 1..=n {
-                    let f = j as f32 / n as f32;
-                    let (x, y) = point(&poses[0], o.forme, contour, a0 + da * f + decale, rk, f);
-                    push_trail(&mut self.trails[k * nombre + i], t - dt as f64 * (1.0 - f) as f64, x, y, life, FINESSE_COMETES.1);
-                }
-            }
-        }
         let dur = e.duree.max(0.1) as f64;
         self.sats.retain(|s| t - s.born < dur);
         // satellites permanents : répartis une fois pour toutes (nombre d'or), toujours les mêmes
@@ -1036,6 +1113,36 @@ impl Swarm {
                 })
                 .collect();
         }
+        // part de chaque traînée dans le budget de points commun
+        let part = (POINTS_TRAINEES / (self.trails.len() + self.sats.len() + self.fixes.len()).max(1)).min(TRAIL_POINTS_MAX);
+        // vitesse : celle du trajet plus celle des modulations (accélérée aussi), jamais négative ;
+        // lissée, elle borne la vie utile des traînées (`TOURS_TRAINEE` tours de trajet)
+        let vitesse = |g: usize| self.dir * self.vitesse(g);
+        let (w_cometes, w_sats) = (vitesse(0), vitesse(1));
+        for (w, v) in self.w_lisse.iter_mut().zip([w_cometes.abs(), w_sats.abs()]) {
+            *w += (v - *w) * (1.0 - (-dt * 2.0).exp());
+            if !w.is_finite() {
+                *w = v;
+            }
+        }
+        self.vies.resize(anneaux, life);
+        for (k, angle) in self.angles.iter_mut().enumerate() {
+            let (rk, wk) = if contours_cometes > 1 { (1.0, 1.0) } else { anneau(k) };
+            let contour = k % contours_cometes;
+            let (a0, da) = (*angle, w_cometes * wk * dt);
+            *angle = (a0 + da).rem_euclid(TAU);
+            let vie = vie_utile(life, self.w_lisse[0] * wk);
+            self.vies[k] = vie;
+            let n = sous_pas(da, poses[0].rayon * rk * longueur_par_radian(o.forme, contour), FINESSE_COMETES);
+            for i in 0..nombre {
+                let decale = i as f32 * TAU / nombre as f32;
+                for j in 1..=n {
+                    let f = j as f32 / n as f32;
+                    let (x, y) = point(&poses[0], o.forme, contour, a0 + da * f + decale, rk, f);
+                    push_trail(&mut self.trails[k * nombre + i], t - dt as f64 * (1.0 - f) as f64, x, y, vie, FINESSE_COMETES.1, part);
+                }
+            }
+        }
         // satellites : sur le trajet des comètes, ou le leur, à des distances variées
         let forme = e.forme.suivie(o.forme);
         let vie_sats = SAT_TRAIL * self.mods[1].trainee as f64 * if re.actif { SAT_TRAIL_RESSORTS } else { 1.0 };
@@ -1046,18 +1153,20 @@ impl Swarm {
             if re.actif {
                 let mut ecart = s.rr - s.r;
                 ressort(&mut ecart, &mut s.rv, s.w, SAT_RESSORT.2, dt);
-                s.rr = (s.r + ecart).max(0.0);
+                // dépassement borné (il ne va pas au-delà de ~37 %) : l'étendue reste celle prévue
+                s.rr = (s.r + ecart).clamp(0.0, SAT_R_MAX * SAT_DEPASSEMENT);
             } else {
                 (s.rr, s.rv) = (s.r, 0.0);
             }
             let (contour, rel) = if contours_sats > 1 { (s.couleur % contours_sats, 1.0 + (s.r - 1.3) * 0.25) } else { (0, s.rr) };
             let (a0, da) = (s.a, w_sats * s.mul * dt);
             s.a = (a0 + da).rem_euclid(TAU);
+            let vie = vie_utile(vie_sats, self.w_lisse[1] * s.mul);
             let n = sous_pas(da, poses[1].rayon * rel * longueur_par_radian(forme, contour), FINESSE_SATELLITES);
             for j in 1..=n {
                 let f = j as f32 / n as f32;
                 let (x, y) = point(&poses[1], forme, contour, a0 + da * f, rel, f);
-                push_trail(&mut s.trail, t - dt as f64 * (1.0 - f) as f64, x, y, vie_sats, FINESSE_SATELLITES.1);
+                push_trail(&mut s.trail, t - dt as f64 * (1.0 - f) as f64, x, y, vie, FINESSE_SATELLITES.1, part);
             }
         }
         // saut du pointeur (autre écran…) : la traînée laissée loin derrière est abandonnée
@@ -1124,8 +1233,10 @@ impl Swarm {
                 }
             }
             Action::Rebond => {
+                // élan borné à celui d'un rebond de force 3 : plusieurs rebonds dans la même
+                // image (kicks en rafale, kick et caisse claire) ne s'additionnent pas sans fin
                 for r in &mut self.rebond {
-                    r.1 += REBOND * force;
+                    r.1 = (r.1 + REBOND * force).clamp(-REBOND_MAX, REBOND_MAX);
                 }
             }
             Action::Poussee => self.pousse += POUSSEE.0 * force,
@@ -1289,7 +1400,8 @@ impl Swarm {
                 }
             };
             let al = (k * 1.5).min(1.0) * ms.opacite;
-            draw_trail(cv, xy, &s.trail, t, vie_sats, 2.6 * k * scale * ms.taille, al, false, cfg, (s.couleur, ms.teinte));
+            let vie = vie_utile(vie_sats, self.w_lisse[1] * s.mul);
+            draw_trail(cv, xy, &s.trail, t, vie, 2.6 * k * scale * ms.taille, al, false, cfg, (s.couleur, ms.teinte));
             if let Some(&(_, x, y)) = s.trail.back() {
                 let rgb = prisme_palette(cfg, t, 1.0, s.couleur, ms.teinte);
                 let front = y > self.center.map_or(0.0, |c| c.1);
@@ -1300,10 +1412,13 @@ impl Swarm {
         // une teinte de la palette. En rubans : une traînée large, vrillée, sans tête
         if o.cometes {
             let cy = self.center.map_or(0.0, |c| c.1);
-            let vie = o.trainee.max(0.01) as f64 * mc.trainee as f64;
+            let vie_reglee = o.trainee.max(0.01) as f64 * mc.trainee as f64;
+            let nombre = o.nombre.max(1) as usize;
             let ru = &cfg.rubans;
             let phase = (-VRILLE.1 * t).rem_euclid(TAU as f64) as f32 + self.vrille.1;
             for (i, tr) in self.trails.iter().enumerate() {
+                // vie utile de son anneau (`vie_utile`), comme dans `update`
+                let vie = self.vies.get(i / nombre).copied().unwrap_or(vie_reglee);
                 if ru.actif {
                     let vrille = (VRILLE.0 * ru.vrille.clamp(0.0, 1.0), phase + 2.0 * i as f32);
                     draw_ruban(cv, xy, tr, t, vie, (ru.largeur.clamp(1.0, 14.0) * scale * mc.taille, 0.6 * scale), mc.opacite, cfg, (i, mc.teinte), vrille);
@@ -1436,7 +1551,7 @@ fn draw_ruban(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
         let profil = (PI * k.powf(0.75)).sin().max(0.0).powf(0.8);
         let onde = 0.5 + 0.5 * (5.5 * k + vrille.1).sin();
         let w = (largeur.0 * profil * (1.0 - vrille.0 * (1.0 - onde))).max(largeur.1);
-        cv.polyline(&xy[i..=end], w, prisme_palette(cfg, t, k, j, decale), al, true);
+        cv.trainee(&xy[i..=end], w, prisme_palette(cfg, t, k, j, decale), al, true);
         i = end;
     }
 }
@@ -1459,7 +1574,7 @@ fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
     xy.clear();
     xy.extend(tr.iter().map(|&(_, x, y)| (x, y)));
     if halo {
-        cv.polyline(xy, (0.8 + width * 0.7) * 2.6, prisme_palette(cfg, t, 0.7, j, decale), 0.12 * al, false);
+        cv.trainee(xy, (0.8 + width * 0.7) * 2.6, prisme_palette(cfg, t, 0.7, j, decale), 0.12 * al, false);
     }
     // les comètes (avec halo) sont lissées ; les satellites non, en deux morceaux (tête vive,
     // queue pâle) : c'est le poste le plus coûteux sur processeur
@@ -1469,7 +1584,7 @@ fn draw_trail(cv: &mut dyn Canvas, xy: &mut Vec<(f32, f32)>, tr: &Trail, t: f64,
     while i + 1 < xy.len() {
         let end = (i + chunk).min(xy.len() - 1);
         let k = (q(i) + q(end)) * 0.5;
-        cv.polyline(&xy[i..=end], 0.8 + k * width, prisme_palette(cfg, t, k, j, decale), k * 0.9 * al, smooth);
+        cv.trainee(&xy[i..=end], 0.8 + k * width, prisme_palette(cfg, t, k, j, decale), k * 0.9 * al, smooth);
         i = end;
     }
 }
@@ -1511,7 +1626,7 @@ impl Crack {
         let mut stack = Vec::new();
         for i in 0..rays {
             let ang = off + i as f32 / rays as f32 * TAU + rng.range(-0.35, 0.35);
-            stack.push((0.0f32, 0.0f32, ang, rng.range(18.0, 44.0) * size, rng.range(1.6, 2.6) * size.sqrt(), 0u8));
+            stack.push((0.0f32, 0.0f32, ang, rng.range(FISSURE_RAYON.0, FISSURE_RAYON.1) * size, rng.range(1.6, 2.6) * size.sqrt(), 0u8));
         }
         while let Some((mut px, mut py, mut a, len, wd, depth)) = stack.pop() {
             let mut left = len;
@@ -1597,6 +1712,19 @@ impl Crack {
 
 /// Marge autour de la fissure, à 100 % (moitié de l'éclat, reflet décalé, lissage).
 const MARGE_FISSURE: f32 = 6.0;
+/// Longueur d'un rayon de fissure, en tailles (tirée entre les deux), et portée la plus longue
+/// d'une fissure (px à 100 %) : une branche ne va jamais plus loin que son rayon (plus un pas).
+const FISSURE_RAYON: (f32, f32) = (18.0, 44.0);
+const FISSURE_PORTEE_MAX: f32 = 400.0;
+
+/// Taille d'une fissure (`Crack::new`) : `[fissures] taille` × la force de son déclencheur, bornée
+/// pour que ses rayons ne dépassent pas `FISSURE_PORTEE_MAX` (taille 6 et force 3 la portaient à
+/// ~800 px et plus), × l'échelle de l'écran.
+pub fn taille_fissure(taille: f32, force: f32, scale: f32) -> f32 {
+    let t = taille * force;
+    let t = if t.is_finite() { t.clamp(0.0, FISSURE_PORTEE_MAX / FISSURE_RAYON.1) } else { 0.0 };
+    t * scale
+}
 
 /// Taille de l'onde d'un changement de piste (pixels à 100 %), et sa durée (s).
 const ONDE_PISTE: (f32, f32) = (90.0, 0.8);
@@ -1604,6 +1732,7 @@ const ONDE_PISTE: (f32, f32) = (90.0, 0.8);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{Cible, Groupe, Modulation, Source};
     use tiny_skia::Pixmap;
 
     const C: (f32, f32) = (300.0, 300.0);
@@ -2342,6 +2471,50 @@ mod tests {
         }
         let per = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
         eprintln!("{} satellites, image {size} px de large : {per:.3} ms par image", s.sats.len());
+
+        // cas extrême : 32 comètes, 64 satellites, 32 permanents, traînées de 15 s, vitesse 60,
+        // pointeur qui tourne vite ; simulation et dessin (processeur, puis carte graphique)
+        let mut cfg = Config::default();
+        (cfg.orbite.nombre, cfg.orbite.anneaux, cfg.orbite.trainee, cfg.orbite.vitesse_base) = (8, 4, 3.0, 60.0);
+        (cfg.essaim.maximum, cfg.essaim.fixes, cfg.essaim.duree) = (64, 32, 30.0);
+        cfg.modulations.liste = vec![Modulation { source: Source::Basse, cible: Cible::Trainee, sur: Groupe::Tout, quantite: 1.0, ..Default::default() }];
+        cfg.declencheurs.liste = vec![Declencheur { nombre: 8, nombre_max: 8, ..Declencheur::new(Evenement::Kick, Action::Satellites) }];
+        let mut s = Swarm::new();
+        let mut au = AudioView { bass: 1.0, ..Default::default() };
+        let curseur = |i: usize| {
+            let a = i as f32 * dt * 6.0;
+            (900.0 + 600.0 * a.cos(), 600.0 + 400.0 * a.sin())
+        };
+        let (chauffe, n) = (144 * 8, 200);
+        let mut b = crate::backend::Backend::new(true);
+        let mons = [(1isize, (0, 0, 1920, 1080))];
+        let (mut cpu, mut gpu, mut simu) = (0.0, 0.0, 0.0);
+        for i in 0..chauffe + n {
+            au.kicks += (i % 20 == 0) as u32;
+            let (t, c) = (i as f64 * dt as f64, curseur(i));
+            let t0 = std::time::Instant::now();
+            s.update(t, dt, c, au, &cfg, 1.5);
+            let t1 = std::time::Instant::now();
+            if i < chauffe {
+                continue;
+            }
+            let _ = render(&s, c, t, &cfg, 1.5);
+            let t2 = std::time::Instant::now();
+            let (x0, y0, x1, y1) = s.bounds(c, 1.5, cfg.eclat.taille);
+            b.frame(&mons, (x0 as i32, y0 as i32, x1 as i32 + 1, y1 as i32 + 1), &[], &|cv, _| s.draw(cv, t, &cfg, 1.5, c));
+            simu += (t1 - t0).as_secs_f64();
+            cpu += (t2 - t1).as_secs_f64();
+            gpu += t2.elapsed().as_secs_f64();
+        }
+        let points: usize = s.trails.iter().chain(s.sats.iter().chain(&s.fixes).map(|q| &q.trail)).map(|tr| tr.len()).sum();
+        let ms = |x: f64| x * 1000.0 / n as f64;
+        eprintln!(
+            "extrême ({} traînées, {points} points) : simulation {:.3} ms, dessin processeur {:.3} ms, carte graphique {:.3} ms par image",
+            s.trails.len() + s.sats.len() + s.fixes.len(),
+            ms(simu),
+            ms(cpu),
+            ms(gpu)
+        );
     }
 
     /// Coût du dessin de 12 fissures (le maximum) sur processeur :
@@ -2888,7 +3061,7 @@ mod tests {
             let mut tr = Trail::new();
             for i in 0..images {
                 let t = i as f64 / 144.0;
-                push_trail(&mut tr, t, (t * px_par_s) as f32, 0.0, vie, FINESSE_COMETES.1);
+                push_trail(&mut tr, t, (t * px_par_s) as f32, 0.0, vie, FINESSE_COMETES.1, TRAIL_POINTS_MAX);
             }
             tr.len()
         };
@@ -2918,5 +3091,161 @@ mod tests {
         }
         assert!(peints > 200);
         assert_eq!(c.echelle, 2.0);
+    }
+
+    #[test]
+    fn les_presets_fournis_gardent_leurs_trainees() {
+        // la borne de `TOURS_TRAINEE` ne mord que sur les cas extrêmes : aucun preset fourni n'a sa
+        // traînée raccourcie, ni sur le son d'essai, ni ensuite basse à fond
+        for p in crate::prereglages::builtins() {
+            let mut s = Swarm::new();
+            s.rng = Rng::graine(7);
+            for i in 0..960 {
+                let t = i as f64 / 60.0;
+                let mut au = son_essai(t % 8.0);
+                if i >= 480 {
+                    (au.bass, au.kicks) = (1.0, au.kicks + 100);
+                }
+                s.avance(t, 1.0 / 60.0, C, au, &p.cfg, 1.0);
+                let vie = p.cfg.orbite.trainee.max(0.01) as f64 * s.mods[0].trainee as f64;
+                let vie_sats = SAT_TRAIL * s.mods[1].trainee as f64 * if p.cfg.ressorts.actif { SAT_TRAIL_RESSORTS } else { 1.0 };
+                assert!(s.vies.iter().all(|&v| v == vie), "{} : comètes raccourcies à {t:.2} s", p.name);
+                assert!(s.sats.iter().chain(&s.fixes).all(|q| vie_utile(vie_sats, s.w_lisse[1] * q.mul) == vie_sats), "{} : satellites raccourcis à {t:.2} s", p.name);
+            }
+        }
+    }
+
+    #[test]
+    fn fissure_bornee_quelle_que_soit_la_force() {
+        // taille 6 et force 3 : 18 tailles, des rayons de ~800 px ; bornée à `FISSURE_PORTEE_MAX`
+        assert_eq!(taille_fissure(1.4, 1.0, 1.0), 1.4);
+        assert_eq!(taille_fissure(6.0, 3.0, 2.0), 2.0 * FISSURE_PORTEE_MAX / FISSURE_RAYON.1);
+        assert_eq!(taille_fissure(f32::NAN, 1.0, 1.0), 0.0);
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        for scale in [1.0f32, 2.0] {
+            for _ in 0..20 {
+                let c = Crack::new(0.0, 0.0, 0.0, taille_fissure(6.0, 3.0, scale), &mut rng);
+                assert!(c.ext <= (FISSURE_PORTEE_MAX + 40.0) * scale, "fissure de {} px à {scale}", c.ext);
+            }
+        }
+    }
+
+    #[test]
+    fn grand_rayon_module_l_essaim_reste_entier() {
+        // rayon 200 à 200 %, quatre anneaux, rayon modulé × 5, inertie à fond, décalage : sans
+        // borne, l'anneau extérieur passait à ~5 000 px et toutes ses comètes étaient retirées
+        let mut cfg = Config::default();
+        (cfg.orbite.rayon, cfg.orbite.anneaux, cfg.orbite.inertie) = (200.0, 4, 1.0);
+        cfg.essaim.fixes = 8;
+        cfg.ressorts.actif = true;
+        cfg.modulations.liste = vec![
+            Modulation { source: Source::Basse, cible: Cible::Rayon, sur: Groupe::Tout, quantite: 1.0, ..Default::default() },
+            Modulation { source: Source::Basse, cible: Cible::Decalage, sur: Groupe::Tout, quantite: 1.0, ..Default::default() },
+        ];
+        cfg.declencheurs.liste = vec![Declencheur { force: 3.0, ..Declencheur::new(Evenement::Kick, Action::Rebond) }];
+        let mut s = Swarm::new();
+        let dt = 1.0 / 60.0;
+        let mut au = AudioView { bass: 1.0, ..Default::default() };
+        for i in 0..240 {
+            // quatre kicks par image : leurs rebonds ne s'additionnent pas sans fin
+            au.kicks += 4;
+            let cursor = (C.0 + 300.0 * (i as f32 * 0.05).sin(), C.1);
+            s.update(i as f64 * dt as f64, dt, cursor, au, &cfg, 2.0);
+            for tr in s.trails.iter().chain(s.fixes.iter().map(|q| &q.trail)) {
+                let p = tr.back().expect("une tête a disparu");
+                let d = (p.1 - cursor.0).abs().max((p.2 - cursor.1).abs());
+                assert!(d <= MAX_EXTENT / 2.0, "tête à {d} px du pointeur");
+            }
+        }
+        // l'essaim reste grand : borné, pas écrasé
+        let c = s.center.unwrap();
+        let loin = s.trails.iter().filter_map(|tr| tr.back()).map(|p| (p.1 - c.0).hypot(p.2 - c.1)).fold(0.0f32, f32::max);
+        assert!(loin > 400.0, "{loin}");
+        // cinq rebonds de force 3 dans la même image : l'élan d'un seul
+        let d = Declencheur { force: 3.0, ..Declencheur::new(Evenement::Clic, Action::Rebond) };
+        s.rebond = [(0.0, 0.0); 2];
+        for _ in 0..5 {
+            s.agir(&d, C, 0.0, &cfg, 1.0);
+        }
+        assert_eq!(s.rebond.map(|r| r.1), [REBOND_MAX; 2]);
+    }
+
+    #[test]
+    fn etendue_bornee_garde_les_proportions() {
+        // rien à borner : inchangé
+        assert_eq!(borne_etendue(2.0, 0.5, 20.0, 1.0, 1000.0), (2.0, 0.5));
+        // trop grand : ramené juste à `dispo`, rayon et décalage d'autant
+        let (f, d) = borne_etendue(5.0, 1.0, 200.0, 2.65, 1000.0);
+        assert!((d.abs() * 200.0 + ETENDUE_FORME * 2.65 * 200.0 * f - 1000.0).abs() < 0.1);
+        assert!((f / d - 5.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn trainees_au_plus_cinq_tours_et_budget_commun() {
+        // tout au maximum : 32 comètes, 64 satellites, 32 permanents, traînées de 15 s, vitesse 60,
+        // pointeur qui file
+        let mut cfg = Config::default();
+        (cfg.orbite.nombre, cfg.orbite.anneaux, cfg.orbite.trainee, cfg.orbite.vitesse_base) = (8, 4, 3.0, 60.0);
+        (cfg.essaim.maximum, cfg.essaim.fixes, cfg.essaim.duree) = (64, 32, 30.0);
+        cfg.modulations.liste = vec![Modulation { source: Source::Basse, cible: Cible::Trainee, sur: Groupe::Tout, quantite: 1.0, ..Default::default() }];
+        cfg.declencheurs.liste = vec![Declencheur { nombre: 8, nombre_max: 8, ..Declencheur::new(Evenement::Kick, Action::Satellites) }];
+        let mut s = Swarm::new();
+        let dt = 1.0 / 144.0;
+        let mut au = AudioView { bass: 1.0, ..Default::default() };
+        for i in 0..(144 * 8) {
+            au.kicks += (i % 20 == 0) as u32;
+            let a = i as f32 * dt * 6.0;
+            s.update(i as f64 * dt as f64, dt, (900.0 + 600.0 * a.cos(), 600.0 + 400.0 * a.sin()), au, &cfg, 1.5);
+        }
+        assert_eq!((s.trails.len(), s.sats.len(), s.fixes.len()), (32, 64, 32));
+        let total: usize = s.trails.iter().chain(s.sats.iter().chain(&s.fixes).map(|q| &q.trail)).map(|tr| tr.len()).sum();
+        assert!(total <= POINTS_TRAINEES + 128, "{total} points");
+        // une comète de l'anneau intérieur tourne à ~60 rad/s : sa traînée couvre cinq tours
+        // (~0,52 s), pas 15 s
+        let vie = s.vies[0];
+        assert!(vie < 0.6, "vie utile {vie} s");
+        let tr = &s.trails[0];
+        assert!(tr.back().unwrap().0 - tr.front().unwrap().0 <= vie + 1e-6);
+    }
+
+    #[test]
+    fn trajet_change_trainees_et_modulations_repartent_de_zero() {
+        let mut cfg = Config::default();
+        let mut s = Swarm::new();
+        let dt = 1.0 / 60.0;
+        let au = AudioView { bass: 0.8, ..Default::default() };
+        let mut t = 0.0;
+        let mut avancer = |s: &mut Swarm, cfg: &Config, n: usize| {
+            for _ in 0..n {
+                s.update(t, dt, C, au, cfg, 1.0);
+                t += dt as f64;
+            }
+        };
+        avancer(&mut s, &cfg, 30);
+        let longueur = |s: &Swarm| s.trails.iter().map(|tr| tr.len()).max().unwrap();
+        assert!(longueur(&s) > 5);
+        // une teinte, une quantité changées : rien ne repart
+        cfg.couleur.teinte = 200.0;
+        cfg.modulations.liste[0].quantite *= 0.5;
+        avancer(&mut s, &cfg, 1);
+        assert!(longueur(&s) > 5);
+        let lissee = s.valeurs[0];
+        assert!(lissee != 0.0);
+        // autre forme : les traînées repartent de zéro
+        cfg.orbite.forme = Forme::Etoile;
+        avancer(&mut s, &cfg, 1);
+        assert!(longueur(&s) <= 2, "{}", longueur(&s));
+        avancer(&mut s, &cfg, 30);
+        // autre rayon de base : de même
+        cfg.orbite.rayon += 10.0;
+        avancer(&mut s, &cfg, 1);
+        assert!(longueur(&s) <= 2);
+        // une modulation retirée en tête : les valeurs lissées repartent de zéro (la suivante
+        // n'hérite pas de la valeur de celle d'avant)
+        avancer(&mut s, &cfg, 30);
+        cfg.modulations.liste.remove(0);
+        s.valeurs.iter_mut().for_each(|v| *v = 123.0);
+        avancer(&mut s, &cfg, 1);
+        assert!(s.valeurs.iter().all(|&v| v != 123.0));
     }
 }

@@ -109,8 +109,10 @@ fn geometrique(i: usize) -> bool {
 const FIG_VITESSE: f32 = 0.1;
 const FIG_DECALAGE: f32 = 30.0;
 /// Échelle d'une figure, modulations comprises, jamais sous celle que permet son allure seule
-/// (`echelle` 0,5) : plus petite, elle se ramasserait sur le pointeur.
+/// (`echelle` 0,5) : plus petite, elle se ramasserait sur le pointeur ; ni au-delà de 2,5 (allure
+/// à 2 et rayon modulé jusqu'à × 5 la portaient à 10 : la figure couvrait l'écran).
 const GEO_MIN: f32 = 0.5;
+const GEO_MAX: f32 = 2.5;
 /// Trait plus fin que ça (px) : rien n'est dessiné (tiny-skia trace 1 px pour une largeur nulle).
 const TRAIT_MIN: f32 = 0.05;
 
@@ -145,10 +147,13 @@ impl Pose {
         (c.0 + dx * cos - dy * sin + self.decalage.0, c.1 + dx * sin + dy * cos + self.decalage.1)
     }
 
-    /// Zone d'une figure contenue dans le carré de demi-côté `e` px autour de `centre`, une fois posée.
-    fn autour(&self, centre: (f32, f32), e: f32) -> IRect {
+    /// Zone d'une figure contenue dans le carré de demi-côté `e` px autour de `centre`, une fois
+    /// posée ; `epaisseur` : son trait le plus large (px), qu'un trait épaissi de `traits` élargit
+    /// (le reste de la figure, lui, ne grandit pas avec les traits).
+    fn autour(&self, centre: (f32, f32), e: f32, epaisseur: f32) -> IRect {
         let tourne = if self.angle != 0.0 { SQRT_2 } else { 1.0 };
-        autour((centre.0 + self.decalage.0, centre.1 + self.decalage.1), e * self.geo * self.traits.max(1.0) * tourne)
+        let demi = e * self.geo + epaisseur * (self.traits - 1.0).max(0.0);
+        autour((centre.0 + self.decalage.0, centre.1 + self.decalage.1), demi * tourne)
     }
 }
 
@@ -593,7 +598,7 @@ impl Figures {
             self.poses[i] = Pose {
                 centre,
                 angle: if geo { self.angles[i] } else { 0.0 },
-                geo: if geo { (a.echelle * m.rayon).max(GEO_MIN) } else { 1.0 },
+                geo: if geo { (a.echelle * m.rayon).clamp(GEO_MIN, GEO_MAX) } else { 1.0 },
                 traits: m.taille,
                 decalage: if geo { ((a.decalage_x + m.decalage * FIG_DECALAGE) * scale, a.decalage_y * scale) } else { (0.0, 0.0) },
                 alpha: a.opacite * m.opacite * m.luminosite,
@@ -652,7 +657,7 @@ impl Figures {
             let r = match i {
                 TRAIT => self.plus.rect_trait(scale * pose.traits.max(1.0), cfg),
                 PENDULE => self.plus.rect_pendule(cursor, scale, pose.traits, cfg),
-                _ => Some(pose.autour(centre, self.etendue(i, cfg) * scale)),
+                _ => Some(pose.autour(centre, self.etendue(i, cfg) * scale, trait_max(i, cfg) * scale)),
             };
             zone = crate::layer::union(zone, r);
         }
@@ -770,6 +775,21 @@ impl Figures {
 fn autour((cx, cy): (f32, f32), e: f32) -> IRect {
     let e = e + 2.0;
     ((cx - e).floor() as i32, (cy - e).floor() as i32, (cx + e).ceil() as i32, (cy + e).ceil() as i32)
+}
+
+/// Trait le plus large que la figure `i` épaissit avec ses `traits` (px à 100 %) : les arcs, le
+/// contour de l'anneau (jusqu'à trois fois son épaisseur avec la basse et la montée), de l'orbe
+/// (ou de ses échos), de la voix et des gouttes. Les points (trame, quatre temps) ne s'épaississent
+/// pas.
+fn trait_max(i: usize, cfg: &Config) -> f32 {
+    match i {
+        ARCS => cfg.arcs.epaisseur,
+        ANNEAU => (3.0 * cfg.anneau.epaisseur).max(1.2),
+        ORBE => cfg.orbe.epaisseur.max(1.7),
+        VOIX => cfg.voix.epaisseur,
+        GOUTTES => cfg.gouttes.epaisseur,
+        _ => 0.0,
+    }
 }
 
 #[cfg(test)]

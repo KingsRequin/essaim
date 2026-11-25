@@ -316,10 +316,12 @@ const R_MIN_PX: f32 = 1.0;
 /// Pastilles au plus par trait ou anneau : un trait démesuré (coordonnées aberrantes) garde sa
 /// longueur, ses pastilles plus espacées, au lieu de remplir la mémoire.
 const MAX_PAR_TRAIT: usize = 20_000;
-/// Garde-fou de mémoire sur l'image entière (~24 Mo de pastilles) : très au-dessus d'une image
-/// réelle (un halo sur une fenêtre agrandie en 4K en pose ~33 000), il ne coupe jamais l'essaim,
-/// dessiné après l'habillage.
+/// Garde-fou de mémoire sur l'image entière (~24 Mo de pastilles), et la part que les traînées de
+/// l'essaim (`Canvas::trainee`) peuvent en prendre : au-delà, seules leurs pastilles sont
+/// laissées. Le reste (têtes, particules, éclats, figures, habillage : un halo sur une fenêtre
+/// agrandie en 4K en pose ~33 000) garde toujours au moins 200 000 places.
 const MAX_PASTILLES: usize = 500_000;
+const MAX_TRAINEES: usize = 300_000;
 
 /// Rapport entre le demi-côté de l'image d'une pastille et le rayon de son disque.
 fn marge(cote: u32) -> f32 {
@@ -436,11 +438,14 @@ struct SpriteCanvas {
     vignette: Vignette,
     /// Pixels de l'écran par unité de dessin.
     echelle: f32,
+    /// Pastilles des traînées posées à cette image, et traînée en cours de pose.
+    trainees: usize,
+    en_trainee: bool,
 }
 
 impl Default for SpriteCanvas {
     fn default() -> Self {
-        Self { rects: Vec::new(), sources: Vec::new(), colors: Vec::new(), voiles: Vec::new(), vignette: Vignette::default(), echelle: 1.0 }
+        Self { rects: Vec::new(), sources: Vec::new(), colors: Vec::new(), voiles: Vec::new(), vignette: Vignette::default(), echelle: 1.0, trainees: 0, en_trainee: false }
     }
 }
 
@@ -475,6 +480,7 @@ impl SpriteCanvas {
         vider(&mut self.colors);
         vider(&mut self.voiles);
         self.vignette.place = None;
+        (self.trainees, self.en_trainee) = (0, false);
     }
 
     /// Rayon minimal d'une pastille, en unités de dessin.
@@ -502,6 +508,12 @@ impl SpriteCanvas {
     fn poser(&mut self, x: f32, y: f32, r: f32, c: D2D1_COLOR_F) {
         if !(fini((x, y)) && r.is_finite()) || c.a <= 0.0 || self.rects.len() >= MAX_PASTILLES {
             return;
+        }
+        if self.en_trainee {
+            if self.trainees >= MAX_TRAINEES {
+                return;
+            }
+            self.trainees += 1;
         }
         let (cote, x0) = niveau(r * self.echelle);
         // le disque occupe 1 / marge de l'image : on élargit pour qu'il ait le rayon r
@@ -554,6 +566,12 @@ impl Canvas for SpriteCanvas {
             // le premier point d'un segment est le dernier du précédent : pas de doublon
             self.stroke(w[0], w[1], width, rgb, alpha, i == 0);
         }
+    }
+
+    fn trainee(&mut self, pts: &[(f32, f32)], width: f32, rgb: Rgb, alpha: f32, smooth: bool) {
+        self.en_trainee = true;
+        self.polyline(pts, width, rgb, alpha, smooth);
+        self.en_trainee = false;
     }
 
     fn circle(&mut self, x: f32, y: f32, r: f32, rgb: Rgb, alpha: f32) {
@@ -666,6 +684,26 @@ mod tests {
         let mut v: Vec<u8> = Vec::with_capacity(RENDRE_AU_DELA);
         vider(&mut v);
         assert_eq!(v.capacity(), RENDRE_AU_DELA);
+    }
+
+    #[test]
+    fn le_plafond_ne_coupe_que_les_trainees() {
+        // des traînées démesurées : plafonnées à leur part
+        let mut s = SpriteCanvas::default();
+        for _ in 0..MAX_TRAINEES / MAX_PAR_TRAIT + 2 {
+            s.trainee(&[(0.0, 0.0), (1.0e9, 0.0)], 2.0, (255, 0, 0), 1.0, true);
+        }
+        assert_eq!((s.trainees, s.rects.len()), (MAX_TRAINEES, MAX_TRAINEES));
+        // têtes, particules, figures posées après : toutes là
+        for i in 0..5000 {
+            s.circle(i as f32, 0.0, 3.0, (255, 255, 255), 1.0);
+        }
+        s.line((0.0, 0.0), (1.0e9, 0.0), 2.0, (255, 0, 0), 1.0, true);
+        assert_eq!(s.rects.len(), MAX_TRAINEES + 5000 + MAX_PAR_TRAIT + 1);
+        // une image neuve repart de zéro
+        s.vider();
+        s.trainee(&[(0.0, 0.0), (10.0, 0.0)], 2.0, (255, 0, 0), 1.0, true);
+        assert!(s.trainees > 0 && s.trainees == s.rects.len());
     }
 
     #[test]

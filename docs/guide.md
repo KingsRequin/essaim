@@ -90,7 +90,10 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   une quantité positive est sans effet seule, l'opacité étant déjà au plus, mais compense une
   autre modulation qui la baisse). En négatif, ces parts multipliées s'arrêtent à leur borne :
   le rayon et la traînée à −90 % (× 0,1), l'accélération, la taille et la lueur à −100 % ; une
-  figure, elle, ne descend pas sous la moitié de sa taille (échelle × rayon, au moins × 0,5). La
+  figure, elle, reste entre la moitié et deux fois et demie sa taille (échelle × rayon, de × 0,5
+  à × 2,5 : elle ne couvre jamais l'écran). Quel que soit le réglage, l'essaim reste à moins de
+  1 200 px du pointeur (rayon et décalage réduits ensemble au-delà), et une traînée ne fait pas
+  plus de cinq tours de son trajet (au-delà, elle repasserait sur elle-même). La
   fenêtre des réglages affiche cet effet borné, source à fond, et son infobulle dit d'où la
   source à fond ne change plus rien (−22,5 % pour le rayon, −30 % pour la traînée, −50 % pour
   l'accélération et la lueur, −66,7 % pour la taille) ; la glissière va quand même de −100 à
@@ -113,7 +116,8 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
   resserrent au quart), dans des bornes lisibles. Avec le réglage, la rotation reste entre −180
   et 180 tr/min (celle d'une figure aussi) et la vitesse sur le trajet entre 0 et 60 radians/s.
   Une figure ne descend pas sous la moitié de sa taille (l'échelle 0,5 de son allure) : plus
-  petite, elle se ramasserait sur le pointeur.
+  petite, elle se ramasserait sur le pointeur ; ni au-delà de deux fois et demie (elle couvrirait
+  l'écran).
 
 Les réglages et presets d'avant ces listes (`[musique]`, `[clic]`, `[scintillement]`,
 `[fissures] actives`, `[bordure] intensite`, `[couleur] musique`, `[audio] pulsation_tempo`,
@@ -182,6 +186,8 @@ garde son allure (essai
   écran. 400 particules vivantes au plus.
 - **Fissures** (`[fissures] taille`, `duree`) : une fissure qui s'ouvre sous le pointeur
   (déclencheur `fissure`, au clic par défaut), s'éclaire au début et sur les kicks, puis s'efface.
+  Sa taille est celle du réglage fois la force du déclencheur, ses branches à 400 px au plus du
+  point (à 100 %).
 - **Sillage** : quand la souris file vite, une poussière reste derrière elle (`[sillage]`) ; on
   le voit aussi dans le grand aperçu des réglages quand la souris y file.
 - **Inertie** (`[orbite] inertie`, 0 à 1, 0 par défaut) : le centre de l'orbite suit le pointeur
@@ -357,7 +363,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   écran (jeu, vidéo), qu'elle ait le clavier ou non ; avec un jeu en plein écran sur un écran et
   le pointeur sur l'autre, il continue. Un menu, une notification, une bulle ou la surcouche
   d'une autre appli (Discord, Steam, NVIDIA) au-dessus d'une vidéo en plein écran ne la font pas
-  reprendre ; une vraie fenêtre (à barre de titre) passée devant, si.
+  reprendre ; une vraie fenêtre (à barre de titre) passée devant, si, comme une appli sans cadre
+  qu'on vient d'activer (cliquée ou choisie par Alt+Tab).
 - **Pauses automatiques** (`[pause]`, propres à la machine, hors presets) :
   - `ne_pas_deranger` (oui par défaut) : pause quand Windows ne veut pas être dérangé (appli en
     plein écran sur l'écran du pointeur, jeu Direct3D en plein écran exclusif, mode
@@ -403,7 +410,9 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
   avec *Masquer des captures*. L'essaim y grandit avec la fenêtre et y tient toujours entier, éclats
   et ondes compris, quelle que soit sa forme. Sans `[rendu] cadence`, elle tourne à 60 images/s
   au moins sans suivre tout un écran plus rapide (72 à 144 Hz, 60 à 240 Hz) ; avec une cadence
-  fixée, elle la tient (jamais en dessous sur un écran assez rapide, jamais au-dessus).
+  fixée, elle la tient (jamais en dessous sur un écran assez rapide, au plus 10 % au-dessus quand
+  l'écran ne s'y divise pas juste : des images régulières valent mieux qu'une attente qui en
+  sauterait une sur deux).
 - **Raccourcis globaux** (`[raccourcis] actif`) : Ctrl+Alt+→ / ← preset suivant / précédent
   (une bulle de l'icône le nomme), Ctrl+Alt+P pause, Ctrl+Alt+F projecteur. Ils passent par `RegisterHotKey` : Windows
   prévient Essaim de ces seules touches, sans hook sur le clavier. Pour Windows, AltGr vaut

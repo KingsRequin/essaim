@@ -483,10 +483,11 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut raison_publiee = String::new();
     let mut adaptatif = adaptatif::Adaptatif::default();
     // cadence visée sans le plafond adaptatif (0 = celle de l'écran), et fréquence de l'écran du
-    // pointeur (0 = inconnue) : la raison « Allégé » n'est dite que si ce plafond joue ; la
-    // fréquence sert aussi d'attente quand `DwmFlush` ne compose rien
+    // pointeur (0 = inconnue) : la raison « Allégé » n'est dite que si ce plafond joue
     let mut cadence_visee = conf.cfg.rendu.cadence;
     let mut frequence = 0u32;
+    // fréquence de l'écran le plus rapide : celle que suit le compositeur (attente de `DwmFlush`)
+    let mut frequence_composition = 0u32;
 
     let start = Instant::now();
     let mut last = start;
@@ -500,6 +501,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
     let mut droit_avant = false;
     // appuis notés par Windows avant le lancement : lus et oubliés (pas de clic fantôme au départ)
     let _ = (bouton(false), bouton(true));
+    // position illisible (bureau sécurisé…) ou pause de Windows (session, écran éteint) au tour
+    // précédent : le bit « appuyé depuis la dernière lecture » de la lecture suivante peut venir
+    // de clics faits ailleurs (invite de l'UAC, écran de connexion), il est ignoré
+    let mut boutons_douteux = false;
     // mode sans flashs (relu chaque seconde : Windows peut changer d'avis) ; le cadre de la
     // fenêtre au premier plan est relu à chaque image (`lire_fenetre`)
     let mut doux = win::sans_flashs(conf.cfg.rendu.sans_flashs);
@@ -528,6 +533,9 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         }
         // toutes les commandes arrivées depuis le dernier tour (menu, raccourcis), dans l'ordre
         let mut sortir = false;
+        // preset appliqué par un raccourci dans ce tour : les réglages ne sont relus qu'après, un
+        // second Ctrl+Alt+→ part de lui (sinon deux appuis rapprochés n'avancent que d'un preset)
+        let mut applique: Option<String> = None;
         while let c @ 1.. = win::take_command() {
             match c {
                 win::CMD_QUIT => {
@@ -549,9 +557,12 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
                 win::CMD_PROJECTEUR => effets.demander_projecteur(),
                 c @ (win::CMD_SUIVANT | win::CMD_PRECEDENT) => {
                     let pas = if c == win::CMD_SUIVANT { 1 } else { -1 };
-                    if let Some(nom) = profils::voisin(&conf.cfg, pas) {
+                    if let Some(nom) = profils::voisin(&conf.cfg, applique.as_deref(), pas) {
                         match profils::appliquer(&nom) {
-                            Ok(()) => win::bulle(&format!("Preset « {nom} »")),
+                            Ok(()) => {
+                                win::bulle(&format!("Preset « {nom} »"));
+                                applique = Some(nom);
+                            }
                             Err(e) => log::warn!("raccourci : preset « {nom} » non appliqué ({e})"),
                         }
                     }
@@ -647,6 +658,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             win::raccourcis_suivent_clavier();
             // fréquence de l'écran du pointeur : dit si le plafond adaptatif change quelque chose
             frequence = win::frequence_ecran(last_pos.0, last_pos.1);
+            frequence_composition = win::frequence_max(&monitors);
         }
         if (timed || config::take_reload_request()) && conf.reload() {
             conf_gen += 1;
@@ -687,8 +699,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         prisme.set_wanted(cfg.couleur.synchro_prisme);
         // preset en place (interface locale, infobulle de l'icône) : recherché quand les réglages changent
         if preset.as_ref().is_none_or(|p| p.0 != conf_gen) {
-            let nom = profils::list().into_iter().find(|p| profils::same(&p.cfg, cfg)).map(|p| p.name);
-            preset = Some((conf_gen, nom));
+            preset = Some((conf_gen, profils::en_place(cfg)));
         }
         let nom_preset = preset.as_ref().and_then(|p| p.1.as_deref());
         let fields = (user_paused, fs_paused, !user_paused && !retrait, backend.is_gpu(), prisme.connected(), conf_gen);
@@ -729,6 +740,8 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             last_sound = now;
         }
         let ((down, appui), (droit, appui_droit)) = (bouton(false), bouton(true));
+        let douteux = std::mem::replace(&mut boutons_douteux, cur.is_none() || retenue.systeme) || cur.is_none();
+        let (appui, appui_droit) = (appui && !douteux, appui_droit && !douteux);
         let (clic_neuf, droit_neuf) = (nouveau_clic(down, appui, was_down), nouveau_clic(droit, appui_droit, droit_avant));
         if down || droit || clic_neuf || droit_neuf {
             last_click = now;
@@ -894,7 +907,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
             if cracks.len() >= MAX_CRACKS {
                 cracks.remove(0);
             }
-            cracks.push(Crack::new(x, y, t, cfg.fissures.taille * force * scale, &mut rng).a_l_echelle(scale));
+            cracks.push(Crack::new(x, y, t, render::taille_fissure(cfg.fissures.taille, force, scale), &mut rng).a_l_echelle(scale));
         }
         render::set_decalage(swarm.teinte_globale());
         if let Some(c) = icone_appli.suivre(cfg.suit_icone()) {
@@ -944,7 +957,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         // équerres et liseré : seulement quand leur dessin change
         crack_rects.extend(effets.zones_loin());
         let rgb = render::prisme(cfg, t, 1.0);
-        border.tick(true, &cfg.bordure, rgb, now);
+        border.tick(colorer, &cfg.bordure, rgb, now);
         let env = swarm.env;
         let dessiner = |cv: &mut dyn canvas::Canvas, here: bool| {
             for c in &cracks {
@@ -1001,7 +1014,10 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<bool> {
         if cadence == 0 {
             let avant = Instant::now();
             let ok = unsafe { DwmFlush() }.is_ok();
-            let periode = Duration::from_secs_f64(1.0 / f64::from(if frequence > 0 { frequence } else { 60 }));
+            // période de l'écran le plus rapide : le compositeur suit celui-là ; celle de l'écran
+            // du pointeur (60 Hz à côté d'un 144 Hz) prenait chaque image pour du vide
+            let f = [frequence_composition, frequence].into_iter().max().filter(|&f| f > 0).unwrap_or(60);
+            let periode = Duration::from_secs_f64(1.0 / f64::from(f));
             // rendu vite ET moins d'une demi-période depuis le précédent : une image lourde, qui
             // trouve le rafraîchissement suivant tout proche, n'est pas prise pour du vide
             let vide = avant.elapsed() < COMPOSITION_MIN && dernier_flush.elapsed() < periode / 2;

@@ -144,6 +144,9 @@ pub fn recente() -> String {
 pub struct Etat {
     /// Pause, avec sa raison (« Ne pas déranger », « Sur batterie », « Appli : obs64.exe »).
     pub pause: Option<String>,
+    /// La pause vient de Windows (session verrouillée, déconnectée ou à distance, écran éteint) :
+    /// à sa fin, l'état des boutons de la souris lu juste après n'est pas fiable.
+    pub systeme: bool,
     /// Plafond de cadence (0 = aucun).
     pub plafond: u32,
 }
@@ -190,9 +193,11 @@ impl Pauses {
         let appli = self.premier_plan.as_ref().and_then(|a| a.noms().find_map(|exe| appli_en_pause(&cfg.applis, exe)));
         // session verrouillée, déconnectée ou à distance, écran éteint : toujours, quel que soit
         // `[pause]`
-        let pause = if let Some(s) = crate::win::session_retenue() {
+        let session = crate::win::session_retenue();
+        let eteint = session.is_none() && crate::win::ecran_eteint();
+        let pause = if let Some(s) = session {
             Some(s.to_owned())
-        } else if crate::win::ecran_eteint() {
+        } else if eteint {
             Some("Écran éteint".to_owned())
         } else if self.derange {
             Some("Ne pas déranger".to_owned())
@@ -203,7 +208,7 @@ impl Pauses {
         };
         let plafond = if batterie == EffetBatterie::Reduire { CADENCE_BATTERIE } else { 0 };
         self.noter(&pause, plafond);
-        Etat { pause, plafond }
+        Etat { pause, systeme: session.is_some() || eteint, plafond }
     }
 
     /// Entrées et sorties notées au journal, comme le plein écran.

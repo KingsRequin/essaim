@@ -420,6 +420,13 @@ pub fn frequence_ecran(x: i32, y: i32) -> u32 {
     f
 }
 
+/// Fréquence de l'écran le plus rapide parmi `ecrans` (`monitors`), en Hz ; 0 si aucune n'est
+/// connue. Avec des écrans de fréquences différentes, le compositeur (et donc `DwmFlush`) suit
+/// celui-là.
+pub fn frequence_max(ecrans: &[(isize, crate::layer::IRect)]) -> u32 {
+    ecrans.iter().map(|&(h, _)| frequence_moniteur(HMONITOR(h as *mut _))).max().unwrap_or(0)
+}
+
 /// Fréquence de l'écran qui porte la fenêtre `hwnd` (Hz, 0 = inconnue). Sans cache : sert à un
 /// autre fil que la boucle principale (fenêtre pour le stream), qui la relit de lui-même.
 pub fn frequence_fenetre(hwnd: HWND) -> u32 {
@@ -441,6 +448,9 @@ pub struct VueFenetre {
     pub possedee: bool,
     /// En plein écran sur l'écran du pointeur (`covers_monitor`, même écran que le point).
     pub plein_ecran: bool,
+    /// Racine de la fenêtre au premier plan (`GetAncestor(GetForegroundWindow(), GA_ROOTOWNER)`) :
+    /// l'application qu'on utilise, même sans cadre ni barre de titre.
+    pub premier_plan: bool,
     /// Cadre affiché, sans la marge invisible de redimensionnement.
     pub cadre: RECT,
 }
@@ -501,12 +511,13 @@ fn survolee<T>(fenetres: impl IntoIterator<Item = (T, VueFenetre)>, x: i32, y: i
 /// dessous) avec le pointeur en (`x`, `y`). `precedente` : celle retenue au dernier passage, si
 /// elle couvre encore l'écran du pointeur (`None` sinon). La fenêtre survolée en plein écran
 /// l'emporte ; sinon la précédente reste tant que la fenêtre survolée n'est pas une vraie fenêtre
-/// (`vraie_fenetre`) : une fenêtre sans cadre ni bulle reconnue, un instant de flottement de
-/// l'ordre Z, ne lèvent pas la pause.
+/// (`vraie_fenetre`) ou la racine de la fenêtre au premier plan (une appli sans cadre qu'on vient
+/// d'activer : Spotify, Discord, un lanceur de jeu) : une fenêtre sans cadre ni bulle reconnue,
+/// un instant de flottement de l'ordre Z, ne lèvent pas la pause.
 pub fn plein_ecran_retenu<T>(fenetres: impl IntoIterator<Item = (T, VueFenetre)>, x: i32, y: i32, precedente: Option<T>) -> Option<T> {
     match survolee(fenetres, x, y) {
         Some((h, v)) if v.plein_ecran => Some(h),
-        Some((_, v)) if vraie_fenetre(&v) => None,
+        Some((_, v)) if vraie_fenetre(&v) || v.premier_plan => None,
         _ => precedente,
     }
 }
@@ -538,6 +549,7 @@ fn vue_fenetre(hwnd: HWND, x: i32, y: i32, ecran: HMONITOR) -> Option<VueFenetre
             classe: String::from_utf16_lossy(&classe[..n]),
             possedee: GetWindow(hwnd, GW_OWNER).is_ok_and(|p| !p.is_invalid()),
             plein_ecran: plein_ecran_sur(hwnd, ecran),
+            premier_plan: GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) == hwnd,
             cadre,
         })
     }

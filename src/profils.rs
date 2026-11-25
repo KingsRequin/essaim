@@ -52,11 +52,25 @@ pub fn list() -> Vec<Profile> {
 /// Fichiers `.toml` du dossier, avec leur date et leur taille, triés.
 type Empreinte = Vec<(std::ffi::OsString, Option<SystemTime>, u64)>;
 
+/// Réglages de profil `(section, clé, valeur)` d'un jeu de réglages, à plat.
+type Reglages = Vec<(String, String, serde_json::Value)>;
+
+/// La liste des presets, et les réglages de profil de chacun, mis à plat une fois avec elle :
+/// trouver le preset en place ne sérialise plus que les réglages en place, pas tous les presets.
+struct Liste {
+    profils: Vec<Profile>,
+    reglages: Vec<Reglages>,
+    generation: u64,
+}
+
+/// Listes lues depuis le lancement (numéro de la dernière : `generation_liste`).
+static GENERATIONS: AtomicU64 = AtomicU64::new(0);
+
 struct Cache {
     dossier: PathBuf,
     empreinte: Empreinte,
     ecritures: u64,
-    liste: Vec<Profile>,
+    liste: std::sync::Arc<Liste>,
 }
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
@@ -88,6 +102,10 @@ fn empreinte(dir: &Path) -> Empreinte {
 }
 
 fn list_in(dir: &Path) -> Vec<Profile> {
+    liste_in(dir).profils.clone()
+}
+
+fn liste_in(dir: &Path) -> std::sync::Arc<Liste> {
     // relevées avant la lecture : une écriture faite pendant celle-ci invalide le résultat
     let ecritures = ECRITURES.load(Ordering::Relaxed);
     let emp = empreinte(dir);
@@ -100,9 +118,31 @@ fn list_in(dir: &Path) -> Vec<Profile> {
     // lecture hors du verrou : les autres fils (menu de l'icône, boucle principale) n'attendent
     // pas la lecture de tous les presets ; deux lectures simultanées écrivent chacune un cache
     // juste pour son empreinte, une autre empreinte le fait relire
-    let liste = lire_liste(dir);
+    let profils = lire_liste(dir);
+    let reglages = profils.iter().map(|p| reglages_de_profil(&p.cfg)).collect();
+    let generation = GENERATIONS.fetch_add(1, Ordering::Relaxed) + 1;
+    let liste = std::sync::Arc::new(Liste { profils, reglages, generation });
     *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Cache { dossier: dir.to_owned(), empreinte: emp, ecritures, liste: liste.clone() });
     liste
+}
+
+/// Rang dans `liste` du preset dont les réglages de profil sont ceux de `cfg` (comme `same`).
+fn rang_en_place(liste: &Liste, cfg: &Config) -> Option<usize> {
+    let b = serde_json::to_value(cfg).ok()?;
+    liste.reglages.iter().position(|r| memes(r, &b, true))
+}
+
+/// Nom du preset en place (`same`), cherché dans la liste gardée en mémoire.
+pub fn en_place(cfg: &Config) -> Option<String> {
+    let liste = liste_in(&dir());
+    rang_en_place(&liste, cfg).map(|i| liste.profils[i].name.clone())
+}
+
+/// Numéro de la liste des presets : il change chaque fois qu'elle est relue (dossier changé,
+/// preset enregistré, renommé ou supprimé). La fenêtre des réglages ne renvoie la liste à la page
+/// que quand il change.
+pub fn generation_liste() -> u64 {
+    liste_in(&dir()).generation
 }
 
 fn lire_liste(dir: &Path) -> Vec<Profile> {
@@ -407,7 +447,7 @@ fn pareilles(v: &serde_json::Value, w: Option<&serde_json::Value>, vide_neutre: 
 }
 
 /// Réglages de profil `(section, clé, valeur)` de `cfg`.
-fn reglages_de_profil(cfg: &Config) -> Vec<(String, String, serde_json::Value)> {
+fn reglages_de_profil(cfg: &Config) -> Reglages {
     let Ok(serde_json::Value::Object(v)) = serde_json::to_value(cfg) else { return Vec::new() };
     v.into_iter()
         .flat_map(|(s, keys)| {
@@ -419,14 +459,14 @@ fn reglages_de_profil(cfg: &Config) -> Vec<(String, String, serde_json::Value)> 
 }
 
 /// Valeur `[section] key` de `cfg` en JSON.
-fn valeur(cfg: &serde_json::Value, section: &str, key: &str) -> Option<serde_json::Value> {
-    cfg.get(section).and_then(|s| s.get(key)).cloned()
+fn valeur<'a>(cfg: &'a serde_json::Value, section: &str, key: &str) -> Option<&'a serde_json::Value> {
+    cfg.get(section).and_then(|s| s.get(key))
 }
 
 /// Nombre de réglages de profil qui diffèrent entre `a` et `b`.
 pub fn ecarts(a: &Config, b: &Config) -> usize {
     let Ok(b) = serde_json::to_value(b) else { return usize::MAX };
-    reglages_de_profil(a).iter().filter(|(s, k, v)| !pareilles(v, valeur(&b, s, k).as_ref(), true)).count()
+    reglages_de_profil(a).iter().filter(|(s, k, v)| !pareilles(v, valeur(&b, s, k), true)).count()
 }
 
 pub fn delete(name: &str) -> Result<(), String> {
@@ -607,20 +647,24 @@ fn cles_a_remettre(avant: &Config, apres: &Config, actuel: &Config) -> Vec<(Stri
     let (Ok(av), Ok(ac)) = (serde_json::to_value(avant), serde_json::to_value(actuel)) else { return Vec::new() };
     reglages_de_profil(apres)
         .into_iter()
-        .filter(|(s, k, v)| !pareilles(v, valeur(&av, s, k).as_ref(), false) && pareilles(v, valeur(&ac, s, k).as_ref(), false))
+        .filter(|(s, k, v)| !pareilles(v, valeur(&av, s, k), false) && pareilles(v, valeur(&ac, s, k), false))
         .map(|(s, k, _)| (s, k))
         .collect()
 }
 
-/// Preset voisin de celui en place dans la liste (`pas` = 1 : suivant, -1 : précédent).
-pub fn voisin(cfg: &Config, pas: i32) -> Option<String> {
-    let liste = list();
-    if liste.is_empty() {
+/// Preset voisin dans la liste (`pas` = 1 : suivant, -1 : précédent) : de `depuis` (nom d'un
+/// preset tout juste appliqué, que `cfg` ne montre pas encore) s'il est dans la liste, sinon de
+/// celui en place.
+pub fn voisin(cfg: &Config, depuis: Option<&str>, pas: i32) -> Option<String> {
+    let liste = liste_in(&dir());
+    let noms = &liste.profils;
+    if noms.is_empty() {
         return None;
     }
-    let n = liste.len() as i32;
-    let i = liste.iter().position(|p| same(&p.cfg, cfg)).map_or(if pas > 0 { -1 } else { 0 }, |i| i as i32);
-    Some(liste[(i + pas).rem_euclid(n) as usize].name.clone())
+    let n = noms.len() as i32;
+    let rang = depuis.and_then(|d| noms.iter().position(|p| meme_nom(&p.name, d))).or_else(|| rang_en_place(&liste, cfg));
+    let i = rang.map_or(if pas > 0 { -1 } else { 0 }, |i| i as i32);
+    Some(noms[(i + pas).rem_euclid(n) as usize].name.clone())
 }
 
 /// Les réglages de profil de `a` et `b` sont-ils identiques (aux arrondis près) ?
@@ -636,7 +680,12 @@ fn same_strict(a: &Config, b: &Config) -> bool {
 
 fn meme_reglages(a: &Config, b: &Config, vide_neutre: bool) -> bool {
     let Ok(b) = serde_json::to_value(b) else { return false };
-    reglages_de_profil(a).iter().all(|(s, k, v)| pareilles(v, valeur(&b, s, k).as_ref(), vide_neutre))
+    memes(&reglages_de_profil(a), &b, vide_neutre)
+}
+
+/// Les réglages de profil `reglages` ont-ils tous la même valeur dans `b` (réglages en JSON) ?
+fn memes(reglages: &[(String, String, serde_json::Value)], b: &serde_json::Value, vide_neutre: bool) -> bool {
+    reglages.iter().all(|(s, k, v)| pareilles(v, valeur(b, s, k), vide_neutre))
 }
 
 #[cfg(test)]

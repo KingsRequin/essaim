@@ -239,6 +239,9 @@ struct Fenetre {
     son_envoye: (u32, u32),
     /// Dates de `config.toml` et du dossier des presets au dernier état envoyé.
     dates: (Option<SystemTime>, Option<SystemTime>),
+    /// Numéro de la liste des presets envoyée en dernier à la page (`profils::generation_liste`) :
+    /// elle n'est renvoyée que s'il change, ou si la page (re)chargée redemande son état.
+    presets_envoyes: Option<u64>,
     /// Aperçus des jeux de curseurs déjà dessinés (clé → images).
     apercus: std::collections::HashMap<String, Value>,
     /// Réglages et curseurs d'avant le dernier preset appliqué (pour « Annuler »).
@@ -349,8 +352,12 @@ impl Fenetre {
             }
         }
         let cfg = lu.unwrap_or_default();
-        let liste = profils::list();
-        let actif = liste.iter().find(|p| profils::same(&p.cfg, &cfg)).map(|p| p.name.clone());
+        let actif = profils::en_place(&cfg);
+        // la liste des presets (plusieurs Mo de JSON) n'est renvoyée que si elle a changé depuis
+        // le dernier envoi ; sinon `presets` manque et la page garde la sienne
+        let generation = profils::generation_liste();
+        let envoyer_liste = self.presets_envoyes != Some(generation);
+        let liste = if envoyer_liste || actif.is_none() { profils::list() } else { Vec::new() };
         // sans preset identique : le plus proche, s'il ne diffère que de quelques réglages
         let proche = if actif.is_some() {
             None
@@ -360,15 +367,14 @@ impl Fenetre {
         let date = |p: &profils::Profile| {
             p.date.and_then(|d| d.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs())
         };
-        let presets: Vec<Value> =
-            liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg, "date": date(p) })).collect();
+        let presets: Option<Vec<Value>> = envoyer_liste
+            .then(|| liste.iter().map(|p| json!({ "nom": p.name, "fourni": p.builtin, "reglages": p.cfg, "date": date(p) })).collect());
         let curseurs = crate::souris::actuel();
         let curseurs_nom = self.nom_du_jeu(&curseurs);
         let refus = crate::win::raccourcis_refuses();
-        self.envoyer(&json!({
+        let mut etat = json!({
             "type": "etat",
             "reglages": cfg,
-            "presets": presets,
             "actif": actif,
             "curseurs": curseurs,
             // nom affiché du jeu (« Windows par défaut » plutôt que « @main.cpl,-1020 »)
@@ -383,7 +389,12 @@ impl Fenetre {
             "version": env!("CARGO_PKG_VERSION"),
             "illisible": illisible,
             "prisme": crate::prisme::present(),
-        }));
+        });
+        if let Some(presets) = presets {
+            etat["presets"] = Value::Array(presets);
+            self.presets_envoyes = Some(generation);
+        }
+        self.envoyer(&etat);
     }
 
     /// État de la mise à jour, envoyé à la page quand il change.
@@ -451,6 +462,8 @@ impl Fenetre {
                     self.ecoute = true;
                     self.armer();
                 }
+                // page (re)chargée : elle n'a aucune liste, renvoyée en entier
+                self.presets_envoyes = None;
                 self.etat();
                 // la page (re)chargée n'a pas l'état de la mise à jour : renvoyé
                 self.maj = None;
@@ -1296,6 +1309,7 @@ fn run(son: Arc<AudioShared>, place: &Place) -> anyhow::Result<()> {
         son,
         son_envoye: (u32::MAX, 0),
         dates: (None, None),
+        presets_envoyes: None,
         apercus: Default::default(),
         avant: None,
         ecoute: false,
