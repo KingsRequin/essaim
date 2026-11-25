@@ -1008,6 +1008,11 @@ fn valeur_run() -> Option<String> {
     }
 }
 
+/// Écritures de la valeur `Essaim` de la clé Run : le fil qui complète une ancienne commande et
+/// la page qui coche ou décoche le démarrage ne se croisent pas (une valeur supprimée par
+/// l'utilisateur n'est pas réécrite juste après).
+static VERROU_RUN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Écrit la valeur `Essaim` de la clé Run.
 fn ecrire_run(valeur: &str) -> Result<(), String> {
     use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
@@ -1026,11 +1031,14 @@ pub fn demarrage_sans_argument() -> bool {
 /// Clé Run qui lance l'exécutable en cours sans `ARG_DEMARRAGE` (ancienne installation) :
 /// réécrite avec lui. Sa permission dans le Gestionnaire des tâches n'est pas touchée.
 pub fn completer_demarrage() {
+    let _verrou = VERROU_RUN.lock().unwrap_or_else(|e| e.into_inner());
+    // relue sous le verrou : décochée entre-temps, elle n'existe plus et rien n'est réécrit
     let (Some(valeur), Ok(exe)) = (valeur_run(), std::env::current_exe()) else { return };
     if avec_arg_demarrage(&valeur) || !meme_exe(std::path::Path::new(exe_de_la_commande(&valeur)), &exe) {
         return;
     }
-    match ecrire_run(&commande_demarrage(&exe)) {
+    // les arguments déjà inscrits (écrits à la main) sont gardés
+    match ecrire_run(&format!("{} {ARG_DEMARRAGE}", valeur.trim_end())) {
         Ok(()) => log::info!("démarrage : commande complétée de {ARG_DEMARRAGE}"),
         Err(e) => log::warn!("démarrage : commande non complétée ({e})"),
     }
@@ -1086,6 +1094,7 @@ fn demarrage_approuve(octet: u8) -> bool {
 /// Démarrage avec la session : l'exécutable en cours, ou plus rien.
 fn regler_demarrage(actif: bool) -> Result<(), String> {
     use windows::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
+    let _verrou = VERROU_RUN.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         if actif {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
