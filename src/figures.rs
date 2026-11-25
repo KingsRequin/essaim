@@ -899,7 +899,7 @@ mod tests {
                     let (x0, y0, x1, y1) = f.rect(cursor, scale, &cfg).unwrap();
                     let mut pm = Pixmap::new(1600, 1600).unwrap();
                     f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, t, &cfg, scale);
-                    for (j, p) in pm.data().chunks_exact(4).enumerate() {
+                    for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
                         if p[3] > 0 {
                             peints += 1;
                             let (x, y) = ((j % 1600) as i32, (j / 1600) as i32);
@@ -963,8 +963,8 @@ mod tests {
             f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 0.0, cfg, 1.0);
             pm
         };
-        let droite = |pm: &Pixmap| pm.data().chunks_exact(4).enumerate().filter(|(j, p)| p[3] > 0 && j % 600 > 340).count();
-        let opaque = |pm: &Pixmap| pm.data().chunks_exact(4).map(|p| p[3]).max().unwrap_or(0);
+        let droite = |pm: &Pixmap| pm.data().as_chunks::<4>().0.iter().enumerate().filter(|(j, p)| p[3] > 0 && j % 600 > 340).count();
+        let opaque = |pm: &Pixmap| pm.data().as_chunks::<4>().0.iter().map(|p| p[3]).max().unwrap_or(0);
         let avant = image(&h, &cfg);
         (cfg.arcs.allure.decalage_x, cfg.arcs.allure.opacite) = (60.0, 0.5);
         avancer(&mut h, 1.0 / 60.0, 1.0 / 60.0, (300.0, 300.0), 1.0, &AudioView::default(), &Coups::default(), &cfg);
@@ -1152,7 +1152,7 @@ mod tests {
         let mut pm = Pixmap::new(600, 600).unwrap();
         f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, t, &cfg, 1.0);
         // un anneau est dessiné, mais rien sous le pointeur
-        assert!(pm.data().chunks_exact(4).filter(|p| p[3] > 100).count() > 60);
+        assert!(pm.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 100).count() > 60);
         for (dx, dy) in [(0i32, 0i32), (2, 2), (-2, 1)] {
             assert_eq!(pm.pixel((300 + dx) as u32, (300 + dy) as u32).unwrap().alpha(), 0);
         }

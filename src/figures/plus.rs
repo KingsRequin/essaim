@@ -508,7 +508,6 @@ impl Plus {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Orbe, étirée comme l'anneau (`etire` : étirement, cosinus et sinus de sa direction).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dessiner_orbe(&self, p: &Partage, cv: &mut dyn Canvas, pts: &mut Vec<(f32, f32)>, t: f64, cfg: &Config, scale: f32, (tete, queue): (Rgb, Rgb), (e, ec, es): (f32, f32, f32)) {
@@ -618,7 +617,7 @@ mod tests {
     fn peints(f: &Figures, t: f64, cfg: &Config) -> (Pixmap, usize) {
         let mut pm = Pixmap::new(600, 600).unwrap();
         f.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, t, cfg, 1.0);
-        let n = pm.data().chunks_exact(4).filter(|p| p[3] > 60).count();
+        let n = pm.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 60).count();
         (pm, n)
     }
 
@@ -724,7 +723,7 @@ mod tests {
         let (pm, n) = peints(&f, t, &cfg);
         assert!(n > 300, "{n} pixels");
         let (x0, y0, x1, y1) = f.rect((510.0, 300.0), 1.0, &cfg).unwrap();
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             let (x, y) = ((j % 600) as i32, (j / 600) as i32);
             assert!(p[3] == 0 || (x >= x0 && x < x1 && y >= y0 && y < y1), "pixel ({x}, {y}) hors de la zone");
         }

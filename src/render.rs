@@ -2473,7 +2473,7 @@ mod tests {
         }
         assert!(s.trails[0].len() >= 10, "{} points", s.trails[0].len());
         let (pm, _) = render(&s, (100.0, 100.0), 71.0 * dt as f64, &cfg, 1.0);
-        let painted = pm.data().chunks_exact(4).filter(|p| p[3] > 40).count();
+        let painted = pm.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 40).count();
         assert!(painted > 150, "{painted} pixels colorés");
     }
 
@@ -2661,7 +2661,7 @@ mod tests {
         }
         c.draw(&mut SansImage(crate::canvas::PixCanvas { pm: &mut b, origin: (10.0, 20.0) }), 0.0, (255, 0, 0), 1.0);
         let ecart = a.data().iter().zip(b.data()).map(|(p, q)| p.abs_diff(*q) as u32).max().unwrap();
-        let peint = a.data().chunks_exact(4).filter(|p| p[3] > 100).count();
+        let peint = a.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 100).count();
         assert!(peint > 100 && ecart <= 40, "{peint} pixels, écart {ecart}");
     }
 
@@ -2820,7 +2820,7 @@ mod tests {
         let (w, h) = (pm.width(), pm.height());
         let bord = (0..w).flat_map(|x| [(x, 0), (x, h - 1)]).chain((0..h).flat_map(|y| [(0, y), (w - 1, y)])).filter(|&(x, y)| pm.pixel(x, y).unwrap().alpha() > 0).count();
         assert_eq!(bord, 0, "dessin au bord du rectangle");
-        assert!(pm.data().chunks_exact(4).filter(|p| p[3] > 40).count() > 150);
+        assert!(pm.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 40).count() > 150);
     }
 
     #[test]
@@ -2842,13 +2842,13 @@ mod tests {
         let bord = (0..w).flat_map(|x| [(x, 0), (x, h - 1)]).chain((0..h).flat_map(|y| [(0, y), (w - 1, y)])).filter(|&(x, y)| pm.pixel(x, y).unwrap().alpha() > 0).count();
         assert_eq!(bord, 0, "ruban au bord du rectangle");
         // un ruban large est bien là, et aucune tête blanche
-        let peints = pm.data().chunks_exact(4).filter(|p| p[3] > 200).count();
-        let blancs = pm.data().chunks_exact(4).filter(|p| p[3] > 200 && p[0] > 240 && p[1] > 240 && p[2] > 240).count();
+        let peints = pm.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 200).count();
+        let blancs = pm.data().as_chunks::<4>().0.iter().filter(|p| p[3] > 200 && p[0] > 240 && p[1] > 240 && p[2] > 240).count();
         assert!(peints > 800 && blancs == 0, "{peints} pixels pleins, {blancs} blancs");
         // sans rubans : les mêmes réglages redonnent des têtes au cœur blanc
         cfg.rubans.actif = false;
         let (pm, _) = render(&s, C, t, &cfg, 1.5);
-        assert!(pm.data().chunks_exact(4).any(|p| p[3] > 200 && p[0] > 240 && p[1] > 240 && p[2] > 240));
+        assert!(pm.data().as_chunks::<4>().0.iter().any(|p| p[3] > 200 && p[0] > 240 && p[1] > 240 && p[2] > 240));
     }
 
     #[test]
@@ -3197,7 +3197,7 @@ mod tests {
         let mut pm = Pixmap::new(600, 600).unwrap();
         c.draw(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 1.0, (120, 160, 255), 1.0);
         let mut peints = 0;
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             if p[3] > 0 {
                 peints += 1;
                 let (x, y) = ((j % 600) as i32, (j / 600) as i32);

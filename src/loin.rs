@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(zones.len(), 4);
         let pm = image(&l, 0.0, &cfg);
         let mut peints = 0;
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             if p[3] > 0 {
                 peints += 1;
                 assert!(dans(&zones, (j % 1200) as i32, (j / 1200) as i32), "pixel ({}, {}) hors des zones", j % 1200, j / 1200);
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(zones.len(), 4);
         let pm = image(&l, 1.5, &cfg);
         let mut peints = 0;
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             if p[3] > 0 {
                 peints += 1;
                 assert!(dans(&zones, (j % 1200) as i32, (j / 1200) as i32), "pixel ({}, {}) hors des bandes", j % 1200, j / 1200);
@@ -918,7 +918,7 @@ mod tests {
             let zones = l.zones().to_vec();
             let pm = image(&l, 0.0, &cfg);
             let mut peints = 0;
-            for (j, p) in pm.data().chunks_exact(4).enumerate() {
+            for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
                 if p[3] > 0 {
                     let (x, y) = ((j % 1200) as i32, (j / 1200) as i32);
                     peints += 1;
@@ -989,7 +989,7 @@ mod tests {
         assert_eq!(zones, [(0, 800 - 5, 1200, 800)]);
         let pm = image(&l, 1.5, &cfg);
         let mut peints = 0;
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             if p[3] > 0 {
                 peints += 1;
                 assert!(dans(&zones, (j % 1200) as i32, (j / 1200) as i32), "pixel hors de la bande");

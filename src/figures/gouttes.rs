@@ -303,7 +303,7 @@ mod tests {
         let zone = f.rect(C, 1.0, &cfg).unwrap();
         let pm = image(&f, 10.0, &cfg);
         let mut peints = 0;
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             if p[3] > 0 {
                 peints += 1;
                 let (x, y) = ((j % 600) as i32, (j / 600) as i32);

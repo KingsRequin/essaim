@@ -204,7 +204,7 @@ impl Canvas for PixCanvas<'_> {
                     _ => (x1, 2),
                 };
                 let fin = fin.clamp(px_x + 1, x1);
-                let morceau = ligne[px_x as usize * 4..fin as usize * 4].chunks_exact_mut(4);
+                let morceau = ligne[px_x as usize * 4..fin as usize * 4].as_chunks_mut::<4>().0.iter_mut();
                 if nature == 2 {
                     morceau.for_each(|d| sur(d, plein));
                 } else if nature == 1 {

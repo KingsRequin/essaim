@@ -950,7 +950,7 @@ mod tests {
             let mut px = Vec::with_capacity((l * h) as usize);
             for y in 0..h {
                 let ligne = std::slice::from_raw_parts((m.pData as *const u8).add((y * m.RowPitch) as usize), (l * 4) as usize);
-                px.extend(ligne.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]));
+                px.extend(ligne.as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2], p[3]]));
             }
             ctx.Unmap(&copie, 0);
             px
@@ -1016,7 +1016,7 @@ mod tests {
         let _ = unsafe { DestroyWindow(hwnd) };
         // tiny-skia garde du RGBA prémultiplié et l'écrit en PNG à opacité ordinaire
         let mut image = tiny_skia::Pixmap::new(n, n).unwrap();
-        for (d, p) in image.data_mut().chunks_exact_mut(4).zip(&px) {
+        for (d, p) in image.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(&px) {
             d.copy_from_slice(&[p[2], p[1], p[0], p[3]]);
         }
         image.save_png(sortie).unwrap();

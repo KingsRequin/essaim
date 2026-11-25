@@ -500,7 +500,7 @@ fn image(jeu: &Jeu, role: usize, cote: i32) -> Option<Image> {
         let _ = DestroyCursor(HCURSOR(c));
         let (noir, blanc) = (noir?, blanc?);
         let mut pm = tiny_skia::Pixmap::new((cote * n) as u32, cote as u32)?;
-        for ((d, n), b) in pm.data_mut().chunks_exact_mut(4).zip(noir.chunks_exact(4)).zip(blanc.chunks_exact(4)) {
+        for ((d, n), b) in pm.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(noir.as_chunks::<4>().0.iter()).zip(blanc.as_chunks::<4>().0.iter()) {
             let a = 255 - (b[1] as i32 - n[1] as i32).clamp(0, 255);
             // BGRA sur noir = couleur × alpha (déjà prémultipliée)
             d.copy_from_slice(&[n[2].min(a as u8), n[1].min(a as u8), n[0].min(a as u8), a as u8]);

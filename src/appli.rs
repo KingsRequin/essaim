@@ -327,7 +327,7 @@ fn teinte_page(hwnd: HWND) -> Option<f32> {
                 // un pixel sur trois dans chaque sens suffit ; alpha à 255 (la copie n'en a pas)
                 let tout = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);
                 let echantillon: Vec<u8> = tout
-                    .chunks_exact(4)
+                    .as_chunks::<4>().0.iter()
                     .enumerate()
                     .filter(|(i, _)| (i % w as usize).is_multiple_of(3) && (i / w as usize).is_multiple_of(3))
                     .flat_map(|(_, p)| [p[0], p[1], p[2], 255])
@@ -515,8 +515,8 @@ fn icone_rgba(exe: &str, cote: i32) -> Option<(Vec<u8>, usize, usize)> {
         return None;
     }
     let (mut px, l, ht) = unsafe { pixels_icone(h[0])? };
-    let sans_alpha = px.chunks_exact(4).all(|p| p[3] == 0);
-    for p in px.chunks_exact_mut(4) {
+    let sans_alpha = px.as_chunks::<4>().0.iter().all(|p| p[3] == 0);
+    for p in px.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
         if sans_alpha {
             p[3] = 255;
@@ -571,10 +571,10 @@ unsafe fn pixels_icone(icone: HICON) -> Option<(Vec<u8>, usize, usize)> {
 /// est presque grise.
 pub fn teinte_dominante(bgra: &[u8]) -> Option<f32> {
     // vieilles icônes sans alpha : tout est opaque
-    let sans_alpha = bgra.chunks_exact(4).all(|p| p[3] == 0);
+    let sans_alpha = bgra.as_chunks::<4>().0.iter().all(|p| p[3] == 0);
     let mut cases = [0f32; 36];
     let mut pixels: Vec<(f32, f32)> = Vec::new();
-    for p in bgra.chunks_exact(4) {
+    for p in bgra.as_chunks::<4>().0 {
         let a = if sans_alpha { 1.0 } else { p[3] as f32 / 255.0 };
         let (b, g, r) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0);
         let (max, min) = (r.max(g).max(b), r.min(g).min(b));

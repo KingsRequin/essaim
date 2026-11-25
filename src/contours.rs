@@ -69,17 +69,17 @@ pub fn contours(rgba: &[u8], l: usize, h: usize, o: &Options) -> Resultat {
 /// forme ; seuil employé, et s'il porte sur la transparence.
 fn forme(rgba: &[u8], l: usize, h: usize, o: &Options) -> (Vec<f32>, f32, u8, bool) {
     let n = l * h;
-    let opaques = rgba.chunks_exact(4).take(n).filter(|p| p[3] >= 128).count();
+    let opaques = rgba.as_chunks::<4>().0.iter().take(n).filter(|p| p[3] >= 128).count();
     // transparence utile : ni (presque) tout opaque, ni (presque) tout transparent
     if opaques > n / 50 && opaques < n - n / 50 {
         let s = o.seuil.unwrap_or(128).max(1);
-        let valeurs = rgba.chunks_exact(4).take(n).map(|p| p[3] as f32).collect();
+        let valeurs = rgba.as_chunks::<4>().0.iter().take(n).map(|p| p[3] as f32).collect();
         // l'opacité « ≥ s » sur des entiers : le niveau passe entre s − 1 et s
         return inverser(valeurs, s as f32 - 0.5, s, true, o);
     }
     // luminosité, sur fond blanc pour les pixels un peu transparents
     let lum: Vec<u8> = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .take(n)
         .map(|p| {
             let a = p[3] as f32 / 255.0;

@@ -337,7 +337,7 @@ pub unsafe fn planche_pastilles(dc: &ID2D1DeviceContext) -> windows::core::Resul
         crate::canvas::circle(&mut pm, x0 as f32 + c, c, c - 1.0, &blanc);
     }
     // RGBA → BGRA (le blanc prémultiplié a les trois mêmes composantes)
-    let data: Vec<u8> = pm.data().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+    let data: Vec<u8> = pm.data().as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
     unsafe { dc.CreateBitmap(D2D_SIZE_U { width: PLANCHE.0, height: PLANCHE.1 }, Some(data.as_ptr() as *const _), PLANCHE.0 * 4, &proprietes_image()) }
 }
 
@@ -668,7 +668,7 @@ impl Canvas for SpriteCanvas {
         let v = &mut self.vignette;
         if v.id != id || v.pixels.is_empty() {
             v.pixels.clear();
-            v.pixels.extend(img.data().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]));
+            v.pixels.extend(img.data().as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]));
             (v.id, v.l, v.h) = (id, img.width(), img.height());
         }
         v.place = Some((x.round(), y.round(), alpha.clamp(0.0, 1.0)));

@@ -302,7 +302,7 @@ impl Surface {
 /// RGBA → BGRA, pixel par pixel sur des mots de 32 bits (le compilateur le vectorise).
 /// Pixels RGBA (tiny-skia) → BGRA (GDI).
 pub fn rgba_vers_bgra(dst: &mut [u8], src: &[u8]) {
-    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+    for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0.iter()) {
         let p = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
         let q = (p & 0xFF00_FF00) | (p >> 16 & 0xFF) | (p & 0xFF) << 16;
         d.copy_from_slice(&q.to_le_bytes());
@@ -1432,9 +1432,9 @@ fn make_icon(gris: bool) -> Option<HICON> {
         let mut bits: *mut c_void = std::ptr::null_mut();
         let color = CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
         let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (cote * cote * 4) as usize);
-        for (d, s) in dst.chunks_exact_mut(4).zip(pm.data().chunks_exact(4)) {
+        for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(pm.data().as_chunks::<4>().0.iter()) {
             let a = s[3] as u32;
-            let un = |v: u8| if a == 0 { 0 } else { ((v as u32 * 255 + a / 2) / a).min(255) as u8 };
+            let un = |v: u8| (v as u32 * 255 + a / 2).checked_div(a).map_or(0, |x| x.min(255) as u8);
             d[0] = un(s[2]);
             d[1] = un(s[1]);
             d[2] = un(s[0]);

@@ -274,7 +274,7 @@ fn ecrire(titre: &str, artiste: &str, taille: f32, largeur_max: f32) -> Option<T
                 }
                 let _ = GdiFlush();
                 let pixels = std::slice::from_raw_parts(bits as *const u8, (l * h * 4) as usize);
-                for (i, (c, p)) in couverture.iter_mut().zip(pixels.chunks_exact(4)).enumerate() {
+                for (i, (c, p)) in couverture.iter_mut().zip(pixels.as_chunks::<4>().0.iter()).enumerate() {
                     let ligne = (i as i32) / l;
                     let opacite = bandes.iter().find(|b| ligne >= b.0 && ligne < b.1).map_or(0.0, |b| b.2);
                     *c = (p[0].max(p[1]).max(p[2]) as f32 * opacite).round() as u8;
@@ -299,7 +299,7 @@ fn ecrire(titre: &str, artiste: &str, taille: f32, largeur_max: f32) -> Option<T
         // cerne : la couverture la plus forte dans un disque de rayon `CERNE` autour du pixel
         let mut image = Pixmap::new(l as u32, h as u32)?;
         let at = |x: i32, y: i32| if x < 0 || y < 0 || x >= l || y >= h { 0 } else { couverture[(y * l + x) as usize] };
-        for (i, px) in image.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, px) in image.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let (x, y) = (i as i32 % l, i as i32 / l);
             let c = couverture[i] as f32 / 255.0;
             let mut autour = 0u8;
@@ -536,7 +536,7 @@ mod tests {
         let tx = ecrire("Titre du morceau", "Artiste", 12.0, LARGEUR_MAX).expect("texte écrit");
         let (l, h) = (tx.image.width(), tx.image.height());
         assert!(l > 60 && h > 20 && h < 60, "{l} × {h}");
-        let px: Vec<&[u8]> = tx.image.data().chunks_exact(4).collect();
+        let px: Vec<&[u8; 4]> = tx.image.data().as_chunks::<4>().0.iter().collect();
         // du blanc plein (les lettres), du sombre translucide (le cerne), du vide autour
         assert!(px.iter().any(|p| p[0] > 230 && p[3] > 230), "pas de blanc");
         assert!(px.iter().any(|p| p[0] < 20 && p[3] > 100 && p[3] < 200), "pas de cerne");
@@ -610,14 +610,14 @@ mod tests {
             let apres = capture(zone);
             if let Ok(dossier) = std::env::var("ESSAIM_PLANCHE") {
                 let (l, h) = ((zone.2 - zone.0) as u32, (zone.3 - zone.1) as u32);
-                let rgba: Vec<u8> = apres.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], 255]).collect();
+                let rgba: Vec<u8> = apres.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], 255]).collect();
                 let pm = Pixmap::from_vec(rgba, tiny_skia::IntSize::from_wh(l, h).unwrap()).unwrap();
                 pm.save_png(std::path::Path::new(&dossier).join(format!("etiquette-{}.png", if backend.is_gpu() { "carte" } else { "processeur" }))).unwrap();
             }
             backend.clear();
             // les lettres et leur cerne ont changé l'écran ; du blanc franc s'y trouve
-            let changes = avant.chunks_exact(4).zip(apres.chunks_exact(4)).filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 40)).count();
-            let blancs = apres.chunks_exact(4).filter(|p| p[0] > 235 && p[1] > 235 && p[2] > 235).count();
+            let changes = avant.as_chunks::<4>().0.iter().zip(apres.as_chunks::<4>().0.iter()).filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 40)).count();
+            let blancs = apres.as_chunks::<4>().0.iter().filter(|p| p[0] > 235 && p[1] > 235 && p[2] > 235).count();
             eprintln!("{} : {changes} pixels changés, {blancs} blancs", if backend.is_gpu() { "carte graphique" } else { "processeur" });
             assert_eq!(backend.is_gpu(), gpu, "moteur demandé indisponible");
             assert!(changes > 150 && blancs > 80, "étiquette absente de l'écran");
@@ -650,7 +650,7 @@ mod tests {
         let zone = e.rect().unwrap();
         e.dessiner(&mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) }, 1.0, &cfg, 1.0);
         let mut peints = 0;
-        for (j, p) in pm.data().chunks_exact(4).enumerate() {
+        for (j, p) in pm.data().as_chunks::<4>().0.iter().enumerate() {
             if p[3] > 0 {
                 peints += 1;
                 let (x, y) = ((j % 800) as i32, (j / 800) as i32);
