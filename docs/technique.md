@@ -9,7 +9,11 @@ Comment Essaim dessine, écoute et reste léger. Usage : [guide.md](guide.md).
   et fissures.
 - **Rendu** : un calque **immobile** par écran, de la taille de l'écran, transparent aux clics
   et toujours devant (une fenêtre qui bouge ou apparaît sous la souris fait redemander leur
-  curseur aux applications, et l'Explorateur répondait « flèche »). Seule la zone qui change
+  curseur aux applications, et l'Explorateur répondait « flèche »). Un autre programme peut
+  retirer le « toujours devant » d'un calque (l'essaim passait alors derrière les fenêtres
+  jusqu'à ce que le calque soit refait) : la boucle le vérifie chaque seconde
+  (`win::remettre_devant`), le remet devant et le note au journal avec l'appli au premier plan,
+  sans rien toucher tant que tout est en place. Seule la zone qui change
   est effacée et redessinée. Deux moteurs (`backend.rs`), même interface de dessin
   (`canvas.rs`) :
   - **carte graphique** (par défaut, `gpu.rs`) : DirectComposition + surface virtuelle Direct2D,

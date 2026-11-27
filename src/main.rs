@@ -774,6 +774,13 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
             // disposition de clavier ajoutée ou retirée : un raccourci peut se mettre à écrire un
             // caractère avec AltGr (ou cesser de le faire)
             win::raccourcis_suivent_clavier();
+            // calque qu'un autre programme a sorti de « toujours devant » : l'essaim passerait
+            // derrière les fenêtres ; l'appli au premier plan aide à trouver le coupable
+            let remis = win::remettre_devant();
+            if remis > 0 {
+                let appli = appli::premier_plan().map_or_else(|| "aucune".to_string(), |a| a.nom);
+                log::warn!("calques : {remis} n'étai(en)t plus toujours devant, remis devant (premier plan : {appli})");
+            }
             // fréquence de l'écran du pointeur : dit si le plafond adaptatif change quelque chose
             frequence = win::frequence_ecran(last_pos.0, last_pos.1);
             frequence_composition = win::frequence_max(&monitors);

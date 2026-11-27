@@ -174,18 +174,48 @@ pub fn masquer_captures(oui: bool) {
     if MASQUER_CAPTURES.swap(oui, Ordering::Relaxed) == oui {
         return;
     }
+    chaque_calque(|h| exclure_des_captures(h, oui));
+    log::info!("{}", if oui { "calques masqués des captures et des streams" } else { "calques de nouveau visibles des captures" });
+}
+
+/// Appelle `f` sur chaque calque. Fil principal (celui qui crée les calques).
+fn chaque_calque(mut f: impl FnMut(HWND)) {
     unsafe extern "system" fn chaque(h: HWND, l: LPARAM) -> windows::core::BOOL {
         let mut classe = [0u16; 32];
         let n = unsafe { GetClassNameW(h, &mut classe) } as usize;
         if classe[..n] == *unsafe { CLASSE_CALQUE.as_wide() } {
-            exclure_des_captures(h, l.0 != 0);
+            let f = unsafe { &mut *(l.0 as *mut &mut dyn FnMut(HWND)) };
+            f(h);
         }
         true.into()
     }
+    let mut f: &mut dyn FnMut(HWND) = &mut f;
     unsafe {
-        let _ = EnumThreadWindows(windows::Win32::System::Threading::GetCurrentThreadId(), Some(chaque), LPARAM(oui as isize));
+        let _ = EnumThreadWindows(
+            windows::Win32::System::Threading::GetCurrentThreadId(),
+            Some(chaque),
+            LPARAM(&mut f as *mut &mut dyn FnMut(HWND) as isize),
+        );
     }
-    log::info!("{}", if oui { "calques masqués des captures et des streams" } else { "calques de nouveau visibles des captures" });
+}
+
+/// Remet « toujours devant » les calques affichés qui ne le sont plus, et renvoie leur nombre.
+/// Rien dans Essaim ne change leur place, mais un autre programme peut la leur retirer
+/// (`SetWindowPos` avec `HWND_NOTOPMOST` ou `HWND_BOTTOM`) : l'essaim passerait alors derrière
+/// les fenêtres ordinaires jusqu'à ce que le calque soit refait. Ne touche à rien (pas de
+/// changement d'ordre sous la souris) tant que tout est en place. Fil principal.
+pub fn remettre_devant() -> u32 {
+    let mut n = 0;
+    chaque_calque(|h| unsafe {
+        let devant = GetWindowLongPtrW(h, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
+        if !devant && IsWindowVisible(h).as_bool() {
+            let drapeaux = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+            if SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, drapeaux).is_ok() {
+                n += 1;
+            }
+        }
+    });
+    n
 }
 
 impl Surface {
