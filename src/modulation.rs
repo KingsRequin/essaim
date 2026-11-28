@@ -47,6 +47,7 @@ pub fn multipliee(c: Cible) -> Option<(f32, f32, f32)> {
         Cible::Trainee => (TRAINEE, 0.1, 5.0),
         Cible::Opacite => (OPACITE, 0.0, 1.0),
         Cible::Rotation | Cible::Vitesse | Cible::Teinte | Cible::Decalage | Cible::Aucune => return None,
+        Cible::Ouverture | Cible::Ecart | Cible::Forme | Cible::Relief | Cible::Duree | Cible::Nombre | Cible::Noyau => return None,
     })
 }
 
@@ -149,11 +150,27 @@ pub struct Effet {
     pub luminosite: f32,
     pub trainee: f32,
     pub opacite: f32,
+    /// Parts ajoutées aux paramètres propres d'une figure (quantité × source, additionnées) :
+    /// chaque figure lit celles qui la concernent (`figures.rs`), les autres n'y font rien.
+    pub propres: Propres,
+}
+
+/// Paramètres propres des figures que les modulations font varier (cibles `ouverture`, `ecart`,
+/// `forme`, `relief`, `duree`, `nombre`, `noyau`) : 0 sans modulation.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Propres {
+    pub ouverture: f32,
+    pub ecart: f32,
+    pub forme: f32,
+    pub relief: f32,
+    pub duree: f32,
+    pub nombre: f32,
+    pub noyau: f32,
 }
 
 impl Default for Effet {
     fn default() -> Self {
-        Self { rotation: 0.0, vitesse: 0.0, teinte: 0.0, decalage: 0.0, acceleration: 1.0, rayon: 1.0, taille: 1.0, luminosite: 1.0, trainee: 1.0, opacite: 1.0 }
+        Self { rotation: 0.0, vitesse: 0.0, teinte: 0.0, decalage: 0.0, acceleration: 1.0, rayon: 1.0, taille: 1.0, luminosite: 1.0, trainee: 1.0, opacite: 1.0, propres: Propres::default() }
     }
 }
 
@@ -202,6 +219,13 @@ pub fn effets(liste: &[Modulation], valeurs: &[f32]) -> Effets {
                 Cible::Luminosite => e.luminosite *= facteur(m.cible),
                 Cible::Trainee => e.trainee *= facteur(m.cible),
                 Cible::Opacite => e.opacite *= facteur(m.cible),
+                Cible::Ouverture => e.propres.ouverture += v,
+                Cible::Ecart => e.propres.ecart += v,
+                Cible::Forme => e.propres.forme += v,
+                Cible::Relief => e.propres.relief += v,
+                Cible::Duree => e.propres.duree += v,
+                Cible::Nombre => e.propres.nombre += v,
+                Cible::Noyau => e.propres.noyau += v,
                 Cible::Aucune => {}
             }
         }

@@ -1050,6 +1050,7 @@ fn run(open_settings: bool, open_stream: bool) -> anyhow::Result<Option<Relance>
         (swarm.murs, swarm.doux) = (murs, doux);
         swarm.avance(t, dt, cursor, au, cfg, scale);
         effets.moduler_figures(swarm.effets_figures());
+        effets.gestes_figures(&swarm.prendre_gestes());
         effets.bouton = down || droit;
         effets.avance(t, dt, cursor, scale, swarm.env, &shared, cfg, &monitors);
         // l'étiquette, écrite pour une échelle, prend celle de l'écran sans glisser (un texte

@@ -780,54 +780,69 @@ pub(crate) fn builtins() -> Vec<Profile> {
         make("Arcs", |c| {
             figure_seule(c);
             c.arcs.actif = true;
+            c.modulations.liste = vec![ml(S::Kick, Ci::Ouverture, G::Arcs, 0.35, 0.2)];
+            gestes(c, &[]);
             teinte(c, 160.0, 0.0, 40.0);
         }),
         // quatre temps : quatre points sous le pointeur, le plus petit preset
         make("Quatre temps", |c| {
             figure_seule(c);
             c.quatre_temps.actif = true;
+            c.modulations.liste = vec![ml(S::Basse, Ci::Ecart, G::QuatreTemps, 0.3, 0.5)];
+            gestes(c, &[]);
             teinte(c, 35.0, 0.0, 20.0);
         }),
         // anneau : un anneau fin qui suit le pointeur avec du retard et bat au kick
         make("Anneau", |c| {
             figure_seule(c);
             c.anneau.actif = true;
+            gestes(c, &[]);
             teinte(c, 250.0, 0.0, 80.0);
         }),
         // orbe : le spectre en une seule ligne fermée, qui lâche un écho à chaque kick
         make("Orbe", |c| {
             figure_seule(c);
             c.orbe.actif = true;
+            c.modulations.liste = vec![ml(S::Drop, Ci::Relief, G::Orbe, 0.8, 0.3)];
+            gestes(c, &[]);
             teinte(c, 140.0, 0.0, 60.0);
         }),
         // ligne de voix : une petite onde sous le pointeur, effacée sans son
         make("Ligne de voix", |c| {
             figure_seule(c);
             c.voix.actif = true;
+            c.modulations.liste = vec![ml(S::Brillance, Ci::Relief, G::Voix, 0.6, 0.5)];
+            gestes(c, &[]);
             teinte(c, 200.0, 0.0, 50.0);
         }),
         // trame : une grille de points autour du pointeur, traversée par les vagues des coups
         make("Trame", |c| {
             figure_seule(c);
             c.trame.actif = true;
+            gestes(c, &[]);
             teinte(c, 5.0, 0.0, 0.0);
         }),
         // trait : rien au repos, un trait de pinceau quand la souris file
         make("Trait", |c| {
             figure_seule(c);
             c.pinceau.actif = true;
+            c.modulations.liste = vec![ml(S::Basse, Ci::Duree, G::Pinceau, 0.6, 0.5)];
+            gestes(c, &[]);
             teinte(c, 20.0, 0.0, 240.0);
         }),
         // pendule : un petit poids pendu au pointeur, qui saute sur le kick
         make("Pendule", |c| {
             figure_seule(c);
             c.pendule.actif = true;
+            gestes(c, &[]);
             teinte(c, 195.0, 0.0, 0.0);
         }),
         // gouttes : une ligne liquide, du rouge au centre à l'ambre au large
         make("Gouttes", |c| {
             figure_seule(c);
             c.gouttes.actif = true;
+            c.modulations.liste = vec![ml(S::Basse, Ci::Nombre, G::Gouttes, 0.5, 0.6), ml(S::Kick, Ci::Noyau, G::Gouttes, 0.4, 0.1)];
+            gestes(c, &[]);
             teinte(c, 6.0, 0.0, 30.0);
         }),
         // figures combinées, avec leur allure et leurs modulations : de vraies alternatives à
@@ -837,17 +852,20 @@ pub(crate) fn builtins() -> Vec<Profile> {
         make("Montre", |c| {
             figure_seule(c);
             (c.arcs.actif, c.quatre_temps.actif) = (true, true);
-            (c.arcs.rayon, c.arcs.allure.rotation, c.arcs.allure.reaction_kick) = (24.0, 4.0, 0.6);
+            (c.arcs.rayon, c.arcs.allure.rotation) = (24.0, 4.0);
             c.quatre_temps.allure.teinte = 40.0;
             c.modulations.liste = vec![ml(S::Kick, Ci::Taille, G::Arcs, 0.5, 0.1), ml(S::Montee, Ci::Acceleration, G::Arcs, 0.8, 0.5)];
+            // les arcs avancent moins fort au kick
+            gestes(c, &[(G::Arcs, A::Battement, 0.6)]);
             teinte(c, 205.0, 0.0, 40.0);
         }),
         // respiration : l'orbe enfle doucement sur la basse et vire de teinte sur le drop
         make("Respiration", |c| {
             figure_seule(c);
             c.orbe.actif = true;
-            (c.orbe.allure.echelle, c.orbe.allure.reaction_kick) = (0.9, 0.5);
+            c.orbe.allure.echelle = 0.9;
             c.modulations.liste = vec![ml(S::Basse, Ci::Rayon, G::Orbe, 0.08, 0.7), ml(S::Drop, Ci::Teinte, G::Orbe, 0.35, 0.3), ml(S::Montee, Ci::Rotation, G::Orbe, 0.2, 0.5)];
+            gestes(c, &[(G::Orbe, A::Battement, 0.5)]);
             teinte(c, 165.0, 6.0, 50.0);
         }),
         // planète : un anneau suiveur décalé sur le côté, avec son pendule ; l'anneau tourne au
@@ -857,7 +875,9 @@ pub(crate) fn builtins() -> Vec<Profile> {
             (c.anneau.actif, c.pendule.actif) = (true, true);
             (c.anneau.rayon, c.anneau.allure.decalage_x, c.anneau.allure.decalage_y) = (9.0, 26.0, -18.0);
             (c.pendule.longueur, c.pendule.allure.teinte) = (18.0, 150.0);
-            c.modulations.liste = vec![m(S::Stereo, Ci::Decalage, G::Anneau, 0.4), ml(S::Drop, Ci::Rotation, G::Anneau, 0.5, 0.3)];
+            // au drop, l'anneau tourne et devient carré le temps que le drop retombe
+            c.modulations.liste = vec![m(S::Stereo, Ci::Decalage, G::Anneau, 0.4), ml(S::Drop, Ci::Rotation, G::Anneau, 0.5, 0.3), ml(S::Drop, Ci::Forme, G::Anneau, 0.7, 0.3)];
+            gestes(c, &[]);
             teinte(c, 30.0, 0.0, 0.0);
         }),
         // duo : une petite trame et la ligne de voix, dans deux teintes ; la trame réagit fort
@@ -865,9 +885,10 @@ pub(crate) fn builtins() -> Vec<Profile> {
         make("Duo", |c| {
             figure_seule(c);
             (c.trame.actif, c.voix.actif) = (true, true);
-            (c.trame.rayon, c.trame.allure.echelle, c.trame.allure.reaction_kick) = (36.0, 0.9, 1.5);
+            (c.trame.rayon, c.trame.allure.echelle) = (36.0, 0.9);
             (c.voix.allure.teinte, c.voix.allure.decalage_y) = (120.0, 8.0);
             c.modulations.liste = vec![Modulation { inverser: true, ..ml(S::Charleston, Ci::Opacite, G::Voix, -0.4, 0.6) }];
+            gestes(c, &[(G::Trame, A::Battement, 1.5)]);
             teinte(c, 275.0, 0.0, 0.0);
         }),
     ]
@@ -879,6 +900,20 @@ fn figure_seule(c: &mut Config) {
     (c.orbite.cometes, c.essaim.maximum, c.essaim.fixes, c.eclat.taille) = (false, 0, 0, 0.0);
     c.modulations.liste.clear();
     c.declencheurs.liste = vec![d(E::Kick, A::Bordure, 0.8), d(E::Clic, A::Onde, 0.8), d(E::ClicDroit, A::Implosion, 0.8)];
+}
+
+/// Réactions de toujours de chaque figure allumée (`config::declencheurs_de_figure`), ajoutées
+/// aux déclencheurs ; `forces` : la force de certains gestes (figure, geste, force).
+fn gestes(c: &mut Config, forces: &[(G, A, f32)]) {
+    for i in 0..crate::config::FIGURES.len() {
+        if !c.figure(i).0 {
+            continue;
+        }
+        for d in crate::config::declencheurs_de_figure(i) {
+            let force = forces.iter().find(|(g, a, _)| *g == d.sur && *a == d.faire).map_or(d.force, |f| f.2);
+            c.declencheurs.liste.push(Declencheur { force, ..d });
+        }
+    }
 }
 
 /// Modulation `source` → `cible` (lissage par défaut).
@@ -1059,6 +1094,18 @@ mod tests {
         // les presets de figures combinées montrent l'allure et les modulations des figures
         let combinees: Vec<&Profile> = seules.iter().filter(|p| !p.cfg.modulations.liste.is_empty()).collect();
         assert!(combinees.len() >= 4 && combinees.iter().all(|p| (0..crate::config::FIGURES.len()).filter(|&i| p.cfg.figure(i).0).count() >= 1));
+        // les cibles propres des figures servent toutes, et chaque figure allumée fait ses gestes
+        let mods_figures: Vec<&Modulation> = seules.iter().flat_map(|p| &p.cfg.modulations.liste).collect();
+        for c in [Ci::Ouverture, Ci::Ecart, Ci::Forme, Ci::Relief, Ci::Duree, Ci::Nombre, Ci::Noyau] {
+            assert!(mods_figures.iter().any(|m| m.cible == c), "cible propre {c:?} jamais utilisée");
+        }
+        for p in &seules {
+            for i in (0..crate::config::FIGURES.len()).filter(|&i| p.cfg.figure(i).0) {
+                for a in crate::config::gestes_de_figure(i) {
+                    assert!(p.cfg.declencheurs.liste.iter().any(|d| d.faire == *a && d.sur.fait_geste(i)), "{} : {} sans geste {a:?}", p.name, crate::config::FIGURES[i]);
+                }
+            }
+        }
         let b: Vec<Profile> = builtins().into_iter().filter(|p| seules.iter().all(|s| s.name != p.name)).collect();
         let mods: Vec<&Modulation> = b.iter().flat_map(|p| &p.cfg.modulations.liste).collect();
         let sources = [S::Basse, S::Grave, S::Aigu, S::Kick, S::Caisse, S::Charleston, S::Montee, S::Drop, S::Stereo, S::Tempo, S::Contretemps, S::Brillance];

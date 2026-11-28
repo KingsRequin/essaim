@@ -571,14 +571,30 @@ du sens par image) et la teinte
   (14 rad/s, amortissement 0,55), jamais à plus de 40 px de lui : la zone (`Figures::rect`) est
   prise autour de ce centre. Tout ce qui bouge passe par des ressorts bornés
   (`Ressort::vers` : en butée, l'élan est perdu), si bien que la zone contient toujours le dessin
-  (essai `les_figures_tiennent_dans_leur_zone`, quatre kicks par image à 20 images/s). Les temps
-  se comptent depuis le dernier drop ; la présence du tempo monte en 0,15 s et s'efface en 0,8 s.
+  (essai `les_figures_tiennent_dans_leur_zone`, quatre gestes de force 2 par image à 20
+  images/s). Les temps se comptent depuis le dernier drop ; la présence du tempo monte en 0,15 s et
+  s'efface en 0,8 s. **Gestes** : les réactions des figures aux coups sont des déclencheurs
+  (actions `battement`, `accent`, `scintillement`, `apogee`, `config::GESTES`, avec leur `sur`).
+  `Swarm::agir` les range figure par figure (`figures::Gestes` : nombre et force cumulée, 4 au
+  plus de chaque sorte), seulement pour les figures visées qui font ce geste
+  (`config::gestes_de_figure`) ; la boucle les prend (`Swarm::prendre_gestes`) et les passe aux
+  figures (`Effets::gestes_figures`), comme les modulations, et la fenêtre pour le stream fait de
+  même ; une image non simulée (frappe, pause) les jette. Chaque figure garde l'enveloppe de ses
+  battements, accents et scintillements (1 au geste, retombée 7, 8 et 10 par seconde). Allumer
+  une figure dans la fenêtre des réglages lui donne ses gestes de toujours
+  (`config::declencheurs_de_figure`) si aucun déclencheur ne la vise. `migration::migrer_figures`
+  convertit les réglages d'avant (`reaction_kick`… dans l'allure) quand `[declencheurs] figures`
+  manque au texte (seul le texte est regardé : des réglages envoyés par la page, sans la clé,
+  valent `figures = true`).
   Une figure active demande l'analyse musicale (`Config::analyse_musicale`).
   `figures/plus.rs` en ajoute cinq. L'orbe reçoit les bandes lissées du spectre (`Effets` les
   demande à 16 bandes quand le spectre est coupé) ; son contour est recalculé à chaque image, et
   chaque écho en garde une copie. La trame parcourt les cases de la grille que couvre la loupe
   (alignée sur l'écran : les points ne bougent pas avec le pointeur) ; la somme des vagues est
-  bornée, donc aussi la taille et le déplacement d'un point. Le trait garde le trajet du pointeur
+  bornée, donc aussi la taille et le déplacement d'un point. Chaque vague est préparée une fois par
+  image (centre, front, force restante) plutôt qu'à chaque point. Elle n'est pas posée par
+  `Posee` : son échelle agrandit la loupe, la modulation de la taille ses points, son décalage
+  déplace la loupe, sans jamais tourner ni étirer la grille. Le trait garde le trajet du pointeur
   (instant, x, y) : sa zone est le cadre de ce trajet, et un point à plus de 1200 px du pointeur
   est oublié (saut d'écran). Le pendule est une masse sous gravité au bout d'un fil qui ne
   s'étire pas : après chaque pas, le poids est ramené à la longueur du fil et sa vitesse
@@ -586,23 +602,32 @@ du sens par image) et la teinte
   (essai `le_pendule_reste_au_bout_de_son_fil`).
   Les gouttes en contour (`figures/gouttes.rs`) sont un champ : chaque goutte (noyau, perles,
   bulles) y ajoute r² / (d² + 1), calculé sur une grille de 73 × 73 nœuds (pas de 2 px à 100 %),
-  réduite à la partie que les gouttes peuvent atteindre. La ligne où ce champ vaut 1 est tirée
+  réduite à la partie que les gouttes peuvent atteindre. Traîne liquide : quand le centre bouge,
+  chaque goutte en garde une part en retard (noyau 0,35 × souplesse, perles de 0,5 à 1 × souplesse
+  selon leur orbite) sur un ressort par axe (pulsation de 18 rad/s pour le noyau, plus lente pour
+  les perles du large, amortissement 0,3), retard borné à 26 px × souplesse ; les bulles restent
+  où elles sont. Toute goutte est ramenée dans la grille (son contour n'y est jamais coupé). Le
+  nombre de perles (8 au plus) est fractionnaire avec sa modulation : la dernière grandit ou fond. La ligne où ce champ vaut 1 est tirée
   case par case (marching squares, coupure placée par interpolation entre deux nœuds), en petits
   segments dessinés comme des traits : ni image ni flou, les deux moteurs dessinent comme
   d'habitude. Les ressorts des perles sont bornés et le bord de la grille est toujours hors du
   contour : la ligne reste dans la zone redessinée.
   **Allure et modulations des figures** : chaque figure lit son allure (`config::Allure`,
   aplatie dans sa section par `serde(flatten)`) et ses effets de modulation
-  (`modulation::Effets::figures`, gardés par `Swarm` et passés par `Effets::moduler_figures`).
-  `Partage::pour` lui donne la basse, la montée, le charleston et la caisse claire à la force de
-  ses réactions (plafonnés à 1 : les zones restent bornées), `Elan::de` ses coups (kicks ×
-  force, et 0 ou la force pour le kick, la caisse claire, le charleston et le drop) ; chaque
-  impulsion est multipliée par cette force. `Figures::poser` en fait une `Pose` par figure :
-  angle accumulé (rotation propre plus modulations, en tr/min, plus vitesse × 0,1, le tout ×
-  accélération), échelle (`echelle` × rayon modulé), épaisseur des traits (taille modulée),
-  décalage (`decalage_x` + décalage modulé × 30 px, `decalage_y`), opacité (`opacite` × opacité ×
-  lueur modulées) ; la teinte (`teinte` + teinte modulée) décale ses couleurs
-  (`render::prisme_decale`). Le dessin passe par `Posee`, un `Canvas` qui transforme les points
+  (`modulation::Effets::figures`, gardés par `Swarm` et passés par `Effets::moduler_figures`),
+  dont ses cibles propres (`modulation::Propres` : parts additionnées, chaque figure les borne,
+  `figures::ecart_module`, `plus::relief_module`…). `Partage` lui donne la basse et la montée
+  (communes) et ses enveloppes de gestes ; chaque impulsion est multipliée par la force du geste.
+  `Figures::poser` en fait une `Pose` par figure : angle accumulé pour les figures qui tournent
+  (`figures::tourne` : arcs, anneau, orbe, gouttes ; rotation propre plus modulations, en tr/min,
+  plus vitesse × 0,1, le tout × accélération), échelle (`echelle` × rayon modulé), épaisseur des
+  traits (taille modulée), décalage (`decalage_x` + décalage modulé × 30 px, `decalage_y`),
+  opacité (`opacite` × opacité × lueur modulées). Sa couleur vient de `figures::couleur_figure` :
+  celle de l'essaim décalée de `teinte` plus la teinte modulée (`render::prisme_decale`), une
+  teinte fixe (`teinte_fixe`, la queue `degrade` degrés plus loin) ou du blanc. L'anneau et l'orbe
+  s'étirent dans la direction de leur retard (`Figures::etirement`, au plus `etirement`) ; tournés
+  par leur pose, cette direction est tournée d'autant dans l'autre sens (`etirement_pose`) : ils
+  restent étirés vers le pointeur (essai `l_anneau_qui_tourne_reste_etire_vers_le_pointeur`). Le dessin passe par `Posee`, un `Canvas` qui transforme les points
   autour du centre, multiplie les rayons par l'échelle et les épaisseurs par celle des traits ;
   une pose neutre dessine directement (au bit près comme avant). La zone de chaque figure est son
   carré autour du centre, déplacé, agrandi par l'échelle et les traits, et par √2 si elle a

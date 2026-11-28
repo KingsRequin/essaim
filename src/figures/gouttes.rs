@@ -1,6 +1,8 @@
-//! Gouttes en contour (`[gouttes]`) : un noyau autour du pointeur et quatre perles en orbite, dont
+//! Gouttes en contour (`[gouttes]`) : un noyau autour du pointeur et des perles en orbite, dont
 //! on ne dessine que la ligne de niveau du champ qu'elles forment ensemble. La ligne se soude
 //! quand deux gouttes se touchent et se sépare quand elles s'éloignent ; l'intérieur reste vide.
+//! Comme un liquide, chaque goutte traîne derrière le pointeur quand il bouge, au bout de son
+//! propre ressort (`[gouttes] souplesse`) : l'ensemble s'étire, se sépare, puis revient se souder.
 //!
 //! Le champ (somme des r² / d² de chaque goutte) est calculé sur une petite grille autour du
 //! centre, puis son contour au niveau 1 est tiré case par case (marching squares) en petits
@@ -8,42 +10,89 @@
 //!
 //! `ui/apercu.js` reproduit ce calcul : le modifier ici oblige à le reporter là.
 
-use super::{melange, Elan, Partage, Ressort};
+use super::{ecart_module, melange, Gestes, Partage, Ressort, ACCENT, APOGEE, BATTEMENT};
 use crate::canvas::{Canvas, Rgb};
 use crate::config::Config;
+use crate::modulation::Effet;
 use std::f32::consts::TAU;
 
 /// Demi-côté de la zone calculée (px à 100 %, pour une taille de 1) et nœuds de la grille par
 /// côté (pas de 2 px).
 const DEMI: f32 = 72.0;
 const NOEUDS: usize = 73;
-/// Noyau : rayon au repos, ce qu'y ajoutent la basse et une montée, élan d'un kick et d'un drop
-/// (px/s), bornes du rayon.
+/// Noyau : rayon au repos, ce qu'y ajoutent la basse et une montée, élan d'un battement et d'une
+/// apogée (px/s), bornes du rayon, ce qu'y ajoute la modulation du noyau à fond (px).
 const NOYAU: (f32, f32, f32) = (8.0, 2.5, 4.0);
 const NOYAU_ELAN: (f32, f32) = (40.0, 70.0);
 const NOYAU_BORNES: (f32, f32) = (2.0, 18.0);
-/// Perles : rayon de l'orbite, vitesse (rad/s), rayon de la perle.
-const PERLES: [(f32, f32, f32); 4] = [(17.0, 2.1, 4.8), (23.0, -1.6, 4.2), (29.0, 1.2, 5.2), (34.0, -0.9, 4.2)];
-/// Élan qui projette une perle : au kick (tiré entre deux valeurs) et au drop (px/s) ; écart le
-/// plus grand à son orbite ; part de l'orbite que ferme une montée.
+const NOYAU_MODULE: f32 = 8.0;
+/// Perles : rayon de l'orbite, vitesse (rad/s), rayon de la perle ; les quatre premières sont
+/// celles de toujours (`[gouttes] perles` en garde de 0 à 8).
+const PERLES: [(f32, f32, f32); 8] = [
+    (17.0, 2.1, 4.8),
+    (23.0, -1.6, 4.2),
+    (29.0, 1.2, 5.2),
+    (34.0, -0.9, 4.2),
+    (20.0, -1.9, 3.8),
+    (26.0, 1.4, 4.4),
+    (31.0, -1.1, 3.9),
+    (14.0, 2.6, 3.6),
+];
+/// Perles ajoutées par la modulation du nombre à fond.
+const PERLES_MODULE: f32 = 4.0;
+/// Élan qui projette une perle : au battement (tiré entre deux valeurs) et à l'apogée (px/s) ;
+/// écart le plus grand à son orbite ; part de l'orbite que ferme une montée.
 const PERLE_ELAN: ((f32, f32), f32) = ((80.0, 140.0), 200.0);
 const PERLE_ECART_MAX: f32 = 24.0;
 const PERLE_MONTEE: f32 = 0.9;
-/// Bulles d'un drop : nombre, vitesse (px/s), rayon, durée (s), tirés entre deux valeurs ; frein.
+/// Bulles d'une apogée : nombre, vitesse (px/s), rayon, durée (s), tirés entre deux valeurs ;
+/// frein ; bulles gardées au plus (apogées et gouttes détachées par l'accent).
 const BULLES: usize = 5;
 const BULLE_VITESSE: (f32, f32) = (90.0, 160.0);
 const BULLE_RAYON: (f32, f32) = (2.2, 3.2);
 const BULLE_VIE: (f32, f32) = (0.6, 0.9);
 const BULLE_FREIN: f32 = 3.5;
+const BULLES_MAX: usize = 12;
+/// Goutte détachée par un accent : vitesse (px/s), part du rayon de sa perle, durée (s).
+const DETACHEE: (f32, f32, f32) = (110.0, 0.7, 0.8);
+/// Traîne liquide : retard le plus grand d'une goutte sur le centre (px à 100 %, souplesse 1),
+/// part du mouvement que garde le noyau et chaque perle, pulsation du ressort qui les ramène
+/// (rad/s : les perles du large plus lentes) et son amortissement.
+const TRAINE_MAX: f32 = 26.0;
+const TRAINE_NOYAU: f32 = 0.35;
+const TRAINE_RAPPEL: (f32, f32) = (18.0, 0.3);
 /// Distance au centre où la couleur a fini de passer de celle des têtes à celle des queues.
 const DEGRADE: f32 = 45.0;
+/// Gouttes de l'image au plus : noyau, perles, bulles.
+const GOUTTES_MAX: usize = 1 + PERLES.len() + BULLES_MAX;
 
+/// Retard d'une goutte sur le centre (px à 100 %), au bout d'un ressort.
+#[derive(Clone, Copy, Default)]
+struct Traine {
+    x: Ressort,
+    y: Ressort,
+}
+
+impl Traine {
+    /// Le centre a bougé de `(dx, dy)` (px à 100 %) : la goutte en garde la part `k` en retard,
+    /// puis son ressort la ramène (pulsation `w`), sans dépasser `max`.
+    fn avance(&mut self, (dx, dy): (f32, f32), k: f32, w: f32, max: f32, dt: f32) {
+        self.x.x -= dx * k;
+        self.y.x -= dy * k;
+        self.x.vers(0.0, (w, TRAINE_RAPPEL.1), dt, (-max, max));
+        self.y.vers(0.0, (w, TRAINE_RAPPEL.1), dt, (-max, max));
+    }
+}
+
+#[derive(Clone, Copy)]
 struct Perle {
     angle: f32,
     ecart: Ressort,
+    traine: Traine,
 }
 
-/// Bulle lâchée par un drop : place et vitesse autour du centre (px à 100 %).
+/// Bulle lâchée par une apogée ou détachée par un accent : place et vitesse autour du centre (px
+/// à 100 %).
 struct Bulle {
     x: f32,
     y: f32,
@@ -56,7 +105,8 @@ struct Bulle {
 
 pub(super) struct Gouttes {
     noyau: Ressort,
-    perles: [Perle; 4],
+    traine: Traine,
+    perles: [Perle; PERLES.len()],
     bulles: Vec<Bulle>,
     graine: u32,
     /// Champ aux nœuds de la grille, et segments du contour (px à 100 %, autour du centre).
@@ -66,8 +116,8 @@ pub(super) struct Gouttes {
 
 impl Gouttes {
     pub(super) fn new() -> Self {
-        let perle = |i: usize| Perle { angle: i as f32 * 2.4, ecart: Ressort::default() };
-        Self { noyau: Ressort::en(NOYAU.0), perles: [perle(0), perle(1), perle(2), perle(3)], bulles: Vec::new(), graine: 0x51ed_270b, champ: Vec::new(), segments: Vec::new() }
+        let perles = std::array::from_fn(|i| Perle { angle: i as f32 * 2.4, ecart: Ressort::default(), traine: Traine::default() });
+        Self { noyau: Ressort::en(NOYAU.0), traine: Traine::default(), perles, bulles: Vec::new(), graine: 0x51ed_270b, champ: Vec::new(), segments: Vec::new() }
     }
 
     /// Plus de gouttes : rien à dessiner.
@@ -79,7 +129,7 @@ impl Gouttes {
     /// Gouttes rallumées : noyau et perles reprennent leur place de départ, sans élan.
     pub(super) fn reinitialiser(&mut self) {
         let neuves = Self::new();
-        (self.noyau, self.perles) = (neuves.noyau, neuves.perles);
+        (self.noyau, self.traine, self.perles) = (neuves.noyau, neuves.traine, neuves.perles);
         self.oublier();
     }
 
@@ -91,58 +141,106 @@ impl Gouttes {
         a + (b - a) * ((self.graine >> 8) as f32 / (1u32 << 24) as f32)
     }
 
-    /// Avance d'une image ; `el` : les coups à la force des réactions des gouttes.
-    pub(super) fn avance(&mut self, p: &Partage, el: &Elan, t: f64, dt: f32, cfg: &Config) {
-        if !cfg.gouttes.actif {
+    /// Perles visibles (de 0 à 8, fractionnaire : la dernière grandit ou fond) : le réglage, plus
+    /// la modulation du nombre.
+    fn nombre(cfg: &Config, m: &Effet) -> f32 {
+        let n = cfg.gouttes.perles as f32 + if m.propres.nombre.is_finite() { m.propres.nombre * PERLES_MODULE } else { 0.0 };
+        n.clamp(0.0, PERLES.len() as f32)
+    }
+
+    /// Avance d'une image ; `g` : les gestes reçus, `m` : les modulations des gouttes, `bouge` :
+    /// déplacement du centre depuis l'image précédente (px écran).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn avance(&mut self, p: &Partage, g: &Gestes, m: &Effet, bouge: (f32, f32), t: f64, dt: f32, scale: f32, cfg: &Config) {
+        let c = &cfg.gouttes;
+        if !c.actif {
             self.oublier();
             return;
         }
-        for _ in 0..if el.kick > 0.0 { el.kicks.min(4) } else { 0 } {
-            self.noyau.v += NOYAU_ELAN.0 * el.fk;
+        let nombre = Self::nombre(cfg, m);
+        let visible = |j: usize| (nombre - j as f32).clamp(0.0, 1.0);
+        for _ in 0..g.n(BATTEMENT) {
+            let f = g.fort(BATTEMENT);
+            self.noyau.v += NOYAU_ELAN.0 * f;
             for i in 0..self.perles.len() {
-                self.perles[i].ecart.v += self.hasard(PERLE_ELAN.0) * el.fk;
+                self.perles[i].ecart.v += self.hasard(PERLE_ELAN.0) * f;
             }
         }
-        if el.drop > 0.0 {
-            self.noyau.v += NOYAU_ELAN.1 * el.drop;
+        if g.n(APOGEE) > 0 {
+            let f = g.fort(APOGEE);
+            self.noyau.v += NOYAU_ELAN.1 * f;
             for q in &mut self.perles {
-                q.ecart.v += PERLE_ELAN.1 * el.drop;
+                q.ecart.v += PERLE_ELAN.1 * f;
             }
-            // vitesse bornée à celle d'une réaction de 1 : une bulle plus rapide sortirait de la
+            // vitesse bornée à celle d'un geste de force 1 : une bulle plus rapide sortirait de la
             // grille (son contour y serait coupé)
             for i in 0..BULLES {
-                let (a, v) = (i as f32 * TAU / BULLES as f32 + self.hasard((-0.3, 0.3)), self.hasard(BULLE_VITESSE) * el.drop.min(1.0));
+                let (a, v) = (i as f32 * TAU / BULLES as f32 + self.hasard((-0.3, 0.3)), self.hasard(BULLE_VITESSE) * f.min(1.0));
                 let (r, vie) = (self.hasard(BULLE_RAYON), self.hasard(BULLE_VIE));
                 self.bulles.push(Bulle { x: 0.0, y: 0.0, vx: a.cos() * v, vy: a.sin() * v, r, ne: t, vie });
             }
-            // plusieurs drops de suite : les plus vieilles bulles s'en vont
-            let trop = self.bulles.len().saturating_sub(2 * BULLES);
-            self.bulles.drain(..trop);
         }
-        self.noyau.vers(NOYAU.0 + NOYAU.1 * p.basse + NOYAU.2 * p.montee, (16.0, 0.35), dt, NOYAU_BORNES);
-        for (q, &(orbite, vitesse, _)) in self.perles.iter_mut().zip(&PERLES) {
-            q.angle = (q.angle + vitesse * (1.0 + 1.5 * p.basse) * dt).rem_euclid(TAU);
+        // accent : une goutte se détache d'une perle visible et file vers le large
+        if g.n(ACCENT) > 0 && nombre >= 1.0 {
+            let j = (self.hasard((0.0, nombre.floor())) as usize).min(nombre as usize - 1);
+            let (orbite, _, r) = PERLES[j];
+            let q = &mut self.perles[j];
+            let d = orbite + q.ecart.x;
+            let (x, y) = (q.angle.cos() * d + q.traine.x.x, q.angle.sin() * d + q.traine.y.x);
+            let v = DETACHEE.0 * g.fort(ACCENT).min(1.0);
+            q.ecart.v += 60.0 * g.fort(ACCENT);
+            self.bulles.push(Bulle { x, y, vx: q.angle.cos() * v, vy: q.angle.sin() * v, r: r * DETACHEE.1, ne: t, vie: DETACHEE.2 });
+        }
+        // plusieurs apogées de suite : les plus vieilles bulles s'en vont
+        let trop = self.bulles.len().saturating_sub(BULLES_MAX);
+        self.bulles.drain(..trop);
+        let noyau = NOYAU.0 + NOYAU.1 * p.basse + NOYAU.2 * p.montee + if m.propres.noyau.is_finite() { NOYAU_MODULE * m.propres.noyau } else { 0.0 };
+        self.noyau.vers(noyau, (16.0, 0.35), dt, NOYAU_BORNES);
+        let vitesse = c.vitesse.clamp(0.0, 3.0) * (1.0 + 1.5 * p.basse);
+        for (q, &(orbite, w, _)) in self.perles.iter_mut().zip(&PERLES) {
+            q.angle = (q.angle + w * vitesse * dt).rem_euclid(TAU);
             q.ecart.vers(0.0, (9.0, 0.32), dt, (-orbite, PERLE_ECART_MAX));
+        }
+        // traîne liquide : le centre a bougé, les gouttes en gardent une part en retard (les
+        // perles du large plus que celles près du noyau), les bulles restent où elles sont
+        let k = (scale * c.taille).max(1e-3);
+        let u = if bouge.0.is_finite() && bouge.1.is_finite() { (bouge.0 / k, bouge.1 / k) } else { (0.0, 0.0) };
+        let souplesse = c.souplesse.clamp(0.0, 1.0);
+        let max = TRAINE_MAX * souplesse;
+        self.traine.avance(u, TRAINE_NOYAU * souplesse, TRAINE_RAPPEL.0, max * TRAINE_NOYAU, dt);
+        for (q, &(orbite, _, _)) in self.perles.iter_mut().zip(&PERLES) {
+            let part = souplesse * (0.5 + orbite / 70.0);
+            q.traine.avance(u, part, TRAINE_RAPPEL.0 - orbite / 4.0, max, dt);
         }
         let frein = (-dt * BULLE_FREIN).exp();
         for b in &mut self.bulles {
-            (b.x, b.y) = (b.x + b.vx * dt, b.y + b.vy * dt);
+            (b.x, b.y) = (b.x + b.vx * dt - u.0, b.y + b.vy * dt - u.1);
             (b.vx, b.vy) = (b.vx * frein, b.vy * frein);
         }
-        self.bulles.retain(|b| t - b.ne < b.vie as f64);
+        self.bulles.retain(|b| t - b.ne < b.vie as f64 && b.x.abs().max(b.y.abs()) < DEMI);
 
-        // les gouttes de l'image : (x, y, rayon) autour du centre, puis leur contour commun
-        let mut gouttes = [(0.0f32, 0.0f32, 0.0f32); 5 + 2 * BULLES];
-        gouttes[0] = (0.0, 0.0, self.noyau.x.max(NOYAU_BORNES.0));
+        // les gouttes de l'image : (x, y, rayon) autour du centre, gardées dans la grille (leur
+        // contour n'y est jamais coupé), puis leur contour commun
+        let dans = |x: f32, y: f32, r: f32| {
+            let lim = (DEMI - r - 3.0).max(0.0);
+            (x.clamp(-lim, lim), y.clamp(-lim, lim), r)
+        };
+        let ecart = ecart_module(m.propres.ecart);
+        let mut gouttes = [(0.0f32, 0.0f32, 0.0f32); GOUTTES_MAX];
+        gouttes[0] = dans(self.traine.x.x, self.traine.y.x, self.noyau.x.max(NOYAU_BORNES.0));
         let mut n = 1;
-        for (q, &(orbite, _, r)) in self.perles.iter().zip(&PERLES) {
-            let d = (orbite * (1.0 - PERLE_MONTEE * p.montee) + q.ecart.x).max(0.0);
-            gouttes[n] = (q.angle.cos() * d, q.angle.sin() * d, r);
+        for (j, (q, &(orbite, _, r))) in self.perles.iter().zip(&PERLES).enumerate() {
+            let r = r * visible(j);
+            if r < 0.5 {
+                continue;
+            }
+            let d = (orbite * ecart * (1.0 - PERLE_MONTEE * p.montee) + q.ecart.x).max(0.0);
+            gouttes[n] = dans(q.angle.cos() * d + q.traine.x.x, q.angle.sin() * d + q.traine.y.x, r);
             n += 1;
         }
         for b in &self.bulles {
             let age = ((t - b.ne) as f32 / b.vie).clamp(0.0, 1.0);
-            gouttes[n] = (b.x, b.y, b.r * (1.0 - age).powf(0.7));
+            gouttes[n] = dans(b.x, b.y, b.r * (1.0 - age).powf(0.7));
             n += 1;
         }
         contour(&gouttes[..n], &mut self.champ, &mut self.segments);
@@ -320,5 +418,58 @@ mod tests {
         cfg.gouttes.actif = false;
         avancer(&mut f, 13.0, dt, C, 1.0, &AudioView::default(), &Coups::default(), &cfg);
         assert!(image(&f, 13.0, &cfg).data().iter().all(|&b| b == 0));
+    }
+
+    /// Milieu des bouts de segments (px à 100 %, autour du centre).
+    fn milieu(g: &Gouttes) -> (f32, f32) {
+        let n = (g.segments.len() * 2).max(1) as f32;
+        let (sx, sy) = g.segments.iter().flatten().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+        (sx / n, sy / n)
+    }
+
+    #[test]
+    fn les_gouttes_trainent_derriere_la_souris_comme_un_liquide() {
+        // deux gouttes pareilles (mêmes tirages), l'une rigide, l'autre souple : la souris file
+        // vers la droite, puis s'arrête
+        let dt = 1.0 / 120.0;
+        let (au, coups) = (AudioView::default(), Coups::default());
+        let cfg = |souplesse: f32| {
+            let mut c = Config::default();
+            (c.gouttes.actif, c.gouttes.souplesse) = (true, souplesse);
+            c
+        };
+        let (rigide, souple) = (cfg(0.0), cfg(1.0));
+        let (mut a, mut b) = (Figures::new(), Figures::new());
+        let mut image = |i: usize, cursor: (f32, f32)| {
+            avancer(&mut a, i as f64 * dt as f64, dt, cursor, 1.0, &au, &coups, &rigide);
+            avancer(&mut b, i as f64 * dt as f64, dt, cursor, 1.0, &au, &coups, &souple);
+            (milieu(&a.gouttes).0, milieu(&b.gouttes).0)
+        };
+        for i in 0..120 {
+            image(i, C);
+        }
+        let mut ecart = 0.0f32;
+        for i in 0..30 {
+            let (x0, x1) = image(120 + i, (300.0 + 15.0 * i as f32, 300.0));
+            ecart = ecart.min(x1 - x0);
+        }
+        assert!(ecart < -6.0, "la souple doit traîner derrière la souris ({ecart})");
+        // à l'arrêt, elle revient se souder comme la rigide
+        let mut fin = (0.0, 0.0);
+        for i in 0..360 {
+            fin = image(150 + i, (735.0, 300.0));
+        }
+        assert!((fin.1 - fin.0).abs() < 2.0, "{fin:?}");
+    }
+
+    #[test]
+    fn le_nombre_de_perles_et_ses_modulations() {
+        let mut cfg = Config::default();
+        (cfg.gouttes.actif, cfg.gouttes.perles) = (true, 0);
+        assert_eq!(Gouttes::nombre(&cfg, &Effet::default()), 0.0);
+        let plus = Effet { propres: crate::modulation::Propres { nombre: 1.0, ..Default::default() }, ..Effet::default() };
+        assert_eq!(Gouttes::nombre(&cfg, &plus), PERLES_MODULE);
+        cfg.gouttes.perles = 8;
+        assert_eq!(Gouttes::nombre(&cfg, &plus), 8.0, "jamais plus de huit");
     }
 }

@@ -265,8 +265,64 @@ fn table<'a>(t: &'a mut toml::Table, section: &str) -> &'a mut toml::Table {
 /// écrites dans la table comptent alors, une réaction non écrite, même active par défaut comme la
 /// montée, est coupée partout, modulations et déclencheurs) ; sans `[modulations]`, ou avec les anciennes clés de la
 /// basse, les réactions à la basse passent en tête des modulations. Une modulation de même
-/// source, même cible et même groupe déjà là est gardée. Renvoie vrai si la table a changé.
+/// source, même cible et même groupe déjà là est gardée. Puis les réactions fixes des figures
+/// d'avant la 0.26 deviennent des déclencheurs (`migrer_figures`). Renvoie vrai si la table a
+/// changé.
 pub fn migrer(t: &mut toml::Table) -> bool {
+    let reactions = migrer_reactions(t);
+    migrer_figures(t) || reactions
+}
+
+/// Clés de l'allure des figures d'avant la 0.26 : la force de leurs réactions. Celles des coups
+/// deviennent la force des déclencheurs de leurs gestes (dans l'ordre de `config::GESTES`) ;
+/// celles de la basse et de la montée, propres à la figure, sont retirées.
+pub const REACTIONS_FIGURES: [&str; 6] = ["reaction_kick", "reaction_caisse", "reaction_charleston", "reaction_drop", "reaction_basse", "reaction_montee"];
+
+/// Réactions des figures d'avant la 0.26, fixes et réglées par `reaction_kick`… : sans
+/// `[declencheurs] figures`, chaque figure allumée reçoit les déclencheurs de ses gestes
+/// (`config::declencheurs_de_figure`), à la force de sa réaction d'alors (aucun pour une réaction
+/// à 0), et le drapeau est mis. Les clés `reaction_*` sont retirées partout. Renvoie vrai si la
+/// table a changé.
+pub fn migrer_figures(t: &mut toml::Table) -> bool {
+    use crate::config::{declencheurs_de_figure, FIGURES};
+    let deja = t.get("declencheurs").and_then(|d| d.get("figures")).and_then(toml::Value::as_bool) == Some(true);
+    let mut change = false;
+    let mut nouveaux = Vec::new();
+    for (i, s) in FIGURES.iter().enumerate() {
+        let Some(sec) = t.get_mut(*s).and_then(|v| v.as_table_mut()) else { continue };
+        let mut forces = [1.0f32; 4];
+        for (g, cle) in REACTIONS_FIGURES.iter().enumerate() {
+            let Some(v) = sec.remove(*cle) else { continue };
+            change = true;
+            if let (Some(f), Some(force)) = (forces.get_mut(g), v.as_float().or_else(|| v.as_integer().map(|n| n as f64))) {
+                *f = (force as f32).clamp(0.0, 2.0);
+            }
+        }
+        if deja || !sec.get("actif").and_then(toml::Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        for d in declencheurs_de_figure(i) {
+            let force = d.faire.geste().map_or(1.0, |g| forces[g]);
+            if force > 0.0 {
+                nouveaux.extend(toml::Value::try_from(Declencheur { force, ..d }).ok());
+            }
+        }
+    }
+    if deja {
+        return change;
+    }
+    let decl = table(t, "declencheurs");
+    // une section sans liste a les déclencheurs par défaut : ils restent, ceux des figures suivent
+    let liste = decl.entry("liste").or_insert_with(|| toml::Value::Array(Ancien::default().declencheurs().iter().filter_map(|d| toml::Value::try_from(d).ok()).collect()));
+    if let Some(l) = liste.as_array_mut() {
+        l.extend(nouveaux);
+    }
+    decl.insert("figures".into(), toml::Value::Boolean(true));
+    true
+}
+
+/// Réactions fixes d'Essaim 0.3 et 0.4 (voir `migrer`).
+fn migrer_reactions(t: &mut toml::Table) -> bool {
     let (avait_mod, avait_decl) = (t.contains_key("modulations"), t.contains_key("declencheurs"));
     let mut vieux = toml::Table::new();
     let mut basse_explicite = false;
@@ -347,6 +403,30 @@ pub fn migrer(t: &mut toml::Table) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reactions_des_figures_converties_en_gestes() {
+        use crate::config::{Config, FIGURES};
+        let lire = |texte: &str| -> (Config, bool, toml::Table) {
+            let mut t: toml::Table = toml::from_str(texte).unwrap();
+            let change = migrer(&mut t);
+            (toml::Value::Table(t.clone()).try_into().unwrap(), change, t)
+        };
+        // réglages 0.25 : gouttes allumées, kick à moitié, drop coupé ; arcs éteints
+        let (c, change, t) = lire("[declencheurs]\nliste = []\n[gouttes]\nactif = true\nreaction_kick = 0.5\nreaction_drop = 0\nreaction_basse = 2\n[arcs]\nreaction_kick = 0\n");
+        assert!(change && c.declencheurs.figures);
+        let g = FIGURES.iter().position(|&f| f == "gouttes").unwrap();
+        let gestes: Vec<(Action, f32)> = c.declencheurs.liste.iter().filter(|d| d.sur == Groupe::de_figure(g)).map(|d| (d.faire, d.force)).collect();
+        assert_eq!(gestes, [(Action::Battement, 0.5), (Action::Accent, 1.0)], "drop à 0 : pas d'apogée");
+        assert!(c.declencheurs.liste.iter().all(|d| d.sur.figure() != Some(0)), "arcs éteints : rien");
+        assert!(REACTIONS_FIGURES.iter().all(|k| t["gouttes"].get(*k).is_none() && t["arcs"].get(*k).is_none()));
+        // une fois converties, plus rien : un geste retiré exprès ne revient pas
+        let (_, change, _) = lire("[declencheurs]\nliste = []\nfigures = true\n[gouttes]\nactif = true\n");
+        assert!(!change);
+        // section sans liste : les déclencheurs par défaut restent, ceux des figures s'ajoutent
+        let (c, _, _) = lire("[declencheurs]\n[pendule]\nactif = true\n");
+        assert!(c.declencheurs.liste.len() == Ancien::default().declencheurs().len() + 3, "{:?}", c.declencheurs.liste);
+    }
 
     fn modulations(texte: &str) -> Vec<Modulation> {
         let mut t: toml::Table = toml::from_str(texte).unwrap();

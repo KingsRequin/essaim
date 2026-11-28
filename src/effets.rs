@@ -294,6 +294,12 @@ impl Effets {
         self.figures.moduler(mods);
     }
 
+    /// Gestes des figures demandés par les déclencheurs (`render::Swarm::prendre_gestes`), faits
+    /// à l'image suivante.
+    pub fn gestes_figures(&mut self, gestes: &[crate::figures::Gestes; crate::modulation::NB_FIGURES]) {
+        self.figures.recevoir(gestes);
+    }
+
     /// Avance l'habillage seul (équerres, liseré), quand l'essaim n'est pas dessiné : pointeur
     /// masqué par la frappe, veille profonde. Les coups du son sont lus ici aussi : ceux joués
     /// entre-temps ne partent pas en rafale à la reprise.
@@ -313,6 +319,7 @@ impl Effets {
     /// revient) ; `oublier_demande` le jette quand l'essaim est arrêté.
     pub fn oublier_coups(&mut self, shared: &AudioShared) {
         self.ecoute.lire(&shared.view());
+        self.figures.oublier_gestes();
     }
 
     /// L'essaim n'est pas actif (pause, plein écran, pause automatique) : un projecteur demandé

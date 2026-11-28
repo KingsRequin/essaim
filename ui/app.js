@@ -251,12 +251,11 @@ const pointValide = (q) => Array.isArray(q) && q.length === 2 && q.every((v) => 
 const POINTS_MAX = 2000; // par trajet ou par contour (comme Config::clamped)
 // nombre de contours d'un trajet : CONTOURS_MAX d'apercu.js (chargé avant), comme contours::CONTOURS_MAX
 // Réglages entiers du moteur (u32 dans config.rs) : un nombre distant y est arrondi.
-const ENTIERS = new Set(["orbite.nombre", "orbite.anneaux", "essaim.maximum", "essaim.fixes", "couleur.palette", "spectre.bandes"]);
+const ENTIERS = new Set(["orbite.nombre", "orbite.anneaux", "essaim.maximum", "essaim.fixes", "couleur.palette", "spectre.bandes", "gouttes.perles"]);
 // Bornes sûres des réglages sans glissière (comme config::limits) : l'allure du trait et du
 // pendule (échelle, rotation, décalage, sans glissière), puis la borne de la section.
 const BORNES_ALLURE = {
-  echelle: [0.5, 2], opacite: [0.1, 1], teinte: [-180, 180], rotation: [-30, 30], decalage_x: [-80, 80], decalage_y: [-80, 80],
-  reaction_kick: [0, 2], reaction_caisse: [0, 2], reaction_charleston: [0, 2], reaction_basse: [0, 2], reaction_montee: [0, 2], reaction_drop: [0, 2],
+  echelle: [0.5, 2], opacite: [0.1, 1], teinte: [-180, 180], teinte_fixe: [0, 360], degrade: [0, 180], rotation: [-30, 30], decalage_x: [-80, 80], decalage_y: [-80, 80],
 };
 const BORNES_SECTION = { orbite: [0, 100], essaim: [0, 10], couleur: [0, 720], bordure: [0, 1], rendu: [0, 500] };
 // Champs numériques d'une modulation ou d'un déclencheur (comme Config::clamped) ; `nombre` et
@@ -356,6 +355,36 @@ const ANCIENNES_CLES = [
 // par défaut : ni ses modulations ni son explosion au drop). Une modulation de même source, même
 // cible et même groupe déjà là est gardée.
 function migrer(p) {
+  return migrerFigures(migrerReactions(p));
+}
+
+// Réactions des figures d'avant la 0.26, fixes et réglées par `reaction_kick`… (comme
+// migration::migrer_figures) : sans `[declencheurs] figures`, chaque figure allumée reçoit les
+// déclencheurs de ses gestes, à la force de sa réaction d'alors (aucun à 0).
+const EVENEMENT_DU_GESTE = { battement: "kick", accent: "caisse", scintillement: "charleston", apogee: "drop" };
+const REACTION_DU_GESTE = { battement: "reaction_kick", accent: "reaction_caisse", scintillement: "reaction_charleston", apogee: "reaction_drop" };
+// Réactions de toujours de la figure `s` (comme config::declencheurs_de_figure) ; `forces` : la
+// force de certains gestes.
+const declencheursDeFigure = (s, forces = {}) => (GESTES_DES_FIGURES[s] || [])
+  .map((faire) => ({ ...DECLENCHEUR_DEFAUT, quand: EVENEMENT_DU_GESTE[faire], faire, sur: s, force: forces[faire] ?? 1 }))
+  .filter((d) => d.force > 0);
+function migrerFigures(p) {
+  const d = estObjet(p.declencheurs) ? p.declencheurs : {};
+  if (d.figures === true) return p;
+  const ajout = [];
+  for (const [s] of FIGURES_REGLAGES) {
+    const sec = p[s];
+    if (!estObjet(sec) || sec.actif !== true) continue;
+    const forces = {};
+    for (const [g, k] of Object.entries(REACTION_DU_GESTE)) if (Number.isFinite(sec[k])) forces[g] = borne(sec[k], 0, 2);
+    ajout.push(...declencheursDeFigure(s, forces));
+  }
+  const liste = Array.isArray(d.liste) ? d.liste : reactionsAvant({}).decl;
+  return { ...p, declencheurs: { ...d, liste: liste.concat(ajout), figures: true } };
+}
+
+// Réactions fixes d'Essaim 0.3 et 0.4 (voir `migrer`).
+function migrerReactions(p) {
   const ecrite = (s, k) => estObjet(p[s]) && p[s][k] !== undefined;
   const avaitDecl = p.declencheurs !== undefined;
   if (avaitDecl && !ANCIENNES_CLES.some(([s, k]) => ecrite(s, k))) return p;
@@ -1081,6 +1110,10 @@ const IMPACT = {
   "pinceau.actif": [1, "estime"], "pinceau.largeur": [1, "estime"], "pinceau.duree": [1, "estime"],
   "pendule.actif": [1, "estime"], "pendule.longueur": [1, "estime"], "pendule.taille": [1, "estime"],
   "gouttes.actif": [2, "estime"], "gouttes.taille": [1, "estime"], "gouttes.epaisseur": [1, "estime"],
+  // perles : une goutte de plus dans le champ calculé à chaque image
+  "gouttes.perles": [2, "estime"], "gouttes.vitesse": [1, "estime"], "gouttes.souplesse": [1, "estime"],
+  "anneau.etirement": [1, "estime"], "orbe.etirement": [1, "estime"], "pendule.frottement": [1, "estime"],
+  "action.battement": [1, "estime"], "action.accent": [1, "estime"], "action.scintillement": [1, "estime"], "action.apogee": [1, "estime"],
   // loin du pointeur : leur zone agrandit celle que le moteur redessine
   "equerres.actif": [2, "estime"], "equerres.bras": [1, "estime"], "equerres.epaisseur": [1, "estime"],
   "lisere.actif": [3, "estime"], "lisere.epaisseur": [1, "estime"],
@@ -1175,18 +1208,64 @@ const FIGURES_REGLAGES = [
   ["trame", "Trame"], ["pinceau", "Trait"], ["pendule", "Pendule"], ["gouttes", "Gouttes"],
 ];
 const NOMS_FIGURES = Object.fromEntries(FIGURES_REGLAGES);
-// Cibles qui ne font rien selon « sur » : la traînée sur une figure ; sur le trait et le pendule
-// (ni rayon, ni rotation, ni place), en plus, ce qui fait tourner, grandir ou déplacer.
-const SANS_EFFET_FIGURE = new Set(["trainee"]);
-const SANS_EFFET_TRAIT = new Set(["trainee", "rotation", "vitesse", "acceleration", "rayon", "decalage"]);
+// Cibles proposées sur chaque figure, avec le nom de ce qu'elles y font (comme figures.rs : ce que
+// chaque figure lit de ses modulations). La vitesse (une rotation de plus), la lueur (une opacité
+// de plus) et la traînée n'y sont pas proposées ; la rotation et son accélération, seulement sur les
+// figures qui tournent ; les cibles propres (ouverture, écart, forme…), sur la leur.
+const TOURNANTES = new Set(["arcs", "anneau", "orbe", "gouttes"]);
+const CIBLES_FIGURE = {
+  arcs: [["rayon", "Rayon"], ["taille", "Épaisseur"], ["ouverture", "Ouverture des arcs"]],
+  quatre_temps: [["rayon", "Taille de la figure"], ["taille", "Taille des points"], ["ecart", "Écart des points"]],
+  anneau: [["rayon", "Rayon"], ["taille", "Épaisseur"], ["forme", "Forme (rond → carré)"]],
+  orbe: [["rayon", "Rayon"], ["taille", "Épaisseur"], ["relief", "Relief du spectre"]],
+  voix: [["rayon", "Taille de la ligne"], ["taille", "Épaisseur"], ["relief", "Hauteur des ondulations"]],
+  trame: [["rayon", "Rayon de la loupe"], ["taille", "Taille des points"]],
+  pinceau: [["taille", "Largeur du trait"], ["duree", "Durée du trait"]],
+  pendule: [["rayon", "Longueur du fil"], ["taille", "Taille du poids"]],
+  gouttes: [["rayon", "Taille de l'ensemble"], ["taille", "Épaisseur"], ["nombre", "Nombre de perles"], ["ecart", "Écart des perles"], ["noyau", "Taille du noyau"]],
+};
+// Noms de toutes les cibles propres (valeur gardée hors de sa figure).
+const NOMS_PROPRES = { ouverture: "Ouverture des arcs", ecart: "Écart", forme: "Forme (rond → carré)", relief: "Relief", duree: "Durée du trait", nombre: "Nombre de perles", noyau: "Taille du noyau" };
+const TOUTES_CIBLES = CIBLES_MOD.concat(Object.entries(NOMS_PROPRES));
 function ciblesPour(sur) {
-  const sans = sur === "pinceau" || sur === "pendule" ? SANS_EFFET_TRAIT : sur === "figures" || sur in NOMS_FIGURES ? SANS_EFFET_FIGURE : null;
-  return sans ? CIBLES_MOD.filter(([id]) => !sans.has(id)) : CIBLES_MOD;
+  const fixes = [["teinte", "Teinte"], ["opacite", "Opacité"]];
+  if (sur === "figures") return [["rayon", "Rayon"], ["taille", "Épaisseur"], ["rotation", "Rotation"], ["decalage", "Décalage"], ...fixes];
+  if (!(sur in CIBLES_FIGURE)) return CIBLES_MOD;
+  const tourne = TOURNANTES.has(sur) ? [["rotation", "Rotation"], ["acceleration", "Accélération de la rotation"]] : [];
+  const place = sur === "pinceau" || sur === "pendule" ? [] : [["decalage", "Décalage"]];
+  return [...CIBLES_FIGURE[sur], ...tourne, ...place, ...fixes];
 }
+// Cible qui agit sur ce groupe sans y être proposée (la vitesse et la lueur d'une figure, d'un
+// preset d'avant) : affichée sans « sans effet ici ».
+const agitSans = (cible, sur) => (sur === "figures" || sur in CIBLES_FIGURE) && (cible === "luminosite" || (cible === "vitesse" && (sur === "figures" || TOURNANTES.has(sur))));
 const GROUPES = [
   ["tout", "L'essaim"], ["cometes", "Comètes"], ["satellites", "Satellites"], ["figures", "Toutes les figures"],
   ...FIGURES_REGLAGES.map(([id, nom]) => [id, "Figure : " + nom]),
 ];
+// Ce qui est allumé : les comètes, les satellites (permanents, ou ajoutés par un déclencheur),
+// les figures.
+const figuresAllumees = (r) => FIGURES_REGLAGES.filter(([s]) => r[s] && r[s].actif).map(([s]) => s);
+const satellitesLa = (r) => r.essaim.fixes > 0 || (r.essaim.maximum > 0 && fait(r, "satellites", "explosion", "rafale"));
+// Groupes que vise une modulation, parmi ce qui est allumé (« L'essaim » s'il n'y a rien).
+function groupesPour(r) {
+  const cometes = !!r.orbite.cometes, sats = satellitesLa(r), figures = figuresAllumees(r);
+  const l = GROUPES.filter(([id]) => (id === "tout" && (cometes || sats)) || (id === "cometes" && cometes) || (id === "satellites" && sats)
+    || (id === "figures" && figures.length > 1) || figures.includes(id));
+  return l.length ? l : [GROUPES[0]];
+}
+// Modulation sans rien à faire en ce moment : elle vise un groupe éteint (la teinte « sur tout »
+// colore aussi les figures et la bordure : elle agit toujours).
+function modulationEteinte(m, r) {
+  const sur = m.sur || "tout";
+  if (sur === "tout" && m.cible === "teinte") return false;
+  return !groupesPour(r).some(([id]) => id === sur) && (sur !== "tout" || r.orbite.cometes || satellitesLa(r) || figuresAllumees(r).length > 0);
+}
+// Geste des figures qu'aucune figure allumée ne fait (déclencheur sans effet en ce moment).
+function gesteEteint(d, r) {
+  if (!GESTES_ACTIONS.has(d.faire)) return false;
+  const sur = d.sur || "tout";
+  return !figuresAllumees(r).some((s) => (sur === "tout" || sur === "figures" || sur === s) && GESTES_DES_FIGURES[s].includes(d.faire));
+}
 // sur une figure, la vitesse est dix fois moindre et le décalage se compte en px (comme
 // figures::FIG_VITESSE, FIG_DECALAGE)
 const UNITES_MOD_FIGURE = { vitesse: [(4 * 60) / (2 * Math.PI), " tr/min"], decalage: [48, " px"] };
@@ -1201,7 +1280,7 @@ const LISSAGE_MOD = 0.35;
 // Modulation et déclencheur par défaut, champ par champ (comme Modulation::default et
 // Declencheur::default de config.rs) : un champ omis prend cette valeur.
 const MODULATION_DEFAUT = { source: "basse", cible: "rotation", sur: "tout", quantite: 0.5, seuil: 0, lissage: LISSAGE_MOD, inverser: false };
-const DECLENCHEUR_DEFAUT = { quand: "kick", faire: "onde", force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1 };
+const DECLENCHEUR_DEFAUT = { quand: "kick", faire: "onde", force: 1, nombre: 3, nombre_max: 3, delai: 0, probabilite: 1, sur: "tout" };
 // Bornes du facteur d'une cible qui se multiplie, sur le groupe `sur` : celles du moteur, et
 // pour le rayon d'une figure, son échelle qui ne descend pas sous GEO_MIN (comme
 // figures::poser : échelle × facteur, au moins 0,5). Sur « Figures », l'échelle de chacune
@@ -1209,6 +1288,10 @@ const DECLENCHEUR_DEFAUT = { quand: "kick", faire: "onde", force: 1, nombre: 3, 
 function bornesFacteur(cible, sur) {
   const b = BORNES_MOD[cible];
   if (!b) return null;
+  // le fil du pendule (de × 0,5 à × 2,5), les points de la trame, des quatre temps et le poids du
+  // pendule (jusqu'à × 2,5), comme plus::fil_module et figures::TAILLE_POINTS_MAX
+  if (cible === "rayon" && sur === "pendule") return [b[0], 0.5, 2.5];
+  if (cible === "taille" && (sur === "trame" || sur === "quatre_temps" || sur === "pendule")) return [b[0], b[1], 2.5];
   if (cible !== "rayon" || !(sur === "figures" || sur in NOMS_FIGURES)) return b;
   const f = etat.reglages && etat.reglages[sur];
   const echelle = f && f.echelle > 0 ? f.echelle : 1;
@@ -1218,7 +1301,19 @@ function bornesFacteur(cible, sur) {
 // dans les bornes du moteur (le rayon ne descend pas sous 10 %, l'opacité ne monte pas au-delà
 // de 100 %). La glissière va toujours de −100 à 100 % : la quantité appliquée est q × source,
 // une source à mi-course distingue encore deux quantités que la source à fond confond.
+// Cibles propres, à fond : facteur ajouté et ses bornes (comme figures::ecart_module…), ou valeur
+// ajoutée et son unité.
+const PROPRES_FACTEUR = { ecart: [0.3, 2], relief: [0, 2], duree: [0.3, 2.5] };
+const PROPRES_AJOUT = { ouverture: [100, " % d'ouverture"], forme: [100, " % carré"], nombre: [4, " perles"], noyau: [8, " px"] };
 const affQuantite = (cible, q, sur) => {
+  if (PROPRES_FACTEUR[cible]) {
+    const [lo, hi] = PROPRES_FACTEUR[cible], v = Math.round((Math.min(hi, Math.max(lo, 1 + q)) - 1) * 100);
+    return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v) + " %";
+  }
+  if (PROPRES_AJOUT[cible]) {
+    const [fond, unite] = PROPRES_AJOUT[cible], v = q * fond, a = Math.abs(v);
+    return (v > 0 ? "+" : v < 0 ? "−" : "") + (cible === "nombre" ? virgule(a, 1) : Math.round(a)) + unite;
+  }
   const figure = sur === "figures" || sur in NOMS_FIGURES;
   const [fond, unite] = (figure && UNITES_MOD_FIGURE[cible]) || UNITES_MOD[cible] || [100, " %"];
   const b = bornesFacteur(cible, sur);
@@ -1229,6 +1324,7 @@ const affQuantite = (cible, q, sur) => {
 // Infobulle de la valeur affichée : ce que la quantité ne peut pas dire seule, et la quantité
 // au-delà de laquelle la source à fond touche une borne du moteur.
 function noteQuantite(cible, q, sur) {
+  if (PROPRES_FACTEUR[cible] || PROPRES_AJOUT[cible]) return "Effet de cette modulation seule, source à fond, dans les bornes de la figure";
   if (cible === "opacite" && q > 0) return "Sans effet seule (l'opacité est déjà au plus) : compense une autre modulation de l'opacité qui la baisse";
   const b = bornesFacteur(cible, sur);
   if (!b) return "";
@@ -1257,7 +1353,10 @@ const ACTIONS = [
   ["eclat", "Éclat"], ["satellites", "Satellites"], ["inversion", "Inversion du sens"], ["bordure", "Bordure qui s'illumine"], ["onde", "Onde"],
   ["eclats", "Éclats"], ["fissure", "Fissure"], ["implosion", "Implosion"], ["carre", "Carré"], ["etincelles", "Étincelles"],
   ["explosion", "Explosion"], ["rafale", "Rafale"], ["rebond", "Rebond de l'orbite"], ["poussee", "Poussée de la rotation"], ["frein", "Coup de frein"],
+  ["battement", "Battement des figures"], ["accent", "Accent des figures"], ["scintillement", "Scintillement des figures"], ["apogee", "Apogée des figures"],
 ];
+// Gestes des figures (comme config::GESTES) : chaque figure les fait à sa façon.
+const GESTES_ACTIONS = new Set(GESTES_FIGURE);
 const NOMS_EVENEMENTS = Object.fromEntries(EVENEMENTS);
 const NOMS_ACTIONS = Object.fromEntries(ACTIONS);
 // force : réglable, et son affichage (éclat, bordure et frein : 0 à 100 % ; tailles, rebond et
@@ -1265,6 +1364,7 @@ const NOMS_ACTIONS = Object.fromEntries(ACTIONS);
 const ACTION_FORCE = {
   eclat: "pourcent", bordure: "pourcent", onde: "fois", eclats: "fois", fissure: "fois", implosion: "fois", carre: "fois", etincelles: "fois", explosion: "fois", rafale: "fois",
   rebond: "elan", poussee: "elan", frein: "pourcent",
+  battement: "geste", accent: "geste", scintillement: "geste", apogee: "geste",
 };
 // ce que la force règle quand ce n'est pas la taille de tout (comme Swarm::agir) : nom de la
 // glissière et infobulle
@@ -1275,7 +1375,7 @@ const FORCE_NOMMEE = {
 };
 const ACTION_NOMBRE = new Set(["satellites", "etincelles", "explosion", "rafale"]);
 const IMPACT_ACTION = { etincelles: 2, explosion: 2, eclats: 2, fissure: 2 };
-const DECLENCHEURS_MAX = 24;
+const DECLENCHEURS_MAX = 40;
 const IDEES_DECLENCHEURS = [
   ["Étincelles sur la caisse claire", { quand: "caisse", faire: "etincelles", nombre: 6, nombre_max: 6 }],
   ["Fissure au drop", { quand: "drop", faire: "fissure", force: 2 }],
@@ -1285,6 +1385,8 @@ const IDEES_DECLENCHEURS = [
   ["Bordure sur la caisse claire", { quand: "caisse", faire: "bordure", force: 0.6 }],
   ["Rebond de l'orbite au kick", { quand: "kick", faire: "rebond" }],
   ["Coup de frein sur la caisse claire", { quand: "caisse", faire: "frein" }],
+  ["Les figures battent sur chaque temps", { quand: "temps", faire: "battement", force: 0.6 }],
+  ["Accent des figures au clic", { quand: "clic", faire: "accent" }],
 ];
 
 // Réactions d'avant (comme migration::Ancien), pour un preset de la communauté écrit avant les
@@ -1323,42 +1425,68 @@ function reactionsAvant(p) {
   return { basse, mods, decl };
 }
 
-// Allure commune des figures (comme config::Allure) : l'opacité avec les réglages courants, le
-// reste sous « + Avancé » (l'échelle aussi : elle agrandit ce que « Rayon » ou « Taille », juste
-// au-dessus, règlent déjà). Le trait et le pendule (`geo` faux) ne tournent, ne grandissent ni
-// ne se déplacent.
+// Allure commune des figures (comme config::Allure) : la couleur et l'opacité avec les réglages
+// courants, la place sous « + Avancé » (l'échelle aussi : elle agrandit ce que « Rayon » ou
+// « Taille », juste au-dessus, règlent déjà). Le trait et le pendule (`geo` faux) ne grandissent ni
+// ne se déplacent ; seuls les arcs, l'anneau, l'orbe et les gouttes tournent (`TOURNANTES`).
 const enPourcent = (v) => Math.round(v * 100) + " %";
-// `nom` : titre des groupes quand un panneau montre deux figures ; `cache(r)` : réglages cachés
-// quand la figure est éteinte (panneau « Anneau », deux formes).
-function allureBase(s, cache) {
-  return [{ libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent, cache }];
+const couleurDe = (r, s) => (r[s] && r[s].couleur) || "essaim";
+// `cache(r)` : réglages cachés quand la figure est éteinte (panneau « Anneau », deux formes).
+function allureBase(s, cache = () => false) {
+  return [
+    { choix: "Couleur", section: s, cle: "couleur", valeurs: [["essaim", "De l'essaim"], ["fixe", "Fixe"], ["blanc", "Blanche"]], cache,
+      note: "De l'essaim : elle suit sa teinte (qui défile, ou celle de l'application, de la pochette…). Fixe : une teinte à elle, qui ne bouge pas avec l'essaim." },
+    { libelle: "Teinte, à côté de celle de l'essaim", section: s, cle: "teinte", min: -180, max: 180, pas: 5, aff: (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v)) + "°", cache: (r) => cache(r) || couleurDe(r, s) !== "essaim" },
+    { libelle: "Teinte fixe", section: s, cle: "teinte_fixe", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°", cache: (r) => cache(r) || couleurDe(r, s) !== "fixe" },
+    { libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent, cache },
+  ];
 }
-function allureAvance(s, geo = true, nom, cache) {
-  const reaction = (libelle, cle) => ({ libelle, section: s, cle: "reaction_" + cle, min: 0, max: 2, pas: 0.05, aff: enPourcent });
+// Gestes de la figure `s` (déclencheurs, `battement`, `accent`…), dits par ce qu'ils lui font.
+const LIBELLES_GESTES = {
+  arcs: { battement: "Le grand arc avance d'un cran quand", accent: "Le petit arc recule quand", scintillement: "Le petit arc s'ouvre quand", apogee: "Les arcs se ferment en cercles quand" },
+  quatre_temps: { battement: "Le point du temps saute quand", accent: "Le point s'étire en tiret quand", apogee: "Les points sautent en vague quand" },
+  anneau: { battement: "L'anneau bat quand", accent: "L'anneau devient carré quand", scintillement: "Le point du tempo grossit quand", apogee: "L'anneau lâche un écho quand" },
+  orbe: { battement: "Le spectre souffle et lâche un écho quand", apogee: "Le spectre lâche trois échos quand" },
+  voix: { battement: "Les grandes ondulations montent quand", accent: "Les ondulations moyennes montent quand", scintillement: "Les fines ondulations montent quand", apogee: "La ligne s'élargit quand" },
+  trame: { battement: "Une vague ronde la traverse quand", accent: "Une vague en losange la traverse quand", scintillement: "Des points scintillent quand", apogee: "Une grande vague la traverse quand" },
+  pinceau: { battement: "Une perle glisse le long du trait quand", apogee: "Le trait dure plus longtemps quand" },
+  pendule: { battement: "Le poids saute quand", accent: "Le poids reçoit une pichenette quand", apogee: "Le poids fait un grand saut quand" },
+  gouttes: { battement: "Les perles sont projetées quand", accent: "Une goutte se détache quand", apogee: "Des bulles s'échappent quand" },
+};
+const gestesDe = (s, cache) => GESTES_DES_FIGURES[s].map((g) => ({ quand: [g], sur: s, libelle: LIBELLES_GESTES[s][g], cache }));
+// `nom` : titre des groupes quand un panneau montre deux figures.
+function allureAvance(s, geo = true, nom, cache = () => false) {
   const titre = (t) => (nom ? nom + " · " + t.charAt(0).toLowerCase() + t.slice(1) : t);
   // deux figures dans le panneau : chaque bouton nomme la sienne (« l'anneau lisse »)
   const quoi = nom ? "l'" + NOMS_FIGURES[s].toLowerCase() : null;
   return [
-    { groupe: titre(geo ? "Couleur et place" : "Couleur") },
-    ...(geo ? [{ libelle: "Échelle", section: s, cle: "echelle", min: 0.5, max: 2, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) }] : []),
-    { libelle: "Teinte", section: s, cle: "teinte", min: -180, max: 180, pas: 5, aff: (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v)) + "°" },
     ...(geo ? [
-      { libelle: "Rotation", section: s, cle: "rotation", min: -30, max: 30, pas: 0.5, aff: (v) => virgule(+v, 1) + " tr/min" },
+      { groupe: titre("Place") },
+      { libelle: "Échelle", section: s, cle: "echelle", min: 0.5, max: 2, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) },
+      ...(TOURNANTES.has(s) ? [{ libelle: "Rotation", section: s, cle: "rotation", min: -30, max: 30, pas: 0.5, aff: (v) => virgule(+v, 1) + " tr/min" }] : []),
       { libelle: "Décalage horizontal", section: s, cle: "decalage_x", min: -80, max: 80, pas: 1, aff: (v) => Math.round(v) + " px" },
       { libelle: "Décalage vertical", section: s, cle: "decalage_y", min: -80, max: 80, pas: 1, aff: (v) => Math.round(v) + " px" },
     ] : []),
-    { groupe: titre("Réactions à la musique (0 % : aucune, 200 % : double)") },
-    reaction("Kick", "kick"), reaction("Caisse claire", "caisse"), reaction("Charleston", "charleston"),
-    reaction("Basse", "basse"), reaction("Montée", "montee"), reaction("Drop", "drop"),
+    { groupe: titre("Couleur fixe"), cache: (r) => couleurDe(r, s) !== "fixe" },
+    { libelle: "Écart de teinte de la queue", section: s, cle: "degrade", min: 0, max: 180, pas: 1, aff: (v) => Math.round(v) + "°", cache: (r) => couleurDe(r, s) !== "fixe" },
     { copierAllure: s, quoi },
-    { moduler: s, quoi, geo },
-  ].map((d) => ({ ...d, cache }));
+    { moduler: s, quoi },
+  ].map((d) => ({ ...d, cache: d.cache ? (r) => cache(r) || d.cache(r) : cache }));
 }
 
-// Allure d'une figure copiée sur les huit autres : teinte, opacité et réactions (l'échelle, la
-// rotation et le décalage dépendent de la forme, ils restent). Les valeurs remplacées sont gardées :
-// « Annuler » (Ctrl+Z) les remet tant qu'aucun preset n'a été appliqué depuis.
-const ALLURE_COPIEE = ["teinte", "opacite", "reaction_kick", "reaction_caisse", "reaction_charleston", "reaction_basse", "reaction_montee", "reaction_drop"];
+// Première modulation proposée par « + Moduler » sur chaque figure.
+const MODULER_FIGURE = {
+  arcs: { source: "kick", cible: "ouverture", quantite: 0.3 }, quatre_temps: { source: "basse", cible: "ecart", quantite: 0.3 },
+  anneau: { source: "basse", cible: "forme", quantite: 0.3 }, orbe: { source: "basse", cible: "relief", quantite: 0.5 },
+  voix: { source: "brillance", cible: "relief", quantite: 0.5 }, trame: { source: "basse", cible: "rayon", quantite: 0.1 },
+  pinceau: { source: "basse", cible: "duree", quantite: 0.4 }, pendule: { source: "basse", cible: "rayon", quantite: 0.2 },
+  gouttes: { source: "basse", cible: "nombre", quantite: 0.5 },
+};
+
+// Allure d'une figure copiée sur les huit autres : couleur et opacité (l'échelle, la rotation et le
+// décalage dépendent de la forme, ils restent). Les valeurs remplacées sont gardées : « Annuler »
+// (Ctrl+Z) les remet tant qu'aucun preset n'a été appliqué depuis.
+const ALLURE_COPIEE = ["couleur", "teinte", "teinte_fixe", "degrade", "opacite"];
 // dernière action de la page que « Annuler » défait avant le dernier preset ; `.actif` : le preset
 // en place quand elle a été faite
 let annulationLocale = null;
@@ -1389,7 +1517,7 @@ function copierAllure(source) {
   defaire.actif = etat.actif; // preset en place quand l'allure a été copiée
   defaire.copie = copie; // valeurs posées par la copie
   annulationLocale = defaire;
-  bandeau(`Teinte, opacité et réactions de « ${nom} » copiées sur les autres figures.`, { libelle: "Annuler (Ctrl+Z)", faire: defaire });
+  bandeau(`Couleur et opacité de « ${nom} » copiées sur les autres figures.`, { libelle: "Annuler (Ctrl+Z)", faire: defaire });
 }
 
 // La copie d'allure est-elle dépassée par un preset mis en place d'ailleurs (icône, Horizon, une
@@ -1562,11 +1690,12 @@ const PANNEAUX = [
   },
   {
     id: "arcs", famille: "Figures", titre: "Arcs", actif: ["arcs", "actif"],
-    note: "Deux arcs fins autour du pointeur, comme les anneaux d'une montre : le grand s'ouvre avec la basse, le petit avec les aigus et la montée. Chaque kick fait avancer le grand d'un cran, la caisse claire fait reculer le petit, un drop les ferme en cercles. Leurs couleurs sont celles de l'essaim (tête et queue des traînées).",
+    note: "Deux arcs fins autour du pointeur, comme les anneaux d'une montre : le grand s'ouvre avec la basse, le petit avec les aigus et la montée. Ses gestes, plus bas, disent ce que chaque événement lui fait (par défaut : le kick fait avancer le grand arc, la caisse claire reculer le petit, un drop les ferme en cercles). Pour le reste, « + Moduler », sous « + Avancé ».",
     base: [
       { libelle: "Rayon", section: "arcs", cle: "rayon", min: 10, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Épaisseur", section: "arcs", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
       ...allureBase("arcs"),
+      ...gestesDe("arcs"),
     ],
     avance: allureAvance("arcs"),
   },
@@ -1577,6 +1706,7 @@ const PANNEAUX = [
       { libelle: "Taille des points", section: "quatre_temps", cle: "taille", min: 1, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
       { libelle: "Écart", section: "quatre_temps", cle: "ecart", min: 4, max: 20, pas: 0.5, aff: (v) => virgule(+v, 1) },
       ...allureBase("quatre_temps"),
+      ...gestesDe("quatre_temps"),
     ],
     avance: allureAvance("quatre_temps"),
   },
@@ -1593,12 +1723,16 @@ const PANNEAUX = [
       { titre: "Lisse", cache: (r) => !r.anneau.actif },
       { libelle: "Rayon", section: "anneau", cle: "rayon", min: 6, max: 60, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.anneau.actif },
       { libelle: "Épaisseur", section: "anneau", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1), cache: (r) => !r.anneau.actif },
+      { libelle: "Étirement quand il file", section: "anneau", cle: "etirement", min: 0, max: 0.7, pas: 0.05, aff: (v) => (+v === 0 ? "reste rond" : Math.round(v * 100) + " %"), vers: (x) => x / 100, cache: (r) => !r.anneau.actif },
       ...allureBase("anneau", (r) => !r.anneau.actif),
+      ...gestesDe("anneau", (r) => !r.anneau.actif),
       { titre: "Spectre", cache: (r) => !r.orbe.actif },
       { libelle: "Rayon", section: "orbe", cle: "rayon", min: 10, max: 60, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.orbe.actif },
       { libelle: "Relief", section: "orbe", cle: "relief", min: 2, max: 30, pas: 1, aff: (v) => String(Math.round(v)), cache: (r) => !r.orbe.actif },
       { libelle: "Épaisseur", section: "orbe", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1), cache: (r) => !r.orbe.actif },
+      { libelle: "Étirement quand il file", section: "orbe", cle: "etirement", min: 0, max: 0.7, pas: 0.05, aff: (v) => (+v === 0 ? "reste rond" : Math.round(v * 100) + " %"), vers: (x) => x / 100, cache: (r) => !r.orbe.actif },
       ...allureBase("orbe", (r) => !r.orbe.actif),
+      ...gestesDe("orbe", (r) => !r.orbe.actif),
     ],
     avance: [...allureAvance("anneau", true, "Lisse", (r) => !r.anneau.actif), ...allureAvance("orbe", true, "Spectre", (r) => !r.orbe.actif)],
   },
@@ -1610,6 +1744,7 @@ const PANNEAUX = [
       { libelle: "Hauteur des ondulations", section: "voix", cle: "hauteur", min: 2, max: 20, pas: 0.5, aff: (v) => virgule(+v, 1) },
       { libelle: "Épaisseur", section: "voix", cle: "epaisseur", min: 0.5, max: 5, pas: 0.1, aff: (v) => virgule(+v, 1) },
       ...allureBase("voix"),
+      ...gestesDe("voix"),
     ],
     avance: allureAvance("voix"),
   },
@@ -1621,6 +1756,7 @@ const PANNEAUX = [
       { libelle: "Pas de la grille", section: "trame", cle: "pas", min: 6, max: 24, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Taille des points", section: "trame", cle: "taille", min: 0.3, max: 3, pas: 0.1, aff: (v) => virgule(+v, 1) },
       ...allureBase("trame"),
+      ...gestesDe("trame"),
     ],
     avance: allureAvance("trame"),
   },
@@ -1631,6 +1767,7 @@ const PANNEAUX = [
       { libelle: "Largeur à pleine vitesse", section: "pinceau", cle: "largeur", min: 2, max: 12, pas: 0.5, aff: (v) => virgule(+v, 1) },
       { libelle: "Durée", section: "pinceau", cle: "duree", min: 0.2, max: 1, pas: 0.02, aff: (v) => virgule(+v, 2) + " s" },
       ...allureBase("pinceau"),
+      ...gestesDe("pinceau"),
     ],
     avance: allureAvance("pinceau", false),
   },
@@ -1640,17 +1777,23 @@ const PANNEAUX = [
     base: [
       { libelle: "Longueur du fil", section: "pendule", cle: "longueur", min: 8, max: 60, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Taille du poids", section: "pendule", cle: "taille", min: 1, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
+      { libelle: "Frottement", section: "pendule", cle: "frottement", min: 0.3, max: 6, pas: 0.1, aff: (v) => (v < 1 ? "se balance longtemps" : v > 4 ? "s'arrête vite" : virgule(+v, 1)) },
       ...allureBase("pendule"),
+      ...gestesDe("pendule"),
     ],
     avance: allureAvance("pendule", false),
   },
   {
     id: "gouttes", famille: "Figures", titre: "Gouttes", actif: ["gouttes", "actif"],
-    note: "Une ligne liquide autour du pointeur : un noyau et quatre perles en orbite, dont on ne voit que le contour, qui se soude quand elles se touchent et se sépare quand elles s'éloignent. L'intérieur reste vide. Le kick projette les perles, une montée fond tout en un seul anneau, un drop lâche des bulles.",
+    note: "Une ligne liquide autour du pointeur : un noyau et ses perles en orbite, dont on ne voit que le contour, qui se soude quand elles se touchent et se sépare quand elles s'éloignent. Souple, elle traîne derrière la souris, s'étire et se sépare, puis revient se souder. Une montée fond tout en un seul anneau ; les modulations peuvent ajouter des perles, grossir le noyau, écarter les perles.",
     base: [
       { libelle: "Taille", section: "gouttes", cle: "taille", min: 0.6, max: 1.6, pas: 0.05, aff: (v) => "× " + virgule(+v, 2) },
       { libelle: "Épaisseur", section: "gouttes", cle: "epaisseur", min: 1, max: 4, pas: 0.1, aff: (v) => virgule(+v, 1) },
+      { libelle: "Perles", section: "gouttes", cle: "perles", min: 0, max: 8, pas: 1, aff: (v) => (+v === 0 ? "noyau seul" : String(Math.round(v))) },
+      { libelle: "Vitesse des perles", section: "gouttes", cle: "vitesse", min: 0, max: 3, pas: 0.05, aff: (v) => (+v === 0 ? "immobiles" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
+      { libelle: "Souplesse", section: "gouttes", cle: "souplesse", min: 0, max: 1, pas: 0.05, aff: (v) => (+v === 0 ? "d'un bloc" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
       ...allureBase("gouttes"),
+      ...gestesDe("gouttes"),
     ],
     avance: allureAvance("gouttes"),
   },
@@ -1801,6 +1944,17 @@ const SUGGESTIONS_MOD = [
   ["Penche vers le côté qui joue", { source: "stereo", cible: "decalage", sur: "tout", quantite: 0.6, lissage: 0.42 }],
   ["Lueur sur la caisse claire", { source: "caisse", cible: "luminosite", sur: "tout", quantite: 0.5 }],
   ["Traînées longues sur les graves", { source: "grave", cible: "trainee", sur: "cometes", quantite: 0.5 }],
+  // figures : montrées quand la figure est allumée
+  ["Arcs : ouverts par le kick", { source: "kick", cible: "ouverture", sur: "arcs", quantite: 0.35, lissage: 0.2 }],
+  ["Quatre temps : écartés par la basse", { source: "basse", cible: "ecart", sur: "quatre_temps", quantite: 0.3, lissage: 0.5 }],
+  ["Anneau : carré au drop", { source: "drop", cible: "forme", sur: "anneau", quantite: 0.7, lissage: 0.3 }],
+  ["Spectre : relief qui monte au drop", { source: "drop", cible: "relief", sur: "orbe", quantite: 0.8, lissage: 0.3 }],
+  ["Voix : ondulations qui suivent les aigus", { source: "brillance", cible: "relief", sur: "voix", quantite: 0.6, lissage: 0.5 }],
+  ["Trame : la loupe s'ouvre au kick", { source: "kick", cible: "rayon", sur: "trame", quantite: 0.1 }],
+  ["Trait : plus long avec la basse", { source: "basse", cible: "duree", sur: "pinceau", quantite: 0.6, lissage: 0.5 }],
+  ["Pendule : le fil s'allonge avec la basse", { source: "basse", cible: "rayon", sur: "pendule", quantite: 0.2, lissage: 0.5 }],
+  ["Gouttes : la basse ajoute des perles", { source: "basse", cible: "nombre", sur: "gouttes", quantite: 0.5, lissage: 0.6 }],
+  ["Gouttes : le noyau gonfle au kick", { source: "kick", cible: "noyau", sur: "gouttes", quantite: 0.4, lissage: 0.1 }],
 ];
 
 const glissieres = []; // { def, input, saisie, els }
@@ -1881,10 +2035,20 @@ function bascule(libelle, section, cle, oui, info) {
   b.addEventListener("click", () => {
     const v = val(section, cle);
     regler(section, cle, oui ? oui(v) : !v);
+    if (cle === "actif" && section in NOMS_FIGURES && !v) donnerGestes(section);
     majReglages();
   });
   bascules.push({ section, cle, bouton: b });
   return b;
+}
+
+// Figure allumée : si aucun déclencheur ne lui fait faire de geste, elle reçoit ses réactions de
+// toujours (comme config::declencheurs_de_figure), qu'on retrouve dans son panneau.
+function donnerGestes(s) {
+  const l = listeDecl();
+  if (l.some((d) => GESTES_ACTIONS.has(d.faire) && viseFigure(d, s))) return;
+  const ajout = declencheursDeFigure(s).slice(0, Math.max(0, DECLENCHEURS_MAX - l.length));
+  if (ajout.length) regler("declencheurs", "liste", l.concat(ajout));
 }
 
 function choixForme(section, cle, liste) {
@@ -2022,7 +2186,7 @@ function construireAvance(def, zone) {
     const b = el("button", "puce debut", def.quoi ? `Copier ${def.quoi} sur toutes les figures` : "Copier sur toutes les figures");
     b.type = "button";
     b.addEventListener("click", () => copierAllure(def.copierAllure));
-    const note = el("p", "note", `Donne la teinte, l'opacité et les réactions de ${def.quoi || "cette figure"} aux huit autres figures ; l'échelle, la rotation et le décalage restent propres à chacune.`);
+    const note = el("p", "note", `Donne la couleur et l'opacité de ${def.quoi || "cette figure"} aux huit autres figures ; l'échelle, la rotation et le décalage restent propres à chacune.`);
     note.id = "note-copier-" + def.copierAllure;
     decrire(b, note.id);
     l.append(b, note);
@@ -2033,14 +2197,13 @@ function construireAvance(def, zone) {
     const l = el("div", "ligne-avance");
     const b = el("button", "puce debut", def.quoi ? `+ Moduler ${def.quoi}` : "+ Moduler cette figure");
     b.type = "button";
-    // le trait et le pendule (`geo` faux) n'ont ni rayon, ni rotation, ni place : la basse change leur taille
+    // une première idée, sur ce que la figure a de propre (ses perles, son ouverture, son relief…)
     b.addEventListener("click", () => {
       montrerPanneau("modulations");
-      ajouterModulation({ source: "basse", cible: def.geo ? "rayon" : "taille", sur: def.moduler, quantite: 0.1 });
+      ajouterModulation({ ...MODULER_FIGURE[def.moduler], sur: def.moduler });
     });
-    const note = el("p", "note", def.geo
-      ? "Une source du son fait varier la figure : son rayon, l'épaisseur de ses traits, sa rotation, sa teinte, sa place, son opacité… Voir « Modulations »."
-      : "Une source du son fait varier la figure : sa taille, sa teinte, sa lueur, son opacité… Voir « Modulations ».");
+    const proposees = ciblesPour(def.moduler).map(([, nom]) => nom.toLowerCase());
+    const note = el("p", "note", `Une source du son fait varier la figure : ${proposees.slice(0, -1).join(", ")} ou ${proposees[proposees.length - 1]}. Voir « Modulations ».`);
     note.id = "note-moduler-" + def.moduler;
     decrire(b, note.id);
     l.append(b, note);
@@ -2343,8 +2506,9 @@ function montrerPanneau(id, focus) {
 const listeMods = () => (etat.reglages ? modsDe(etat.reglages) : []);
 const listeDecl = () => (etat.reglages ? declDe(etat.reglages) : []);
 // lignes affichées : clé de structure, lignes, options ouvertes (index)
-const modUI = { cle: null, lignes: [], ouvertes: new Set() };
-const declUI = { cle: null, lignes: [], ouvertes: new Set() };
+const modUI = { cle: null, lignes: [], ouvertes: new Set(), voirEteintes: false };
+const declUI = { cle: null, lignes: [], ouvertes: new Set(), voirEteintes: false };
+const ideesConditionnelles = []; // { bouton, si(r) } : idées montrées seulement quand elles servent
 const quandUI = []; // { actions, zone, cle }
 
 function ecrireModulations(liste) {
@@ -2385,6 +2549,9 @@ function blocListe(corps, id, ajout, ajouter, idees, defaut) {
   groupe.append(nom, ...idees.map(([libelle, x]) => {
     const b = el("button", "puce", libelle);
     b.addEventListener("click", () => ajouter(x));
+    // une idée qui ne viserait rien d'allumé (un geste sans figure, l'essaim éteint) est cachée
+    if (GESTES_ACTIONS.has(x.faire)) ideesConditionnelles.push({ bouton: b, si: (r) => figuresAllumees(r).length > 0 });
+    else if (x.cible) ideesConditionnelles.push({ bouton: b, si: (r) => !modulationEteinte({ ...MODULATION_DEFAUT, ...x }, r) });
     return b;
   }));
   bloc.append(liste, plus, groupe);
@@ -2398,8 +2565,10 @@ function construireDeclencheurs(corps) {
   blocListe(corps, "liste-declencheurs", "+ Ajouter un déclencheur", ajouterDeclencheur, IDEES_DECLENCHEURS, { quand: "kick", faire: "onde" });
 }
 
-// `tous` : liste complète, quand `options` n'en propose qu'une partie (cibles selon « sur »).
-function choixMod(options, valeur, libelle, change, tous = options) {
+// `tous` : liste complète, quand `options` n'en propose qu'une partie (cibles selon « sur ») ;
+// `hors(valeur)` : ce qu'on dit d'une valeur connue qui n'y est pas (« sans effet ici », « éteint »),
+// "" pour la montrer telle quelle.
+function choixMod(options, valeur, libelle, change, tous = options, hors = () => " (sans effet ici)") {
   const s = el("select", "choix");
   s.setAttribute("aria-label", libelle);
   s.replaceChildren(...options.map(([id, nom]) => { const o = el("option", "", nom); o.value = id; return o; }));
@@ -2407,7 +2576,7 @@ function choixMod(options, valeur, libelle, change, tous = options) {
   // d'une version plus récente (affichée telle quelle)
   if (!options.some(([id]) => id === valeur)) {
     const connue = tous.find(([id]) => id === valeur);
-    const o = el("option", "", connue ? connue[1] + " (sans effet ici)" : String(valeur));
+    const o = el("option", "", connue ? connue[1] + hors(valeur) : String(valeur));
     o.value = valeur;
     s.append(o);
   }
@@ -2438,8 +2607,13 @@ function ligneModulation(m, i) {
   const regle = (champ) => (v) => { regler("modulations", "liste", autres(champ, v)); majNomActif(); };
   const n = i + 1;
   const source = choixMod(SOURCES_MOD, m.source, `Modulation ${n} : source`, changer("source"));
-  const cible = choixMod(ciblesPour(m.sur || "tout"), m.cible, `Modulation ${n} : paramètre`, changer("cible"), CIBLES_MOD);
-  const sur = choixMod(GROUPES, m.sur || "tout", `Modulation ${n} : sur`, changer("sur"));
+  const surM = m.sur || "tout";
+  const cible = choixMod(ciblesPour(surM), m.cible, `Modulation ${n} : paramètre`, changer("cible"), TOUTES_CIBLES, (c) => (agitSans(c, surM) ? "" : " (sans effet ici)"));
+  const sur = choixMod(groupesPour(etat.reglages), surM, `Modulation ${n} : sur`, (v) => {
+    // sur un autre groupe, un paramètre qui n'y fait rien laisse la place au premier qui y agit
+    const c = ciblesPour(v).some(([id]) => id === m.cible) ? m.cible : ciblesPour(v)[0][0];
+    ecrireModulations(listeMods().map((x, j) => (j === i ? { ...x, sur: v, cible: c } : x)));
+  }, GROUPES, () => " (éteint)");
   const plage = el("input");
   Object.assign(plage, { type: "range", min: -100, max: 100, step: 1, value: Math.round((m.quantite || 0) * 100) });
   plage.setAttribute("aria-label", `Modulation ${n} : quantité`);
@@ -2503,10 +2677,23 @@ function ligneDeclencheur(d, i) {
   const regle = (champ) => (v) => { regler("declencheurs", "liste", autres(champ, v)); majNomActif(); };
   const n = i + 1;
   const quand = choixMod(EVENEMENTS, d.quand, `Déclencheur ${n} : quand`, changer("quand"));
-  const faire = choixMod(ACTIONS, d.faire, `Déclencheur ${n} : action`, changer("faire"));
+  // les gestes des figures ne sont proposés que quand une figure est allumée
+  const allumees = figuresAllumees(etat.reglages);
+  const actions = allumees.length ? ACTIONS : ACTIONS.filter(([id]) => !GESTES_ACTIONS.has(id));
+  const faire = choixMod(actions, d.faire, `Déclencheur ${n} : action`, changer("faire"), ACTIONS, () => " (aucune figure allumée)");
   const reglages = el("div", "reglages-ligne");
   const genre = ACTION_FORCE[d.faire];
-  if (genre === "pourcent") {
+  if (GESTES_ACTIONS.has(d.faire)) {
+    // la figure qui fait le geste : toutes, ou l'une de celles allumées qui le font
+    const qui = [["tout", "Toutes les figures"], ...allumees.filter((x) => GESTES_DES_FIGURES[x].includes(d.faire)).map((x) => [x, NOMS_FIGURES[x]])];
+    const l = el("label", "option-ligne");
+    l.append(el("span", "t-label", "Figure"), choixMod(qui, partage(d) ? "tout" : d.sur, `Déclencheur ${n} : figure`, changer("sur"), [["tout", "Toutes les figures"], ...FIGURES_REGLAGES], () => " (éteinte)"));
+    reglages.append(l);
+  }
+  if (genre === "geste") {
+    // 0 à 200 % : le geste de toujours, jusqu'au double (comme Action::bornes_force)
+    reglages.append(plageMini(`Déclencheur ${n} : force`, 0, 200, 5, Math.min(2, d.force ?? 1), (v) => Math.round(v * 100) + " %", regle("force"), (x) => x / 100, (v) => v * 100).l);
+  } else if (genre === "pourcent") {
     reglages.append(plageMini(`Déclencheur ${n} : force`, 5, 100, 5, Math.min(1, d.force ?? 1), (v) => Math.round(v * 100) + " %", regle("force"), (x) => x / 100, (v) => v * 100).l);
   } else if (genre === "fois" || genre === "elan") {
     // bornes de `Action::bornes_force` (config.rs) : une taille part de × 0,2, un élan (rebond,
@@ -2568,9 +2755,12 @@ function majListe(ui, id, liste, cle, ligne, vide, max) {
 
 function majModulations() {
   if (!etat.reglages) return;
-  const l = listeMods();
-  majListe(modUI, "liste-modulations", l, JSON.stringify(l.map((m) => [m.source, m.cible, m.sur, !!m.inverser])), ligneModulation,
+  const r = etat.reglages, l = listeMods();
+  // ce qui est allumé change les listes « sur » et les cibles proposées : les lignes sont refaites
+  const allume = groupesPour(r).map(([id]) => id).join();
+  majListe(modUI, "liste-modulations", l, JSON.stringify([allume, l.map((m) => [m.source, m.cible, m.sur, !!m.inverser])]), ligneModulation,
     "Aucune modulation : ajoute-en une, ou pars d'une idée ci-dessous.", MODULATIONS_MAX);
+  masquerEteintes(modUI, "liste-modulations", l.map((m) => modulationEteinte(m, r)), "modulation", "elle vise un effet éteint", "elles visent des effets éteints");
   l.forEach((m, i) => {
     const d = modUI.lignes[i];
     if (d && document.activeElement !== d.plage) {
@@ -2580,8 +2770,11 @@ function majModulations() {
     }
   });
   const ld = listeDecl();
-  majListe(declUI, "liste-declencheurs", ld, JSON.stringify(ld.map((d) => [d.quand, d.faire, d.nombre, d.nombre_max])), ligneDeclencheur,
+  majListe(declUI, "liste-declencheurs", ld, JSON.stringify([allume, ld.map((d) => [d.quand, d.faire, d.nombre, d.nombre_max, d.sur])]), ligneDeclencheur,
     "Aucun déclencheur : l'essaim ne réagit plus aux événements. Ajoute-en un, ou pars d'une idée ci-dessous.", DECLENCHEURS_MAX);
+  masquerEteintes(declUI, "liste-declencheurs", ld.map((d) => gesteEteint(d, r)), "déclencheur", "il fait faire un geste à une figure éteinte", "ils font faire un geste à des figures éteintes");
+  // idées qui ne serviraient à rien en ce moment (un geste sans figure allumée) : cachées
+  for (const b of ideesConditionnelles) b.bouton.hidden = !b.si(r);
   for (const q of quandUI) majQuand(q, ld);
   for (const p of panneaux) {
     if (p.def.id === "modulations" && p.voyant) p.voyant.textContent = l.length ? String(l.length) : "";
@@ -2589,34 +2782,65 @@ function majModulations() {
   }
 }
 
+// Lignes d'une liste qui n'agissent sur rien d'allumé : cachées, avec une note qui les compte et
+// un bouton pour les montrer (elles restent dans le preset, et reprennent dès que leur effet revient).
+function masquerEteintes(ui, id, eteintes, nom, verbe1, verbeN) {
+  const zone = $(id);
+  if (!zone) return;
+  const n = eteintes.filter(Boolean).length;
+  ui.lignes.forEach((d, i) => { d.ligne.hidden = !!eteintes[i] && !ui.voirEteintes; d.ligne.classList.toggle("estompe", !!eteintes[i]); });
+  let note = zone.querySelector(".note-eteintes");
+  if (!n) { if (note) note.remove(); return; }
+  if (!note) {
+    note = el("p", "note note-eteintes");
+    const texte = el("span"), b = el("button", "puce petite");
+    b.type = "button";
+    b.addEventListener("click", () => { ui.voirEteintes = !ui.voirEteintes; majModulations(); });
+    note.append(texte, " ", b);
+    zone.append(note);
+  }
+  note.firstChild.textContent = n === 1 ? `1 ${nom} sans effet en ce moment : ${verbe1}.` : `${n} ${nom}s sans effet en ce moment : ${verbeN}.`;
+  note.lastChild.textContent = ui.voirEteintes ? "Cacher" : "Montrer";
+}
+
 // Déclencheurs d'un effet (ligne « Quand » de son panneau) : un bouton par déclencheur (le
 // retirer), un choix pour en ajouter un, un lien vers tous les déclencheurs.
 function construireQuand(def, contenu) {
   const zone = el("span", "quand");
   contenu.push(zone);
-  const q = { actions: def.quand, zone, cle: null };
+  const q = { actions: def.quand, sur: def.sur, zone, cle: null };
   quandUI.push(q);
   return q;
 }
+// Un geste de figure vise-t-il la figure `s` (lui seul, ou toutes : « tout », « figures ») ?
+const partage = (d) => !d.sur || d.sur === "tout" || d.sur === "figures";
+const viseFigure = (d, s) => partage(d) || d.sur === s;
 function majQuand(q, liste) {
-  const les = liste.map((d, i) => [d, i]).filter(([d]) => q.actions.includes(d.faire));
-  const cle = JSON.stringify(les.map(([d, i]) => [d.quand, d.faire, i]));
+  const les = liste.map((d, i) => [d, i]).filter(([d]) => q.actions.includes(d.faire) && (!q.sur || viseFigure(d, q.sur)));
+  const cle = JSON.stringify(les.map(([d, i]) => [d.quand, d.faire, d.sur, i]));
   if (cle === q.cle) return;
   q.cle = cle;
   const seul = q.actions.length === 1;
   const puces = les.map(([d, i]) => {
-    const b = el("button", "puce evenement", (seul ? NOMS_EVENEMENTS[d.quand] : `${NOMS_EVENEMENTS[d.quand]} → ${NOMS_ACTIONS[d.faire]}`) || d.quand);
+    // un geste fait par toutes les figures le dit
+    const commun = q.sur && partage(d) ? " (toutes les figures)" : "";
+    const b = el("button", "puce evenement", ((seul ? NOMS_EVENEMENTS[d.quand] : `${NOMS_EVENEMENTS[d.quand]} → ${NOMS_ACTIONS[d.faire]}`) || d.quand) + commun);
     b.append(el("span", "croix", "×"));
-    b.title = "Retirer";
+    b.title = commun ? "Retirer pour cette figure (les autres le gardent)" : "Retirer";
     b.setAttribute("aria-label", `Retirer : ${NOMS_EVENEMENTS[d.quand] || d.quand} → ${NOMS_ACTIONS[d.faire] || d.faire}`);
-    b.addEventListener("click", () => ecrireDeclencheurs(listeDecl().filter((_, j) => j !== i)));
+    b.addEventListener("click", () => {
+      const l = listeDecl();
+      // retiré d'une figure, un geste commun reste aux autres figures allumées qui le font
+      const autres = q.sur && partage(d) ? figuresAllumees(etat.reglages).filter((x) => x !== q.sur && GESTES_DES_FIGURES[x].includes(d.faire)).map((x) => ({ ...d, sur: x })) : [];
+      ecrireDeclencheurs(l.slice(0, i).concat(autres, l.slice(i + 1)));
+    });
     return b;
   });
   const ajout = el("select", "choix petit");
   ajout.setAttribute("aria-label", "Ajouter un événement");
   ajout.append(Object.assign(el("option", "", seul ? "+ Ajouter quand…" : `+ ${NOMS_ACTIONS[q.actions[0]]} quand…`), { value: "" }));
   for (const [id, nom] of EVENEMENTS) ajout.append(Object.assign(el("option", "", nom), { value: id }));
-  ajout.addEventListener("change", () => { if (ajout.value) ajouterDeclencheur({ quand: ajout.value, faire: q.actions[0] }); });
+  ajout.addEventListener("change", () => { if (ajout.value) ajouterDeclencheur({ quand: ajout.value, faire: q.actions[0], ...(q.sur ? { sur: q.sur } : {}) }); });
   const tous = el("button", "puce petite", "Tous les déclencheurs →");
   tous.addEventListener("click", () => montrerPanneau("declencheurs", true));
   remplacer(q.zone, [...(puces.length ? puces : [el("span", "note", "jamais")]), ajout, tous]);
@@ -2851,34 +3075,34 @@ function surprise() {
   // modulations et pour les déclencheurs
   const avant = reactionsAvant({ orbite: { vitesse_basse: +r(4, 20).toFixed(1), eloignement_grave: +r(0.4, 2).toFixed(1) }, musique: { contretemps: Math.random() < 0.25 } });
   const idee = (l, defaut) => (Math.random() < 0.35 ? [{ ...defaut, ...parmi(l)[1] }] : []);
-  c.modulations = { liste: avant.basse.concat(avant.mods, idee(SUGGESTIONS_MOD.slice(3), MODULATION_DEFAUT)) };
+  c.modulations = { liste: avant.basse.concat(avant.mods, idee(SUGGESTIONS_MOD.slice(3).filter(([, x]) => !(x.sur in CIBLES_FIGURE)), MODULATION_DEFAUT)) };
   // une fois sur trois, une ou deux figures (jamais plus : l'essaim reste discret), d'allure tirée
   // dans des bornes sages, et parfois une modulation sur l'une d'elles ; les autres sont coupées
   const figures = FIGURES_REGLAGES.map(([s]) => s).filter((s) => c[s]);
   for (const s of figures) c[s].actif = false;
+  const gestes = []; // réactions des figures tirées
   if (figures.length && Math.random() < 0.35) {
     const tirees = [];
     const n = Math.min(figures.length, Math.random() < 0.6 ? 1 : 2);
     while (tirees.length < n) { const s = parmi(figures); if (!tirees.includes(s)) tirees.push(s); }
-    const reaction = () => +r(0.5, 1.5).toFixed(2);
+    const force = () => +r(0.5, 1.5).toFixed(2);
     for (const s of tirees) {
-      Object.assign(c[s], {
-        actif: true, opacite: +r(0.7, 1).toFixed(2), teinte: 5 * ri(-36, 36),
-        reaction_kick: reaction(), reaction_caisse: reaction(), reaction_charleston: reaction(),
-        reaction_basse: reaction(), reaction_montee: reaction(), reaction_drop: reaction(),
-      });
-      // le trait et le pendule ne grandissent, ne tournent ni ne se déplacent
-      if (s !== "pinceau" && s !== "pendule") {
-        Object.assign(c[s], { echelle: +r(0.8, 1.3).toFixed(2), rotation: Math.random() < 0.3 ? +(r(3, 10) * parmi([-1, 1])).toFixed(1) : 0, decalage_x: 0, decalage_y: 0 });
-      }
+      // une fois sur quatre, une teinte fixe à elle
+      const fixe = Math.random() < 0.25;
+      Object.assign(c[s], { actif: true, opacite: +r(0.7, 1).toFixed(2), couleur: fixe ? "fixe" : "essaim", teinte: 5 * ri(-36, 36), teinte_fixe: ri(0, 359) });
+      // le trait et le pendule ne grandissent ni ne se déplacent ; seules quatre figures tournent
+      if (s !== "pinceau" && s !== "pendule") Object.assign(c[s], { echelle: +r(0.8, 1.3).toFixed(2), decalage_x: 0, decalage_y: 0 });
+      if (TOURNANTES.has(s)) c[s].rotation = Math.random() < 0.3 ? +(r(3, 10) * parmi([-1, 1])).toFixed(1) : 0;
+      // ses gestes de toujours, plus ou moins forts
+      gestes.push(...declencheursDeFigure(s, Object.fromEntries(GESTES_DES_FIGURES[s].map((g) => [g, force()]))));
     }
     if (Math.random() < 0.4 && c.modulations.liste.length < MODULATIONS_MAX) {
-      const sur = parmi(tirees), geo = sur !== "pinceau" && sur !== "pendule";
-      const [cible, q] = parmi([["taille", [0.2, 0.5]], ["teinte", [0.2, 0.5]], ...(geo ? [["rayon", [0.05, 0.12]], ["rotation", [0.05, 0.12]]] : [])]);
-      c.modulations.liste.push({ ...MODULATION_DEFAUT, source: parmi(["basse", "kick", "caisse", "charleston", "montee"]), cible, sur, quantite: +r(q[0], q[1]).toFixed(2) });
+      const sur = parmi(tirees), [cible] = parmi(ciblesPour(sur).filter(([id]) => id !== "decalage" && id !== "opacite"));
+      const q = ["rayon", "rotation", "acceleration"].includes(cible) ? r(0.05, 0.12) : r(0.2, 0.5);
+      c.modulations.liste.push({ ...MODULATION_DEFAUT, source: parmi(["basse", "kick", "caisse", "charleston", "montee"]), cible, sur, quantite: +q.toFixed(2) });
     }
   }
-  c.declencheurs = { liste: avant.decl.concat(idee(IDEES_DECLENCHEURS, DECLENCHEUR_DEFAUT)) };
+  c.declencheurs = { ...c.declencheurs, liste: avant.decl.concat(idee(IDEES_DECLENCHEURS.filter(([, x]) => !GESTES_ACTIONS.has(x.faire) || gestes.length), DECLENCHEUR_DEFAUT), gestes), figures: true };
   envoyer({ cmd: "appliquer_reglages", nom: "Surprise", reglages: c });
 }
 

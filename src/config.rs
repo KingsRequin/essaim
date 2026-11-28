@@ -134,7 +134,9 @@ pub const FIGURES: [&str; 9] = ["arcs", "quatre_temps", "anneau", "orbe", "voix"
 
 /// Allure d'une figure, commune aux neuf (`figures.rs`) : les figures sont des alternatives à
 /// l'essaim, elles se règlent autant que lui. Toutes les valeurs par défaut laissent la figure
-/// telle qu'elle est dessinée.
+/// telle qu'elle est dessinée. Ses réactions aux coups du son sont des déclencheurs (actions
+/// `battement`, `accent`, `scintillement`, `apogee`) ; ce que le son lui fait en continu se règle
+/// par les modulations.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Allure {
@@ -142,41 +144,39 @@ pub struct Allure {
     pub echelle: f32,
     /// Opacité (0,1 à 1).
     pub opacite: f32,
-    /// Teinte : degrés ajoutés à celle de l'essaim (-180 à 180).
+    /// Couleur : celle de l'essaim (qui suit sa teinte, `teinte` degrés plus loin), une teinte
+    /// fixe (`teinte_fixe`, la queue `degrade` degrés plus loin) ou du blanc.
+    #[serde(deserialize_with = "tolerant")]
+    pub couleur: CouleurFigure,
+    /// Teinte : degrés ajoutés à celle de l'essaim (-180 à 180), avec la couleur de l'essaim.
     pub teinte: f32,
-    /// Rotation continue autour du pointeur (tours par minute, -30 à 30) ; sans effet sur le
-    /// trait et le pendule.
+    /// Teinte fixe (0 à 360) et écart de teinte de la queue (0 à 180), avec une couleur fixe.
+    pub teinte_fixe: f32,
+    pub degrade: f32,
+    /// Rotation continue autour du pointeur (tours par minute, -30 à 30) : arcs, anneau, orbe et
+    /// gouttes seulement (`figures::tourne`).
     pub rotation: f32,
     /// Place par rapport au pointeur (px à 100 %, -80 à 80) ; sans effet sur le trait et le pendule.
     pub decalage_x: f32,
     pub decalage_y: f32,
-    /// Force des réactions (0 : aucune, 1 : normale, 2 : double) au kick, à la caisse claire, au
-    /// charleston, à la basse, à la montée et au drop.
-    pub reaction_kick: f32,
-    pub reaction_caisse: f32,
-    pub reaction_charleston: f32,
-    pub reaction_basse: f32,
-    pub reaction_montee: f32,
-    pub reaction_drop: f32,
 }
 
 impl Default for Allure {
     fn default() -> Self {
-        Self {
-            echelle: 1.0,
-            opacite: 1.0,
-            teinte: 0.0,
-            rotation: 0.0,
-            decalage_x: 0.0,
-            decalage_y: 0.0,
-            reaction_kick: 1.0,
-            reaction_caisse: 1.0,
-            reaction_charleston: 1.0,
-            reaction_basse: 1.0,
-            reaction_montee: 1.0,
-            reaction_drop: 1.0,
-        }
+        Self { echelle: 1.0, opacite: 1.0, couleur: CouleurFigure::Essaim, teinte: 0.0, teinte_fixe: 200.0, degrade: 40.0, rotation: 0.0, decalage_x: 0.0, decalage_y: 0.0 }
     }
+}
+
+/// Couleur d'une figure.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CouleurFigure {
+    /// Celle de l'essaim (tête et queue des traînées), qui défile ou suit l'appli avec lui.
+    #[default]
+    Essaim,
+    /// Une teinte à elle, qui ne bouge pas avec l'essaim.
+    Fixe,
+    Blanc,
 }
 
 /// Bornes des réglages d'allure d'une figure.
@@ -185,9 +185,10 @@ fn bornes_allure(key: &str) -> Option<(f64, f64)> {
         "echelle" => (0.5, 2.0),
         "opacite" => (0.1, 1.0),
         "teinte" => (-180.0, 180.0),
+        "teinte_fixe" => (0.0, 360.0),
+        "degrade" => (0.0, 180.0),
         "rotation" => (-30.0, 30.0),
         "decalage_x" | "decalage_y" => (-80.0, 80.0),
-        "reaction_kick" | "reaction_caisse" | "reaction_charleston" | "reaction_basse" | "reaction_montee" | "reaction_drop" => (0.0, 2.0),
         _ => return None,
     })
 }
@@ -198,7 +199,7 @@ fn bornes_allure(key: &str) -> Option<(f64, f64)> {
 #[serde(default)]
 pub struct Arcs {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Rayon du grand arc (px à 100 %, 10 à 80) ; le petit est aux deux tiers.
@@ -219,7 +220,7 @@ impl Default for Arcs {
 #[serde(default)]
 pub struct QuatreTemps {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Rayon d'un point (px à 100 %, 1 à 5).
@@ -240,20 +241,25 @@ impl Default for QuatreTemps {
 #[serde(default)]
 pub struct Anneau {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Rayon de l'anneau (px à 100 %, 6 à 60).
     pub rayon: f32,
     /// Épaisseur de son trait au repos (0,5 à 6).
     pub epaisseur: f32,
+    /// Étirement au plus quand il file derrière le pointeur (0 : reste rond, 0,7 : très allongé).
+    pub etirement: f32,
 }
 
 impl Default for Anneau {
     fn default() -> Self {
-        Self { actif: false, allure: Allure::default(), rayon: 13.0, epaisseur: 1.4 }
+        Self { actif: false, allure: Allure::default(), rayon: 13.0, epaisseur: 1.4, etirement: ETIREMENT }
     }
 }
+
+/// Étirement par défaut de l'anneau et de l'orbe quand ils filent.
+pub const ETIREMENT: f32 = 0.45;
 
 /// Orbe : le spectre en une seule ligne fermée autour du pointeur, que les bandes de fréquences
 /// déforment (graves en haut, aigus en bas) ; chaque kick en détache un écho.
@@ -261,7 +267,7 @@ impl Default for Anneau {
 #[serde(default)]
 pub struct Orbe {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Rayon de la ligne au repos (px à 100 %, 10 à 60).
@@ -270,11 +276,13 @@ pub struct Orbe {
     pub relief: f32,
     /// Épaisseur du trait (0,5 à 5).
     pub epaisseur: f32,
+    /// Étirement au plus quand elle file, comme l'anneau (0 à 0,7).
+    pub etirement: f32,
 }
 
 impl Default for Orbe {
     fn default() -> Self {
-        Self { actif: false, allure: Allure::default(), rayon: 21.0, relief: 9.0, epaisseur: 1.6 }
+        Self { actif: false, allure: Allure::default(), rayon: 21.0, relief: 9.0, epaisseur: 1.6, etirement: ETIREMENT }
     }
 }
 
@@ -284,7 +292,7 @@ impl Default for Orbe {
 #[serde(default)]
 pub struct Voix {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Largeur de la ligne (px à 100 %, 20 à 120).
@@ -307,7 +315,7 @@ impl Default for Voix {
 #[serde(default)]
 pub struct Trame {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Rayon de la loupe (px à 100 %, 20 à 120).
@@ -330,7 +338,7 @@ impl Default for Trame {
 #[serde(default)]
 pub struct Pinceau {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Largeur du trait à pleine vitesse (px à 100 %, 2 à 12).
@@ -351,39 +359,49 @@ impl Default for Pinceau {
 #[serde(default)]
 pub struct Pendule {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Longueur du fil (px à 100 %, 8 à 60).
     pub longueur: f32,
     /// Rayon du poids (1 à 6).
     pub taille: f32,
+    /// Frottement (par seconde, 0,3 à 6) : faible, il se balance longtemps ; fort, il s'arrête vite.
+    pub frottement: f32,
 }
 
 impl Default for Pendule {
     fn default() -> Self {
-        Self { actif: false, allure: Allure::default(), longueur: 22.0, taille: 2.6 }
+        Self { actif: false, allure: Allure::default(), longueur: 22.0, taille: 2.6, frottement: 1.8 }
     }
 }
 
-/// Gouttes en contour : un noyau et quatre perles en orbite, dont seule la ligne de contour est
-/// dessinée ; elle se soude et se sépare (`figures/gouttes.rs`).
+/// Gouttes en contour : un noyau et des perles en orbite, dont seule la ligne de contour est
+/// dessinée ; elle se soude et se sépare, et s'étire derrière la souris comme un liquide
+/// (`figures/gouttes.rs`).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Gouttes {
     pub actif: bool,
-    /// Taille, opacité, teinte, rotation, place et réactions (communes aux figures).
+    /// Échelle, opacité, couleur, rotation et place (communes aux figures).
     #[serde(flatten)]
     pub allure: Allure,
     /// Taille de l'ensemble (0,6 à 1,6 ; 1 : perles jusqu'à 35 px du pointeur).
     pub taille: f32,
     /// Épaisseur de la ligne (1 à 4).
     pub epaisseur: f32,
+    /// Perles en orbite autour du noyau (0 à 8).
+    pub perles: u32,
+    /// Vitesse des perles sur leur orbite (0 : immobiles, 1 : normale, 3).
+    pub vitesse: f32,
+    /// Souplesse (0 à 1) : à 0, les gouttes suivent le pointeur d'un bloc ; plus haut, elles
+    /// traînent derrière la souris, s'étirent et se séparent, puis reviennent se souder.
+    pub souplesse: f32,
 }
 
 impl Default for Gouttes {
     fn default() -> Self {
-        Self { actif: false, allure: Allure::default(), taille: 1.0, epaisseur: 1.4 }
+        Self { actif: false, allure: Allure::default(), taille: 1.0, epaisseur: 1.4, perles: 4, vitesse: 1.0, souplesse: 0.5 }
     }
 }
 
@@ -873,8 +891,12 @@ impl Groupe {
 
     /// Vise-t-il la figure `i` (dans l'ordre de `FIGURES`) ?
     pub fn vise_figure(self, i: usize) -> bool {
-        let seule = match self {
-            Self::Figures => return true,
+        self == Self::Figures || self.figure() == Some(i)
+    }
+
+    /// La figure seule qu'il désigne (rang dans `FIGURES`).
+    pub fn figure(self) -> Option<usize> {
+        Some(match self {
             Self::Arcs => 0,
             Self::QuatreTemps => 1,
             Self::Anneau => 2,
@@ -884,9 +906,23 @@ impl Groupe {
             Self::Pinceau => 6,
             Self::Pendule => 7,
             Self::Gouttes => 8,
-            Self::Tout | Self::Cometes | Self::Satellites | Self::Aucun => return false,
-        };
-        seule == i
+            Self::Tout | Self::Cometes | Self::Satellites | Self::Figures | Self::Aucun => return None,
+        })
+    }
+
+    /// Groupe de la figure `i` (rang dans `FIGURES`).
+    pub fn de_figure(i: usize) -> Self {
+        [Self::Arcs, Self::QuatreTemps, Self::Anneau, Self::Orbe, Self::Voix, Self::Trame, Self::Pinceau, Self::Pendule, Self::Gouttes].get(i).copied().unwrap_or(Self::Aucun)
+    }
+
+    /// Un geste des figures (déclencheur) de ce groupe est-il fait par la figure `i` ? `tout`
+    /// (valeur par défaut d'un déclencheur) et `figures` : par toutes.
+    pub fn fait_geste(self, i: usize) -> bool {
+        self == Self::Tout || self.vise_figure(i)
+    }
+
+    pub fn est_tout(&self) -> bool {
+        *self == Self::Tout
     }
 }
 
@@ -929,7 +965,8 @@ pub(crate) fn migrer_fichier_in(p: &Path) -> Result<(), String> {
             return Ok(());
         }
         let cfg = Config::deserialize(t).map_err(|e| format!("config.toml illisible : {e}"))?;
-        for (section, cle) in crate::migration::ANCIENNES_CLES {
+        let reactions = FIGURES.iter().flat_map(|s| crate::migration::REACTIONS_FIGURES.map(|c| (*s, c)));
+        for (section, cle) in crate::migration::ANCIENNES_CLES.into_iter().chain(reactions) {
             if let Some(sec) = doc.get_mut(section).and_then(|o| o.as_table_like_mut()) {
                 sec.remove(cle);
             }
@@ -940,7 +977,7 @@ pub(crate) fn migrer_fichier_in(p: &Path) -> Result<(), String> {
             }
         }
         let valeurs = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
-        for (section, cle) in [("modulations", "liste"), ("declencheurs", "liste"), ("particules", "rebonds"), ("particules", "taille")] {
+        for (section, cle) in [("modulations", "liste"), ("declencheurs", "liste"), ("declencheurs", "figures"), ("particules", "rebonds"), ("particules", "taille")] {
             set_in_doc(doc, known, section, cle, &valeurs[section][cle])?;
         }
         log::info!("config : réactions converties en modulations et déclencheurs");
@@ -1034,27 +1071,43 @@ pub enum Cible {
     Trainee,
     /// Opacité des traînées et des têtes.
     Opacite,
+    /// Cibles propres à une figure (part ajoutée, `quantite` × source) : ouverture des arcs,
+    /// écart des quatre temps ou des perles des gouttes, forme de l'anneau (carré à 1), relief
+    /// de l'orbe ou de la ligne de voix, durée du trait, nombre de perles et noyau des gouttes.
+    Ouverture,
+    Ecart,
+    Forme,
+    Relief,
+    Duree,
+    Nombre,
+    Noyau,
     #[serde(other)]
     Aucune,
 }
 
 /// Déclencheurs (`[declencheurs] liste`) : quand un événement arrive (kick, caisse claire, drop,
-/// clic…), une action (éclat, onde, satellites, fissure…). Ils remplacent les réactions fixes
-/// d'avant : ce sont, par défaut, celles-là (`migration::Ancien::declencheurs`).
+/// clic…), une action (éclat, onde, satellites, fissure…, ou un geste des figures). Ils
+/// remplacent les réactions fixes d'avant : ce sont, par défaut, celles-là
+/// (`migration::Ancien::declencheurs`).
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Declencheurs {
     pub liste: Vec<Declencheur>,
+    /// Les réactions des figures aux coups sont dans la liste (actions `battement`, `accent`…).
+    /// Absent d'un fichier (réglages d'avant la 0.26, où elles étaient fixes, réglées par
+    /// `reaction_kick`…) : `migration::migrer` les y ajoute pour chaque figure allumée, en lisant
+    /// le texte. Ailleurs (réglages envoyés par la fenêtre), absent vaut vrai : rien n'est ajouté.
+    pub figures: bool,
 }
 
 impl Default for Declencheurs {
     fn default() -> Self {
-        Self { liste: crate::migration::Ancien::default().declencheurs() }
+        Self { liste: crate::migration::Ancien::default().declencheurs(), figures: true }
     }
 }
 
 /// Déclencheurs gardés au plus.
-pub const DECLENCHEURS_MAX: usize = 24;
+pub const DECLENCHEURS_MAX: usize = 40;
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
 #[serde(default)]
@@ -1071,11 +1124,14 @@ pub struct Declencheur {
     pub delai: f32,
     /// Chance de se déclencher à chaque événement (0 à 1).
     pub probabilite: f32,
+    /// Pour un geste des figures : la figure qui le fait ; `tout` (absent) ou `figures` : toutes.
+    #[serde(skip_serializing_if = "Groupe::est_tout")]
+    pub sur: Groupe,
 }
 
 impl Default for Declencheur {
     fn default() -> Self {
-        Self { quand: Evenement::Kick, faire: Action::Onde, force: 1.0, nombre: 3, nombre_max: 3, delai: 0.0, probabilite: 1.0 }
+        Self { quand: Evenement::Kick, faire: Action::Onde, force: 1.0, nombre: 3, nombre_max: 3, delai: 0.0, probabilite: 1.0, sur: Groupe::Tout }
     }
 }
 
@@ -1146,6 +1202,14 @@ pub enum Action {
     Poussee,
     /// Coup de frein : la rotation ralentit d'un coup, puis repart.
     Frein,
+    /// Gestes des figures (`figures.rs`), chacune à sa façon : le battement (le coup du kick :
+    /// les arcs avancent, les perles des gouttes sont projetées, le pendule saute…), l'accent
+    /// (celui de la caisse claire : l'anneau devient carré, une goutte se détache…), le
+    /// scintillement (celui des aigus) et l'apogée (celui du drop : écho, bulles, vague…).
+    Battement,
+    Accent,
+    Scintillement,
+    Apogee,
     #[serde(other)]
     Aucune,
 }
@@ -1153,14 +1217,48 @@ pub enum Action {
 impl Action {
     /// Bornes de la force d'un déclencheur de cette action : une intensité (éclat, bordure,
     /// frein : 0 à 1), une taille (0,2 à 3), un élan (rebond, poussée : 0 à 3, un petit rebond
-    /// au charleston reste possible) ; sans effet pour les satellites et l'inversion (0 à 3).
+    /// au charleston reste possible), un geste des figures (0 à 2 : le double du geste de
+    /// toujours) ; sans effet pour les satellites et l'inversion (0 à 3).
     pub fn bornes_force(self) -> (f32, f32) {
         match self {
             Self::Eclat | Self::Bordure | Self::Frein => (0.0, 1.0),
+            Self::Battement | Self::Accent | Self::Scintillement | Self::Apogee => (0.0, 2.0),
             Self::Rebond | Self::Poussee | Self::Satellites | Self::Inversion | Self::Aucune => (0.0, 3.0),
             Self::Onde | Self::Eclats | Self::Fissure | Self::Implosion | Self::Carre | Self::Etincelles | Self::Explosion | Self::Rafale => (0.2, 3.0),
         }
     }
+
+    /// Geste des figures (dans l'ordre de `GESTES`), ou `None` pour une action de l'essaim.
+    pub fn geste(self) -> Option<usize> {
+        GESTES.iter().position(|&g| g == self)
+    }
+}
+
+/// Gestes des figures, dans l'ordre des impulsions que reçoit chaque figure (`figures::Gestes`).
+pub const GESTES: [Action; 4] = [Action::Battement, Action::Accent, Action::Scintillement, Action::Apogee];
+
+/// Événement d'un geste dans les réactions de toujours des figures : le battement au kick,
+/// l'accent à la caisse claire, le scintillement aux aigus, l'apogée au drop.
+pub const EVENEMENTS_DES_GESTES: [Evenement; 4] = [Evenement::Kick, Evenement::Caisse, Evenement::Charleston, Evenement::Drop];
+
+/// Gestes que fait la figure `i` (rang dans `FIGURES`) : les autres ne lui font rien.
+pub fn gestes_de_figure(i: usize) -> &'static [Action] {
+    use Action::{Accent, Apogee, Battement, Scintillement};
+    match FIGURES.get(i).copied() {
+        Some("arcs" | "anneau" | "voix" | "trame") => &[Battement, Accent, Scintillement, Apogee],
+        Some("quatre_temps" | "pendule" | "gouttes") => &[Battement, Accent, Apogee],
+        Some("orbe" | "pinceau") => &[Battement, Apogee],
+        _ => &[],
+    }
+}
+
+/// Réactions de toujours de la figure `i` aux coups du son : un déclencheur par geste qu'elle fait,
+/// à son événement, pour elle seule.
+pub fn declencheurs_de_figure(i: usize) -> Vec<Declencheur> {
+    gestes_de_figure(i)
+        .iter()
+        .filter_map(|&a| Some(Declencheur { sur: Groupe::de_figure(i), ..Declencheur::new(EVENEMENTS_DES_GESTES[a.geste()?], a) }))
+        .collect()
 }
 
 /// Trajet des satellites : celui des comètes, ou une forme à eux.
@@ -1417,10 +1515,12 @@ etirement = 1           # étirement des têtes dans leur élan (0 = rondes, 2 =
 
 # Figures autour du pointeur : des alternatives à l'essaim. En plus de ses réglages, chacune
 # accepte son allure (valeurs par défaut) : echelle = 1 (0.5 à 2), opacite = 1 (0.1 à 1),
-# teinte = 0 (degrés ajoutés, -180 à 180), rotation = 0 (tr/min, -30 à 30), decalage_x = 0 et
-# decalage_y = 0 (px, -80 à 80), et la force de ses réactions, de 0 à 2 : reaction_kick,
-# reaction_caisse, reaction_charleston, reaction_basse, reaction_montee, reaction_drop = 1.
-# Le trait (pinceau) et le pendule n'ont ni échelle, ni rotation, ni décalage.
+# couleur = "essaim" ("essaim" : celle de l'essaim, teinte = 0 degrés ajoutés, -180 à 180 ;
+# "fixe" : teinte_fixe = 200, 0 à 360, la queue degrade = 40 degrés plus loin ; "blanc"),
+# rotation = 0 (tr/min, -30 à 30 : arcs, anneau, orbe et gouttes), decalage_x = 0 et
+# decalage_y = 0 (px, -80 à 80). Le trait (pinceau) et le pendule n'ont ni échelle, ni
+# rotation, ni décalage. Leurs réactions aux coups sont des déclencheurs (battement, accent,
+# scintillement, apogee), et les modulations leur font le reste.
 [arcs]
 actif = false           # deux arcs fins autour du pointeur : le grand mesure la basse, le petit les aigus
 rayon = 20              # rayon du grand arc (10 à 80)
@@ -1435,12 +1535,14 @@ ecart = 7.5             # écart entre deux points (4 à 20)
 actif = false           # un anneau fin qui suit le pointeur avec du retard et bat avec le kick
 rayon = 13              # rayon de l'anneau (6 à 60)
 epaisseur = 1.4         # épaisseur du trait au repos (0.5 à 6)
+etirement = 0.45        # étirement quand il file derrière le pointeur (0 = reste rond, 0.7)
 
 [orbe]
 actif = false           # le spectre en une seule ligne fermée autour du pointeur (graves en haut)
 rayon = 21              # rayon de la ligne au repos (10 à 60)
 relief = 9              # ce qu'une bande de fréquences à fond ajoute au rayon (2 à 30)
 epaisseur = 1.6         # épaisseur du trait (0.5 à 5)
+etirement = 0.45        # étirement quand elle file derrière le pointeur (0 à 0.7)
 
 [voix]
 actif = false           # une petite onde sous le pointeur, comme un message vocal ; effacée sans son
@@ -1463,11 +1565,15 @@ duree = 0.42            # durée du trait (0.2 à 1 s)
 actif = false           # un petit poids pendu au pointeur par un fil, qui saute sur le kick
 longueur = 22           # longueur du fil (8 à 60)
 taille = 2.6            # rayon du poids (1 à 6)
+frottement = 1.8        # 0.3 = se balance longtemps, 6 = s'arrête vite
 
 [gouttes]
 actif = false           # gouttes en contour : une ligne liquide qui se soude et se sépare autour du pointeur
 taille = 1              # taille de l'ensemble (0.6 à 1.6)
 epaisseur = 1.4         # épaisseur de la ligne (1 à 4)
+perles = 4              # perles en orbite autour du noyau (0 à 8)
+vitesse = 1             # vitesse des perles sur leur orbite (0 à 3)
+souplesse = 0.5         # 0 = suit le pointeur d'un bloc, 1 = s'étire et se sépare derrière la souris
 
 # Habillage de la fenêtre et de l'écran : hors des presets, il reste quand on en change et prend
 # les couleurs de l'essaim.
@@ -1501,7 +1607,9 @@ duree = 3               # temps d'affichage en secondes (1.5 à 8)
 #              acceleration (vitesse multipliée, 1 = ×3), rayon
 #              (1 = +400 %), taille (1 = +150 %), teinte (1 = +180° ; « sur tout » : tout ce
 #              qu'Essaim dessine), decalage (1 = 1,6 rayon vers la droite), luminosite (1 = +200 %),
-#              trainee (1 = +300 %), opacite (-1 = transparent)
+#              trainee (1 = +300 %), opacite (-1 = transparent) ; propres à une figure :
+#              ouverture (arcs), ecart (quatre_temps, gouttes), forme (anneau : 1 = carré),
+#              relief (orbe, voix), duree (pinceau), nombre (gouttes : perles), noyau (gouttes)
 #   sur      : "tout" (comètes et satellites), "cometes", "satellites", "figures" (toutes les
 #              figures) ou une figure : "arcs", "quatre_temps", "anneau", "orbe", "voix", "trame",
 #              "pinceau", "pendule", "gouttes"
@@ -1519,17 +1627,19 @@ liste = [
 ]
 
 [declencheurs]
-# Chaque déclencheur fait une action quand un événement arrive (24 au plus), dans l'ordre :
+# Chaque déclencheur fait une action quand un événement arrive (40 au plus), dans l'ordre :
 #   quand    : kick, caisse, charleston (aigus), drop, temps, break (temps sans kick),
 #              contretemps, piste (changement de piste), clic, clic_droit
 #   faire    : eclat, satellites, inversion (du sens), bordure, onde, eclats, fissure, implosion,
 #              carre, etincelles, explosion, rafale, rebond (de l'orbite), poussee (de la
-#              rotation), frein
+#              rotation), frein ; gestes des figures, chacune à sa façon : battement, accent,
+#              scintillement, apogee (sur = une figure, ou absent : toutes)
 #   force    : éclat, bordure et frein : 0 à 1 ; onde, éclats, fissure, implosion, carré,
-#              étincelles, explosion, rafale : 0.2 à 3 ; rebond, poussee : 0 à 3 ;
+#              étincelles, explosion, rafale : 0.2 à 3 ; rebond, poussee : 0 à 3 ; gestes : 0 à 2 ;
 #              nombre, nombre_max : satellites, étincelles (0 à 40)
 #   delai    : secondes au moins entre deux fois ; probabilite : chance à chaque fois (0 à 1)
 # Par défaut, les réactions de toujours.
+figures = true          # les réactions des figures sont dans la liste (réglages d'avant : ajoutées)
 liste = [
     { quand = "kick", faire = "inversion" },
     { quand = "kick", faire = "eclat" },
@@ -1716,10 +1826,15 @@ fn limites_connues(section: &str, key: &str) -> Option<(f64, f64)> {
         ("trame", "taille") => (0.3, 3.0),
         ("pinceau", "largeur") => (2.0, 12.0),
         ("pinceau", "duree") => (0.2, 1.0),
+        ("anneau", "etirement") | ("orbe", "etirement") => (0.0, 0.7),
         ("pendule", "longueur") => (8.0, 60.0),
         ("pendule", "taille") => (1.0, 6.0),
+        ("pendule", "frottement") => (0.3, 6.0),
         ("gouttes", "taille") => (0.6, 1.6),
         ("gouttes", "epaisseur") => (1.0, 4.0),
+        ("gouttes", "perles") => (0.0, 8.0),
+        ("gouttes", "vitesse") => (0.0, 3.0),
+        ("gouttes", "souplesse") => (0.0, 1.0),
         ("equerres", "bras") => (4.0, 30.0),
         ("equerres", "epaisseur") => (1.0, 5.0),
         ("lisere", "epaisseur") => (1.0, 8.0),
@@ -2251,7 +2366,7 @@ mod tests {
         assert_eq!(c.modulations.liste[0].source, Source::Kick);
         assert!(quand(&c, Evenement::Drop, Action::Explosion).is_none() && quand(&c, Evenement::Caisse, Action::Carre).is_some());
         // réglages de cette version : rien à faire ; une vieille clé égarée est retirée
-        let mut t: toml::Table = toml::from_str("[declencheurs]\nliste = []\n[modulations]\nliste = []\n").unwrap();
+        let mut t: toml::Table = toml::from_str("[declencheurs]\nliste = []\nfigures = true\n[modulations]\nliste = []\n").unwrap();
         assert!(!crate::migration::migrer(&mut t));
         let c = super::de_texte("[declencheurs]\nliste = []\n[clic]\nonde = true\n").unwrap();
         assert!(c.declencheurs.liste.is_empty());

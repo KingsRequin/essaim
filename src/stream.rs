@@ -630,6 +630,7 @@ fn boucle(hwnd: HWND, son: &AudioShared) -> windows::core::Result<()> {
         // pas de fissures dans la fenêtre pour le stream
         swarm.fissures.clear();
         effets.moduler_figures(swarm.effets_figures());
+        effets.gestes_figures(&swarm.prendre_gestes());
         effets.avance(t, dt, (0.0, 0.0), 1.0, swarm.env, son, cfg, &[]);
         // taille : la portée mesurée, ou celle vue en direct si la musique pousse plus loin
         vue = (vue * (-dt / OUBLI).exp()).max(demi_cote(&swarm, &effets, cfg));

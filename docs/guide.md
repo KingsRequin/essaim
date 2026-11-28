@@ -45,7 +45,7 @@ fissure, un clic droit une onde qui se referme.
 
 ### Déclencheurs
 
-`[declencheurs] liste` (24 au plus) : `{ quand = "kick", faire = "onde", force = 1 }`, dans
+`[declencheurs] liste` (40 au plus) : `{ quand = "kick", faire = "onde", force = 1 }`, dans
 l'ordre de la liste.
 
 - `quand` : `kick`, `caisse`, `charleston`, `drop`, `temps`, `break`, `contretemps`, `piste`,
@@ -62,15 +62,29 @@ l'ordre de la liste.
   centre), `rafale` (éclat, satellites, grande onde), `rebond` (le rayon de l'orbite part vers
   l'extérieur, dépasse et revient, comme au bout d'un ressort), `poussee` (la rotation prend de
   la vitesse, +5 radians/s à la force 1, qui retombe en un quart de seconde), `frein` (la
-  rotation perd d'un coup jusqu'à 80 % de sa vitesse, puis repart).
+  rotation perd d'un coup jusqu'à 80 % de sa vitesse, puis repart) ; et les **gestes des figures**,
+  que chaque figure fait à sa façon (voir « Les effets ») : `battement` (le geste du kick : les
+  arcs avancent, les perles des gouttes sont projetées, le pendule saute…), `accent` (celui de la
+  caisse claire : l'anneau devient carré, une goutte se détache…), `scintillement` (celui des
+  aigus) et `apogee` (celui du drop : écho, bulles, grande vague…). `sur` (gestes seulement) : la
+  figure qui le fait (`"gouttes"`…) ; absent, `"tout"` ou `"figures"` : toutes celles qui font ce
+  geste. Les réactions d'une figure aux coups du son sont ces déclencheurs, ajoutés quand on
+  l'allume (`{ quand = "kick", faire = "battement", sur = "gouttes" }`…) : on les change, les
+  retire ou les met sur d'autres événements comme les autres.
 - `force` : pour un éclat, la bordure ou le frein, de 0 à 1 ; pour une onde, des éclats, une
   fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour des étincelles, de 0,2 à 3 (leur
   vitesse : leur taille ne change pas) ; pour une explosion ou une rafale, de 0,2 à 3 (la taille
-  de la grande onde seule) ; pour un rebond ou une poussée, de 0 à 3 (l'élan). `nombre` et
+  de la grande onde seule) ; pour un rebond ou une poussée, de 0 à 3 (l'élan) ; pour un geste
+  des figures, de 0 à 2 (le geste de toujours à 1, le double à 2). `nombre` et
   `nombre_max` (satellites, étincelles, et ceux de l'explosion et de la rafale) : de 0 à 40, le
   nombre tiré entre les deux à chaque fois. `delai` : secondes au moins entre deux fois (0 à 10) ;
   `probabilite` : la chance de se déclencher à chaque événement (0 à 1 ; 0,33 : un sur trois).
 - Un événement ou une action inconnus (preset d'une version plus récente) ne font rien.
+- Jusqu'à la version 0.25, les réactions d'une figure étaient fixes, réglées par `reaction_kick`,
+  `reaction_caisse`, `reaction_charleston`, `reaction_basse`, `reaction_montee` et
+  `reaction_drop` : un fichier ou un preset d'alors (sans `[declencheurs] figures = true`) reçoit,
+  pour chaque figure allumée, les déclencheurs de ses gestes à la force de sa réaction d'alors
+  (aucun à 0) ; ces clés sont retirées (celles de la basse et de la montée sans équivalent).
 
 ### Modulations
 
@@ -108,11 +122,18 @@ quantite = 0.8 }`. Par défaut : `basse` → `vitesse` (0,275 : +11 radians/s ba
 - `sur` : `"tout"` (les comètes et les satellites), `"cometes"`, `"satellites"`, `"figures"`
   (toutes les figures autour du pointeur) ou une figure : `"arcs"`, `"quatre_temps"`,
   `"anneau"`, `"orbe"`, `"voix"`, `"trame"`, `"pinceau"` (le trait), `"pendule"`, `"gouttes"`.
-  Sur une figure, `rayon` l'agrandit tout entière, `taille` épaissit ses traits, `rotation` et
-  `vitesse` la font tourner autour du pointeur (la vitesse dix fois moins que pour l'essaim),
-  `decalage` la pousse de côté (48 px à fond), `opacite` et `luminosite` la pâlissent ou la
-  ravivent, `teinte` la colore, `acceleration` multiplie sa rotation ; `trainee` n'y fait rien.
-  Le trait et le pendule ne tournent, ne grandissent ni ne se déplacent. `quantite` de -1 à 1 (négatif : dans l'autre
+  Sur une figure, `rayon` l'agrandit tout entière (la trame : sa loupe ; le pendule : son fil,
+  de × 0,5 à × 2,5), `taille` épaissit ses traits (la trame et les quatre temps : leurs points ;
+  le pendule : son poids), `decalage` la pousse de côté (48 px à fond), `opacite` la pâlit,
+  `teinte` la colore. Seuls les arcs, l'anneau, l'orbe et les gouttes tournent (`rotation`,
+  `vitesse`, dix fois moins que pour l'essaim, et `acceleration`, qui multiplie leur rotation) :
+  les quatre temps et la ligne de voix sont sous la flèche, la trame est fixe à l'écran ; le trait
+  et le pendule ne grandissent ni ne se déplacent. `luminosite` y vaut une opacité de plus et
+  `trainee` n'y fait rien (la fenêtre ne les propose pas). Chaque figure a en plus ses cibles
+  propres, des parts ajoutées (quantité × source) : `ouverture` (arcs : 1 = grands ouverts),
+  `ecart` (quatre temps, perles des gouttes : de × 0,3 à × 2), `forme` (anneau : 1 = carré),
+  `relief` (orbe, ligne de voix : de plat à × 2), `duree` (trait : de × 0,3 à × 2,5), `nombre`
+  (gouttes : 1 = 4 perles de plus, 8 au plus) et `noyau` (gouttes : 1 = +8 px). `quantite` de -1 à 1 (négatif : dans l'autre
   sens). `seuil` (0 à 0,95) : rien sous ce niveau de la source, puis jusqu'au maximum. `lissage`
   (0 à 1) : 0 réagit aussitôt, 1 en douceur (0,4 s ; 0,35 par défaut ≈ 50 ms). `inverser` : la
   source à l'envers (1 − valeur ; stéréo : l'autre côté) ; une source nulle en silence agit donc
@@ -241,7 +262,8 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
   compte repart du premier (Essaim connaît les temps, pas le premier de la mesure). Ils
   s'effacent en moins d'une seconde quand le tempo n'est plus régulier.
 - **Anneau** : un anneau qui suit le pointeur avec un temps de retard et s'étire quand il file,
-  d'autant plus qu'il est loin derrière. Deux formes, seules ou ensemble (deux anneaux ; panneau
+  d'autant plus qu'il est loin derrière (`etirement`, 0 à 0,7, 0,45 par défaut ; 0 : il reste
+  rond), vers le pointeur même quand il tourne. Deux formes, seules ou ensemble (deux anneaux ; panneau
   *Anneau*, cases *Lisse* et *Spectre*) :
   - *Lisse* (`[anneau]`) : un trait net (`rayon`, 6 à 60, 13 par défaut ; `epaisseur`, 0,5 à
     6). Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec la
@@ -249,7 +271,7 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
     mesure de quatre temps quand le tempo est régulier.
   - *Spectre* (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
     pointeur, étirée comme la forme lisse (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à
-    5). Les bandes de fréquences la déforment (`relief`, 2 à 30 : graves en haut, aigus en bas,
+    5 ; `etirement`, le sien). Les bandes de fréquences la déforment (`relief`, 2 à 30 : graves en haut, aigus en bas,
     les deux moitiés en miroir) ; chaque kick en détache un écho qui garde la forme du son, un
     drop trois ; pendant une montée elle se resserre et frise. Elle demande l'analyse en bandes,
     comme le spectre (16 bandes s'il est coupé).
@@ -266,29 +288,37 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
   100 %), elle laisse un trait de pinceau, plus épais quand elle va vite (`largeur` à pleine
   vitesse, 2 à 12), qui s'efface en `duree` (0,2 à 1 s, 0,42 par défaut). La basse l'élargit,
   chaque kick y fait glisser une perle de la tête à la queue, un drop le fait durer plus longtemps.
+  Il prend le dégradé de sa couleur de la tête à la queue : celle de l'essaim, ou une teinte à lui
+  (`couleur = "fixe"`, ci-dessous).
 - **Pendule** (`[pendule]`) : un petit poids (`taille`, 1 à 6) pendu au pointeur par un fil
-  (`longueur`, 8 à 60, 22 par défaut). Il se balance quand la souris bouge ; chaque kick le fait
+  (`longueur`, 8 à 60, 22 par défaut). Il se balance quand la souris bouge, plus ou moins
+  longtemps (`frottement`, 0,3 = longtemps à 6 = il s'arrête vite, 1,8 par défaut) ; chaque kick le fait
   sauter (le fil se détend puis se retend), la caisse claire lui donne une pichenette, à gauche
   puis à droite ; le fil s'allonge avec la basse et se raccourcit pendant une montée.
-- **Gouttes** (`[gouttes]`) : une ligne liquide autour du pointeur. Un noyau et quatre perles en
-  orbite, dont on ne voit que le contour commun (`epaisseur`, 1 à 4) : la ligne se soude quand
-  deux gouttes se touchent et se sépare quand elles s'éloignent ; l'intérieur reste vide, on voit
-  l'écran à travers. Le noyau s'élargit avec la basse, chaque kick projette les perles qui
-  reviennent se souder, une montée fond tout en un seul anneau, un drop lâche cinq petites bulles.
-  `taille` (0,6 à 1,6) agrandit ou réduit l'ensemble (à 1, les perles tournent jusqu'à 35 px du
-  pointeur).
+- **Gouttes** (`[gouttes]`) : une ligne liquide autour du pointeur. Un noyau et ses perles en
+  orbite (`perles`, 0 à 8, 4 par défaut ; `vitesse` sur leur orbite, 0 à 3), dont on ne voit que
+  le contour commun (`epaisseur`, 1 à 4) : la ligne se soude quand deux gouttes se touchent et se
+  sépare quand elles s'éloignent ; l'intérieur reste vide, on voit l'écran à travers. Comme un
+  liquide, chaque goutte traîne derrière la souris au bout de son propre ressort (`souplesse`, 0 =
+  d'un bloc, 1 = très liquide, 0,5 par défaut) : l'ensemble s'étire, se sépare, les gouttes
+  libres restent un instant en arrière, puis tout revient se souder. Le noyau s'élargit avec la
+  basse, une montée fond tout en un seul anneau ; ses gestes : le battement projette les perles,
+  l'accent détache une goutte d'une perle, l'apogée lâche cinq petites bulles. `taille` (0,6 à
+  1,6) agrandit ou réduit l'ensemble (à 1, les perles tournent jusqu'à 35 px du pointeur).
 
-Ces neuf figures prennent les couleurs de l'essaim (tête et queue des traînées), laissent le
-pointeur dégagé, et s'utilisent seules ou avec l'essaim : ce sont des alternatives aux comètes,
-aussi réglables qu'elles. Chacune a, en plus de ses réglages propres, son **allure** (mêmes clés
-dans sa section) : `echelle` (0,5 à 2), `opacite` (0,1 à 1), `teinte` (degrés ajoutés à celle de
-l'essaim, -180 à 180), `rotation` (tours par minute autour du pointeur, -30 à 30), `decalage_x`
-et `decalage_y` (sa place par rapport au pointeur, -80 à 80 px), et la force de chacune de ses
-réactions à la musique, de 0 (aucune) à 2 (double) : `reaction_kick`, `reaction_caisse`,
-`reaction_charleston`, `reaction_basse`, `reaction_montee`, `reaction_drop`. Le trait et le
-pendule n'ont ni échelle, ni rotation, ni décalage. Les modulations peuvent viser chaque figure
-(`sur`, ci-dessus). Dans la fenêtre des réglages, *Copier sur toutes les figures* (sous
-*+ Avancé* d'une figure) donne sa teinte, son opacité et ses réactions aux huit autres (Ctrl+Z
+Ces neuf figures laissent le pointeur dégagé et s'utilisent seules ou avec l'essaim : ce sont des
+alternatives aux comètes, aussi réglables qu'elles. Chacune a, en plus de ses réglages propres,
+son **allure** (mêmes clés dans sa section) : `couleur` (`"essaim"` par défaut : les couleurs de
+l'essaim, tête et queue des traînées, qui défilent ou suivent l'application avec lui, `teinte`
+degrés plus loin, -180 à 180 ; `"fixe"` : une teinte à elle, `teinte_fixe`, 0 à 360, sa queue
+`degrade` degrés plus loin, 0 à 180, 40 par défaut ; `"blanc"`), `echelle` (0,5 à 2), `opacite`
+(0,1 à 1), `rotation` (tours par minute autour du pointeur, -30 à 30 : arcs, anneau, orbe et
+gouttes), `decalage_x` et `decalage_y` (sa place par rapport au pointeur, -80 à 80 px). Le trait
+et le pendule n'ont ni échelle, ni rotation, ni décalage. Ses réactions aux coups du son sont
+ses gestes, des déclencheurs (voir « Déclencheurs ») ; la basse et la montée, elle les entend
+elle-même, et les modulations peuvent viser chaque figure (`sur`, ci-dessus), avec ses cibles
+propres. Dans la fenêtre des réglages, *Copier sur toutes les figures* (sous *+ Avancé* d'une
+figure) donne sa couleur et son opacité aux huit autres (Ctrl+Z
 pour revenir, tant qu'aucun preset n'a été appliqué depuis, ici ou ailleurs) ; tant que le
 panneau d'une figure active est affiché, le grand aperçu montre une croix au pointeur et, en
 pointillés, le cadre de sa zone une fois posée (échelle, décalage), absents de l'export GIF.
@@ -510,9 +540,10 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     *Comètes*, *Rubans*, *Ressorts*, *Satellites*, *Couleur*), *Les effets* (*Éclat*,
     *Particules*, *Fissures*, *Réticule et projecteur*, *Barres de spectre*), *Figures* (*Arcs*,
     *Quatre temps*, *Anneau* (formes lisse et spectre), *Ligne de voix*, *Trame*, *Trait*, *Pendule*,
-    *Gouttes* ; sous *+ Avancé*, leur échelle, teinte, rotation, place et réactions, et un bouton
-    qui leur ajoute une modulation ; seuls les paramètres qui agissent sur la figure sont
-    proposés), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
+    *Gouttes* : leurs réglages, leur couleur, et leurs gestes dits par ce qu'ils leur font, « Les
+    perles sont projetées quand [Kick] » ; sous *+ Avancé*, leur échelle, rotation et place, et un
+    bouton qui leur ajoute une modulation ; seuls les paramètres qui agissent sur la figure sont
+    proposés ; allumer une figure lui donne ses gestes de toujours si aucun déclencheur ne la vise), *Fenêtre et écran* (*Bordure*, *Équerres*, *Halo de fenêtre*, *Liseré*),
     *Réactions* (*Modulations*, *Déclencheurs*), *Écoute* (*Écoute*, *Étiquette du morceau*) et
     *Cet ordinateur* (le dessin de l'essaim sur ce PC ; liens vers les pauses, les captures et le
     stream, et les pauses par application) ; les panneaux hors presets le disent dans leur
@@ -524,7 +555,12 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     pour en ajouter). *Déclencheurs* : une ligne par déclencheur (quand → action, force ou taille,
     nombre ; *+* : délai minimal, chance ; *Tester* le joue dans le grand aperçu) ; *Modulations* :
     une ligne par modulation (source → paramètre, sur qui, quantité, jauge de la source en direct ;
-    *+* : seuil, lissage, à l'envers) ; des idées à ajouter d'un clic. Sous l'aperçu, *Simuler* :
+    *+* : seuil, lissage, à l'envers) ; des idées à ajouter d'un clic. Les listes ne proposent que
+    ce qui est allumé (le choix *sur* : l'essaim, ses comètes, ses satellites, chaque figure
+    allumée ; le paramètre : ce qui agit sur ce groupe, avec le nom qu'il y prend, « Nombre de
+    perles », « Longueur du fil »…) ; une modulation ou un geste qui vise un effet éteint est caché,
+    compté sous la liste (*Montrer* les affiche), et reprend dès que l'effet revient ; un geste
+    d'une figure se règle aussi pour une seule figure ou pour toutes. Sous l'aperçu, *Simuler* :
     une montée suivie du drop (3 s), un kick, une caisse claire, un temps, un changement de piste,
     pour voir les réactions sans attendre la musique ; tant qu'un morceau joue, l'aperçu suit le
     vrai son, même entre deux coups ; écoute coupée, les aperçus restent muets. *Image…* ouvre
@@ -574,7 +610,8 @@ un simple point, discret au milieu de l'essaim. Clic droit sur `_install.inf` �
     ceux en place : un réglage avancé changé à la main n'y survit pas ; Ctrl+Z pour revenir) ;
     l'habillage et les réglages de la machine restent. Une fois sur trois
     environ, une ou deux figures (jamais plus) d'allure tirée dans des bornes sages (échelle 0,8
-    à 1,3, réactions 50 à 150 %), parfois avec une modulation sur l'une d'elles.
+    à 1,3, une fois sur quatre une teinte fixe, gestes de 50 à 150 %), parfois avec une
+    modulation sur l'une d'elles.
   - Pause dans l'en-tête ; *Démarrer Essaim avec Windows* dans *Application* (une entrée coupée
     dans le Gestionnaire des tâches est montrée inactive ; la réactiver ici lève la coupure). Une
     entrée qui lance un autre `essaim.exe` (copie déplacée, autre dossier) est montrée non cochée,

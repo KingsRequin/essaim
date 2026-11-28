@@ -13,6 +13,7 @@
 
 use crate::audio::AudioView;
 use crate::config::{Action, Config, Declencheur, Evenement, Forme};
+use crate::figures::Gestes;
 use crate::modulation::{self, Effet, Sources};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
@@ -354,7 +355,7 @@ pub(crate) fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u
     hsl((tail + dh * k).rem_euclid(360.0), 1.0, 0.66)
 }
 
-fn hsl(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+pub(crate) fn hsl(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = l - c / 2.0;
@@ -712,6 +713,9 @@ pub struct Swarm {
     reste_sillage: f32,
     /// Fissures demandées par les déclencheurs (x, y, force), que la boucle principale ouvre.
     pub fissures: Vec<(f32, f32, f32)>,
+    /// Gestes des figures demandés par les déclencheurs depuis l'image précédente, figure par
+    /// figure (`prendre_gestes`).
+    gestes: [Gestes; modulation::NB_FIGURES],
     /// Traînées des comètes, anneau par anneau.
     trails: Vec<Trail>,
     sats: Vec<Sat>,
@@ -826,6 +830,7 @@ impl Swarm {
             cles_declencheurs: Vec::new(),
             reste_sillage: 0.0,
             fissures: Vec::new(),
+            gestes: Default::default(),
             trails: Vec::new(),
             sats: Vec::new(),
             fixes: Vec::new(),
@@ -861,6 +866,13 @@ impl Swarm {
     pub fn oublier_coups(&mut self, au: &AudioView) {
         self.ecoute.lire(au);
         self.dernier_curseur = None;
+        self.gestes = Default::default();
+    }
+
+    /// Gestes des figures demandés depuis l'appel précédent (déclencheurs `battement`, `accent`,
+    /// `scintillement`, `apogee`), figure par figure ; la liste repart de zéro.
+    pub fn prendre_gestes(&mut self) -> [Gestes; modulation::NB_FIGURES] {
+        std::mem::take(&mut self.gestes)
     }
 
     /// Preset appliqué : toutes les traînées repartent de zéro. Sans cela, celles qui suivaient
@@ -1299,6 +1311,16 @@ impl Swarm {
             Action::Poussee => self.pousse += POUSSEE.0 * force,
             Action::Frein => self.frein = self.frein.max(force.min(1.0)),
             Action::Bordure | Action::Aucune => {}
+            // gestes des figures : chaque figure visée qui fait ce geste le recevra
+            // (`prendre_gestes`, passé aux figures par la boucle)
+            Action::Battement | Action::Accent | Action::Scintillement | Action::Apogee => {
+                let Some(g) = d.faire.geste() else { return };
+                for (i, recu) in self.gestes.iter_mut().enumerate() {
+                    if d.sur.fait_geste(i) && crate::config::gestes_de_figure(i).contains(&d.faire) {
+                        recu.ajouter(g, force.min(2.0));
+                    }
+                }
+            }
             Action::Onde => {
                 self.particules.push(Particule { x, y, vx: 0.0, vy: 0.0, ne: t, vie: 0.55, taille: 46.0 * taille * scale, genre: Genre::Onde });
             }
@@ -2695,6 +2717,9 @@ mod tests {
                 })
                 .collect();
             s.avance(t, dt, c, au, &p.cfg, scale);
+            // comme la boucle : modulations et gestes des déclencheurs passés aux figures
+            figures.moduler(s.effets_figures());
+            figures.recevoir(&s.prendre_gestes());
             figures.avance(t, dt, c, scale, &crate::figures::Son { au: &au, coups: &ecoute.lire(&au), bandes: &bandes }, &p.cfg);
             if t >= instants[k] {
                 let origin = (C.0 - cote as f32 / 2.0 - (k as u32 * cote) as f32, C.1 - cote as f32 / 2.0);
