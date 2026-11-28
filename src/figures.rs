@@ -98,13 +98,17 @@ struct Partage {
 }
 
 /// Couleur d'une figure d'allure `a`, de sa queue (`k` = 0) à sa tête (1) : celle de l'essaim
-/// (`prisme_decale`, sa teinte plus `teinte` degrés), une teinte fixe (la queue `degrade` degrés
-/// plus loin) ou du blanc ; `decale` : degrés ajoutés par les modulations de la teinte.
+/// (`prisme_decale`, sa teinte plus `teinte` degrés, à la luminosité de l'essaim), une couleur
+/// fixe (teinte, saturation et luminosité à elle, la queue `degrade` degrés plus loin) ou du
+/// blanc ; `decale` : degrés ajoutés par les modulations de la teinte.
 pub(crate) fn couleur_figure(cfg: &Config, a: &Allure, t: f64, k: f32, decale: f32) -> Rgb {
     let decale = if decale.is_finite() { decale } else { 0.0 };
     match a.couleur {
         CouleurFigure::Essaim => prisme_decale(cfg, t, k, a.teinte + decale),
-        CouleurFigure::Fixe => crate::render::hsl((a.teinte_fixe + decale + a.degrade * (1.0 - k.clamp(0.0, 1.0))).rem_euclid(360.0), 1.0, 0.66),
+        CouleurFigure::Fixe => {
+            let (s, l) = (if a.saturation.is_finite() { a.saturation.clamp(0.0, 1.0) } else { 1.0 }, if a.luminosite.is_finite() { a.luminosite.clamp(0.0, 1.0) } else { crate::config::LUMINOSITE });
+            crate::render::hsl((a.teinte_fixe + decale + a.degrade * (1.0 - k.clamp(0.0, 1.0))).rem_euclid(360.0), s, l)
+        }
         CouleurFigure::Blanc => (255, 255, 255),
     }
 }

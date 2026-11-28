@@ -352,7 +352,20 @@ pub(crate) fn prisme_decale(cfg: &Config, t: f64, k: f32, decale: f32) -> (u8, u
     if dh < -180.0 {
         dh += 360.0;
     }
-    hsl((tail + dh * k).rem_euclid(360.0), 1.0, 0.66)
+    let c = &cfg.couleur;
+    hsl((tail + dh * k).rem_euclid(360.0), borne_01(c.saturation, 1.0), borne_01(c.luminosite, crate::config::LUMINOSITE))
+}
+
+/// `v` ramené de 0 à 1 (`d` s'il n'est pas fini).
+fn borne_01(v: f32, d: f32) -> f32 {
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { d }
+}
+
+/// Blanc des reflets (cœur des têtes et des étincelles, halo de l'éclat), assombri avec la
+/// luminosité des couleurs (`[couleur] luminosite`) : un essaim sombre n'a pas de reflets blancs.
+pub(crate) fn blanc(cfg: &Config) -> (u8, u8, u8) {
+    let v = (255.0 * (borne_01(cfg.couleur.luminosite, crate::config::LUMINOSITE) / crate::config::LUMINOSITE).min(1.0)).round() as u8;
+    (v, v, v)
 }
 
 pub(crate) fn hsl(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
@@ -1452,6 +1465,8 @@ impl Swarm {
             return;
         }
         let glow = 0.4 + 0.6 * self.env;
+        // reflets (cœurs, halo de l'éclat) : blancs, assombris avec la luminosité des couleurs
+        let reflet = blanc(cfg);
         let o = &cfg.orbite;
         let dur = cfg.essaim.duree.max(0.1) as f64;
 
@@ -1529,14 +1544,14 @@ impl Swarm {
                 cv.line(a, b, h.s * 5.2, h.rgb, 0.12 * h.al * glow * h.lueur, true);
                 cv.line(a, b, h.s * 3.2, h.rgb, 0.3 * h.al * glow * h.lueur, true);
                 cv.line(a, b, h.s * 2.0, h.rgb, h.al, true);
-                cv.line(a, (h.x + h.queue.0 * 0.55, h.y + h.queue.1 * 0.55), h.s * 0.9, (255, 255, 255), h.al, true);
+                cv.line(a, (h.x + h.queue.0 * 0.55, h.y + h.queue.1 * 0.55), h.s * 0.9, reflet, h.al, true);
                 return;
             }
             // lueur : deux disques translucides (un dégradé radial coûte bien plus cher sur processeur)
             cv.circle(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * glow * h.lueur);
             cv.circle(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * glow * h.lueur);
             cv.circle(h.x, h.y, h.s, h.rgb, h.al);
-            cv.circle(h.x, h.y, h.s * 0.45, (255, 255, 255), h.al);
+            cv.circle(h.x, h.y, h.s * 0.45, reflet, h.al);
         };
         for h in heads.iter().filter(|h| !h.front && !h.cachee) {
             draw_head(cv, h);
@@ -1560,7 +1575,7 @@ impl Swarm {
                     let dehors = r * (2.0 + 2.5 * self.env);
                     let vide = (HALO_VIDE * scale).min(0.5 * dehors);
                     if dehors > vide {
-                        cv.ring(px, py, (dehors + vide) / 2.0, dehors - vide, (255, 255, 255), 0.35 * self.env);
+                        cv.ring(px, py, (dehors + vide) / 2.0, dehors - vide, reflet, 0.35 * self.env);
                     }
                 }
                 cv.ring(px, py, r * (2.5 + 5.0 * (1.0 - self.env)), 1.5 * scale, head_rgb, 0.8 * self.env * vif);
@@ -1573,7 +1588,7 @@ impl Swarm {
                 Genre::Etincelle => {
                     cv.circle(p.x, p.y, p.taille * 2.2, head_rgb, 0.25 * (1.0 - k));
                     // cœur blanc, atténué en mode sans flashs (une salve d'aigus en ferait des éclairs)
-                    cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), (255, 255, 255), (1.0 - k) * vif);
+                    cv.circle(p.x, p.y, p.taille * (1.0 - 0.5 * k), reflet, (1.0 - k) * vif);
                 }
                 Genre::Onde => {
                     let r = p.taille * (1.0 - (1.0 - k).powi(3));
@@ -2739,6 +2754,37 @@ mod tests {
     fn rayon_tete(s: &Swarm) -> f32 {
         let (c, p) = (s.center.unwrap(), *s.trails[0].back().unwrap());
         ((p.1 - c.0).powi(2) + (p.2 - c.1).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn luminosite_nulle_tout_en_noir() {
+        // essaim, reflets (cœurs, halo de l'éclat, étincelles) et figure à la couleur de
+        // l'essaim : tout ce qui est peint est noir ; à la luminosité de toujours, il y a du clair
+        let image = |luminosite: f32| {
+            let mut cfg = Config::default();
+            (cfg.couleur.luminosite, cfg.gouttes.actif) = (luminosite, true);
+            let mut s = Swarm::avec_graine(3);
+            let mut f = crate::figures::Figures::new();
+            let mut ecoute = Ecoute::default();
+            let mut t = 0.0f64;
+            while t < 2.3 {
+                let au = son_essai(t);
+                s.avance(t, 1.0 / 120.0, C, au, &cfg, 1.0);
+                f.recevoir(&s.prendre_gestes());
+                f.avance(t, 1.0 / 120.0, C, 1.0, &crate::figures::Son { au: &au, coups: &ecoute.lire(&au), bandes: &[] }, &cfg);
+                t += 1.0 / 120.0;
+            }
+            let mut pm = Pixmap::new(800, 800).unwrap();
+            let cv = &mut crate::canvas::PixCanvas { pm: &mut pm, origin: (0.0, 0.0) };
+            f.dessiner(cv, t, &cfg, 1.0);
+            s.draw(cv, t, &cfg, 1.0, C);
+            let peints: Vec<[u8; 4]> = pm.data().as_chunks::<4>().0.iter().copied().filter(|p| p[3] > 0).collect();
+            (peints.len(), peints.iter().map(|p| p[0].max(p[1]).max(p[2])).max().unwrap_or(0))
+        };
+        let (n, clair) = image(0.0);
+        assert!(n > 500 && clair == 0, "{n} pixels, le plus clair à {clair}");
+        let (n, clair) = image(crate::config::LUMINOSITE);
+        assert!(n > 500 && clair > 200, "{n} pixels, le plus clair à {clair}");
     }
 
     #[test]

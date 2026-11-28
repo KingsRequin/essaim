@@ -255,7 +255,7 @@ const ENTIERS = new Set(["orbite.nombre", "orbite.anneaux", "essaim.maximum", "e
 // Bornes sûres des réglages sans glissière (comme config::limits) : l'allure du trait et du
 // pendule (échelle, rotation, décalage, sans glissière), puis la borne de la section.
 const BORNES_ALLURE = {
-  echelle: [0.5, 2], opacite: [0.1, 1], teinte: [-180, 180], teinte_fixe: [0, 360], degrade: [0, 180], rotation: [-30, 30], decalage_x: [-80, 80], decalage_y: [-80, 80],
+  echelle: [0.5, 2], opacite: [0.1, 1], teinte: [-180, 180], teinte_fixe: [0, 360], saturation: [0, 1], luminosite: [0, 1], degrade: [0, 180], rotation: [-30, 30], decalage_x: [-80, 80], decalage_y: [-80, 80],
 };
 const BORNES_SECTION = { orbite: [0, 100], essaim: [0, 10], couleur: [0, 720], bordure: [0, 1], rendu: [0, 500] };
 // Champs numériques d'une modulation ou d'un déclencheur (comme Config::clamped) ; `nombre` et
@@ -1168,6 +1168,18 @@ const dureeVeille = {
   lire: (texte, x) => (/jamais/i.test(texte) ? 0 : /min/i.test(texte) ? x * 60 : x),
 };
 const TEINTES = [0, 25, 50, 95, 150, 190, 215, 260, 295, 330];
+// Couleur #rrggbb d'une teinte, saturation et luminosité (hsl d'apercu.js), et l'inverse.
+const versHex = (h, sat, lum) => "#" + hsl(((h % 360) + 360) % 360, sat, lum).map((v) => v.toString(16).padStart(2, "0")).join("");
+function depuisHex(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  if (d < 1e-6) return [0, 0, l];
+  const sat = d / (1 - Math.abs(2 * l - 1));
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [Math.round(((h * 60) % 360 + 360) % 360), Math.min(1, sat), l];
+}
+// Luminosité d'une couleur : 0 noir, 0,66 vive (celle de toujours), 1 blanc.
+const affLuminosite = (v) => (+v <= 0.005 ? "noir" : +v >= 0.995 ? "blanc" : Math.abs(v - LUMINOSITE) < 0.005 ? "vive" : Math.round(v * 100) + " %");
 
 // Conditions : un réglage dont l'effet est coupé est estompé (il reste réglable).
 const declDe = (r) => (r.declencheurs && Array.isArray(r.declencheurs.liste) ? r.declencheurs.liste : []);
@@ -1437,7 +1449,13 @@ function allureBase(s, cache = () => false) {
     { choix: "Couleur", section: s, cle: "couleur", valeurs: [["essaim", "De l'essaim"], ["fixe", "Fixe"], ["blanc", "Blanche"]], cache,
       note: "De l'essaim : elle suit sa teinte (qui défile, ou celle de l'application, de la pochette…). Fixe : une teinte à elle, qui ne bouge pas avec l'essaim." },
     { libelle: "Teinte, à côté de celle de l'essaim", section: s, cle: "teinte", min: -180, max: 180, pas: 5, aff: (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v)) + "°", cache: (r) => cache(r) || couleurDe(r, s) !== "essaim" },
+    {
+      pipette: "Couleur fixe", section: s, cache: (r) => cache(r) || couleurDe(r, s) !== "fixe",
+      lire: (r) => versHex(r[s].teinte_fixe ?? 200, r[s].saturation ?? 1, r[s].luminosite ?? LUMINOSITE),
+      poser: (h, sat, lum) => { regler(s, "teinte_fixe", h); regler(s, "saturation", sat); regler(s, "luminosite", lum); },
+    },
     { libelle: "Teinte fixe", section: s, cle: "teinte_fixe", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°", cache: (r) => cache(r) || couleurDe(r, s) !== "fixe" },
+    { libelle: "Luminosité", section: s, cle: "luminosite", min: 0, max: 1, pas: 0.01, aff: affLuminosite, vers: (x) => x / 100, cache: (r) => cache(r) || couleurDe(r, s) !== "fixe" },
     { libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent, cache },
   ];
 }
@@ -1486,7 +1504,7 @@ const MODULER_FIGURE = {
 // Allure d'une figure copiée sur les huit autres : couleur et opacité (l'échelle, la rotation et le
 // décalage dépendent de la forme, ils restent). Les valeurs remplacées sont gardées : « Annuler »
 // (Ctrl+Z) les remet tant qu'aucun preset n'a été appliqué depuis.
-const ALLURE_COPIEE = ["couleur", "teinte", "teinte_fixe", "degrade", "opacite"];
+const ALLURE_COPIEE = ["couleur", "teinte", "teinte_fixe", "saturation", "luminosite", "degrade", "opacite"];
 // dernière action de la page que « Annuler » défait avant le dernier preset ; `.actif` : le preset
 // en place quand elle a été faite
 let annulationLocale = null;
@@ -1612,9 +1630,22 @@ const PANNEAUX = [
   },
   {
     id: "couleur", famille: "L'essaim", titre: "Couleur",
-    note: "Une teinte fixe ou qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau. Pour qu'elle glisse avec la musique : une modulation de la teinte.",
-    base: [{ special: "couleur" }],
+    note: "Une teinte fixe ou qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau. La luminosité vaut pour tout ce qu'Essaim dessine, quelle que soit la teinte : baisse-la pour un essaim sombre, jusqu'au noir, même quand il prend la couleur de l'application. Pour que la teinte glisse avec la musique : une modulation de la teinte.",
+    base: [
+      { special: "couleur" },
+      {
+        pipette: "Choisir une couleur", section: "couleur",
+        lire: (r) => versHex(r.couleur.teinte, r.couleur.saturation ?? 1, r.couleur.luminosite ?? LUMINOSITE),
+        // une couleur choisie est fixe : elle ne défile plus et ne suit plus l'appli, le site, la pochette
+        poser: (h, sat, lum) => {
+          for (const [cle, v] of [["teinte", h], ["saturation", sat], ["luminosite", lum], ["vitesse_teinte", 0], ["application", false], ["site", false], ["pochette", false], ["synchro_prisme", false]]) regler("couleur", cle, v);
+        },
+        note: "N'importe quelle couleur, même très sombre ou noire : elle devient fixe.",
+      },
+      { libelle: "Luminosité", section: "couleur", cle: "luminosite", min: 0, max: 1, pas: 0.01, aff: affLuminosite, vers: (x) => x / 100 },
+    ],
     avance: [
+      { libelle: "Saturation", section: "couleur", cle: "saturation", min: 0, max: 1, pas: 0.01, aff: (v) => (+v === 0 ? "gris" : Math.round(v * 100) + " %"), vers: (x) => x / 100 },
       { libelle: "Teinte de départ", section: "couleur", cle: "teinte", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°" },
       { libelle: "Défilement de la teinte", section: "couleur", cle: "vitesse_teinte", min: 0, max: 720, pas: 1, aff: (v) => (+v === 0 ? "fixe" : Math.round(v) + "°/s") },
       { libelle: "Écart tête-queue", section: "couleur", cle: "ecart_teinte", min: 0, max: 720, pas: 1, aff: (v) => Math.round(v) + "°" },
@@ -1960,6 +1991,7 @@ const SUGGESTIONS_MOD = [
 const glissieres = []; // { def, input, saisie, els }
 const bascules = []; // { section, cle, bouton }
 const choix = []; // { section, cle, valeur, bouton } : réglages à quelques valeurs nommées
+const pipettes = []; // { def, input } : sélecteurs de couleur
 const formes = []; // { section, cle, id, b }
 const conditionnels = []; // { si, cache, els } : estompés (si) ou masqués (cache) selon les réglages
 const panneaux = []; // { def, onglet, section, corps, voyant }
@@ -2154,6 +2186,15 @@ function construireBase(def, grille, corps) {
     const { teintes: nuancier, sources } = rangeeCouleur();
     ligneLarge("Teinte", "couleur.teinte", nuancier);
     ligneLarge("Prendre la couleur de", "couleur.application", sources);
+  } else if (def.pipette) {
+    // la pastille ouvre le choix de couleur de Windows ; la couleur prise donne teinte,
+    // saturation et luminosité
+    const p = el("input", "pipette");
+    p.type = "color";
+    p.setAttribute("aria-label", def.pipette);
+    p.addEventListener("input", () => { const [h, sat, lum] = depuisHex(p.value); def.poser(h, sat, lum); majReglages(); });
+    pipettes.push({ def, input: p });
+    els = ligneLarge(def.pipette, def.section + ".teinte", [p], def.note);
   } else if (def.modulations) {
     construireModulations(corps);
   } else if (def.declencheurs) {
@@ -3013,6 +3054,7 @@ function majReglages() {
     b.bouton.setAttribute("aria-pressed", typeof v === "boolean" ? v : v > 0);
   }
   for (const c of choix) c.bouton.setAttribute("aria-pressed", val(c.section, c.cle) === c.valeur);
+  for (const p of pipettes) if (document.activeElement !== p.input) p.input.value = p.def.lire(etat.reglages);
   for (const f of formes) {
     f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
     // le pictogramme d'une image ou de l'icône suit ses contours

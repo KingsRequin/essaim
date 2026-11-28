@@ -193,6 +193,15 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
   disparaît rejoint la teinte propre par un écart qui s'amortit en ~250 ms) ; au changement de
   morceau, la teinte de l'ancienne pochette reste le temps que la nouvelle soit lisible. Pour que la teinte glisse avec la musique :
   une modulation de la teinte « sur tout » (idée *La teinte suit la musique*).
+- **Luminosité et saturation** (`[couleur] luminosite`, 0 = noir, 0,66 = vif par défaut, 1 =
+  blanc ; `saturation`, 0 = gris, 1 par défaut) : celles de tout ce qu'Essaim dessine (essaim,
+  figures à la couleur de l'essaim, particules, habillage, bordure), quelle que soit la teinte,
+  même prise de l'application, du site ou de la pochette : un essaim sombre, jusqu'au noir, ou
+  pâle. Les reflets blancs (cœur des têtes et des étincelles, halo de l'éclat) s'assombrissent
+  avec elle. Dans la fenêtre des réglages, *Choisir une couleur* ouvre le choix de couleur de
+  Windows : la couleur prise donne teinte, saturation et luminosité, et devient fixe (elle ne
+  défile plus et ne suit plus l'application). Derrière un essaim sombre, les aperçus
+  s'éclaircissent.
 - **Palette** (`[couleur] palette`, 1 à 3 teintes) : les comètes et les satellites se partagent
   plusieurs teintes, chacune décalée de `ecart_palette` degrés (120 : trois teintes à égale
   distance) de la teinte de base, qu'elle soit fixe, qui défile ou imposée (application, pochette…).
@@ -310,8 +319,9 @@ Ces neuf figures laissent le pointeur dégagé et s'utilisent seules ou avec l'e
 alternatives aux comètes, aussi réglables qu'elles. Chacune a, en plus de ses réglages propres,
 son **allure** (mêmes clés dans sa section) : `couleur` (`"essaim"` par défaut : les couleurs de
 l'essaim, tête et queue des traînées, qui défilent ou suivent l'application avec lui, `teinte`
-degrés plus loin, -180 à 180 ; `"fixe"` : une teinte à elle, `teinte_fixe`, 0 à 360, sa queue
-`degrade` degrés plus loin, 0 à 180, 40 par défaut ; `"blanc"`), `echelle` (0,5 à 2), `opacite`
+degrés plus loin, -180 à 180 ; `"fixe"` : une couleur à elle, `teinte_fixe`, 0 à 360, `saturation` et
+`luminosite`, 0 à 1 (1 et 0,66 par défaut ; 0 : noire), choisies aussi par la pastille *Couleur
+fixe* de son panneau, sa queue `degrade` degrés plus loin, 0 à 180, 40 par défaut ; `"blanc"`), `echelle` (0,5 à 2), `opacite`
 (0,1 à 1), `rotation` (tours par minute autour du pointeur, -30 à 30 : arcs, anneau, orbe et
 gouttes), `decalage_x` et `decalage_y` (sa place par rapport au pointeur, -80 à 80 px). Le trait
 et le pendule n'ont ni échelle, ni rotation, ni décalage. Ses réactions aux coups du son sont

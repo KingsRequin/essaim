@@ -150,8 +150,11 @@ pub struct Allure {
     pub couleur: CouleurFigure,
     /// Teinte : degrés ajoutés à celle de l'essaim (-180 à 180), avec la couleur de l'essaim.
     pub teinte: f32,
-    /// Teinte fixe (0 à 360) et écart de teinte de la queue (0 à 180), avec une couleur fixe.
+    /// Teinte fixe (0 à 360), sa saturation et sa luminosité (0 à 1 : noir à 0, blanc à 1), et
+    /// écart de teinte de la queue (0 à 180), avec une couleur fixe.
     pub teinte_fixe: f32,
+    pub saturation: f32,
+    pub luminosite: f32,
     pub degrade: f32,
     /// Rotation continue autour du pointeur (tours par minute, -30 à 30) : arcs, anneau, orbe et
     /// gouttes seulement (`figures::tourne`).
@@ -163,7 +166,7 @@ pub struct Allure {
 
 impl Default for Allure {
     fn default() -> Self {
-        Self { echelle: 1.0, opacite: 1.0, couleur: CouleurFigure::Essaim, teinte: 0.0, teinte_fixe: 200.0, degrade: 40.0, rotation: 0.0, decalage_x: 0.0, decalage_y: 0.0 }
+        Self { echelle: 1.0, opacite: 1.0, couleur: CouleurFigure::Essaim, teinte: 0.0, teinte_fixe: 200.0, saturation: 1.0, luminosite: LUMINOSITE, degrade: 40.0, rotation: 0.0, decalage_x: 0.0, decalage_y: 0.0 }
     }
 }
 
@@ -186,6 +189,7 @@ fn bornes_allure(key: &str) -> Option<(f64, f64)> {
         "opacite" => (0.1, 1.0),
         "teinte" => (-180.0, 180.0),
         "teinte_fixe" => (0.0, 360.0),
+        "saturation" | "luminosite" => (0.0, 1.0),
         "degrade" => (0.0, 180.0),
         "rotation" => (-30.0, 30.0),
         "decalage_x" | "decalage_y" => (-80.0, 80.0),
@@ -1372,7 +1376,15 @@ pub struct Couleur {
     /// décalée de `ecart_palette` degrés de la précédente.
     pub palette: u32,
     pub ecart_palette: f32,
+    /// Luminosité (0 : noir, 0,66 : couleurs vives, 1 : blanc) et saturation (0 : gris, 1 :
+    /// pleine) de tout ce qu'Essaim dessine, quelle que soit la teinte (propre, application,
+    /// site, pochette, Prisme) : pour un essaim sombre, ou pâle.
+    pub luminosite: f32,
+    pub saturation: f32,
 }
+
+/// Luminosité par défaut des couleurs (celle de toujours) : vives, ni sombres ni pâles.
+pub const LUMINOSITE: f32 = 0.66;
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
@@ -1436,6 +1448,8 @@ impl Default for Couleur {
             pochette: false,
             palette: 1,
             ecart_palette: 120.0,
+            luminosite: LUMINOSITE,
+            saturation: 1.0,
         }
     }
 }
@@ -1489,6 +1503,8 @@ site = false            # dans un navigateur, prend la couleur du haut de la pag
 pochette = false        # prend la teinte de la pochette du morceau qui joue (avant appli, site et Prisme)
 palette = 1             # teintes que se partagent comètes et satellites (1 à 3)
 ecart_palette = 120     # écart entre deux teintes de la palette (degrés)
+luminosite = 0.66       # de tout ce qu'Essaim dessine, quelle que soit la teinte : 0 = noir, 0.66 = vif, 1 = blanc
+saturation = 1          # 0 = gris, 1 = couleurs pleines
 
 [fissures]
 duree = 3.0             # secondes avant que la fissure soit refermée
@@ -1516,7 +1532,8 @@ etirement = 1           # étirement des têtes dans leur élan (0 = rondes, 2 =
 # Figures autour du pointeur : des alternatives à l'essaim. En plus de ses réglages, chacune
 # accepte son allure (valeurs par défaut) : echelle = 1 (0.5 à 2), opacite = 1 (0.1 à 1),
 # couleur = "essaim" ("essaim" : celle de l'essaim, teinte = 0 degrés ajoutés, -180 à 180 ;
-# "fixe" : teinte_fixe = 200, 0 à 360, la queue degrade = 40 degrés plus loin ; "blanc"),
+# "fixe" : teinte_fixe = 200, 0 à 360, saturation = 1 et luminosite = 0.66 (0 à 1, 0 = noir),
+# la queue degrade = 40 degrés plus loin ; "blanc"),
 # rotation = 0 (tr/min, -30 à 30 : arcs, anneau, orbe et gouttes), decalage_x = 0 et
 # decalage_y = 0 (px, -80 à 80). Le trait (pinceau) et le pendule n'ont ni échelle, ni
 # rotation, ni décalage. Leurs réactions aux coups sont des déclencheurs (battement, accent,
@@ -1848,6 +1865,7 @@ fn limites_connues(section: &str, key: &str) -> Option<(f64, f64)> {
         ("couleur", "teinte") => (0.0, 360.0),
         ("couleur", "palette") => (1.0, 3.0),
         ("couleur", "ecart_palette") => (0.0, 180.0),
+        ("couleur", "luminosite") | ("couleur", "saturation") => (0.0, 1.0),
         ("couleur", _) => (0.0, 720.0),
         ("fissures", "duree") => (0.2, 30.0),
         ("fissures", "taille") => (0.2, 6.0),

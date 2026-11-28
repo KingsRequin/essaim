@@ -624,7 +624,12 @@ du sens par image) et la teinte
   traits (taille modulée), décalage (`decalage_x` + décalage modulé × 30 px, `decalage_y`),
   opacité (`opacite` × opacité × lueur modulées). Sa couleur vient de `figures::couleur_figure` :
   celle de l'essaim décalée de `teinte` plus la teinte modulée (`render::prisme_decale`), une
-  teinte fixe (`teinte_fixe`, la queue `degrade` degrés plus loin) ou du blanc. L'anneau et l'orbe
+  couleur fixe (`teinte_fixe`, `saturation`, `luminosite` ; la queue `degrade` degrés plus loin) ou
+  du blanc. `render::prisme_decale` prend la saturation et la luminosité de `[couleur]` (0,66 par
+  défaut, `config::LUMINOSITE`) ; les reflets blancs passent par `render::blanc`, assombris d'autant
+  (essai `luminosite_nulle_tout_en_noir`). L'aperçu met la classe `scene-claire` (jeton
+  `--scene-claire`) sur son canevas quand l'essaim ou une figure fixe est sombre (luminosité sous
+  0,35). L'anneau et l'orbe
   s'étirent dans la direction de leur retard (`Figures::etirement`, au plus `etirement`) ; tournés
   par leur pose, cette direction est tournée d'autant dans l'autre sens (`etirement_pose`) : ils
   restent étirés vers le pointeur (essai `l_anneau_qui_tourne_reste_etire_vers_le_pointeur`). Le dessin passe par `Posee`, un `Canvas` qui transforme les points

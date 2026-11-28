@@ -111,7 +111,7 @@ const GEO_MIN = 0.5, GEO_MAX = 2.5;
 const FISSURE_RAYON_MAX = 44, FISSURE_PORTEE_MAX = 400;
 // Allure d'une figure (comme config::Allure) : défaut et bornes de chaque réglage.
 const ALLURE = {
-  echelle: [1, 0.5, 2], opacite: [1, 0.1, 1], teinte: [0, -180, 180], teinte_fixe: [200, 0, 360], degrade: [40, 0, 180], rotation: [0, -30, 30], decalage_x: [0, -80, 80], decalage_y: [0, -80, 80],
+  echelle: [1, 0.5, 2], opacite: [1, 0.1, 1], teinte: [0, -180, 180], teinte_fixe: [200, 0, 360], saturation: [1, 0, 1], luminosite: [0.66, 0, 1], degrade: [40, 0, 180], rotation: [0, -30, 30], decalage_x: [0, -80, 80], decalage_y: [0, -80, 80],
 };
 // Valeur d'un réglage, bornée ; `d` si elle manque.
 const regle = (v, lo, hi, d) => Math.min(hi, Math.max(lo, finiOu(+v, d)));
@@ -504,7 +504,16 @@ function prisme(c, t, k, imposee, decalage = 0, j = 0, plus = 0) {
   let dh = base - queue;
   if (dh > 180) dh -= 360;
   if (dh < -180) dh += 360;
-  return hsl((((queue + dh * k) % 360) + 360) % 360, 1, 0.66);
+  return hsl((((queue + dh * k) % 360) + 360) % 360, luminositeDe(c.saturation, 1), luminositeDe(c.luminosite, LUMINOSITE));
+}
+// Luminosité par défaut des couleurs (comme config::LUMINOSITE) ; réglage de 0 à 1, `d` s'il manque.
+const LUMINOSITE = 0.66;
+const luminositeDe = (v, d) => (Number.isFinite(+v) && v !== null && v !== undefined ? Math.min(1, Math.max(0, +v)) : d);
+// Blanc des reflets (cœurs, halo de l'éclat), assombri avec la luminosité des couleurs (comme
+// render::blanc).
+function blancReflet(c) {
+  const v = Math.round(255 * Math.min(1, luminositeDe((c || {}).luminosite, LUMINOSITE) / LUMINOSITE));
+  return [v, v, v];
 }
 
 // Contour fermé parcouru à vitesse constante, coins gardés (comme render::Contour) : ses
@@ -1376,7 +1385,7 @@ class Apercu {
   couleurFigure(sec, k, decale) {
     const a = allureDe(sec), mode = sec && sec.couleur, d = finiOu(decale, 0);
     if (mode === "blanc") return [255, 255, 255];
-    if (mode === "fixe") return hsl(reste(a.teinte_fixe + d + a.degrade * (1 - Math.min(1, Math.max(0, k))), 360), 1, 0.66);
+    if (mode === "fixe") return hsl(reste(a.teinte_fixe + d + a.degrade * (1 - Math.min(1, Math.max(0, k))), 360), a.saturation, a.luminosite);
     return prisme(this.reglages.couleur, this.t, k, this.teinteImposee, this.teinte, 0, a.teinte + d);
   }
 
@@ -2103,6 +2112,11 @@ class Apercu {
     const g = this.ctx, c = this.reglages, t = this.t, S = this.echelle || 1;
     const couleur = (k) => prisme(c.couleur, t, k, this.teinteImposee, this.teinte);
     g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    // essaim sombre (luminosité basse), ou figure d'une couleur fixe sombre : la scène s'éclaircit,
+    // sinon on ne verrait rien sur son noir
+    const sombre = (v) => luminositeDe(v, LUMINOSITE) < 0.35;
+    const claire = sombre((c.couleur || {}).luminosite) || FIGURES.some((s) => c[s] && c[s].actif && c[s].couleur === "fixe" && sombre(c[s].luminosite));
+    if (claire !== this.sceneClaire) { this.sceneClaire = claire; this.canvas.classList.toggle("scene-claire", claire); }
     g.lineCap = "round";
     g.lineJoin = "round";
     const teinte = (k, j, plus = 0) => prisme(c.couleur, t, k, this.teinteImposee, this.teinte, j, plus);
@@ -2272,13 +2286,13 @@ class Apercu {
         trait(a, b, h.s * 5.2, h.rgb, 0.12 * h.al * lueur * h.lueur);
         trait(a, b, h.s * 3.2, h.rgb, 0.3 * h.al * lueur * h.lueur);
         trait(a, b, h.s * 2, h.rgb, h.al);
-        trait(a, [h.x + h.queue[0] * 0.55, h.y + h.queue[1] * 0.55], h.s * 0.9, [255, 255, 255], h.al);
+        trait(a, [h.x + h.queue[0] * 0.55, h.y + h.queue[1] * 0.55], h.s * 0.9, blancReflet(c.couleur), h.al);
         return;
       }
       disque(h.x, h.y, h.s * 2.6, h.rgb, 0.12 * h.al * lueur * h.lueur);
       disque(h.x, h.y, h.s * 1.6, h.rgb, 0.3 * h.al * lueur * h.lueur);
       disque(h.x, h.y, h.s, h.rgb, h.al);
-      disque(h.x, h.y, h.s * 0.45, [255, 255, 255], h.al);
+      disque(h.x, h.y, h.s * 0.45, blancReflet(c.couleur), h.al);
     };
     for (const h of tetes) if (!h.devant) dessinerTete(h);
     const eclat = c.eclat.taille * S;
@@ -2299,7 +2313,7 @@ class Apercu {
         // petit éclat
         const dehors = eclat * (2 + 2.5 * this.env), vide = Math.min(HALO_VIDE * S, 0.5 * dehors);
         if (!this.doux && dehors > vide) {
-          g.strokeStyle = rgba([255, 255, 255], 0.35 * this.env);
+          g.strokeStyle = rgba(blancReflet(c.couleur), 0.35 * this.env);
           g.lineWidth = dehors - vide;
           g.beginPath();
           g.arc(cx, cy, (dehors + vide) / 2, 0, TAU);
@@ -2345,7 +2359,7 @@ class Apercu {
         g.stroke();
       } else {
         disque(q.x, q.y, q.taille * 2.2, tete, 0.25 * (1 - k));
-        disque(q.x, q.y, q.taille * (1 - 0.5 * k), [255, 255, 255], (1 - k) * vif);
+        disque(q.x, q.y, q.taille * (1 - 0.5 * k), blancReflet(c.couleur), (1 - k) * vif);
       }
     }
     for (const h of tetes) if (h.devant) dessinerTete(h);
