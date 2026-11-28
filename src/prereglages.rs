@@ -902,8 +902,10 @@ fn figure_seule(c: &mut Config) {
     c.declencheurs.liste = vec![d(E::Kick, A::Bordure, 0.8), d(E::Clic, A::Onde, 0.8), d(E::ClicDroit, A::Implosion, 0.8)];
 }
 
-/// Réactions de toujours de chaque figure allumée (`config::declencheurs_de_figure`), ajoutées
-/// aux déclencheurs ; `forces` : la force de certains gestes (figure, geste, force).
+/// Réactions de toujours de chaque figure allumée : ses gestes (`config::declencheurs_de_figure`),
+/// ajoutés aux déclencheurs, et ses modulations (`config::modulations_de_figure`), ajoutées aux
+/// modulations sauf celles dont la source, la cible et la figure y sont déjà ; `forces` : la
+/// force de certains gestes (figure, geste, force).
 fn gestes(c: &mut Config, forces: &[(G, A, f32)]) {
     for i in 0..crate::config::FIGURES.len() {
         if !c.figure(i).0 {
@@ -912,6 +914,11 @@ fn gestes(c: &mut Config, forces: &[(G, A, f32)]) {
         for d in crate::config::declencheurs_de_figure(i) {
             let force = forces.iter().find(|(g, a, _)| *g == d.sur && *a == d.faire).map_or(d.force, |f| f.2);
             c.declencheurs.liste.push(Declencheur { force, ..d });
+        }
+        for (_, m) in crate::config::modulations_de_figure(i) {
+            if !c.modulations.liste.iter().any(|x| (x.source, x.cible, x.sur) == (m.source, m.cible, m.sur)) {
+                c.modulations.liste.push(m);
+            }
         }
     }
 }
@@ -1084,7 +1091,8 @@ mod tests {
 
     /// Les presets fournis montrent tout ce que les modulations savent faire : chaque source et
     /// chaque cible servent au moins une fois, et deux presets n'ont jamais les mêmes réactions.
-    /// Ceux d'une figure seule (ni comètes ni satellites) n'ont rien à moduler : ils n'en ont pas.
+    /// Ceux d'une figure seule (ni comètes ni satellites) ne modulent que leurs figures, avec leurs
+    /// gestes et leurs modulations de toujours.
     #[test]
     fn modulations_variees() {
         let seules: Vec<Profile> = builtins().into_iter().filter(|p| !p.cfg.orbite.cometes && p.cfg.essaim.maximum + p.cfg.essaim.fixes as usize == 0).collect();
@@ -1103,6 +1111,9 @@ mod tests {
             for i in (0..crate::config::FIGURES.len()).filter(|&i| p.cfg.figure(i).0) {
                 for a in crate::config::gestes_de_figure(i) {
                     assert!(p.cfg.declencheurs.liste.iter().any(|d| d.faire == *a && d.sur.fait_geste(i)), "{} : {} sans geste {a:?}", p.name, crate::config::FIGURES[i]);
+                }
+                for (_, m) in crate::config::modulations_de_figure(i) {
+                    assert!(p.cfg.modulations.liste.iter().any(|x| (x.source, x.cible, x.sur) == (m.source, m.cible, m.sur)), "{} : {} sans {:?}", p.name, crate::config::FIGURES[i], m.cible);
                 }
             }
         }

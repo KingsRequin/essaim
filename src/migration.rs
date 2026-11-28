@@ -266,11 +266,61 @@ fn table<'a>(t: &'a mut toml::Table, section: &str) -> &'a mut toml::Table {
 /// montée, est coupée partout, modulations et déclencheurs) ; sans `[modulations]`, ou avec les anciennes clés de la
 /// basse, les réactions à la basse passent en tête des modulations. Une modulation de même
 /// source, même cible et même groupe déjà là est gardée. Puis les réactions fixes des figures
-/// d'avant la 0.26 deviennent des déclencheurs (`migrer_figures`). Renvoie vrai si la table a
-/// changé.
+/// d'avant la 0.26 deviennent des déclencheurs (`migrer_figures`), et les gestes retirés en 0.28
+/// des modulations (`migrer_doublons`). Renvoie vrai si la table a changé.
 pub fn migrer(t: &mut toml::Table) -> bool {
     let reactions = migrer_reactions(t);
-    migrer_figures(t) || reactions
+    let figures = migrer_figures(t);
+    migrer_doublons(t) || figures || reactions
+}
+
+/// Ajoute `mods` aux modulations de la table (une section sans liste a celles par défaut, qui
+/// restent), sauf celles dont la source, la cible et le groupe y sont déjà, dans la limite de
+/// `MODULATIONS_MAX`. Renvoie vrai si la liste a changé.
+fn ajouter_modulations(t: &mut toml::Table, mods: &[Modulation]) -> bool {
+    if mods.is_empty() {
+        return false;
+    }
+    let liste = table(t, "modulations").entry("liste").or_insert_with(|| toml::Value::Array(Ancien::default().modulations(true, true).iter().filter_map(|m| toml::Value::try_from(m).ok()).collect()));
+    let Some(l) = liste.as_array_mut() else { return false };
+    let mut change = false;
+    for m in mods {
+        let deja = l.iter().any(|v| v.clone().try_into::<Modulation>().is_ok_and(|x| (x.source, x.cible, x.sur) == (m.source, m.cible, m.sur)));
+        if !deja && l.len() < crate::config::MODULATIONS_MAX {
+            l.extend(toml::Value::try_from(m).ok());
+            change = true;
+        }
+    }
+    change
+}
+
+/// Gestes retirés en 0.28 des figures dont ils ne faisaient que pousser un paramètre déjà cible de
+/// leurs modulations (`config::modulations_de_figure` : le carré de l'anneau, son battement, les
+/// arcs fermés et le trait allongé au drop). Chaque déclencheur d'un tel geste pour cette figure
+/// seule devient la modulation qui le remplace (source : son événement ; quantité : celle de la
+/// réaction de toujours × sa force) ; un événement sans source (temps, piste, clic) le retire
+/// seulement. Renvoie vrai si la table a changé.
+pub fn migrer_doublons(t: &mut toml::Table) -> bool {
+    use crate::config::{gestes_de_figure, modulations_de_figure};
+    let Some(liste) = t.get_mut("declencheurs").and_then(|d| d.get_mut("liste")).and_then(toml::Value::as_array_mut) else { return false };
+    let (avant, mut mods) = (liste.len(), Vec::new());
+    liste.retain(|v| {
+        let Ok(d) = v.clone().try_into::<Declencheur>() else { return true };
+        let Some(i) = d.sur.figure() else { return true };
+        if d.faire.geste().is_none() || gestes_de_figure(i).contains(&d.faire) {
+            return true;
+        }
+        let remplace = modulations_de_figure(i).into_iter().find(|(a, _)| *a == d.faire);
+        if let (Some((_, m)), Some(source)) = (remplace, d.quand.source()) {
+            mods.push(Modulation { source, quantite: ((m.quantite * d.force).clamp(-1.0, 1.0) * 1e4).round() / 1e4, ..m });
+        }
+        false
+    });
+    if liste.len() == avant {
+        return false;
+    }
+    ajouter_modulations(t, &mods);
+    true
 }
 
 /// Clés de l'allure des figures d'avant la 0.26 : la force de leurs réactions. Celles des coups
@@ -280,14 +330,15 @@ pub const REACTIONS_FIGURES: [&str; 6] = ["reaction_kick", "reaction_caisse", "r
 
 /// Réactions des figures d'avant la 0.26, fixes et réglées par `reaction_kick`… : sans
 /// `[declencheurs] figures`, chaque figure allumée reçoit les déclencheurs de ses gestes
-/// (`config::declencheurs_de_figure`), à la force de sa réaction d'alors (aucun pour une réaction
+/// (`config::declencheurs_de_figure`) et ses modulations de toujours
+/// (`config::modulations_de_figure`), à la force de sa réaction d'alors (aucun pour une réaction
 /// à 0), et le drapeau est mis. Les clés `reaction_*` sont retirées partout. Renvoie vrai si la
 /// table a changé.
 pub fn migrer_figures(t: &mut toml::Table) -> bool {
-    use crate::config::{declencheurs_de_figure, FIGURES};
+    use crate::config::{declencheurs_de_figure, modulations_de_figure, FIGURES};
     let deja = t.get("declencheurs").and_then(|d| d.get("figures")).and_then(toml::Value::as_bool) == Some(true);
     let mut change = false;
-    let mut nouveaux = Vec::new();
+    let (mut nouveaux, mut mods) = (Vec::new(), Vec::new());
     for (i, s) in FIGURES.iter().enumerate() {
         let Some(sec) = t.get_mut(*s).and_then(|v| v.as_table_mut()) else { continue };
         let mut forces = [1.0f32; 4];
@@ -307,10 +358,18 @@ pub fn migrer_figures(t: &mut toml::Table) -> bool {
                 nouveaux.extend(toml::Value::try_from(Declencheur { force, ..d }).ok());
             }
         }
+        // ses réactions faites par une modulation, à la force du geste d'alors
+        for (a, m) in modulations_de_figure(i) {
+            let force = a.geste().map_or(1.0, |g| forces[g]);
+            if force > 0.0 {
+                mods.push(Modulation { quantite: (m.quantite * force).clamp(-1.0, 1.0), ..m });
+            }
+        }
     }
     if deja {
         return change;
     }
+    ajouter_modulations(t, &mods);
     let decl = table(t, "declencheurs");
     // une section sans liste a les déclencheurs par défaut : ils restent, ceux des figures suivent
     let liste = decl.entry("liste").or_insert_with(|| toml::Value::Array(Ancien::default().declencheurs().iter().filter_map(|d| toml::Value::try_from(d).ok()).collect()));
@@ -426,6 +485,38 @@ mod tests {
         // section sans liste : les déclencheurs par défaut restent, ceux des figures s'ajoutent
         let (c, _, _) = lire("[declencheurs]\n[pendule]\nactif = true\n");
         assert!(c.declencheurs.liste.len() == Ancien::default().declencheurs().len() + 3, "{:?}", c.declencheurs.liste);
+    }
+
+    #[test]
+    fn gestes_en_double_convertis_en_modulations() {
+        use crate::config::{Config, FIGURES};
+        let anneau = Groupe::de_figure(FIGURES.iter().position(|&f| f == "anneau").unwrap());
+        let mut t: toml::Table = toml::from_str(
+            "[modulations]\nliste = []\n[declencheurs]\nfigures = true\nliste = [\
+             { quand = \"caisse\", faire = \"accent\", sur = \"anneau\", force = 0.5 },\
+             { quand = \"clic\", faire = \"battement\", sur = \"anneau\" },\
+             { quand = \"drop\", faire = \"apogee\", sur = \"anneau\" },\
+             { quand = \"kick\", faire = \"accent\" },\
+             { quand = \"kick\", faire = \"onde\" }]\n",
+        )
+        .unwrap();
+        assert!(migrer(&mut t));
+        let c: Config = toml::Value::Table(t.clone()).try_into().unwrap();
+        // le carré à la caisse claire, à moitié : une modulation de la forme ; le battement au clic
+        // (sans source) disparaît ; l'apogée (l'écho) reste un geste, comme l'accent « sur tout »
+        let faits: Vec<(Evenement, Action)> = c.declencheurs.liste.iter().map(|d| (d.quand, d.faire)).collect();
+        assert_eq!(faits, [(Evenement::Drop, Action::Apogee), (Evenement::Kick, Action::Accent), (Evenement::Kick, Action::Onde)]);
+        assert_eq!(c.modulations.liste.len(), 1);
+        let m = c.modulations.liste[0];
+        assert_eq!((m.source, m.cible, m.sur, m.quantite), (Source::Caisse, Cible::Forme, anneau, 0.5));
+        // une fois converties, plus rien ne change
+        assert!(!migrer(&mut t));
+        // réglages d'avant la 0.26 : l'anneau allumé reçoit ses modulations de toujours
+        let mut t: toml::Table = toml::from_str("[modulations]\nliste = []\n[declencheurs]\nliste = []\n[anneau]\nactif = true\nreaction_caisse = 0\n").unwrap();
+        migrer(&mut t);
+        let c: Config = toml::Value::Table(t).try_into().unwrap();
+        let l: Vec<(Source, Cible)> = c.modulations.liste.iter().map(|m| (m.source, m.cible)).collect();
+        assert_eq!(l, [(Source::Kick, Cible::Rayon)], "caisse claire à 0 : pas de carré");
     }
 
     fn modulations(texte: &str) -> Vec<Modulation> {

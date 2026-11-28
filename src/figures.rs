@@ -350,10 +350,9 @@ struct Arcs {
     cran: f32,
     bond: Ressort,
     recul: Ressort,
-    /// Niveaux affichés (0 à 1) et arcs fermés par un drop (1 → 0).
+    /// Niveaux affichés (0 à 1).
     grave: f32,
     aigu: f32,
-    plein: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -382,13 +381,12 @@ impl QuatreTemps {
 
 struct Anneau {
     echelle: Ressort,
-    carre: f32,
     echos: Vec<f64>,
 }
 
 impl Anneau {
     fn new() -> Self {
-        Self { echelle: Ressort::en(1.0), carre: 0.0, echos: Vec::new() }
+        Self { echelle: Ressort::en(1.0), echos: Vec::new() }
     }
 }
 
@@ -573,10 +571,6 @@ impl Figures {
                 a.bond.v += ARC_BOND * g.total(BATTEMENT);
             }
             a.recul.v -= ARC_RECUL * g.fort(ACCENT);
-            if g.n(APOGEE) > 0 {
-                a.plein = a.plein.max(g.fort(APOGEE).min(1.0));
-            }
-            a.plein *= (-dt * 1.6).exp();
             // l'angle reste petit : le cran et l'arc reculent ensemble d'un tour
             while a.cran > TAU {
                 a.cran -= TAU;
@@ -585,8 +579,8 @@ impl Figures {
             a.tour.vers(a.cran, (14.0, 0.4), dt, (-TAU, 2.0 * TAU));
             a.bond.vers(0.0, (18.0, 0.3), dt, ARC_BORNES);
             a.recul.vers(0.0, (12.0, 0.35), dt, (-PI, PI));
-            let aigu = (0.9 * p.scintillement + 0.8 * p.montee + 0.45 * p.accent).min(1.0).max(a.plein);
-            a.grave = p.basse.max(a.plein);
+            let aigu = (0.9 * p.scintillement + 0.8 * p.montee + 0.45 * p.accent).min(1.0);
+            a.grave = p.basse;
             a.aigu += (aigu - a.aigu) * (1.0 - (-dt * if aigu > a.aigu { 30.0 } else { 6.0 }).exp());
         }
 
@@ -620,15 +614,10 @@ impl Figures {
 
         if cfg.anneau.actif {
             let ((p, g), a) = (&ecoutes[ANNEAU], &mut self.anneau);
-            a.echelle.v += 5.5 * g.total(BATTEMENT);
-            if g.n(ACCENT) > 0 {
-                a.carre = a.carre.max(g.fort(ACCENT).min(1.0));
-            }
             if g.n(APOGEE) > 0 {
                 a.echelle.v += 10.0 * g.fort(APOGEE);
                 a.echos.push(t);
             }
-            a.carre *= (-dt * 6.0).exp();
             a.echelle.vers(1.0 - 0.42 * p.montee, (18.0, 0.28), dt, ANNEAU_BORNES);
             a.echos.retain(|&ne| t - ne < ANNEAU_ECHO.0);
             if a.echos.len() > ANNEAU_ECHOS_MAX {
@@ -855,7 +844,7 @@ impl Figures {
                 // modulation de la forme (superellipse : un cercle à l'exposant 2, presque un
                 // carré à 8)
                 let (e, cos, sin) = self.etirement_pose(ANNEAU, scale, c.etirement);
-                let carre = (a.carre + propres.forme).clamp(0.0, 1.0);
+                let carre = propres.forme.clamp(0.0, 1.0);
                 let (ra, rb, puissance) = (r * (1.0 + e), r * (1.0 - e), 2.0 / (2.0 + 6.0 * carre));
                 let point = |angle: f32| {
                     let (st, ct) = angle.sin_cos();
@@ -1289,15 +1278,15 @@ mod tests {
         use crate::config::{Action, Declencheur, Evenement, Groupe};
         let mut cfg = toutes();
         cfg.declencheurs.liste = vec![
-            Declencheur { sur: Groupe::Anneau, ..Declencheur::new(Evenement::Clic, Action::Accent) },
+            Declencheur { sur: Groupe::Pendule, ..Declencheur::new(Evenement::Clic, Action::Accent) },
             Declencheur::new(Evenement::Clic, Action::Battement),
         ];
         let mut s = crate::render::Swarm::avec_graine(1);
         s.evenement(Evenement::Clic, 300.0, 300.0, 0.0, &cfg, 1.0);
         let g = s.prendre_gestes();
-        // l'accent visé : l'anneau seul ; le battement pour toutes : chaque figure qui le fait
+        // l'accent visé : le pendule seul ; le battement pour toutes : chaque figure qui le fait
         for (i, g) in g.iter().enumerate() {
-            assert_eq!(g.n(ACCENT), (i == ANNEAU) as u32, "{}", crate::config::FIGURES[i]);
+            assert_eq!(g.n(ACCENT), (i == PENDULE) as u32, "{}", crate::config::FIGURES[i]);
             assert_eq!(g.n(BATTEMENT), crate::config::gestes_de_figure(i).contains(&Action::Battement) as u32);
         }
         // pris une fois : la liste repart de zéro

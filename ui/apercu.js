@@ -124,11 +124,19 @@ function allureDe(sec) {
 // Gestes des figures (comme config::GESTES) : rang dans les gestes reçus par une figure.
 const [BATTEMENT, ACCENT, SCINTILLEMENT, APOGEE] = [0, 1, 2, 3];
 const GESTES_FIGURE = ["battement", "accent", "scintillement", "apogee"];
-// Gestes que fait chaque figure (comme config::gestes_de_figure).
+// Gestes que fait chaque figure (comme config::gestes_de_figure) : un geste qui ne ferait que
+// pousser un paramètre déjà cible de ses modulations est une modulation (MODULATIONS_DES_FIGURES).
 const GESTES_DES_FIGURES = {
-  arcs: GESTES_FIGURE, anneau: GESTES_FIGURE, voix: GESTES_FIGURE, trame: GESTES_FIGURE,
+  voix: GESTES_FIGURE, trame: GESTES_FIGURE, arcs: ["battement", "accent", "scintillement"],
   quatre_temps: ["battement", "accent", "apogee"], pendule: ["battement", "accent", "apogee"], gouttes: ["battement", "accent", "apogee"],
-  orbe: ["battement", "apogee"], pinceau: ["battement", "apogee"],
+  orbe: ["battement", "apogee"], anneau: ["scintillement", "apogee"], pinceau: ["battement"],
+};
+// Réactions de toujours faites par une modulation (comme config::modulations_de_figure) : le geste
+// qu'elles remplacent depuis la 0.28, source, cible et quantité (aussitôt, pour la figure seule).
+const MODULATIONS_DES_FIGURES = {
+  arcs: [["apogee", "drop", "ouverture", 1]],
+  anneau: [["battement", "kick", "rayon", 0.05], ["accent", "caisse", "forme", 1]],
+  pinceau: [["apogee", "drop", "duree", 0.35]],
 };
 // Gestes reçus par une figure depuis l'image d'avant : combien de chaque, et leur force cumulée
 // (comme figures::Gestes, 4 au plus de chaque sorte) ; force d'un geste (moyenne), 0 sans geste.
@@ -425,10 +433,10 @@ function nouvellesFigures() {
     // gestes reçus des déclencheurs pour la prochaine image, enveloppes du battement, de l'accent
     // et du scintillement de chaque figure
     gestes: FIGURES.map(gestesVides), enveloppes: FIGURES.map(() => [0, 0, 0]),
-    arcs: { tour: [0, 0], cran: 0, bond: [0, 0], recul: [0, 0], grave: 0, aigu: 0, plein: 0 },
+    arcs: { tour: [0, 0], cran: 0, bond: [0, 0], recul: [0, 0], grave: 0, aigu: 0 },
     // vague du drop : son début et sa force
     temps: { pts: [0, 1, 2, 3].map(() => ({ saut: [0, 0], taille: [1, 0], tiret: [0, 0], arme: false })), actif: null, vague: -Infinity, force: 1 },
-    anneau: { echelle: [1, 0], carre: 0, echos: [] },
+    anneau: { echelle: [1, 0], echos: [] },
     // figures/plus.rs
     orbe: { souffle: [0, 0], contour: [], echos: [] },
     voix: { niveaux: [0, 0, 0], large: [1, 0], silence: VOIX_ATTENTE, visible: 0 },
@@ -945,14 +953,12 @@ class Apercu {
       const a = f.arcs, { p, g } = ecoutes[F_ARCS];
       if (g.n[BATTEMENT] > 0) { a.cran += ARC_CRAN * g.force[BATTEMENT]; a.bond[1] += ARC_BOND * g.force[BATTEMENT]; }
       a.recul[1] -= ARC_RECUL * forceGeste(g, ACCENT);
-      if (g.n[APOGEE] > 0) a.plein = Math.max(a.plein, Math.min(1, forceGeste(g, APOGEE)));
-      a.plein *= Math.exp(-dt * 1.6);
       while (a.cran > TAU) { a.cran -= TAU; a.tour[0] -= TAU; }
       vers(a.tour, a.cran, [14, 0.4], dt, [-TAU, 2 * TAU]);
       vers(a.bond, 0, [18, 0.3], dt, ARC_BORNES);
       vers(a.recul, 0, [12, 0.35], dt, [-Math.PI, Math.PI]);
-      const aigu = Math.max(a.plein, Math.min(1, 0.9 * p.scintillement + 0.8 * p.montee + 0.45 * p.accent));
-      a.grave = Math.max(p.basse, a.plein);
+      const aigu = Math.min(1, 0.9 * p.scintillement + 0.8 * p.montee + 0.45 * p.accent);
+      a.grave = p.basse;
       a.aigu += (aigu - a.aigu) * (1 - Math.exp(-dt * (aigu > a.aigu ? 30 : 6)));
     }
     if (actives[F_QUATRE]) {
@@ -976,10 +982,7 @@ class Apercu {
     }
     if (actives[F_ANNEAU]) {
       const a = f.anneau, { p, g } = ecoutes[F_ANNEAU];
-      a.echelle[1] += 5.5 * g.force[BATTEMENT];
-      if (g.n[ACCENT] > 0) a.carre = Math.max(a.carre, Math.min(1, forceGeste(g, ACCENT)));
       if (g.n[APOGEE] > 0) { a.echelle[1] += 10 * forceGeste(g, APOGEE); a.echos.push(t); }
-      a.carre *= Math.exp(-dt * 6);
       vers(a.echelle, 1 - 0.42 * p.montee, [18, 0.28], dt, ANNEAU_BORNES);
       a.echos = a.echos.filter((ne) => t - ne < ANNEAU_ECHO[0]).slice(-ANNEAU_ECHOS_MAX);
     }
@@ -1076,7 +1079,6 @@ class Apercu {
       const pi = f.pinceau, { g } = ecoutes[F_TRAIT], duree = regle(pinceau.duree, 0.2, 1, 0.42) * dureeModule(mods(F_TRAIT).propres.duree);
       if (g.n[BATTEMENT] > 0 && pi.perles.length < 6) pi.perles.push(t);
       if (pi.vie[0] <= 0) pi.vie = [duree, 0];
-      pi.vie[1] += 5.2 * duree * forceGeste(g, APOGEE);
       vers(pi.vie, duree, [9, 0.45], dt, [duree * 0.5, duree * 2.2]);
       pi.perles = pi.perles.filter((ne) => t - ne < 0.5);
       // la souris sur le canevas, sinon son centre (rien à tracer)
@@ -1222,7 +1224,7 @@ class Apercu {
       // étiré dans le sens où il file ; carré un instant sur l'accent, ou par la modulation de la
       // forme (superellipse : cercle à 2, presque carré à 8)
       const [e, cos, sin] = this.etirementPose(F_ANNEAU, S, regle(anneau.etirement, 0, 0.7, ETIREMENT_DEFAUT)), ra = r * (1 + e), rb = r * (1 - e);
-      const puissance = 2 / (2 + 6 * Math.min(1, Math.max(0, a.carre + finiOu(propres.forme, 0))));
+      const puissance = 2 / (2 + 6 * Math.min(1, Math.max(0, finiOu(propres.forme, 0))));
       const point = (th) => {
         const ct = Math.cos(th), st = Math.sin(th);
         const x = ra * Math.sign(ct) * Math.abs(ct) ** puissance, y = rb * Math.sign(st) * Math.abs(st) ** puissance;

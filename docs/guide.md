@@ -65,12 +65,17 @@ l'ordre de la liste.
   rotation perd d'un coup jusqu'à 80 % de sa vitesse, puis repart) ; et les **gestes des figures**,
   que chaque figure fait à sa façon (voir « Les effets ») : `battement` (le geste du kick : les
   arcs avancent, les perles des gouttes sont projetées, le pendule saute…), `accent` (celui de la
-  caisse claire : l'anneau devient carré, une goutte se détache…), `scintillement` (celui des
-  aigus) et `apogee` (celui du drop : écho, bulles, grande vague…). `sur` (gestes seulement) : la
-  figure qui le fait (`"gouttes"`…) ; absent, `"tout"` ou `"figures"` : toutes celles qui font ce
-  geste. Les réactions d'une figure aux coups du son sont ces déclencheurs, ajoutés quand on
-  l'allume (`{ quand = "kick", faire = "battement", sur = "gouttes" }`…) : on les change, les
-  retire ou les met sur d'autres événements comme les autres.
+  caisse claire : une goutte se détache, le pendule reçoit une pichenette…), `scintillement`
+  (celui des aigus) et `apogee` (celui du drop : écho, bulles, grande vague…). `sur` (gestes
+  seulement) : la figure qui le fait (`"gouttes"`…) ; absent, `"tout"` ou `"figures"` : toutes
+  celles qui font ce geste. Les réactions d'une figure aux coups du son sont ces déclencheurs,
+  ajoutés quand on l'allume (`{ quand = "kick", faire = "battement", sur = "gouttes" }`…) : on les
+  change, les retire ou les met sur d'autres événements comme les autres. Ce qu'une modulation de
+  la figure sait déjà faire n'est pas un geste, pour ne pas le régler à deux endroits : le
+  battement et le carré de l'anneau (modulations de son rayon au kick et de sa forme à la caisse
+  claire), les arcs qui se ferment en cercles et le trait qui dure plus longtemps au drop
+  (modulations de l'ouverture et de la durée) sont des modulations, ajoutées aussi quand on allume
+  la figure. Des réglages d'avant la 0.28 qui en faisaient des gestes sont convertis.
 - `force` : pour un éclat, la bordure ou le frein, de 0 à 1 ; pour une onde, des éclats, une
   fissure, un carré, une implosion, de 0,2 à 3 (la taille) ; pour des étincelles, de 0,2 à 3 (leur
   vitesse : leur taille ne change pas) ; pour une explosion ou une rafale, de 0,2 à 3 (la taille
@@ -198,10 +203,13 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
   figures à la couleur de l'essaim, particules, habillage, bordure), quelle que soit la teinte,
   même prise de l'application, du site ou de la pochette : un essaim sombre, jusqu'au noir, ou
   pâle. Les reflets blancs (cœur des têtes et des étincelles, halo de l'éclat) s'assombrissent
-  avec elle. Dans la fenêtre des réglages, *Choisir une couleur* ouvre le choix de couleur de
-  Windows : la couleur prise donne teinte, saturation et luminosité, et devient fixe (elle ne
-  défile plus et ne suit plus l'application). Derrière un essaim sombre, les aperçus
-  s'éclaircissent.
+  avec elle. Dans la fenêtre des réglages, une pastille du nuancier donne une couleur vive ; la
+  dernière, en arc-en-ciel, ouvre le choix de couleur de Windows : n'importe quelle couleur, qui
+  donne teinte, saturation et luminosité. Dans les deux cas la couleur devient fixe (elle ne
+  défile plus et ne suit plus l'application). Rallumer une source (défilement, application, site,
+  pochette, Prisme) depuis une couleur fixe rend des couleurs vives : on l'assombrit ensuite avec
+  la luminosité. Un double-clic sur une glissière la remet à sa valeur par défaut. Derrière un
+  essaim sombre, les aperçus s'éclaircissent.
 - **Palette** (`[couleur] palette`, 1 à 3 teintes) : les comètes et les satellites se partagent
   plusieurs teintes, chacune décalée de `ecart_palette` degrés (120 : trois teintes à égale
   distance) de la teinte de base, qu'elle soit fixe, qui défile ou imposée (application, pochette…).
@@ -264,7 +272,8 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
 - **Arcs** (`[arcs]`) : deux arcs fins autour du pointeur, comme les anneaux d'une montre
   (`rayon` du grand, 10 à 80, 20 par défaut ; `epaisseur`, 0,5 à 6). Le grand s'ouvre avec la
   basse, le petit avec les aigus et la montée ; chaque kick fait avancer le grand d'un cran et
-  gonfler son rayon, la caisse claire fait reculer le petit, un drop les ferme en cercles.
+  gonfler son rayon, la caisse claire fait reculer le petit ; un drop les ferme en cercles (une
+  modulation de leur ouverture).
 - **Quatre temps** (`[quatre_temps]`) : quatre points sous le pointeur, un par temps (`taille`,
   1 à 5 ; `ecart`, 4 à 20). Celui du temps en cours saute sur le kick et s'étire en tiret sur la
   caisse claire ; pendant une montée ils se rapprochent, au drop ils sautent en vague et le
@@ -275,8 +284,8 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
   rond), vers le pointeur même quand il tourne. Deux formes, seules ou ensemble (deux anneaux ; panneau
   *Anneau*, cases *Lisse* et *Spectre*) :
   - *Lisse* (`[anneau]`) : un trait net (`rayon`, 6 à 60, 13 par défaut ; `epaisseur`, 0,5 à
-    6). Il bat avec le kick, devient carré un instant sur la caisse claire, s'épaissit avec la
-    basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
+    6). Il bat avec le kick et devient carré un instant sur la caisse claire (deux modulations,
+    de son rayon et de sa forme), s'épaissit avec la basse, se resserre pendant une montée et lâche un écho au drop ; un point y fait un tour par
     mesure de quatre temps quand le tempo est régulier.
   - *Spectre* (`[orbe]`) : le spectre sans les barres, en une seule ligne fermée autour du
     pointeur, étirée comme la forme lisse (`rayon`, 10 à 60, 21 par défaut ; `epaisseur`, 0,5 à
@@ -296,7 +305,8 @@ modulations ni l'explosion au drop). Un preset d'avant garde son allure (essai
 - **Trait** (`[pinceau]`) : rien au repos. Quand la souris file (plus de 120 px par seconde à
   100 %), elle laisse un trait de pinceau, plus épais quand elle va vite (`largeur` à pleine
   vitesse, 2 à 12), qui s'efface en `duree` (0,2 à 1 s, 0,42 par défaut). La basse l'élargit,
-  chaque kick y fait glisser une perle de la tête à la queue, un drop le fait durer plus longtemps.
+  chaque kick y fait glisser une perle de la tête à la queue, un drop le fait durer plus longtemps
+  (une modulation de sa durée).
   Il prend le dégradé de sa couleur de la tête à la queue : celle de l'essaim, ou une teinte à lui
   (`couleur = "fixe"`, ci-dessous).
 - **Pendule** (`[pendule]`) : un petit poids (`taille`, 1 à 6) pendu au pointeur par un fil

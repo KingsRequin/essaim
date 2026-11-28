@@ -582,7 +582,12 @@ du sens par image) et la teinte
   même ; une image non simulée (frappe, pause) les jette. Chaque figure garde l'enveloppe de ses
   battements, accents et scintillements (1 au geste, retombée 7, 8 et 10 par seconde). Allumer
   une figure dans la fenêtre des réglages lui donne ses gestes de toujours
-  (`config::declencheurs_de_figure`) si aucun déclencheur ne la vise. `migration::migrer_figures`
+  (`config::declencheurs_de_figure`) si aucun déclencheur ne la vise, et ses modulations de
+  toujours (`config::modulations_de_figure`) si aucune modulation ne la vise seule. Un geste qui
+  ne ferait que pousser un paramètre déjà cible des modulations de la figure n'en est pas un
+  (`gestes_de_figure`) : le battement et le carré de l'anneau, les arcs fermés et le trait allongé
+  au drop sont ces modulations ; `migration::migrer_doublons` convertit les déclencheurs de ces
+  gestes d'avant la 0.28 (source : leur événement ; sans source, retirés). `migration::migrer_figures`
   convertit les réglages d'avant (`reaction_kick`… dans l'allure) quand `[declencheurs] figures`
   manque au texte (seul le texte est regardé : des réglages envoyés par la page, sans la clé,
   valent `figures = true`).

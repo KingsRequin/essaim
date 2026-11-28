@@ -375,7 +375,6 @@ impl Plus {
             if pi.vie.x <= 0.0 {
                 pi.vie = Ressort::en(duree);
             }
-            pi.vie.v += 5.2 * duree * g.fort(APOGEE);
             pi.vie.vers(duree, (9.0, 0.45), dt, (duree * 0.5, duree * 2.2));
             pi.perles.retain(|&ne| t - ne < 0.5);
             let immobile = pi.trajet.back().is_some_and(|q| (q.1 - cursor.0).hypot(q.2 - cursor.1) < PINCEAU_PAS);

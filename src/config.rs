@@ -1172,6 +1172,21 @@ pub enum Evenement {
     Aucun,
 }
 
+impl Evenement {
+    /// Source de modulation qui suit cet événement (son enveloppe), s'il y en a une : les coups du
+    /// son ; ni les temps, ni la piste, ni les clics.
+    pub fn source(self) -> Option<Source> {
+        Some(match self {
+            Self::Kick => Source::Kick,
+            Self::Caisse => Source::Caisse,
+            Self::Charleston => Source::Charleston,
+            Self::Drop => Source::Drop,
+            Self::Contretemps => Source::Contretemps,
+            Self::Temps | Self::Break | Self::Piste | Self::Clic | Self::ClicDroit | Self::Aucun => return None,
+        })
+    }
+}
+
 /// Action d'un déclencheur. Une action inconnue ne fait rien.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -1245,14 +1260,34 @@ pub const GESTES: [Action; 4] = [Action::Battement, Action::Accent, Action::Scin
 /// l'accent à la caisse claire, le scintillement aux aigus, l'apogée au drop.
 pub const EVENEMENTS_DES_GESTES: [Evenement; 4] = [Evenement::Kick, Evenement::Caisse, Evenement::Charleston, Evenement::Drop];
 
-/// Gestes que fait la figure `i` (rang dans `FIGURES`) : les autres ne lui font rien.
+/// Gestes que fait la figure `i` (rang dans `FIGURES`) : les autres ne lui font rien. Un geste qui
+/// ne ferait que pousser un paramètre déjà cible de ses modulations n'en est pas un (il ferait
+/// doublon) : c'est une modulation (`modulations_de_figure`).
 pub fn gestes_de_figure(i: usize) -> &'static [Action] {
     use Action::{Accent, Apogee, Battement, Scintillement};
     match FIGURES.get(i).copied() {
-        Some("arcs" | "anneau" | "voix" | "trame") => &[Battement, Accent, Scintillement, Apogee],
+        Some("voix" | "trame") => &[Battement, Accent, Scintillement, Apogee],
+        Some("arcs") => &[Battement, Accent, Scintillement],
         Some("quatre_temps" | "pendule" | "gouttes") => &[Battement, Accent, Apogee],
-        Some("orbe" | "pinceau") => &[Battement, Apogee],
+        Some("orbe") => &[Battement, Apogee],
+        Some("anneau") => &[Scintillement, Apogee],
+        Some("pinceau") => &[Battement],
         _ => &[],
+    }
+}
+
+/// Réactions de toujours de la figure `i` faites par une modulation (pour elle seule) : le
+/// paramètre qu'elles font varier est une cible de ses modulations. Chacune avec le geste qu'elle
+/// remplace depuis la 0.28 (les déclencheurs de ce geste en deviennent : `migration`) : le carré
+/// de l'anneau à la caisse claire et son battement au kick, les arcs qui se ferment en cercles et
+/// le trait qui dure plus longtemps au drop.
+pub fn modulations_de_figure(i: usize) -> Vec<(Action, Modulation)> {
+    let m = |source, cible, quantite| Modulation { source, cible, sur: Groupe::de_figure(i), quantite, lissage: 0.0, ..Default::default() };
+    match FIGURES.get(i).copied() {
+        Some("arcs") => vec![(Action::Apogee, m(Source::Drop, Cible::Ouverture, 1.0))],
+        Some("anneau") => vec![(Action::Battement, m(Source::Kick, Cible::Rayon, 0.05)), (Action::Accent, m(Source::Caisse, Cible::Forme, 1.0))],
+        Some("pinceau") => vec![(Action::Apogee, m(Source::Drop, Cible::Duree, 0.35))],
+        _ => Vec::new(),
     }
 }
 

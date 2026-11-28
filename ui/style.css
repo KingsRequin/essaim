@@ -282,6 +282,13 @@ input[type="range"] { width: 100%; margin: 0; accent-color: var(--signal); }
 .pipette::-webkit-color-swatch-wrapper { padding: 0; }
 .pipette::-webkit-color-swatch { border: 0; box-shadow: inset 0 0 0 1px var(--contour-teinte); }
 .pipette:focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; }
+/* Dernière pastille du nuancier : n'importe quelle couleur. Un arc-en-ciel tant qu'elle n'est pas
+   la couleur en place, puis cette couleur, entourée comme une pastille choisie. */
+.teinte.autre { padding: 0; background: none; }
+.teinte.autre::-webkit-color-swatch-wrapper { padding: 0; }
+.teinte.autre::-webkit-color-swatch { border: 0; box-shadow: inset 0 0 0 1px var(--contour-teinte); }
+.teinte.autre:not(.choisie)::-webkit-color-swatch { background-image: var(--arc-en-ciel); } /* posé par app.js, des teintes du nuancier */
+.teinte.autre.choisie, .teinte.autre:focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; }
 
 /* Valeur d'un réglage : se tape au clavier (clic dessus). */
 .valeur-saisie {

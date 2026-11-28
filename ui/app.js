@@ -355,7 +355,42 @@ const ANCIENNES_CLES = [
 // par défaut : ni ses modulations ni son explosion au drop). Une modulation de même source, même
 // cible et même groupe déjà là est gardée.
 function migrer(p) {
-  return migrerFigures(migrerReactions(p));
+  return migrerDoublons(migrerFigures(migrerReactions(p)));
+}
+
+// Modulations de toujours de la figure `s` (comme config::modulations_de_figure) ; `forces` : la
+// force des gestes qu'elles remplacent.
+const modulationsDeFigure = (s, forces = {}) => (MODULATIONS_DES_FIGURES[s] || [])
+  .map(([geste, source, cible, quantite]) => ({ ...MODULATION_DEFAUT, source, cible, sur: s, quantite: borne(quantite * (forces[geste] ?? 1), -1, 1), lissage: 0 }))
+  .filter((m) => m.quantite !== 0);
+// `mods` ajoutées à la liste `liste` (une liste absente : celle par défaut), sauf celles de même
+// source, même cible et même groupe, dans la limite de MODULATIONS_MAX.
+function avecModulations(liste, mods) {
+  const l = Array.isArray(liste) ? liste.slice() : reactionsAvant({}).basse.concat(reactionsAvant({}).mods);
+  for (const m of mods) {
+    if (l.length < MODULATIONS_MAX && !l.some((x) => x.source === m.source && x.cible === m.cible && (x.sur || "tout") === m.sur)) l.push(m);
+  }
+  return l;
+}
+// Gestes retirés en 0.28 des figures dont ils ne faisaient que pousser un paramètre déjà cible de
+// leurs modulations (comme migration::migrer_doublons) : chaque déclencheur d'un tel geste pour
+// cette figure seule devient la modulation qui le remplace ; sans source (temps, piste, clic), il
+// est seulement retiré.
+const SOURCE_DE_L_EVENEMENT = { kick: "kick", caisse: "caisse", charleston: "charleston", drop: "drop", contretemps: "contretemps" };
+function migrerDoublons(p) {
+  const d = estObjet(p.declencheurs) ? p.declencheurs : null;
+  if (!d || !Array.isArray(d.liste)) return p;
+  const mods = [];
+  const liste = d.liste.filter((x) => {
+    const s = estObjet(x) ? x.sur : null;
+    if (!(s in NOMS_FIGURES) || !GESTES_ACTIONS.has(x.faire) || GESTES_DES_FIGURES[s].includes(x.faire)) return true;
+    const r = (MODULATIONS_DES_FIGURES[s] || []).find(([geste]) => geste === x.faire), source = SOURCE_DE_L_EVENEMENT[x.quand || "kick"];
+    if (r && source) mods.push({ ...MODULATION_DEFAUT, source, cible: r[2], sur: s, quantite: borne(r[3] * (x.force ?? 1), -1, 1), lissage: 0 });
+    return false;
+  });
+  if (liste.length === d.liste.length) return p;
+  const m = estObjet(p.modulations) ? p.modulations : {};
+  return { ...p, declencheurs: { ...d, liste }, modulations: { ...m, liste: avecModulations(m.liste, mods) } };
 }
 
 // Réactions des figures d'avant la 0.26, fixes et réglées par `reaction_kick`… (comme
@@ -371,16 +406,19 @@ const declencheursDeFigure = (s, forces = {}) => (GESTES_DES_FIGURES[s] || [])
 function migrerFigures(p) {
   const d = estObjet(p.declencheurs) ? p.declencheurs : {};
   if (d.figures === true) return p;
-  const ajout = [];
+  const ajout = [], mods = [];
   for (const [s] of FIGURES_REGLAGES) {
     const sec = p[s];
     if (!estObjet(sec) || sec.actif !== true) continue;
     const forces = {};
     for (const [g, k] of Object.entries(REACTION_DU_GESTE)) if (Number.isFinite(sec[k])) forces[g] = borne(sec[k], 0, 2);
     ajout.push(...declencheursDeFigure(s, forces));
+    mods.push(...modulationsDeFigure(s, forces));
   }
   const liste = Array.isArray(d.liste) ? d.liste : reactionsAvant({}).decl;
-  return { ...p, declencheurs: { ...d, liste: liste.concat(ajout), figures: true } };
+  const m = estObjet(p.modulations) ? p.modulations : {};
+  const avecMods = mods.length ? { modulations: { ...m, liste: avecModulations(m.liste, mods) } } : {};
+  return { ...p, ...avecMods, declencheurs: { ...d, liste: liste.concat(ajout), figures: true } };
 }
 
 // Réactions fixes d'Essaim 0.3 et 0.4 (voir `migrer`).
@@ -1454,20 +1492,19 @@ function allureBase(s, cache = () => false) {
       lire: (r) => versHex(r[s].teinte_fixe ?? 200, r[s].saturation ?? 1, r[s].luminosite ?? LUMINOSITE),
       poser: (h, sat, lum) => { regler(s, "teinte_fixe", h); regler(s, "saturation", sat); regler(s, "luminosite", lum); },
     },
-    { libelle: "Teinte fixe", section: s, cle: "teinte_fixe", min: 0, max: 360, pas: 1, aff: (v) => Math.round(v) + "°", cache: (r) => cache(r) || couleurDe(r, s) !== "fixe" },
     { libelle: "Luminosité", section: s, cle: "luminosite", min: 0, max: 1, pas: 0.01, aff: affLuminosite, vers: (x) => x / 100, cache: (r) => cache(r) || couleurDe(r, s) !== "fixe" },
     { libelle: "Opacité", section: s, cle: "opacite", min: 0.1, max: 1, pas: 0.05, aff: enPourcent, cache },
   ];
 }
 // Gestes de la figure `s` (déclencheurs, `battement`, `accent`…), dits par ce qu'ils lui font.
 const LIBELLES_GESTES = {
-  arcs: { battement: "Le grand arc avance d'un cran quand", accent: "Le petit arc recule quand", scintillement: "Le petit arc s'ouvre quand", apogee: "Les arcs se ferment en cercles quand" },
+  arcs: { battement: "Le grand arc avance d'un cran quand", accent: "Le petit arc recule quand", scintillement: "Le petit arc seul s'ouvre quand" },
   quatre_temps: { battement: "Le point du temps saute quand", accent: "Le point s'étire en tiret quand", apogee: "Les points sautent en vague quand" },
-  anneau: { battement: "L'anneau bat quand", accent: "L'anneau devient carré quand", scintillement: "Le point du tempo grossit quand", apogee: "L'anneau lâche un écho quand" },
+  anneau: { scintillement: "Le point du tempo grossit quand", apogee: "L'anneau lâche un écho quand" },
   orbe: { battement: "Le spectre souffle et lâche un écho quand", apogee: "Le spectre lâche trois échos quand" },
   voix: { battement: "Les grandes ondulations montent quand", accent: "Les ondulations moyennes montent quand", scintillement: "Les fines ondulations montent quand", apogee: "La ligne s'élargit quand" },
   trame: { battement: "Une vague ronde la traverse quand", accent: "Une vague en losange la traverse quand", scintillement: "Des points scintillent quand", apogee: "Une grande vague la traverse quand" },
-  pinceau: { battement: "Une perle glisse le long du trait quand", apogee: "Le trait dure plus longtemps quand" },
+  pinceau: { battement: "Une perle glisse le long du trait quand" },
   pendule: { battement: "Le poids saute quand", accent: "Le poids reçoit une pichenette quand", apogee: "Le poids fait un grand saut quand" },
   gouttes: { battement: "Les perles sont projetées quand", accent: "Une goutte se détache quand", apogee: "Des bulles s'échappent quand" },
 };
@@ -1630,18 +1667,9 @@ const PANNEAUX = [
   },
   {
     id: "couleur", famille: "L'essaim", titre: "Couleur",
-    note: "Une teinte fixe ou qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau. La luminosité vaut pour tout ce qu'Essaim dessine, quelle que soit la teinte : baisse-la pour un essaim sombre, jusqu'au noir, même quand il prend la couleur de l'application. Pour que la teinte glisse avec la musique : une modulation de la teinte.",
+    note: "Une couleur fixe (une pastille, ou n'importe laquelle avec la dernière, même noire), une teinte qui défile, ou celle de ce qui est à l'écran : l'application, le site, la pochette du morceau. Revenir à l'une de ces sources rend des couleurs vives ; la luminosité les assombrit ensuite, quelle que soit la teinte, jusqu'au noir. Pour que la teinte glisse avec la musique : une modulation de la teinte.",
     base: [
       { special: "couleur" },
-      {
-        pipette: "Choisir une couleur", section: "couleur",
-        lire: (r) => versHex(r.couleur.teinte, r.couleur.saturation ?? 1, r.couleur.luminosite ?? LUMINOSITE),
-        // une couleur choisie est fixe : elle ne défile plus et ne suit plus l'appli, le site, la pochette
-        poser: (h, sat, lum) => {
-          for (const [cle, v] of [["teinte", h], ["saturation", sat], ["luminosite", lum], ["vitesse_teinte", 0], ["application", false], ["site", false], ["pochette", false], ["synchro_prisme", false]]) regler("couleur", cle, v);
-        },
-        note: "N'importe quelle couleur, même très sombre ou noire : elle devient fixe.",
-      },
       { libelle: "Luminosité", section: "couleur", cle: "luminosite", min: 0, max: 1, pas: 0.01, aff: affLuminosite, vers: (x) => x / 100 },
     ],
     avance: [
@@ -1721,7 +1749,7 @@ const PANNEAUX = [
   },
   {
     id: "arcs", famille: "Figures", titre: "Arcs", actif: ["arcs", "actif"],
-    note: "Deux arcs fins autour du pointeur, comme les anneaux d'une montre : le grand s'ouvre avec la basse, le petit avec les aigus et la montée. Ses gestes, plus bas, disent ce que chaque événement lui fait (par défaut : le kick fait avancer le grand arc, la caisse claire reculer le petit, un drop les ferme en cercles). Pour le reste, « + Moduler », sous « + Avancé ».",
+    note: "Deux arcs fins autour du pointeur, comme les anneaux d'une montre : le grand s'ouvre avec la basse, le petit avec les aigus et la montée. Ses gestes, plus bas, disent ce que chaque événement lui fait (par défaut : le kick fait avancer le grand arc, la caisse claire reculer le petit). Un drop les ferme en cercles : c'est une modulation de leur ouverture, à régler avec les autres sous « + Avancé », « + Moduler ».",
     base: [
       { libelle: "Rayon", section: "arcs", cle: "rayon", min: 10, max: 80, pas: 1, aff: (v) => String(Math.round(v)) },
       { libelle: "Épaisseur", section: "arcs", cle: "epaisseur", min: 0.5, max: 6, pas: 0.1, aff: (v) => virgule(+v, 1) },
@@ -1745,7 +1773,7 @@ const PANNEAUX = [
   // dans les réglages (`anneau` : lisse, `orbe` : spectre)
   {
     id: "anneau", famille: "Figures", titre: "Anneau", voyant: (r) => !!(r.anneau.actif || r.orbe.actif),
-    note: "Un anneau autour du pointeur, qui le suit avec un temps de retard et s'étire quand il file (d'autant plus qu'il est loin derrière). Deux formes, seules ou ensemble : lisse, un trait net qui bat avec le kick, devient carré un instant sur la caisse claire et lâche un écho au drop, un point y faisant un tour par mesure ; spectre, une ligne que les bandes de fréquences déforment (graves en haut, aigus en bas), dont chaque kick détache un écho.",
+    note: "Un anneau autour du pointeur, qui le suit avec un temps de retard et s'étire quand il file (d'autant plus qu'il est loin derrière). Deux formes, seules ou ensemble : lisse, un trait net qui bat avec le kick et devient carré un instant sur la caisse claire (deux modulations, de son rayon et de sa forme, sous « + Avancé », « + Moduler ») et lâche un écho au drop, un point y faisant un tour par mesure ; spectre, une ligne que les bandes de fréquences déforment (graves en haut, aigus en bas), dont chaque kick détache un écho.",
     base: [
       { rangee: "Forme", puces: [
         ["Lisse", "anneau", "actif", "Un trait net, qui bat avec le kick et devient carré sur la caisse claire"],
@@ -1793,7 +1821,7 @@ const PANNEAUX = [
   },
   {
     id: "pinceau", famille: "Figures", titre: "Trait", actif: ["pinceau", "actif"],
-    note: "Rien au repos. Quand la souris file, elle laisse un trait de pinceau, plus épais quand elle va vite, qui s'efface en une seconde au plus ; chaque kick y fait glisser une perle. Dans l'aperçu, passe vite la souris dessus pour le voir.",
+    note: "Rien au repos. Quand la souris file, elle laisse un trait de pinceau, plus épais quand elle va vite, qui s'efface en une seconde au plus ; chaque kick y fait glisser une perle, et il dure plus longtemps au drop (une modulation de sa durée, sous « + Avancé »). Dans l'aperçu, passe vite la souris dessus pour le voir.",
     base: [
       { libelle: "Largeur à pleine vitesse", section: "pinceau", cle: "largeur", min: 2, max: 12, pas: 0.5, aff: (v) => virgule(+v, 1) },
       { libelle: "Durée", section: "pinceau", cle: "duree", min: 0.2, max: 1, pas: 0.02, aff: (v) => virgule(+v, 2) + " s" },
@@ -1992,6 +2020,7 @@ const glissieres = []; // { def, input, saisie, els }
 const bascules = []; // { section, cle, bouton }
 const choix = []; // { section, cle, valeur, bouton } : réglages à quelques valeurs nommées
 const pipettes = []; // { def, input } : sélecteurs de couleur
+const modulationsDites = []; // { s, el } : modulations de chaque figure, dites sous « + Moduler »
 const formes = []; // { section, cle, id, b }
 const conditionnels = []; // { si, cache, els } : estompés (si) ou masqués (cache) selon les réglages
 const panneaux = []; // { def, onglet, section, corps, voyant }
@@ -2075,12 +2104,19 @@ function bascule(libelle, section, cle, oui, info) {
 }
 
 // Figure allumée : si aucun déclencheur ne lui fait faire de geste, elle reçoit ses réactions de
-// toujours (comme config::declencheurs_de_figure), qu'on retrouve dans son panneau.
+// toujours (comme config::declencheurs_de_figure), qu'on retrouve dans son panneau ; si aucune
+// modulation ne la vise seule, ses modulations de toujours (config::modulations_de_figure).
 function donnerGestes(s) {
   const l = listeDecl();
-  if (l.some((d) => GESTES_ACTIONS.has(d.faire) && viseFigure(d, s))) return;
-  const ajout = declencheursDeFigure(s).slice(0, Math.max(0, DECLENCHEURS_MAX - l.length));
-  if (ajout.length) regler("declencheurs", "liste", l.concat(ajout));
+  if (!l.some((d) => GESTES_ACTIONS.has(d.faire) && viseFigure(d, s))) {
+    const ajout = declencheursDeFigure(s).slice(0, Math.max(0, DECLENCHEURS_MAX - l.length));
+    if (ajout.length) regler("declencheurs", "liste", l.concat(ajout));
+  }
+  const m = listeMods();
+  if (!m.some((x) => x.sur === s)) {
+    const ajout = modulationsDeFigure(s);
+    if (ajout.length) regler("modulations", "liste", avecModulations(m, ajout));
+  }
 }
 
 function choixForme(section, cle, liste) {
@@ -2109,34 +2145,60 @@ function pucesChoix(def) {
   });
 }
 
-// Rangée de la couleur : nuancier et sources de la teinte.
+// Sources de la teinte de l'essaim allumées (défilement, application, site, pochette, Prisme).
+const sourcesAllumees = (c) => [c.vitesse_teinte > 0, c.application, c.site, c.pochette, c.synchro_prisme].filter(Boolean).length;
+const vive = (c) => Math.abs((c.saturation ?? 1) - 1) < 0.005 && Math.abs((c.luminosite ?? LUMINOSITE) - LUMINOSITE) < 0.005;
+
+// Couleur fixe de l'essaim : teinte, saturation, luminosité ; elle ne défile plus et ne suit plus
+// l'application, le site, la pochette ni Prisme.
+function couleurFixe(h, sat, lum) {
+  for (const [cle, v] of [["teinte", h], ["saturation", sat], ["luminosite", lum], ["vitesse_teinte", 0], ["application", false], ["site", false], ["pochette", false], ["synchro_prisme", false]]) regler("couleur", cle, v);
+  majReglages();
+}
+
+// Rangée de la couleur : nuancier (pastilles vives, puis n'importe quelle couleur par le choix de
+// Windows) et sources de la teinte.
+let autreCouleur = null;
 function rangeeCouleur() {
   teintes = TEINTES.map((h) => {
     const b = el("button", "teinte");
     b.style.background = hslCss(h);
     b.setAttribute("aria-label", "Teinte " + h + "°");
-    b.addEventListener("click", () => {
-      regler("couleur", "teinte", h);
-      regler("couleur", "vitesse_teinte", 0);
-      regler("couleur", "application", false);
-      regler("couleur", "site", false);
-      regler("couleur", "pochette", false);
-      regler("couleur", "synchro_prisme", false);
-      majReglages();
-    });
+    b.addEventListener("click", () => couleurFixe(h, 1, LUMINOSITE));
     return { h, b };
   });
+  autreCouleur = el("input", "teinte autre");
+  autreCouleur.type = "color";
+  autreCouleur.title = "N'importe quelle couleur, même très sombre ou noire";
+  autreCouleur.setAttribute("aria-label", "Autre couleur");
+  autreCouleur.style.setProperty("--arc-en-ciel", `conic-gradient(${[...TEINTES, 360].map(hslCss).join(", ")})`);
+  autreCouleur.addEventListener("input", () => couleurFixe(...depuisHex(autreCouleur.value)));
+  // une couleur fixe en place (assombrie, voire noire) n'est pas celle qu'on veut en revenant à
+  // une source : celle-ci reprend des couleurs vives, que la luminosité assombrit ensuite
+  const source = (libelle, cle, oui, info) => {
+    const b = bascule(libelle, "couleur", cle, oui, info);
+    // (après la bascule : la source vient de s'allumer, seule, donc la couleur était fixe)
+    b.addEventListener("click", () => {
+      const c = etat.reglages.couleur;
+      if (!vive(c) && (cle === "vitesse_teinte" ? c.vitesse_teinte > 0 : c[cle]) && sourcesAllumees(c) === 1) {
+        regler("couleur", "saturation", 1);
+        regler("couleur", "luminosite", LUMINOSITE);
+        majReglages();
+      }
+    });
+    return b;
+  };
   // une teinte choisie coupe la synchro avec l'éclairage : cette bascule la remet ; montrée
   // seulement quand l'appli dit que Prisme (outil d'éclairage RGB, rarement installé) est là
-  boutonPrisme = bascule("Synchro Prisme", "couleur", "synchro_prisme", null, "Prend la teinte de l'éclairage RGB de Prisme quand il tourne");
+  boutonPrisme = source("Synchro Prisme", "synchro_prisme", null, "Prend la teinte de l'éclairage RGB de Prisme quand il tourne");
   boutonPrisme.hidden = etat.prisme !== true;
   return {
-    teintes: teintes.map((t) => t.b),
+    teintes: [...teintes.map((t) => t.b), autreCouleur],
     sources: [
-      bascule("Teinte qui défile", "couleur", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
-      bascule("Couleur de l'application", "couleur", "application"),
-      bascule("Couleur du site (navigateur)", "couleur", "site"),
-      bascule("Couleur de la pochette", "couleur", "pochette", null, "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application et le site"),
+      source("Teinte qui défile", "vitesse_teinte", (v) => (v > 0 ? 0 : 60)),
+      source("Couleur de l'application", "application"),
+      source("Couleur du site (navigateur)", "site"),
+      source("Couleur de la pochette", "pochette", null, "Prend la teinte de la pochette du morceau qui joue (Spotify, navigateur…), avant l'application et le site"),
       boutonPrisme,
     ],
   };
@@ -2246,8 +2308,11 @@ function construireAvance(def, zone) {
     const proposees = ciblesPour(def.moduler).map(([, nom]) => nom.toLowerCase());
     const note = el("p", "note", `Une source du son fait varier la figure : ${proposees.slice(0, -1).join(", ")} ou ${proposees[proposees.length - 1]}. Voir « Modulations ».`);
     note.id = "note-moduler-" + def.moduler;
-    decrire(b, note.id);
-    l.append(b, note);
+    const siennes = el("p", "note");
+    siennes.id = "note-siennes-" + def.moduler;
+    modulationsDites.push({ s: def.moduler, el: siennes });
+    decrire(b, note.id, siennes.id);
+    l.append(b, siennes, note);
     zone.append(l);
     els = [l];
   } else if (def.groupe) {
@@ -3055,6 +3120,11 @@ function majReglages() {
   }
   for (const c of choix) c.bouton.setAttribute("aria-pressed", val(c.section, c.cle) === c.valeur);
   for (const p of pipettes) if (document.activeElement !== p.input) p.input.value = p.def.lire(etat.reglages);
+  for (const d of modulationsDites) {
+    const noms = Object.fromEntries(ciblesPour(d.s)), sources = Object.fromEntries(SOURCES_MOD);
+    const l = listeMods().filter((m) => m.sur === d.s).map((m) => `${sources[m.source] || m.source} → ${(noms[m.cible] || m.cible).toLowerCase()}`);
+    d.el.textContent = l.length ? `Ses modulations : ${l.join(", ")}.` : "Aucune modulation ne la vise seule.";
+  }
   for (const f of formes) {
     f.b.setAttribute("aria-pressed", (val(f.section, f.cle) || "cometes") === f.id);
     // le pictogramme d'une image ou de l'icône suit ses contours
@@ -3072,8 +3142,17 @@ function majReglages() {
     boutonPrisme.hidden = !prisme && !c.synchro_prisme;
     boutonPrisme.title = prisme ? "Prend la teinte de l'éclairage RGB de Prisme quand il tourne" : "Prisme ne répond pas : sans effet tant qu'il ne tourne pas";
   }
+  // couleur fixe : sa pastille, ou la dernière (n'importe quelle couleur) si aucune ne la donne
+  const fixe = !c.application && !c.site && !c.pochette && !(prisme && c.synchro_prisme) && c.vitesse_teinte === 0;
+  let pastille = false;
   for (const t of teintes) {
-    t.b.setAttribute("aria-pressed", !c.application && !c.site && !c.pochette && !(prisme && c.synchro_prisme) && c.vitesse_teinte === 0 && Math.abs(c.teinte - t.h) < 3);
+    const oui = fixe && vive(c) && Math.abs(c.teinte - t.h) < 3;
+    pastille ||= oui;
+    t.b.setAttribute("aria-pressed", oui);
+  }
+  if (autreCouleur) {
+    autreCouleur.classList.toggle("choisie", fixe && !pastille);
+    if (document.activeElement !== autreCouleur) autreCouleur.value = versHex(c.teinte, c.saturation ?? 1, c.luminosite ?? LUMINOSITE);
   }
   $("avec-preset").setAttribute("aria-pressed", !!val("souris", "avec_preset"));
   const d = $("demarrage");
@@ -3137,6 +3216,7 @@ function surprise() {
       if (TOURNANTES.has(s)) c[s].rotation = Math.random() < 0.3 ? +(r(3, 10) * parmi([-1, 1])).toFixed(1) : 0;
       // ses gestes de toujours, plus ou moins forts
       gestes.push(...declencheursDeFigure(s, Object.fromEntries(GESTES_DES_FIGURES[s].map((g) => [g, force()]))));
+      c.modulations.liste = avecModulations(c.modulations.liste, modulationsDeFigure(s, Object.fromEntries((MODULATIONS_DES_FIGURES[s] || []).map(([g]) => [g, force()]))));
     }
     if (Math.random() < 0.4 && c.modulations.liste.length < MODULATIONS_MAX) {
       const sur = parmi(tirees), [cible] = parmi(ciblesPour(sur).filter(([id]) => id !== "decalage" && id !== "opacite"));
