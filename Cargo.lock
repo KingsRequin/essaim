@@ -28,7 +28,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "audio-commun"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "anyhow",
  "log",
@@ -403,7 +403,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "essaim"
-version = "0.27.0"
+version = "0.27.1"
 dependencies = [
  "anyhow",
  "audio-commun",

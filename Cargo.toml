@@ -1,6 +1,6 @@
 [package]
 name = "essaim"
-version = "0.27.0"
+version = "0.27.1"
 edition = "2021"
 description = "Surcouche réactive à la musique autour du pointeur de Windows : comètes, essaim en orbite, fissures au clic"
 license = "MIT"
@@ -16,7 +16,7 @@ toml_edit = "0.22"
 tungstenite = "0.30"
 # Capture du son et détection du kick, partagées avec Prisme et Horizon (dépôt voisin). Figée
 # par son commit (après v0.2.0 : niveaux stéréo) : un tag peut être déplacé, un commit non.
-audio-commun = { git = "https://github.com/KingsRequin/audio-commun", rev = "030312f4ff47e877d535500371f57d212c4cd621", default-features = false, features = ["capture"] }
+audio-commun = { git = "https://github.com/KingsRequin/audio-commun", rev = "f8947d835c5aea6de53f48b48c84ddd7dd0297ff", default-features = false, features = ["capture"] }
 windows-numerics = "0.3"
 wry = { version = "=0.57.1", default-features = false }
 
